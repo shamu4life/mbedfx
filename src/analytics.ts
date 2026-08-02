@@ -53,7 +53,11 @@ import type { ClientClass, Platform } from './types.ts'
 export type Outcome2 =
   | 'ok' | 'media_hit' | 'media_miss' | 'api_hit' | 'api_miss' | 'api_bad_id' | 'assert_fail'
   | 'fetch_fail' | 'age_restricted' | 'private' | 'ambiguous' | 'notfound'
-  | 'copyright_recovered' | 'fullpage_recovered'
+  // copyright_recovered = the v1 user feed had it (the post was recent enough to be in the window).
+  // copyright_remux = it was not, and the page went to the container instead. The two are counted
+  // SEPARATELY on purpose: their ratio is the only way to see how often the feed's 12-post window is
+  // actually the binding constraint, which is the number that would justify revisiting either path.
+  | 'copyright_recovered' | 'copyright_remux' | 'fullpage_recovered'
   | 'translated' | 'translate_fallback'
 
 /**

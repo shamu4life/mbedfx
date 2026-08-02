@@ -2055,18 +2055,64 @@ test('A PUBLIC POST WHOSE EMBED FAILED IS NOT PRIVATE — the false 🔒, end to
   assert.ok(urls.some(u => u.includes('/api/v1/feed/user/fixture8.example/')), 'feed scoped to the OWNER')
 })
 
-test('THE RECOVERY FAILS SAFE — a refused feed leaves exactly today\'s cover-still card', async () => {
-  // Every measurement behind this feature is RESIDENTIAL; Cloudflare egress is unconfirmed. This is
-  // the test that makes shipping it anyway defensible: if Instagram refuses our datacenter IPs, the
-  // card must be indistinguishable from before the feature existed, never an error and never worse.
+test('A REFUSED FEED NOW HANDS THE PAGE TO THE CONTAINER, still carrying the cover as its poster', async () => {
+  /**
+   * REWRITTEN 2026-08-02. This pinned "a refused feed leaves exactly today's cover-still card", which
+   * was the right guarantee while the user feed was the only recovery there was: every measurement
+   * behind it is residential, so degrading to the still was what made shipping it defensible.
+   *
+   * WHAT CHANGED. The feed is ACCOUNT-scoped and Instagram serves 12 items whatever `count` asks for,
+   * so a blocked reel further back than that was unrecoverable by it — reported on /reel/DX7byl-oyGR/,
+   * ~60 posts deep, which instagram7 played and we drew as a photo. Paging to it measured five
+   * sequential requests and 2.45 MB. yt-dlp resolves the same reel by URL in one request, cookie-free,
+   * at a better rendition, and the container that does it is already how YouTube and Facebook work.
+   *
+   * So a refused or exhausted feed is no longer the end of the line. The GUARANTEE the old test
+   * existed to protect is unchanged and is asserted below: the cover still survives as the poster, so
+   * a card drawn before the mux lands — or one where the container is absent or refuses — is exactly
+   * the picture we shipped before, never a posterless video and never an error.
+   */
   const real = globalThis.fetch
   try {
     globalThis.fetch = async url => String(url).includes('/api/v1/feed/user/')
       ? new Response('{"message":"login_required","status":"fail"}', { status: 403 })
       : new Response(readFileSync('test/fixtures/instagram-copyright-blocked.html', 'utf8'), { status: 200 })
     const post = await liveFetchPost({ p: 'ig', kind: 'p', code: 'DbN6SsKum-9' }, fakeEnv(), 'discord')
-    assert.equal(post.media[0].kind, 'image', 'degrades to the cover still — unchanged from before')
-    assert.equal(post.author.name, 'fixture_user_10', 'and the rest of the card is untouched')
+
+    assert.equal(post.media.length, 1, 'still exactly one piece of media')
+    assert.equal(post.media[0].kind, 'video', 'the page goes to the container instead of giving up')
+    assert.ok(post.media[0].remux?.page?.startsWith('https://www.instagram.com/'),
+      'addressed BY THE POST, which is why the 12-item window cannot apply to it')
+    assert.ok(post.media[0].poster, 'and the cover rides along as the poster')
+    assert.equal(post.author.name, 'fixture_user_10', 'the rest of the card is untouched')
+  } finally {
+    globalThis.fetch = real
+  }
+})
+
+test('THE REMUXED BLOCKED REEL CARRIES THE STILL\'S SIZE, or every degrade draws a blank card', async () => {
+  /**
+   * The degrade paths — withResolver on a Worker with no container, and settleMux when the mux loses
+   * its race — both rebuild the cover as `{ kind: 'image', w: posterW ?? w }`. A remux video's own w/h
+   * are deliberately 0, so WITHOUT posterW/posterH that reconstruction is a 0x0 image; mastodon.ts
+   * omits meta.original when the size is unknown, and Discord draws no picture at all.
+   *
+   * So the consequence of dropping these is not a slightly wrong card, it is a BLANK one — on exactly
+   * the deploys and races where the still is the only thing left. This project has already shipped
+   * that bug once, on the degraded-still slot, which is why it is pinned here rather than trusted.
+   */
+  const real = globalThis.fetch
+  try {
+    globalThis.fetch = async url => String(url).includes('/api/v1/feed/user/')
+      ? new Response('{"message":"login_required","status":"fail"}', { status: 403 })
+      : new Response(readFileSync('test/fixtures/instagram-copyright-blocked.html', 'utf8'), { status: 200 })
+    const post = await liveFetchPost({ p: 'ig', kind: 'p', code: 'DbN6SsKum-9' }, fakeEnv(), 'discord')
+    const m = post.media[0]
+
+    assert.equal(m.kind, 'video')
+    assert.equal(m.w, 0, "the video's own size is unknown until the container reports it")
+    assert.ok(m.posterW > 0 && m.posterH > 0,
+      `the still's real size rides along for the degrade (got ${m.posterW}x${m.posterH})`)
   } finally {
     globalThis.fetch = real
   }

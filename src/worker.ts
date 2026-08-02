@@ -22,7 +22,7 @@ import { fetchInstagram, fetchInstagramFullPage, fetchInstagramUserFeed } from '
 import {
   instagramAgeGate, instagramCopyrightBlocked, instagramFullPageCard, instagramPrivateGate,
   normalizeInstagram,
-  recoveredMediaFrom, withRecoveredVideo,
+  recoveredMediaFrom, withCopyrightRemux, withRecoveredVideo,
 } from './platforms/instagram/normalize.ts'
 import { fetchTwitter } from './platforms/twitter/fetch.ts'
 import { normalizeTwitter } from './platforms/twitter/normalize.ts'
@@ -394,8 +394,27 @@ export async function liveFetchPost(
       if (post && instagramCopyrightBlocked(got.html) && post.media[0]?.kind === 'image') {
         const feed = await fetchInstagramUserFeed(post.author?.name)
         const recovered = recoveredMediaFrom(feed, ref.kind === 'p' ? ref.code : '')
-        if (recovered) count(env, 'ig', 'copyright_recovered', client)
-        return withRecoveredVideo(post, recovered)
+        if (recovered) {
+          count(env, 'ig', 'copyright_recovered', client)
+          return withRecoveredVideo(post, recovered)
+        }
+        /**
+         * THE WINDOW RAN OUT, SO HAND THE PAGE TO THE CONTAINER — the same yt-dlp tier YouTube and
+         * Facebook use. Reported 2026-08-02 on /reel/DX7byl-oyGR/, which instagram7 played and we drew
+         * as a photo.
+         *
+         * The feed above is ACCOUNT-scoped and Instagram serves 12 items whatever `count` asks for, so
+         * a blocked reel further back than that was unrecoverable. That one sits ~60 posts deep;
+         * reaching it by `max_id` paging measured five sequential requests and 2.45 MB, which does not
+         * fit a 5s ceiling and hands any unauthenticated caller a multi-megabyte lever. yt-dlp is
+         * addressed by the POST, so the window simply does not apply — and on that reel it returned a
+         * better rendition than the feed does (1080x1920 against 720x1280) in one request.
+         *
+         * ORDER MATTERS AND IS DELIBERATE: the feed is tried FIRST, so a recent blocked reel still
+         * resolves without booting a container. This is the fallback's fallback.
+         */
+        count(env, 'ig', 'copyright_remux', client)
+        return withCopyrightRemux(post)
       }
       return post
     }

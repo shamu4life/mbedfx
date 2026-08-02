@@ -5,6 +5,38 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [1.1.2] — 2026-08-02
+
+### Fixed
+- **A copyright-blocked Instagram reel older than the account's last 12 posts rendered as a photo.**
+  Instagram strips `video_url` from the embed payload when a post's audio is major-label catalogue,
+  and the existing recovery asks the v1 user feed for the account's recent posts and picks ours out
+  by shortcode. That feed is ACCOUNT-scoped and serves exactly 12 items whatever `count` requests
+  (verified at 33 and 50), so anything further back fell outside the window — the case reported on
+  `/reel/DX7byl-oyGR/`, which sits about 60 posts deep and which instagram7 played while we drew a
+  still. Paging to it with `max_id` measured five sequential requests and 2.45 MB, which neither fits
+  a 5s response ceiling nor is safe to expose to unauthenticated callers.
+
+  It now falls through to the yt-dlp container — the same tier YouTube and Facebook already use.
+  yt-dlp addresses the post by URL, so the window cannot apply to it, and on that reel it resolved
+  cookie-free to a better rendition than the feed offers (1080x1920 against 720x1280) in one request.
+  The cheap path still runs first, so a recent blocked reel resolves without booting a container.
+
+### Notes
+- The still's own dimensions now ride along as `posterW`/`posterH`. Both degrade paths rebuild the
+  cover as `{ kind: 'image', w: posterW ?? w }`, and a remux video's own `w`/`h` are deliberately 0 —
+  so omitting them would have produced a 0x0 image, which Discord draws as no picture at all. That is
+  a blank card rather than a slightly wrong one, on exactly the deploys and races where the still is
+  all that is left.
+- yt-dlp's success here was measured from a RESIDENTIAL host and is not confirmed from Cloudflare's
+  egress. It fails safe: no container, a refused extract or an oversized result all leave the cover
+  still exactly as it is today. The precedent for optimism is Facebook, where Meta decoys the crawler
+  from the datacenter and yt-dlp extracts the video anyway — precedent, not proof.
+
+1131 tests, `node --test`; `tsc --noEmit` clean.
+
+---
+
 ## [1.1.1] — 2026-08-02
 
 ### Fixed
