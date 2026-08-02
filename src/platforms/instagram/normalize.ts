@@ -834,6 +834,68 @@ export function withRecoveredVideo<T extends Post | null>(post: T, recovered: un
   return { ...post, media: usable } as T
 }
 
+/**
+ * THE SECOND LINE OF RECOVERY FOR A RIGHTS-STRUCK REEL: hand the PAGE to the container, the same way
+ * YouTube and Facebook already do. Pure and non-destructive — a post it cannot improve comes back as
+ * the same object, so the caller needs no branch.
+ *
+ * WHY THIS EXISTS ON TOP OF THE USER-FEED RECOVERY, which already works. That path is ACCOUNT-scoped:
+ * there is no logged-out shortcode form of it, so it asks for the account's recent posts and picks
+ * ours out — and Instagram serves exactly 12 whatever `count` you send (measured: count=33 and
+ * count=50 both returned 12). A blocked reel further back than that falls outside the window and stays a
+ * still. Reported 2026-08-02 on /reel/DX7byl-oyGR/, which sits ~60 posts deep: reaching it by
+ * `max_id` paging took FIVE sequential requests and 2.45 MB, against a 5s ceiling on the OpenGraph
+ * route. Paging is the wrong shape of answer.
+ *
+ * yt-dlp is addressed BY THE POST, so the window problem does not exist for it. Measured on that same
+ * reel, cookie-free: exit 0, 12 formats, 8 with video, best 1080x1920 progressive MP4 — a BETTER
+ * rendition than the user feed's 720x1280, in one request instead of five.
+ *
+ * THE CHEAP PATH STILL GOES FIRST. The caller tries the user feed and only falls here when it comes
+ * back empty, so a recent blocked reel keeps resolving without booting a container at all. This is the
+ * safety net, not the primary.
+ *
+ * NOT EGRESS-CONFIRMED, and the caveat is the usual one: yt-dlp was run from a RESIDENTIAL host.
+ * Instagram is known to treat Cloudflare's egress differently. The precedent for optimism is Facebook,
+ * where Meta decoys facebookexternalhit from the datacenter and yt-dlp extracts the video anyway
+ * (container/server.py) — but that is precedent, not proof, and this fails safe: no container binding,
+ * a refused extract or an oversized result all leave the cover still exactly as it is today.
+ */
+export function withCopyrightRemux<T extends Post | null>(post: T): T {
+  if (!post) return post
+  // Only the still-only shape this exists to upgrade, and only with a page to hand over.
+  if (!Array.isArray(post.media) || post.media.length !== 1) return post
+  const still = post.media[0]
+  if (!still || still.kind !== 'image') return post
+  const page = typeof post.canonical === 'string' ? post.canonical : ''
+  if (!/^https:\/\/(www\.)?instagram\.com\//.test(page)) return post
+  /**
+   * `url` is the page placeholder and is never served — /_media resolves through `remux` — which is
+   * byte-for-byte what Facebook and YouTube ship. w/h are 0 because the container has not reported a
+   * size yet; the still rides along as the poster so a card drawn before the mux lands is the cover
+   * image we already show today rather than a posterless video, which Discord renders as bare
+   * OpenGraph.
+   *
+   * posterW/posterH CARRY THE STILL'S OWN SIZE, and leaving them off is not a cosmetic omission. Both
+   * degrade paths — withResolver on a no-container deploy, and settleMux when the mux loses its race —
+   * rebuild the still as `{ kind: 'image', w: posterW ?? w }`. Without these that is a 0x0 image, and
+   * mastodon.ts omits meta.original when the size is unknown, which Discord draws as NO PICTURE AT
+   * ALL. The failure mode of forgetting them is therefore not "a slightly wrong card", it is a blank
+   * one on exactly the deploys and races where the still is all there is.
+   */
+  const w = typeof still.w === 'number' ? still.w : 0
+  const h = typeof still.h === 'number' ? still.h : 0
+  return {
+    ...post,
+    media: [{
+      kind: 'video', url: page, w: 0, h: 0,
+      poster: still.url,
+      ...(w > 0 && h > 0 ? { posterW: w, posterH: h } : {}),
+      remux: { page },
+    }],
+  } as T
+}
+
 /** The legacy single-object shape ({url,w,h,duration}) that recoveredVideoFrom used to return. */
 function recoveredToMedia(r: Any): Media | null {
   if (typeof r?.url !== 'string' || !r.url) return null
@@ -923,7 +985,21 @@ export function recoveredMediaFrom(body: unknown, code: string): Media[] | null 
   } catch {
     return null
   }
-  const items: unknown = (parsed as Any)?.items
+  /**
+   * TWO ENVELOPES, ONE ITEM SHAPE. The user feed answers `{items:[…]}`; the shortcode-scoped GraphQL
+   * surface answers `{data:{xdt_api__v1__media__shortcode__web_info:{items:[…]}}}`. The items inside
+   * are the SAME v1 objects — same image_versions2 candidate ladder, same video_versions, same
+   * carousel_media — which is the whole reason the GraphQL path is worth having: it is a different
+   * ADDRESS onto the serializer this function already knows how to read, not a new format.
+   *
+   * Read here rather than unwrapped at each call site so both surfaces are guaranteed to go through
+   * one candidate-selection rule. The aspect-first crop rejection above took a reported bug to get
+   * right, and a second copy of it reached by a different door is how that bug comes back.
+   */
+  const envelope = parsed as Any
+  const items: unknown = Array.isArray(envelope?.items)
+    ? envelope.items
+    : envelope?.data?.xdt_api__v1__media__shortcode__web_info?.items
   if (!Array.isArray(items)) return null
   const item = items.find(it => it !== null && typeof it === 'object' && (it as Any).code === code) as Any
   if (!item) return null

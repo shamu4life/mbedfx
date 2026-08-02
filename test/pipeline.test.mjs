@@ -1995,16 +1995,27 @@ test('an ig post costs exactly ONE upstream fetch — there is no video-resoluti
   assert.ok(urls[0].includes('/embed/captioned/'), 'and it must be the embed endpoint')
 })
 
-test('A COPYRIGHT-BLOCKED REEL COSTS A SECOND FETCH AND COMES BACK PLAYABLE', async () => {
-  // The defect: instagram.com/reel/DbN6SsKum-9/ is a video that rendered as a PHOTO, because the
-  // embed serializer omits video_url for rights-struck audio. The recovery reads the v1 user feed,
-  // which carries no copyright field at all. This pins the WIRING — the pure halves are covered in
-  // instagram-copyright.test.mjs; what can only break here is the worker arm that joins them.
+test('A COPYRIGHT-BLOCKED REEL FALLS BACK TO THE ACCOUNT FEED WHEN THE SHORTCODE QUERY CANNOT ANSWER', async () => {
+  /**
+   * The defect: instagram.com/reel/DbN6SsKum-9/ is a video that rendered as a PHOTO, because the
+   * embed serializer omits video_url for rights-struck audio. This pins the WIRING — the pure halves
+   * are covered in instagram-copyright.test.mjs; what can only break here is the worker arm.
+   *
+   * REWRITTEN 2026-08-02, when the shortcode GraphQL query became the first recovery. This used to
+   * assert "blocked reel = embed + feed, exactly 2 fetches", which was the whole chain at the time.
+   * There are now three tiers, so the count moved to 3 — and the assertion that matters is not the
+   * NUMBER but the ORDER and the SCOPING, both of which are kept below. The GraphQL tier refusing is
+   * simulated here rather than mocked away, so this doubles as the fallback path's wiring test.
+   */
   const urls = []
   const real = globalThis.fetch
   try {
     globalThis.fetch = async url => {
       urls.push(String(url))
+      if (String(url).includes('/graphql/query/')) {
+        // A refusal at HTTP 200, which is what this surface actually does.
+        return new Response('{"data":null}', { status: 200 })
+      }
       const body = String(url).includes('/api/v1/feed/user/')
         ? readFileSync('test/fixtures/instagram-user-feed.json', 'utf8')
         : readFileSync('test/fixtures/instagram-copyright-blocked.html', 'utf8')
@@ -2016,12 +2027,13 @@ test('A COPYRIGHT-BLOCKED REEL COSTS A SECOND FETCH AND COMES BACK PLAYABLE', as
   } finally {
     globalThis.fetch = real
   }
-  assert.equal(urls.length, 2, `blocked reel = embed + feed, got ${JSON.stringify(urls)}`)
+  assert.equal(urls.length, 3, `blocked reel = embed + graphql + feed, got ${JSON.stringify(urls)}`)
   assert.ok(urls[0].includes('/embed/captioned/'), 'the embed is still FIRST and still primary')
+  assert.ok(urls[1].includes('/graphql/query/'), 'the cheap shortcode query is tried before the walk')
   // The handle comes off the PARSED payload, not the ref — pinned so a refactor that passes the
   // shortcode here (which the feed endpoint would happily 200 on, with the wrong account's posts)
   // is caught rather than silently serving a stranger's video.
-  assert.ok(urls[1].includes('/api/v1/feed/user/fixture_user_10/'), `the feed must be scoped to the OWNER, got ${urls[1]}`)
+  assert.ok(urls[2].includes('/api/v1/feed/user/fixture_user_10/'), `the feed must be scoped to the OWNER, got ${urls[2]}`)
 })
 
 test('A PUBLIC POST WHOSE EMBED FAILED IS NOT PRIVATE — the false 🔒, end to end', async () => {
@@ -2055,18 +2067,64 @@ test('A PUBLIC POST WHOSE EMBED FAILED IS NOT PRIVATE — the false 🔒, end to
   assert.ok(urls.some(u => u.includes('/api/v1/feed/user/fixture8.example/')), 'feed scoped to the OWNER')
 })
 
-test('THE RECOVERY FAILS SAFE — a refused feed leaves exactly today\'s cover-still card', async () => {
-  // Every measurement behind this feature is RESIDENTIAL; Cloudflare egress is unconfirmed. This is
-  // the test that makes shipping it anyway defensible: if Instagram refuses our datacenter IPs, the
-  // card must be indistinguishable from before the feature existed, never an error and never worse.
+test('A REFUSED FEED NOW HANDS THE PAGE TO THE CONTAINER, still carrying the cover as its poster', async () => {
+  /**
+   * REWRITTEN 2026-08-02. This pinned "a refused feed leaves exactly today's cover-still card", which
+   * was the right guarantee while the user feed was the only recovery there was: every measurement
+   * behind it is residential, so degrading to the still was what made shipping it defensible.
+   *
+   * WHAT CHANGED. The feed is ACCOUNT-scoped and Instagram serves 12 items whatever `count` asks for,
+   * so a blocked reel further back than that was unrecoverable by it — reported on /reel/DX7byl-oyGR/,
+   * ~60 posts deep, which instagram7 played and we drew as a photo. Paging to it measured five
+   * sequential requests and 2.45 MB. yt-dlp resolves the same reel by URL in one request, cookie-free,
+   * at a better rendition, and the container that does it is already how YouTube and Facebook work.
+   *
+   * So a refused or exhausted feed is no longer the end of the line. The GUARANTEE the old test
+   * existed to protect is unchanged and is asserted below: the cover still survives as the poster, so
+   * a card drawn before the mux lands — or one where the container is absent or refuses — is exactly
+   * the picture we shipped before, never a posterless video and never an error.
+   */
   const real = globalThis.fetch
   try {
     globalThis.fetch = async url => String(url).includes('/api/v1/feed/user/')
       ? new Response('{"message":"login_required","status":"fail"}', { status: 403 })
       : new Response(readFileSync('test/fixtures/instagram-copyright-blocked.html', 'utf8'), { status: 200 })
     const post = await liveFetchPost({ p: 'ig', kind: 'p', code: 'DbN6SsKum-9' }, fakeEnv(), 'discord')
-    assert.equal(post.media[0].kind, 'image', 'degrades to the cover still — unchanged from before')
-    assert.equal(post.author.name, 'fixture_user_10', 'and the rest of the card is untouched')
+
+    assert.equal(post.media.length, 1, 'still exactly one piece of media')
+    assert.equal(post.media[0].kind, 'video', 'the page goes to the container instead of giving up')
+    assert.ok(post.media[0].remux?.page?.startsWith('https://www.instagram.com/'),
+      'addressed BY THE POST, which is why the 12-item window cannot apply to it')
+    assert.ok(post.media[0].poster, 'and the cover rides along as the poster')
+    assert.equal(post.author.name, 'fixture_user_10', 'the rest of the card is untouched')
+  } finally {
+    globalThis.fetch = real
+  }
+})
+
+test('THE REMUXED BLOCKED REEL CARRIES THE STILL\'S SIZE, or every degrade draws a blank card', async () => {
+  /**
+   * The degrade paths — withResolver on a Worker with no container, and settleMux when the mux loses
+   * its race — both rebuild the cover as `{ kind: 'image', w: posterW ?? w }`. A remux video's own w/h
+   * are deliberately 0, so WITHOUT posterW/posterH that reconstruction is a 0x0 image; mastodon.ts
+   * omits meta.original when the size is unknown, and Discord draws no picture at all.
+   *
+   * So the consequence of dropping these is not a slightly wrong card, it is a BLANK one — on exactly
+   * the deploys and races where the still is the only thing left. This project has already shipped
+   * that bug once, on the degraded-still slot, which is why it is pinned here rather than trusted.
+   */
+  const real = globalThis.fetch
+  try {
+    globalThis.fetch = async url => String(url).includes('/api/v1/feed/user/')
+      ? new Response('{"message":"login_required","status":"fail"}', { status: 403 })
+      : new Response(readFileSync('test/fixtures/instagram-copyright-blocked.html', 'utf8'), { status: 200 })
+    const post = await liveFetchPost({ p: 'ig', kind: 'p', code: 'DbN6SsKum-9' }, fakeEnv(), 'discord')
+    const m = post.media[0]
+
+    assert.equal(m.kind, 'video')
+    assert.equal(m.w, 0, "the video's own size is unknown until the container reports it")
+    assert.ok(m.posterW > 0 && m.posterH > 0,
+      `the still's real size rides along for the degrade (got ${m.posterW}x${m.posterH})`)
   } finally {
     globalThis.fetch = real
   }
@@ -3128,4 +3186,87 @@ test('gated short link MUST NOT REGRESS: a NORMAL public short link still resolv
   assert.equal(net.page, 1, 'ONE page fetch, as before')
   const tt = env.points.filter(p => p.blobs[0] === 'tt').map(p => p.blobs[1])
   assert.ok(tt.includes('ok') && !tt.includes('private') && !tt.includes('age_restricted'), 'counts ok, no gate')
+})
+
+test('THE SHORTCODE GRAPHQL QUERY IS TRIED FIRST, and the account feed is never touched when it answers', async () => {
+  /**
+   * Added 2026-08-02. The account feed is window-limited to Instagram's twelve most recent items —
+   * whatever `count` asks for — so a blocked reel further back was unrecoverable by it. The GraphQL
+   * surface is addressed BY THE POST, so no window applies; measured on the reported reel at HTTP 200,
+   * 21.6 KB, 429 ms, cookie-free, with video_versions intact.
+   *
+   * Two things are pinned. That it goes FIRST, because it is ~113x cheaper than the feed walk and the
+   * ordering is the entire cost argument. And that a hit STOPS there — if the feed were still called
+   * afterwards the saving would be imaginary.
+   */
+  const urls = []
+  const real = globalThis.fetch
+  try {
+    globalThis.fetch = async (url, init) => {
+      urls.push(String(url))
+      if (String(url).includes('/graphql/query/')) {
+        // The real envelope: the v1 item, wrapped one level deeper than the feed's.
+        assert.match(String(init?.body ?? ''), /doc_id=\d+/, 'sends a doc_id')
+        assert.equal(init.headers['x-fb-friendly-name'], 'PolarisPostRootQuery')
+        assert.ok(init.headers['x-fb-lsd'], 'and an lsd token matching the body')
+        return new Response(JSON.stringify({
+          data: {
+            xdt_api__v1__media__shortcode__web_info: {
+              items: [{
+                code: 'DbN6SsKum-9',
+                media_type: 2,
+                image_versions2: { candidates: [{ url: 'https://example.invalid/c.jpg', width: 720, height: 1280 }] },
+                video_versions: [{ url: 'https://scontent.cdninstagram.com/v.mp4', width: 720, height: 1280, type: 101 }],
+              }],
+            },
+          },
+        }), { status: 200 })
+      }
+      return new Response(readFileSync('test/fixtures/instagram-copyright-blocked.html', 'utf8'), { status: 200 })
+    }
+    const post = await liveFetchPost({ p: 'ig', kind: 'p', code: 'DbN6SsKum-9' }, fakeEnv(), 'discord')
+
+    assert.equal(post.media[0].kind, 'video', 'the reel plays')
+    assert.ok(urls.some(u => u.includes('/graphql/query/')), 'the shortcode query was asked')
+    assert.ok(!urls.some(u => u.includes('/api/v1/feed/user/')),
+      'and the 2.4MB account walk was never started')
+  } finally {
+    globalThis.fetch = real
+  }
+})
+
+test('A ROTATED doc_id FALLS THROUGH INSTEAD OF FAILING — the reason depending on one is defensible', async () => {
+  /**
+   * Meta rotates this number; InstaFix's history shows one dying inside about a month, which is why
+   * theirs is configurable and ours is too (Env.IG_GRAPHQL_DOC_ID). What makes shipping a magic number
+   * acceptable is that its death is not an outage: the query stops carrying the documented root, this
+   * returns null, and the older recoveries carry the card at a slower tier.
+   *
+   * Also pins ASSERT-ON-CONTENT for this surface. Instagram answers refusals at HTTP 200 here — the
+   * sibling endpoint's "SecFetch Policy violation." is the standing example — so a 200 with the wrong
+   * body must count as no recovery, not as success.
+   */
+  const urls = []
+  const real = globalThis.fetch
+  try {
+    globalThis.fetch = async url => {
+      urls.push(String(url))
+      if (String(url).includes('/graphql/query/')) {
+        // What a dead doc_id actually returns: HTTP 200, and an error envelope.
+        return new Response('{"errors":[{"message":"Query with id does not exist"}],"data":null}', { status: 200 })
+      }
+      if (String(url).includes('/api/v1/feed/user/')) {
+        return new Response('{"message":"login_required","status":"fail"}', { status: 403 })
+      }
+      return new Response(readFileSync('test/fixtures/instagram-copyright-blocked.html', 'utf8'), { status: 200 })
+    }
+    const post = await liveFetchPost({ p: 'ig', kind: 'p', code: 'DbN6SsKum-9' }, fakeEnv(), 'discord')
+
+    assert.ok(urls.some(u => u.includes('/graphql/query/')), 'it tried')
+    assert.ok(urls.some(u => u.includes('/api/v1/feed/user/')), 'then fell through to the feed')
+    assert.equal(post.media[0].kind, 'video', 'and the container still carries the card')
+    assert.ok(post.media[0].remux?.page, 'via the yt-dlp tier, which no Instagram endpoint can revoke')
+  } finally {
+    globalThis.fetch = real
+  }
 })

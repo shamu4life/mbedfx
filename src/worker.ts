@@ -18,11 +18,13 @@ import { fetchBluesky } from './platforms/bluesky/fetch.ts'
 import { normalizeBluesky } from './platforms/bluesky/normalize.ts'
 import { fetchTikTok, resolveTikTokShortlink, withResolvedVideo } from './platforms/tiktok/fetch.ts'
 import { normalizeTikTok, tiktokGate, tiktokRefFrom, videoDetailScope } from './platforms/tiktok/normalize.ts'
-import { fetchInstagram, fetchInstagramFullPage, fetchInstagramUserFeed } from './platforms/instagram/fetch.ts'
+import {
+  fetchInstagram, fetchInstagramFullPage, fetchInstagramGraphQLMedia, fetchInstagramUserFeed,
+} from './platforms/instagram/fetch.ts'
 import {
   instagramAgeGate, instagramCopyrightBlocked, instagramFullPageCard, instagramPrivateGate,
   normalizeInstagram,
-  recoveredMediaFrom, withRecoveredVideo,
+  recoveredMediaFrom, withCopyrightRemux, withRecoveredVideo,
 } from './platforms/instagram/normalize.ts'
 import { fetchTwitter } from './platforms/twitter/fetch.ts'
 import { normalizeTwitter } from './platforms/twitter/normalize.ts'
@@ -392,10 +394,55 @@ export async function liveFetchPost(
        * unconfirmed on this endpoint, and this shape is what makes shipping it anyway defensible.
        */
       if (post && instagramCopyrightBlocked(got.html) && post.media[0]?.kind === 'image') {
+        const code = ref.kind === 'p' ? ref.code : ''
+        /**
+         * THREE RECOVERIES, CHEAPEST AND MOST PRECISE FIRST, each covering the one below it.
+         *
+         * 1. THE SHORTCODE GRAPHQL QUERY. One POST, ~21KB, measured at 429ms — and addressed by the
+         *    POST, so the user feed's 12-item window cannot apply to it. This is what the
+         *    InstaFix-derived services use, and it is why they played /reel/DX7byl-oyGR/ while we drew
+         *    a photo. Its weakness is a rotating doc_id.
+         * 2. THE ACCOUNT FEED. Older, no magic number to rot, but account-scoped: only recovers a post
+         *    inside the account's twelve most recent. It is the answer when the doc_id has rotated and
+         *    the post is recent.
+         * 3. THE yt-dlp CONTAINER. Slowest, and the only one that is not a private Instagram endpoint
+         *    at all — which makes it the durable floor: yt-dlp's maintainers chase Meta's changes, so
+         *    it survives the failure that takes out both of the above.
+         *
+         * They fail in DIFFERENT ways on purpose. 1 dies to a doc_id rotation, 2 to an old post, 3 to
+         * a missing container or an extractor break. Nothing but Instagram refusing our egress
+         * outright takes all three, and that lands on the cover still we already ship.
+         */
+        const gql = recoveredMediaFrom(
+          await fetchInstagramGraphQLMedia(code, env.IG_GRAPHQL_DOC_ID), code,
+        )
+        if (gql) {
+          count(env, 'ig', 'copyright_gql', client)
+          return withRecoveredVideo(post, gql)
+        }
         const feed = await fetchInstagramUserFeed(post.author?.name)
-        const recovered = recoveredMediaFrom(feed, ref.kind === 'p' ? ref.code : '')
-        if (recovered) count(env, 'ig', 'copyright_recovered', client)
-        return withRecoveredVideo(post, recovered)
+        const recovered = recoveredMediaFrom(feed, code)
+        if (recovered) {
+          count(env, 'ig', 'copyright_recovered', client)
+          return withRecoveredVideo(post, recovered)
+        }
+        /**
+         * THE WINDOW RAN OUT, SO HAND THE PAGE TO THE CONTAINER — the same yt-dlp tier YouTube and
+         * Facebook use. Reported 2026-08-02 on /reel/DX7byl-oyGR/, which instagram7 played and we drew
+         * as a photo.
+         *
+         * The feed above is ACCOUNT-scoped and Instagram serves 12 items whatever `count` asks for, so
+         * a blocked reel further back than that was unrecoverable. That one sits ~60 posts deep;
+         * reaching it by `max_id` paging measured five sequential requests and 2.45 MB, which does not
+         * fit a 5s ceiling and hands any unauthenticated caller a multi-megabyte lever. yt-dlp is
+         * addressed by the POST, so the window simply does not apply — and on that reel it returned a
+         * better rendition than the feed does (1080x1920 against 720x1280) in one request.
+         *
+         * ORDER MATTERS AND IS DELIBERATE: the feed is tried FIRST, so a recent blocked reel still
+         * resolves without booting a container. This is the fallback's fallback.
+         */
+        count(env, 'ig', 'copyright_remux', client)
+        return withCopyrightRemux(post)
       }
       return post
     }
