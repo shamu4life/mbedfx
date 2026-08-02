@@ -374,3 +374,30 @@ test('A PREVIEW THAT LOST THE RACE SAYS SO, so the page knows to ask once more',
   assert.equal(j.pending, true, 'the page is told the answer is incomplete')
   assert.ok(!/Latte-chan/.test(j.text), 'and it is not pretending to have a translation it lost')
 })
+
+test('THE HTML SEAM TRANSLATES A VIDEO POST TOO — the two seams must not disagree about one post', async () => {
+  /**
+   * The counterpart to the /_card test above, on the seam DISCORD reads for a post with no media —
+   * and the one that proves the pair cannot drift.
+   *
+   * Found by measuring a live cold Instagram reel: the activity document came back translated while
+   * this document, for the SAME post at the SAME moment, carried the raw Chinese caption. Same
+   * defect as the preview's — settleMux was awaited first and spent the budget the translation then
+   * asked for what was left of.
+   *
+   * "Fix one head and not the other and half the cards still break" is the oldest note in this
+   * repo's guide. This is that note as an assertion.
+   */
+  const model = async () => {
+    await new Promise(r => setTimeout(r, 800))
+    return { response: 'Tonight, a Latte-chan nap service video' }
+  }
+  const { ctx } = trackingCtx()
+  const env = { ...envWith(model), MEDIA_RESOLVER: slowMuxBinding(HTML_DEADLINE_MS) }
+  const res = await handle(req(), env, ctx, { ...deps(), fetchPost: async ref => jaVideoPost(ref) })
+  const html = await res.text()
+
+  assert.equal(res.status, 200)
+  assert.match(html, /Latte-chan nap service video/,
+    'the og:description carries the translation instead of the budget going entirely to the mux')
+})

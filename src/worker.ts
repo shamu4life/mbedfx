@@ -2396,17 +2396,44 @@ async function renderPostRoute(
   // shrinks the mux wait rather than stacking on top of it. FLOORED, never zeroed — see
   // MUX_WAIT_FLOOR_MS: a 0ms race beats R2's own head RPC, so a blown budget used to discard a mux that
   // was already sitting warm in the bucket and then decline to cache the degraded card it produced.
-  const settled = await settleMux(post, env, ctx, Math.max(MUX_WAIT_FLOOR_MS, HTML_DEADLINE_MS - (Date.now() - started)))
-  // What is LEFT after the mux, not a fresh budget — the translation is the least important thing on
-  // this card and must never be the reason Discord gives up on it. A lost race still lands in R2 for
-  // the next reader; see withTranslated.
-  // CAPPED as well as floored — see XLATE_MAX_WAIT_MS. What is left of the deadline is an upper bound
-  // on the whole response, not an allowance the least important element gets to spend in full.
-  const xlate = await withTranslated(
-    settled.post, env, ctx,
-    Math.max(XLATE_WAIT_FLOOR_MS, Math.min(XLATE_MAX_WAIT_MS, HTML_DEADLINE_MS - (Date.now() - started))),
+  /**
+   * CONCURRENT, for the reason the card arm is — and this is the seam DISCORD reads.
+   *
+   * These ran serially: settleMux first, then the translation re-evaluating the SAME
+   * `HTML_DEADLINE_MS - elapsed` expression the mux had just spent. The old comment here argued the
+   * translation should get "what is LEFT after the mux, not a fresh budget", because it "must never
+   * be the reason Discord gives up on it". The intent is right and is kept; the implementation did
+   * something stricter than intended. settleMux does not return early on a cold mux — it races
+   * muxOnce against a timer and spends whatever it is handed — so "what is left" was reliably NOTHING
+   * and the translation fell to its 300ms floor on every post with remux media.
+   *
+   * Measured on a live cold Instagram reel while chasing a different bug: the activity document came
+   * back translated and this document, for the same post at the same moment, came back with the raw
+   * Chinese caption. Two seams, one post, disagreeing — which is the failure this file warns about
+   * more than any other.
+   *
+   * Running them concurrently costs NOTHING against the ceiling, because the response was already
+   * waiting on the mux; the translation now overlaps that wait instead of queueing behind it. The
+   * XLATE_MAX_WAIT_MS cap STAYS, and matters more here than anywhere else: this route's ceiling is
+   * HTML_DEADLINE_MS and overrunning it costs the whole embed, so the translation still may not
+   * become the long pole once the mux is done.
+   *
+   * NOT changed, deliberately: the activity route's uncapped MUX_WAIT_API_MS. There the mux and the
+   * translation are already concurrent on a 9s budget that a cold mux is expected to spend anyway, so
+   * capping the translation would abandon it early to save time the response is spending regardless.
+   */
+  const [settled, xlate] = await Promise.all([
+    settleMux(post, env, ctx, Math.max(MUX_WAIT_FLOOR_MS, HTML_DEADLINE_MS - (Date.now() - started))),
+    // The pre-mux post: the mux rewrites media urls and never touches `text`.
+    withTranslated(
+      post, env, ctx,
+      Math.max(XLATE_WAIT_FLOOR_MS, Math.min(XLATE_MAX_WAIT_MS, HTML_DEADLINE_MS - (Date.now() - started))),
+    ),
+  ])
+  const res = render(
+    { kind: 'post', post: withTranslation(settled.post, xlate.translated, xlate.source) },
+    client, origin,
   )
-  const res = render({ kind: 'post', post: xlate.post }, client, origin)
   // `pending` joins `degraded` for the same reason: caching a card that is missing something still
   // arriving would pin the incomplete version for RESP_TTL.
   if (!settled.degraded && !xlate.pending) {

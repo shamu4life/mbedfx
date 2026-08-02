@@ -5,6 +5,65 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [1.0.1] — 2026-08-02
+
+Three defects found in the first day of real use, all on the converter page or the seam behind it.
+Two share one shape: work that only ever got done by *Discord* unfurling a link, on a page where
+nobody has unfurled anything yet.
+
+### Fixed
+- **The preview always said "no upload date".** YouTube's upload date comes from the container and
+  is cached in R2 — but that cache is warmed by the activity route, i.e. by Discord unfurling the
+  link. `/_card` only ever read it. So the record was cold for exactly the links a person previews:
+  the ones they have not sent. Measured live: the same video returned the epoch on its first view
+  and the correct 2009 date on its second and third. On the converter page every view is a first
+  view, so the self-heal that hid this everywhere else could never fire. The preview now warms the
+  record the same way the card does — which adds no container call, it moves the one the reader was
+  about to trigger by pasting into Discord a few seconds earlier.
+- **Translations arrived unreliably on the preview.** `/_card` awaited the mux and *then* asked for
+  whatever was left of the deadline for the translation. A cold mux does not finish early — it
+  spends whatever budget it is handed — so on any post with video the mux took the whole ceiling and
+  the translation fell to its 300ms floor. Google is measured at 217–798ms, so a 300ms race wins
+  *some* of the time: same link, two different answers. The two now run concurrently, on the
+  preview's own ceiling rather than one borrowed from Discord's crawler.
+- **The same defect on the OpenGraph seam.** Found while measuring a live Instagram reel: the
+  activity document came back translated while the plain head, for the same post at the same
+  moment, carried the raw Chinese caption. Two seams disagreeing about one post is the failure this
+  project has repeated more than any other, and it is now asserted against in both directions.
+
+### Added
+- **`pending` in the `/_card` response.** A translation that loses its race already set this flag,
+  and `renderPostRoute` already read it to suppress the response cache so the next render heals. The
+  converter page has no next render — it fetches once and draws the answer. It now re-fetches once,
+  2.5s later, when the flag is set; the losing work is still running and writes to R2 as the
+  response goes out, so the retry reads a warm record rather than paying a second inference. One
+  retry, never a poll.
+
+### Changed
+- Site copy moved out of second person into third — "when a link hits a wall" rather than "when you
+  get a wall". First person stays: the page still says "slot me in" and "so I won't guess".
+- The footer claimed a **"Zero-dependency Cloudflare Worker"**, which is not true — `package.json`
+  carries `@cloudflare/containers`. It now says "No-framework", which is.
+- The comparison table's footnotes sit under the table again. GitHub's own footnote syntax fixed
+  their run-on rendering but relocated them below the licence, ~160 rendered lines from the table
+  they annotate.
+- Staging hostnames dropped from the published domain list.
+
+### Notes
+- **Not changed, deliberately:** the activity route's uncapped translation budget. It looks like the
+  same bug and is not. There the mux and the translation are already concurrent on a 9s budget that
+  a cold mux is expected to spend anyway, so capping the translation would abandon it early to save
+  time the response spends regardless — it would make translations *worse*, which is the thing being
+  fixed here.
+- Each of the three fixes has a test that was verified to FAIL against the previous code. Two of
+  them cost ~5s of wall clock each on purpose: the budget they prove cannot be exhausted is
+  `HTML_DEADLINE_MS`, so the mux has to genuinely outlast it. A faster test passes either way and
+  pins nothing.
+
+1125 tests, `node --test`; `tsc --noEmit` clean.
+
+---
+
 ## [1.0.0] — 2026-08-01
 
 The first public release. Everything below already ran in production; this is the point at
