@@ -985,7 +985,21 @@ export function recoveredMediaFrom(body: unknown, code: string): Media[] | null 
   } catch {
     return null
   }
-  const items: unknown = (parsed as Any)?.items
+  /**
+   * TWO ENVELOPES, ONE ITEM SHAPE. The user feed answers `{items:[…]}`; the shortcode-scoped GraphQL
+   * surface answers `{data:{xdt_api__v1__media__shortcode__web_info:{items:[…]}}}`. The items inside
+   * are the SAME v1 objects — same image_versions2 candidate ladder, same video_versions, same
+   * carousel_media — which is the whole reason the GraphQL path is worth having: it is a different
+   * ADDRESS onto the serializer this function already knows how to read, not a new format.
+   *
+   * Read here rather than unwrapped at each call site so both surfaces are guaranteed to go through
+   * one candidate-selection rule. The aspect-first crop rejection above took a reported bug to get
+   * right, and a second copy of it reached by a different door is how that bug comes back.
+   */
+  const envelope = parsed as Any
+  const items: unknown = Array.isArray(envelope?.items)
+    ? envelope.items
+    : envelope?.data?.xdt_api__v1__media__shortcode__web_info?.items
   if (!Array.isArray(items)) return null
   const item = items.find(it => it !== null && typeof it === 'object' && (it as Any).code === code) as Any
   if (!item) return null

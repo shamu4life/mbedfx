@@ -401,3 +401,88 @@ export async function fetchInstagramFullPage(ref: Extract<PostRef, { p: 'ig' }>)
     return null
   }
 }
+
+/**
+ * THE SHORTCODE-SCOPED RECOVERY: one anonymous GraphQL POST that answers with the v1 media shape.
+ * Returns the body or null; a throw is "no recovery", never an error.
+ *
+ * WHY THIS IS THE FIRST THING TRIED for a rights-struck post. fetchInstagramUserFeed above works and
+ * is kept, but it is ACCOUNT-scoped: there was no logged-out shortcode form of the v1 serializer, so
+ * it asks for the account's recent posts and picks ours out. Instagram serves exactly 12 items
+ * whatever `count` requests (measured at 33 and 50, both 12), so a blocked reel further back stayed a
+ * still — reported 2026-08-02 on /reel/DX7byl-oyGR/, roughly 60 posts deep, which InstaFix-derived
+ * services played and we drew as a photo. Paging to it took five requests and 2.45 MB.
+ *
+ * This endpoint dissolves that problem rather than widening it: addressed by the POST, there is no
+ * window to fall outside and an ancient blocked reel costs exactly what a fresh one does.
+ *
+ * MEASURED, with Node's fetch() rather than curl, cookie-free and token-free, on that exact reel:
+ * HTTP 200, 21,648 bytes, 429ms, `video_versions` present, and no `copyright_blocked` key anywhere in
+ * the payload — the same absence that makes the user feed work, because this is a different ADDRESS
+ * onto that serializer, not a different format. recoveredMediaFrom reads both envelopes for exactly
+ * that reason.
+ *
+ * NOT curl, DELIBERATELY, AND THAT IS THE WHOLE POINT OF SAYING SO. The sibling endpoint above
+ * carries a long note about a probe that measured perfectly by hand and was refused the moment the
+ * shipped client called it, because fetch() stamps sec-fetch headers curl never sends. So this was
+ * verified with the client shape that will actually run.
+ *
+ * `lsd` ONLY HAS TO BE SELF-CONSISTENT. It is Meta's CSRF-ish token; the body value and the X-FB-LSD
+ * header must match each other, and a freshly random one is accepted — no session, no cookie jar, no
+ * prior page load to scrape it from. Verified with random bytes.
+ *
+ * THE doc_id ROTS, and that is a known, accepted cost rather than an oversight. It is Env-overridable
+ * (IG_GRAPHQL_DOC_ID) so a rotation is a config change. When it dies this returns null and the older
+ * recoveries — the user feed, then the yt-dlp container — carry the card, so the failure is a quiet
+ * loss of rendition quality and never a broken embed. That layering is why depending on a magic
+ * number here is defensible at all.
+ *
+ * NOT EGRESS-CONFIRMED, and this caveat is sharper than usual: the OTHER media-scoped anonymous
+ * surface, `i.instagram.com/api/v1/media/{id}/info/`, already answers login_required from our egress
+ * today (see fetchInstagramUserFeed). A media-scoped Instagram endpoint being refused specifically
+ * from Cloudflare is the documented pattern here, not a hypothetical. Every failure lands on the
+ * existing chain, so the residential evidence bounds the UPSIDE — the win may be zero from Workers —
+ * rather than the downside.
+ */
+const IG_GRAPHQL_DOC_ID = '27128499623469141'
+
+export async function fetchInstagramGraphQLMedia(
+  code: unknown, docId?: string,
+): Promise<string | null> {
+  // Same shape check the embed path applies, and for the same reason: this reaches a url.
+  if (typeof code !== 'string' || !SHORTCODE.test(code)) return null
+  try {
+    const lsd = Array.from(crypto.getRandomValues(new Uint8Array(12)))
+      .map(b => b.toString(16).padStart(2, '0')).join('')
+    const body = new URLSearchParams({
+      doc_id: (typeof docId === 'string' && /^\d{6,32}$/.test(docId)) ? docId : IG_GRAPHQL_DOC_ID,
+      lsd,
+      server_timestamps: 'true',
+      variables: JSON.stringify({
+        shortcode: code,
+        __relay_internal__pv__PolarisAIGMMediaWebLabelEnabledrelayprovider: false,
+      }),
+    })
+    const res = await fetch('https://www.instagram.com/graphql/query/', {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/x-www-form-urlencoded',
+        'user-agent': 'Mozilla/5.0',
+        'x-fb-friendly-name': 'PolarisPostRootQuery',
+        'x-fb-lsd': lsd,
+      },
+      body,
+    })
+    if (!res.ok) return null
+    const text = await res.text()
+    /**
+     * ASSERT ON CONTENT, NOT ON STATUS. This surface answers HTTP 200 with a refusal body — the
+     * sibling endpoint's "SecFetch Policy violation." at 200 is the standing example — so a 200 is
+     * not evidence of anything. The only acceptable answer carries the documented root; anything
+     * else is a refusal, a decoy or a rotated doc_id, and all three mean "no recovery".
+     */
+    return text.includes('xdt_api__v1__media__shortcode__web_info') ? text : null
+  } catch {
+    return null
+  }
+}

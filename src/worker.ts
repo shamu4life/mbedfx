@@ -18,7 +18,9 @@ import { fetchBluesky } from './platforms/bluesky/fetch.ts'
 import { normalizeBluesky } from './platforms/bluesky/normalize.ts'
 import { fetchTikTok, resolveTikTokShortlink, withResolvedVideo } from './platforms/tiktok/fetch.ts'
 import { normalizeTikTok, tiktokGate, tiktokRefFrom, videoDetailScope } from './platforms/tiktok/normalize.ts'
-import { fetchInstagram, fetchInstagramFullPage, fetchInstagramUserFeed } from './platforms/instagram/fetch.ts'
+import {
+  fetchInstagram, fetchInstagramFullPage, fetchInstagramGraphQLMedia, fetchInstagramUserFeed,
+} from './platforms/instagram/fetch.ts'
 import {
   instagramAgeGate, instagramCopyrightBlocked, instagramFullPageCard, instagramPrivateGate,
   normalizeInstagram,
@@ -392,8 +394,34 @@ export async function liveFetchPost(
        * unconfirmed on this endpoint, and this shape is what makes shipping it anyway defensible.
        */
       if (post && instagramCopyrightBlocked(got.html) && post.media[0]?.kind === 'image') {
+        const code = ref.kind === 'p' ? ref.code : ''
+        /**
+         * THREE RECOVERIES, CHEAPEST AND MOST PRECISE FIRST, each covering the one below it.
+         *
+         * 1. THE SHORTCODE GRAPHQL QUERY. One POST, ~21KB, measured at 429ms — and addressed by the
+         *    POST, so the user feed's 12-item window cannot apply to it. This is what the
+         *    InstaFix-derived services use, and it is why they played /reel/DX7byl-oyGR/ while we drew
+         *    a photo. Its weakness is a rotating doc_id.
+         * 2. THE ACCOUNT FEED. Older, no magic number to rot, but account-scoped: only recovers a post
+         *    inside the account's twelve most recent. It is the answer when the doc_id has rotated and
+         *    the post is recent.
+         * 3. THE yt-dlp CONTAINER. Slowest, and the only one that is not a private Instagram endpoint
+         *    at all — which makes it the durable floor: yt-dlp's maintainers chase Meta's changes, so
+         *    it survives the failure that takes out both of the above.
+         *
+         * They fail in DIFFERENT ways on purpose. 1 dies to a doc_id rotation, 2 to an old post, 3 to
+         * a missing container or an extractor break. Nothing but Instagram refusing our egress
+         * outright takes all three, and that lands on the cover still we already ship.
+         */
+        const gql = recoveredMediaFrom(
+          await fetchInstagramGraphQLMedia(code, env.IG_GRAPHQL_DOC_ID), code,
+        )
+        if (gql) {
+          count(env, 'ig', 'copyright_gql', client)
+          return withRecoveredVideo(post, gql)
+        }
         const feed = await fetchInstagramUserFeed(post.author?.name)
-        const recovered = recoveredMediaFrom(feed, ref.kind === 'p' ? ref.code : '')
+        const recovered = recoveredMediaFrom(feed, code)
         if (recovered) {
           count(env, 'ig', 'copyright_recovered', client)
           return withRecoveredVideo(post, recovered)

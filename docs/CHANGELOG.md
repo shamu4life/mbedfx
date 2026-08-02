@@ -5,6 +5,37 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [1.2.0] — 2026-08-02
+
+A copyright-blocked Instagram reel now has **three** independent recoveries, tried cheapest first.
+Reported on `/reel/DX7byl-oyGR/`, which a competitor played and we drew as a photo.
+
+### Added
+- **A shortcode-scoped GraphQL recovery, tried first.** Instagram has an anonymous, cookie-free
+  GraphQL query that answers with the same v1 media shape the user feed does — and, unlike the feed,
+  it is addressed by the POST. Measured with a real `fetch()` (not curl, which this project has been
+  burned by on the neighbouring endpoint): HTTP 200, 21.6 KB, 429ms, `video_versions` intact, and no
+  `copyright_blocked` key anywhere in the payload. Against the alternative of paging the account feed
+  — five requests and 2.45 MB — that is roughly 113x less egress and fits the 5s response ceiling
+  the walk does not.
+- **`IG_GRAPHQL_DOC_ID`**, because the `doc_id` that query needs is rotated by Meta; one is known to
+  have died inside about a month. Re-pinning it is now a config change rather than a patch release.
+
+### Changed
+- The recovery chain is **GraphQL → account feed → yt-dlp container**, and the tiers fail in
+  deliberately different ways: the first dies to a rotated `doc_id`, the second to a post older than
+  the account's twelve most recent, the third only to a missing container or an extractor break.
+  Nothing short of Instagram refusing our egress outright takes all three, and that lands on the
+  cover still we already ship. The yt-dlp tier is the durable floor precisely because it is not a
+  private Instagram endpoint — its maintainers chase Meta's changes on our behalf.
+- Three counters (`copyright_gql`, `copyright_recovered`, `copyright_remux`) rather than one. The
+  ratio is the only way a rotated `doc_id` announces itself: the cards keep rendering from a slower
+  tier, so the failure is otherwise completely silent.
+
+1133 tests, `node --test`; `tsc --noEmit` clean.
+
+---
+
 ## [1.1.2] — 2026-08-02
 
 ### Fixed

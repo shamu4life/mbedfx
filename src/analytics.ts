@@ -53,11 +53,17 @@ import type { ClientClass, Platform } from './types.ts'
 export type Outcome2 =
   | 'ok' | 'media_hit' | 'media_miss' | 'api_hit' | 'api_miss' | 'api_bad_id' | 'assert_fail'
   | 'fetch_fail' | 'age_restricted' | 'private' | 'ambiguous' | 'notfound'
-  // copyright_recovered = the v1 user feed had it (the post was recent enough to be in the window).
-  // copyright_remux = it was not, and the page went to the container instead. The two are counted
-  // SEPARATELY on purpose: their ratio is the only way to see how often the feed's 12-post window is
-  // actually the binding constraint, which is the number that would justify revisiting either path.
-  | 'copyright_recovered' | 'copyright_remux' | 'fullpage_recovered'
+  // The three copyright recoveries, in the order they are tried. copyright_gql = the shortcode
+  // GraphQL query answered (cheapest, and the only one with no window). copyright_recovered = it did
+  // not, but the account feed had the post, so it was recent. copyright_remux = neither, and the page
+  // went to the yt-dlp container.
+  //
+  // Counted separately because the RATIO is the operational signal, and each ratio names a different
+  // failure. copyright_gql collapsing to zero is how a rotated doc_id announces itself. Everything
+  // landing on copyright_remux means both private endpoints are refusing our egress. All three at
+  // zero while ig/ok keeps climbing means Instagram closed the recovery entirely and every blocked
+  // reel is quietly a photo again — which no card will ever tell anyone, since they all still render.
+  | 'copyright_gql' | 'copyright_recovered' | 'copyright_remux' | 'fullpage_recovered'
   | 'translated' | 'translate_fallback'
 
 /**
@@ -110,6 +116,14 @@ export interface Env {
    * lever that reverses it in seconds without a deploy, whether the reason is a 403 wave or a letter.
    */
   TRANSLATE_GOOGLE?: string
+  /**
+   * The `doc_id` of Instagram's shortcode-scoped GraphQL query (PolarisPostRootQuery). Overridable
+   * because Meta ROTATES IT — InstaFix's history shows one rotating inside about a month, which is
+   * why they made theirs configurable too. When it dies this path stops answering and the older
+   * recoveries carry the card, so the symptom is a quiet loss of quality rather than an outage; a var
+   * means re-pinning it is a config change, not a patch release.
+   */
+  IG_GRAPHQL_DOC_ID?: string
   // The Reddit OAuth app's credentials (a "script"/"web" app registered as shamu4life). Reddit
   // blocks anonymous access from datacenter IPs, so `rd` alone of the six needs a stored secret;
   // fetchReddit exchanges these for an app-only bearer token. Set with `wrangler secret put`. These
