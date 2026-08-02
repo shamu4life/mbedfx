@@ -5,6 +5,42 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [1.1.1] — 2026-08-02
+
+### Fixed
+- **The footer only existed on `#nope`.** It was written when the page was one long scroll, where "at
+  the bottom" and "under the last channel" were the same place. Once channels started hiding each
+  other, the source link, the licence and the trademark disclaimer vanished from four channels out of
+  five. It now sits outside every section — the only arrangement a future channel cannot take it away
+  from — and is tighter, since it has to earn its height under a two-line channel. The one claim in it
+  worth keeping ("reads the post itself rather than handing you off to someone else's fixer") moved
+  into the `#convert` pitch, where it argues for the tool rather than sitting in small print.
+- **The `fx` mark in the README banner was off centre**, and only for some readers. Measured in
+  Chrome it was off by 0.75px in 112 — correct. It was wrong on the reporter's phone, and that gap is
+  the whole bug: the SVG asked for `system-ui`, which is not embedded, so every viewer rendered the
+  mark in whatever their OS supplied while the baseline had been hand-tuned to one font's metrics. A
+  nudge tuned here would not have moved what they saw. The mark is now baked to a cropped PNG and
+  placed dead centre, so it is identical everywhere. Its size was solved for the width the design
+  actually rendered rather than copied from the old attribute, and landed within 1% of nominal —
+  which confirms the bake reproduces the original rather than quietly redrawing it.
+- **The README version badge was hardcoded** and still read 1.0.0 two releases later. It now reads
+  the latest GitHub release, so it cannot go stale again.
+
+### Changed
+- The comparison table's footnotes are gone. They had been through three shapes — bunched paragraph,
+  GitHub `[^n]`, numbered list — which is the tell that the apparatus was the problem rather than its
+  rendering. The load-bearing qualifications moved into the cells they qualified, and the two fairness
+  points a table cannot show (FxEmbed's depth on Twitter, and our remux being a workaround rather than
+  an advantage) moved into the prose above it. Dropping them silently would have left the table
+  overclaiming.
+- **"How it works" now sits with Contributing, Security and Credits** instead of between Features and
+  Caveats. It is architecture, and it was interrupting the part a visitor reads to decide whether to
+  paste a link.
+
+1130 tests, `node --test`; `tsc --noEmit` clean.
+
+---
+
 ## [1.1.0] — 2026-08-02
 
 The page borrowed Discord's chrome without borrowing its behaviour. Four reports, all the same

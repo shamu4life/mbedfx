@@ -5,7 +5,7 @@
 
 [![License](https://img.shields.io/badge/license-MIT-5865f2?style=flat)](LICENSE)
 [![CI](https://img.shields.io/github/actions/workflow/status/shamu4life/mbedfx/ci.yml?branch=main&style=flat&label=CI&color=5865f2)](../../actions/workflows/ci.yml)
-[![Version](https://img.shields.io/badge/version-1.0.0-5865f2?style=flat)](docs/CHANGELOG.md)
+[![Version](https://img.shields.io/github/v/release/shamu4life/mbedfx?style=flat&label=version&color=5865f2)](docs/CHANGELOG.md)
 
 [![Cloudflare Workers](https://img.shields.io/badge/Deployed_on-Cloudflare_Workers-f38020?style=flat&logo=cloudflare&logoColor=white)](https://workers.cloudflare.com)
 [![Tests](https://img.shields.io/badge/tests-1100%2B-22c55e?style=flat)](test)
@@ -84,25 +84,24 @@ Short links resolve too — `youtu.be`, `dai.ly`, `redd.it`, `tiktok.com/t/…`,
 ## How it compares
 
 Checked 2026-08-01 against each project's docs, source and live service. **?** means we could not
-establish it either way — not that the answer is no. These are all good projects.
+establish it either way — not that the answer is no.
+
+These are all good projects, and two things the table cannot show are worth saying plainly. FxEmbed's
+depth on Twitter far exceeds ours on any single site. And our own remux is a workaround, not a
+feature to be proud of — it exists because most of our seventeen won't hand a bot a playable file,
+and it buys nothing on Twitter or TikTok, where the platform already serves one.
 
 | | **mbedfx** | [FxEmbed](https://github.com/FxEmbed/FxEmbed) | [vxTwitter](https://github.com/dylanpdx/BetterTwitFix) | [fxTikTok](https://github.com/okdargy/fxTikTok) | [InstaFix](https://github.com/Wikidepia/InstaFix) | [InstaFix Revived](https://github.com/Bl0ck154/InstaFix-Revived) |
 |---|---|---|---|---|---|---|
-| Sites covered | **17** | 2 documented, 4 live <sup>1</sup> | Twitter | TikTok | Instagram | Instagram |
-| Working public instance | ✅ | ✅ + status page | ✅ | ✅ | ❌ domain lapsed <sup>2</sup> | ✅ |
-| How video reaches Discord | own remux <sup>3</sup> | platform MP4 <sup>4</sup> | CDN redirect | CDN redirect | CDN redirect | streamed |
-| Caption translation | ✅ automatic | opt-in `/en` | opt-in `/en` <sup>5</sup> | ❌ | ❌ | ❌ |
-| Card says *why* a post is missing | ✅ private / age / deleted | ? | ? | age only | ❌ redirects | one generic card <sup>6</sup> |
+| Sites covered | **17** | 2 documented, 4 live | Twitter | TikTok | Instagram | Instagram |
+| Working public instance | ✅ | ✅ + status page | ✅ | ✅ | ❌ archived, self-host only | ✅ |
+| How video reaches Discord | own remux | platform MP4 | CDN redirect | CDN redirect | CDN redirect | streamed |
+| Caption translation | ✅ automatic | opt-in `/en` | opt-in `/en`, undocumented | ❌ | ❌ | ❌ |
+| Card says *why* a post is missing | ✅ private / age / deleted | ? | ? | age only | ❌ redirects | one generic card |
 | Public JSON API | ❌ | ✅ OpenAPI | ✅ documented | ❌ | ❌ | undocumented |
 | Self-host off Cloudflare | ❌ Workers only | ❌ Workers | ✅ Docker · systemd · Lambda | Docker, undocumented | ✅ Docker · K8s | ✅ Docker |
 | Operator metrics | ❌ | ? | ? | ✅ Prometheus | pprof | pprof |
 
-1. FxEmbed documents Twitter and Bluesky; `dxtiktok.com` and `67instagram.com` are also live FxEmbed deployments, and their public API covers six providers. Their depth on Twitter far exceeds ours on any single site.
-2. `ddinstagram.com` lapsed and was re-registered by an unrelated party in July 2026. The repo is archived; self-host only.
-3. Only necessary because most of our seventeen won't hand a bot a playable file. It's no advantage on Twitter or TikTok, where the platform already serves one.
-4. Twitter hands out progressive MP4, so FxEmbed passes it straight through.
-5. Implemented but undocumented, and it replaces the post text rather than showing both.
-6. They classify private / restricted / deleted internally, then render the same card for all three.
 
 ## Features
 
@@ -161,6 +160,43 @@ Nothing here guesses. When a platform won't say what happened, that's what the c
 
 </details>
 
+
+## Caveats
+
+Know what you're getting:
+
+- **No uptime guarantee.** It's a Cloudflare Worker on a hobby budget. It'll probably be fine.
+- **Some posts can't be fixed.** An age-gated Instagram post needs an account, and nothing clever at the edge changes that.
+- **Videos over 20 minutes come out as thumbnails.** Muxing one inside a request deadline isn't realistic.
+- **It leans on undocumented endpoints.** Platforms change them without warning. When one goes you get a card saying it broke, not a wrong one.
+- **Translation is machine translation.** It gets things wrong; the original's right underneath.
+
+## Privacy
+
+- **No accounts, no cookies, no analytics on the page.** Nothing identifies who pasted a link.
+- **Counters only.** The worker records which platform was asked for and whether it worked. Not urls, not ids, not addresses.
+- **R2 holds two things:** remuxed video, keyed by the post; and translations, keyed by a hash of the text. Both expire after 60 days, and both are regenerable from the platform they came from.
+- **Cards cache for about 15 minutes**, which is why a post you just deleted can linger briefly.
+- **Nothing about you reaches the platform.** The worker fetches from its own egress; your IP and user agent stay with us.
+
+## Official domains
+
+Only these run mbedfx:
+
+`mbedfx.app` · `megapenispoopenfarten.sex`
+
+Anything else using the name isn't us.
+
+## Contributing
+
+Bug reports and feature requests are welcome — see [CONTRIBUTING.md](.github/CONTRIBUTING.md) and the [issue templates](../../issues/new/choose).
+
+One thing before a PR: if you change something based on what an upstream returned, say where you ran it from. A datacenter IP and your laptop get served different bytes. It's bitten this project before.
+
+## Security
+
+Please don't open a public issue for a security problem — [SECURITY.md](.github/SECURITY.md) has the private route.
+
 ## How it works
 
 <details>
@@ -204,42 +240,6 @@ Deploys aren't run by hand — Cloudflare Workers Builds watches `main`, so merg
 The container is optional. Without it, video falls back to a cover image and everything else is unchanged.
 
 </details>
-
-## Caveats
-
-Know what you're getting:
-
-- **No uptime guarantee.** It's a Cloudflare Worker on a hobby budget. It'll probably be fine.
-- **Some posts can't be fixed.** An age-gated Instagram post needs an account, and nothing clever at the edge changes that.
-- **Videos over 20 minutes come out as thumbnails.** Muxing one inside a request deadline isn't realistic.
-- **It leans on undocumented endpoints.** Platforms change them without warning. When one goes you get a card saying it broke, not a wrong one.
-- **Translation is machine translation.** It gets things wrong; the original's right underneath.
-
-## Privacy
-
-- **No accounts, no cookies, no analytics on the page.** Nothing identifies who pasted a link.
-- **Counters only.** The worker records which platform was asked for and whether it worked. Not urls, not ids, not addresses.
-- **R2 holds two things:** remuxed video, keyed by the post; and translations, keyed by a hash of the text. Both expire after 60 days, and both are regenerable from the platform they came from.
-- **Cards cache for about 15 minutes**, which is why a post you just deleted can linger briefly.
-- **Nothing about you reaches the platform.** The worker fetches from its own egress; your IP and user agent stay with us.
-
-## Official domains
-
-Only these run mbedfx:
-
-`mbedfx.app` · `megapenispoopenfarten.sex`
-
-Anything else using the name isn't us.
-
-## Contributing
-
-Bug reports and feature requests are welcome — see [CONTRIBUTING.md](.github/CONTRIBUTING.md) and the [issue templates](../../issues/new/choose).
-
-One thing before a PR: if you change something based on what an upstream returned, say where you ran it from. A datacenter IP and your laptop get served different bytes. It's bitten this project before.
-
-## Security
-
-Please don't open a public issue for a security problem — [SECURITY.md](.github/SECURITY.md) has the private route.
 
 ## Credits
 

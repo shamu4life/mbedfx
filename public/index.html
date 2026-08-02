@@ -403,7 +403,14 @@ pre s { color: var(--faint); }
 }
 .chips code { color: var(--head); font-size: 12px; }
 
-footer { color: var(--faint); font-size: 13px; padding: 28px 0 0; border-top: 1px solid var(--line); margin-top: 32px; }
+footer {
+  color: var(--faint); font-size: 13px; padding: 16px 0 0;
+  border-top: 1px solid var(--line); margin: 28px 0 0;
+}
+footer p { margin: 0 0 4px; }
+footer p:last-child { margin: 0; }
+/* The trademark note is the least urgent thing on the page and is sized to say so. */
+footer .fine { font-size: 12px; opacity: .8; }
 
 /* ---------- narrow ---------------------------------------------------- */
 
@@ -452,7 +459,7 @@ footer { color: var(--faint); font-size: 13px; padding: 28px 0 0; border-top: 1p
          hardcoded because this page is a static asset with no template step — and pinned to
          package.json by a test, because a version number that silently disagrees with the release is
          worse than none at all. -->
-    <div class="server">mbedfx <span class="ver" id="ver">v1.1.0</span></div>
+    <div class="server">mbedfx <span class="ver" id="ver">v1.1.1</span></div>
     <div class="cat">Start here</div>
     <a href="#convert"><b>#</b> convert</a>
     <a href="#sites"><b>#</b> sites</a>
@@ -497,7 +504,8 @@ footer { color: var(--faint); font-size: 13px; padding: 28px 0 0; border-top: 1p
         <div>
           <div class="who"><span class="name">mbedfx</span><span class="bot">BOT</span><span class="ts">today</span></div>
           <p>Paste a social link and I'll hand back one Discord can actually draw. Swap the site's
-             domain for mine and the link still points at the same post.</p>
+             domain for mine and the link still points at the same post — read here, not
+             handed off to someone else's fixer.</p>
 
           <div class="tool">
             <div class="toolbar">
@@ -616,17 +624,20 @@ footer { color: var(--faint); font-size: 13px; padding: 28px 0 0; border-top: 1p
             <div>Bare profile links. There's no post to draw.</div>
             <div>PeerTube playlists, Friendica, Bilibili, pixiv</div>
           </div>
-
-          <footer>
-            <p style="margin:0 0 6px">No-framework Cloudflare Worker. It reads the post itself
-              rather than redirecting to someone else's fixer.
-              <a href="https://github.com/shamu4life/mbedfx">Source on GitHub</a>.</p>
-            <p style="margin:0">Not affiliated with Discord. Platform names and marks belong to their
-              owners and are used here to say which sites are supported.</p>
-          </footer>
         </div>
       </article>
       </section>
+
+      <!-- OUTSIDE every channel section, deliberately. This lived inside #nope, which was invisible
+           while the page was one scroll and became "a footer four channels do not have" the moment
+           one channel started hiding the others. -->
+      <footer>
+        <p>No-framework Cloudflare Worker ·
+          <a href="https://github.com/shamu4life/mbedfx">Source on GitHub</a> ·
+          <a href="https://github.com/shamu4life/mbedfx/blob/main/LICENSE">MIT</a></p>
+        <p class="fine">Not affiliated with Discord. Platform names and marks belong to their owners
+          and are used here to say which sites are supported.</p>
+      </footer>
 
     </div>
   </main>

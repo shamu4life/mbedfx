@@ -634,3 +634,22 @@ test('PORTRAIT MOBILE CAN STILL CHANGE CHANNEL', () => {
   assert.ok(/id="navToggle"/.test(HTML) && /id="scrim"/.test(HTML), 'the toggle and its scrim exist')
   assert.ok(/aria-expanded="false"/.test(HTML), 'and it reports its state to a screen reader')
 })
+
+test('THE FOOTER BELONGS TO THE PAGE, NOT TO A CHANNEL', () => {
+  /**
+   * Reported 2026-08-02: the footer "is only present on #nope ... should be present on every page".
+   *
+   * It was written when the page was one long scroll, where "at the bottom" and "under the last
+   * channel" were the same place. Once channels started hiding each other it became a footer only
+   * #nope had, so the source link, the licence and the trademark disclaimer disappeared from four
+   * channels out of five. It now sits in .msgs, outside every section, which is the only arrangement
+   * a future channel cannot take it away from.
+   */
+  const sections = [...HTML.matchAll(/<section class="chan" id="([^"]+)"[\s\S]*?<\/section>/g)]
+  assert.ok(sections.length >= 5, 'the channels are still sections')
+  for (const [block, id] of sections) {
+    assert.ok(!block.includes('<footer'), `#${id} does not own the footer`)
+  }
+  assert.equal((HTML.match(/<footer/g) || []).length, 1, 'exactly one footer on the page')
+  assert.match(HTML, /Not affiliated with Discord/, 'and it still carries the trademark note')
+})
