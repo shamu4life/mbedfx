@@ -145,6 +145,11 @@ a:hover { text-decoration: underline; }
   font-weight: 700; font-size: 15px; color: var(--head);
   padding: 0 8px 14px; border-bottom: 1px solid var(--line); margin-bottom: 10px;
 }
+.side .ver {
+  font-size: 11px; font-weight: 600; color: var(--faint); letter-spacing: .02em;
+  background: color-mix(in srgb, var(--text) 10%, transparent);
+  border-radius: 4px; padding: 1px 5px; vertical-align: 1px;
+}
 .side .cat {
   font-size: 11px; font-weight: 700; letter-spacing: .02em; text-transform: uppercase;
   color: var(--faint); padding: 12px 8px 4px;
@@ -171,6 +176,30 @@ a:hover { text-decoration: underline; }
   font-weight: 700; color: var(--head); font-size: 15px;
 }
 .chanbar.top { position: sticky; top: 0; z-index: 5; }
+
+/* ONE CHANNEL AT A TIME — the whole point of the conceit. Every channel used to render into one
+   long scroll with a scroll-spy renaming the bar as you passed each divider, which is a page
+   wearing Discord's chrome rather than a page that behaves like it. `hidden` is not used because
+   the router toggles a class and a stylesheet is where "what is on screen" belongs. */
+.chan { display: none; }
+.chan.on { display: block; }
+
+/* THE MOBILE CHANNEL DRAWER. Below 800px the sidebar used to be `display: none` with nothing in its
+   place, so on a portrait phone there was no way to reach any channel but the one you landed on —
+   which mattered far less when everything was one scroll, and became unusable the moment channels
+   started hiding each other. Hidden by TRANSFORM rather than display so it animates and so its
+   links stay focusable in the same order. */
+.navtoggle {
+  display: none; margin-right: 4px; background: none; border: 0; padding: 4px; cursor: pointer;
+  color: var(--head); border-radius: 4px; line-height: 0;
+}
+.navtoggle:hover { background: color-mix(in srgb, var(--text) 10%, transparent); }
+.navtoggle svg { width: 20px; height: 20px; fill: currentColor; }
+.scrim {
+  display: none; position: fixed; inset: 0; z-index: 30;
+  background: color-mix(in srgb, #000 55%, transparent);
+}
+.app.navopen .scrim { display: block; }
 
 /* Visually hidden, still read aloud. The icons alone are not a label. */
 .sr {
@@ -380,11 +409,22 @@ footer { color: var(--faint); font-size: 13px; padding: 28px 0 0; border-top: 1p
 
 @media (max-width: 800px) {
   .app { grid-template-columns: minmax(0, 1fr); }
-  .rail, .side { display: none; }
+  /* The server rail is decoration and goes. The channel list is NAVIGATION and becomes a drawer —
+     it used to go with it, which left a portrait phone with no way to change channel at all. */
+  .rail { display: none; }
+  .navtoggle { display: inline-flex; }
+  .side {
+    display: block; position: fixed; top: 0; bottom: 0; left: 0; width: 260px; max-width: 82vw;
+    z-index: 40; height: 100dvh; transform: translateX(-100%);
+    transition: transform .18s ease; box-shadow: 2px 0 16px rgb(0 0 0 / .35);
+  }
+  .app.navopen .side { transform: none; }
   .msgs { padding: 8px 12px 48px; }
   .msg { grid-template-columns: minmax(0, 1fr); gap: 0; }
   .msg .ava { display: none; }
 }
+/* A drawer that slides on a device asking for no motion is just a drawer that appears. */
+@media (prefers-reduced-motion: reduce) { .side { transition: none; } }
 /* The channel blurb is the first thing to go; the theme switch is not, since the sidebar that would
    otherwise host it is already hidden by this point. */
 @media (max-width: 620px) {
@@ -403,8 +443,16 @@ footer { color: var(--faint); font-size: 13px; padding: 28px 0 0; border-top: 1p
     <div class="pill"></div>
   </div>
 
-  <nav class="side">
-    <div class="server">mbedfx</div>
+  <!-- Tap-outside-to-close for the drawer. Inert until .navopen, so it cannot swallow clicks on the
+       desktop layout where the sidebar is always visible. -->
+  <div class="scrim" id="scrim"></div>
+
+  <nav class="side" id="side">
+    <!-- THE VERSION IS PART OF THE SERVER NAME, where Discord puts the server's own identity. It is
+         hardcoded because this page is a static asset with no template step — and pinned to
+         package.json by a test, because a version number that silently disagrees with the release is
+         worse than none at all. -->
+    <div class="server">mbedfx <span class="ver" id="ver">v1.1.0</span></div>
     <div class="cat">Start here</div>
     <a href="#convert"><b>#</b> convert</a>
     <a href="#sites"><b>#</b> sites</a>
@@ -416,6 +464,12 @@ footer { color: var(--faint); font-size: 13px; padding: 28px 0 0; border-top: 1p
 
   <main class="chat">
     <div class="chanbar top">
+      <!-- Only rendered below 800px, where the sidebar is a drawer. aria-expanded is kept in step by
+           the router so a screen reader is told the state, not just handed a button. -->
+      <button type="button" class="navtoggle" id="navToggle" aria-expanded="false" aria-controls="side"
+              aria-label="Channels">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 6h18v2H3V6Zm0 5h18v2H3v-2Zm0 5h18v2H3v-2Z"/></svg>
+      </button>
       <b>#</b> <span id="chanName">convert</span> <div class="sep"></div>
       <span id="chanDesc">Paste a link, get one that embeds.</span>
       <div class="theme" id="theme" role="group" aria-label="Colour theme">
@@ -437,7 +491,8 @@ footer { color: var(--faint); font-size: 13px; padding: 28px 0 0; border-top: 1p
     <div class="msgs">
 
       <!-- ===================== CONVERT ===================== -->
-      <article class="msg chan" id="convert" data-desc="Paste a link, get one that embeds.">
+      <section class="chan" id="convert" data-desc="Paste a link, get one that embeds.">
+      <article class="msg">
         <div class="ava">fx</div>
         <div>
           <div class="who"><span class="name">mbedfx</span><span class="bot">BOT</span><span class="ts">today</span></div>
@@ -471,11 +526,10 @@ footer { color: var(--faint); font-size: 13px; padding: 28px 0 0; border-top: 1p
           </div>
         </div>
       </article>
+      </section>
 
       <!-- ===================== SITES ===================== -->
-      <div class="chanbar chan" id="sites" data-desc="17 of them." style="margin:28px -16px 0">
-        <b>#</b> sites <div class="sep"></div><span>17 of them.</span>
-      </div>
+      <section class="chan" id="sites" data-desc="17 of them.">
       <article class="msg">
         <div class="ava">fx</div>
         <div>
@@ -486,11 +540,10 @@ footer { color: var(--faint); font-size: 13px; padding: 28px 0 0; border-top: 1p
           <div id="grid"></div>
         </div>
       </article>
+      </section>
 
       <!-- ===================== FEDIVERSE ===================== -->
-      <div class="chanbar chan" id="fediverse" data-desc="Mastodon, Misskey, Lemmy, PeerTube." style="margin:28px -16px 0">
-        <b>#</b> fediverse <div class="sep"></div><span>Mastodon, Misskey, Lemmy, PeerTube.</span>
-      </div>
+      <section class="chan" id="fediverse" data-desc="Mastodon, Misskey, Lemmy, PeerTube.">
       <article class="msg">
         <div class="ava">fx</div>
         <div>
@@ -507,11 +560,10 @@ footer { color: var(--faint); font-size: 13px; padding: 28px 0 0; border-top: 1p
              PieFed and PeerTube.</p>
         </div>
       </article>
+      </section>
 
       <!-- ===================== LIMITS ===================== -->
-      <div class="chanbar chan" id="limits" data-desc="When a link hits a wall instead of a post." style="margin:28px -16px 0">
-        <b>#</b> limits <div class="sep"></div><span>When a link hits a wall instead of a post.</span>
-      </div>
+      <section class="chan" id="limits" data-desc="When a link hits a wall instead of a post.">
       <article class="msg">
         <div class="ava">fx</div>
         <div>
@@ -542,11 +594,10 @@ footer { color: var(--faint); font-size: 13px; padding: 28px 0 0; border-top: 1p
           </div>
         </div>
       </article>
+      </section>
 
       <!-- ===================== NOPE ===================== -->
-      <div class="chanbar chan" id="nope" data-desc="Things I can't fix." style="margin:28px -16px 0">
-        <b>#</b> nope <div class="sep"></div><span>Things I can't fix.</span>
-      </div>
+      <section class="chan" id="nope" data-desc="Things I can't fix.">
       <article class="msg">
         <div class="ava">fx</div>
         <div>
@@ -575,6 +626,7 @@ footer { color: var(--faint); font-size: 13px; padding: 28px 0 0; border-top: 1p
           </footer>
         </div>
       </article>
+      </section>
 
     </div>
   </main>
@@ -1293,40 +1345,70 @@ function mbedfxConvert(input, host) {
   })();
 
   /**
-   * Keep the sticky header naming the section you are actually looking at, and light up the matching
-   * channel in the sidebar. Without it the bar reads "# convert" while you are three sections down,
-   * which is the one detail that gave the whole conceit away.
+   * THE CHANNEL ROUTER — one channel on screen, the way the thing it imitates works.
+   *
+   * This replaces a scroll-spy. Every channel used to render into one long scroll and the spy
+   * renamed the sticky bar as each divider passed under it: Discord's chrome on a document that
+   * behaved like a document. Now the hash IS the channel, which costs nothing and buys the things
+   * people expect for free — deep links (`/#limits` opens limits), the back button stepping through
+   * channels, and the sidebar's existing `href="#id"` anchors working untouched.
+   *
+   * AN UNKNOWN OR ABSENT HASH FALLS BACK TO THE FIRST CHANNEL rather than showing nothing. A stale
+   * bookmark to a renamed channel is a normal thing to happen; a blank page is not.
    */
-  (function spy() {
+  (function router() {
     var sections = [].slice.call(document.querySelectorAll('.chan[id]'));
     if (!sections.length) return;
     var nameEl = $('chanName'), descEl = $('chanDesc');
+    var app = document.querySelector('.app');
     var links = {};
     [].forEach.call(document.querySelectorAll('.side a[href^="#"]'), function (a) {
       links[a.getAttribute('href').slice(1)] = a;
     });
 
-    var current = '';
-    function update() {
-      // The last section whose heading has passed under the sticky bar is the one being read.
-      var active = sections[0];
-      for (var i = 0; i < sections.length; i++) {
-        if (sections[i].getBoundingClientRect().top <= 140) active = sections[i];
-      }
-      if (active.id === current) return;
-      current = active.id;
-      nameEl.textContent = active.id;
-      descEl.textContent = active.getAttribute('data-desc') || '';
-      for (var k in links) if (links[k]) links[k].classList.toggle('on', k === current);
+    function closeNav() {
+      if (!app) return;
+      app.classList.remove('navopen');
+      var t = $('navToggle');
+      if (t) t.setAttribute('aria-expanded', 'false');
     }
 
-    var queued = false;
-    addEventListener('scroll', function () {
-      if (queued) return;
-      queued = true;
-      requestAnimationFrame(function () { queued = false; update(); });
-    }, { passive: true });
-    update();
+    function show(id) {
+      var found = false;
+      for (var i = 0; i < sections.length; i++) if (sections[i].id === id) found = true;
+      if (!found) id = sections[0].id;
+
+      for (var j = 0; j < sections.length; j++) {
+        sections[j].classList.toggle('on', sections[j].id === id);
+      }
+      var el = document.getElementById(id);
+      nameEl.textContent = id;
+      descEl.textContent = (el && el.getAttribute('data-desc')) || '';
+      for (var k in links) if (links[k]) links[k].classList.toggle('on', k === id);
+      document.title = '#' + id + ' — mbedfx';
+      // Switching channel puts you at the top of it. Keeping the old offset lands you halfway down
+      // an unrelated body of text, which reads as a rendering fault rather than a navigation.
+      if (document.querySelector('.msgs')) scrollTo(0, 0);
+      closeNav();
+    }
+
+    function fromHash() { show((location.hash || '').replace(/^#/, '')); }
+    addEventListener('hashchange', fromHash);
+    fromHash();
+
+    /**
+     * The drawer, below 800px. Its links are ordinary anchors, so a tap sets the hash, hashchange
+     * fires, and show() closes the drawer on the way out — no per-link handler needed.
+     */
+    var toggle = $('navToggle'), scrim = $('scrim');
+    if (toggle && app) {
+      toggle.addEventListener('click', function () {
+        var open = app.classList.toggle('navopen');
+        toggle.setAttribute('aria-expanded', open ? 'true' : 'false');
+      });
+    }
+    if (scrim) scrim.addEventListener('click', closeNav);
+    addEventListener('keydown', function (e) { if (e.key === 'Escape') closeNav(); });
   })();
 
   var segs = document.querySelectorAll('.seg button');

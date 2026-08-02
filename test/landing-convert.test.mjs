@@ -570,3 +570,67 @@ test('THE README\'S FORCING CODES ARE THE ROUTER\'S, in the table\'s own order',
   assert.deepEqual(codes.map(c => EXPECT[c]), rows,
     'the code list and the site table must be in the same order — the README says they are')
 })
+
+/* ===================== THE CHANNELS, AND THE VERSION =====================
+ *
+ * Requested 2026-08-02: a version number on the live site, and "since we're mimicking the discord
+ * layout we should make it so that it's really a mimick where the 'channels' don't all show as one
+ * page".
+ */
+
+test('THE SITE\'S VERSION MATCHES package.json — a stale one is worse than none', () => {
+  /**
+   * The page is a static asset with no template step, so the version is hardcoded in the markup.
+   * That is fine only if something fails when it drifts, which is this. A version badge that
+   * disagrees with the release it shipped in makes every bug report ambiguous.
+   */
+  const pkg = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'))
+  const shown = /<span class="ver" id="ver">v([^<]+)<\/span>/.exec(HTML)
+  assert.ok(shown, 'the page carries a version badge')
+  assert.equal(shown[1], pkg.version, 'and it is the version this build actually is')
+})
+
+test('EVERY CHANNEL IS ITS OWN SECTION, so one can be shown without showing the rest', () => {
+  /**
+   * The channels used to be UNWRAPPED — a `div.chanbar.chan#sites` was a sibling of the article
+   * holding its content, so there was no single element per channel to toggle. Any future edit that
+   * adds a channel has to wrap it, or it will render on every channel at once.
+   */
+  const ids = [...HTML.matchAll(/<section class="chan" id="([^"]+)" data-desc="([^"]*)"/g)]
+  assert.ok(ids.length >= 5, `every channel is a <section class="chan">, found ${ids.length}`)
+  for (const [, id, desc] of ids) {
+    assert.ok(desc.trim(), `#${id} has a description for the channel bar to show`)
+  }
+  // The sidebar and the sections must name the same set: a link to a channel that does not exist
+  // silently falls back to the first one, which looks like a broken link rather than a missing page.
+  const linked = [...HTML.matchAll(/<a href="#([a-z]+)"><b>#<\/b>/g)].map(m => m[1])
+  assert.deepEqual(linked.sort(), ids.map(m => m[1]).sort(),
+    'the sidebar links and the channel sections are the same set')
+})
+
+test('THE IN-PAGE CHANNEL DIVIDERS ARE GONE — the sticky bar is the one place the name appears', () => {
+  /**
+   * Reported as "the 'convert' header isn't bold like the rest". It was never about boldness: every
+   * channel had a bold `# name` divider EXCEPT convert, which sat at the top where the sticky bar
+   * already stood in for one. With one channel on screen the divider repeats the bar directly above
+   * it, so the whole set went rather than convert gaining one.
+   */
+  assert.equal(HTML.match(/class="chanbar chan"/g), null,
+    'no channel repeats its own name immediately under the bar that already shows it')
+  assert.ok(/<div class="chanbar top">/.test(HTML), 'the sticky bar is still there')
+})
+
+test('PORTRAIT MOBILE CAN STILL CHANGE CHANNEL', () => {
+  /**
+   * Reported: "there's no sidebar nav on portrait mobile". The 800px breakpoint hid `.rail, .side`
+   * outright, which was survivable while every channel was on one scroll and became a dead end the
+   * moment channels started hiding each other — you could reach exactly the one you landed on.
+   */
+  const mobile = /@media \(max-width: 800px\) \{[\s\S]*?\n\}/.exec(HTML)
+  assert.ok(mobile, 'the mobile breakpoint exists')
+  assert.ok(!/\.rail,\s*\.side \{ display: none/.test(mobile[0]),
+    'the channel list is not hidden outright on mobile')
+  assert.ok(/\.navtoggle \{ display: inline-flex/.test(mobile[0]), 'a channel-list toggle appears')
+  assert.ok(/id="navToggle"/.test(HTML) && /id="scrim"/.test(HTML), 'the toggle and its scrim exist')
+  assert.ok(/aria-expanded="false"/.test(HTML), 'and it reports its state to a screen reader')
+})

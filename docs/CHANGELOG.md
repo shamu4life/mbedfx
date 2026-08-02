@@ -5,6 +5,44 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [1.1.0] — 2026-08-02
+
+The page borrowed Discord's chrome without borrowing its behaviour. Four reports, all the same
+observation from different angles.
+
+### Added
+- **The channels are real channels.** Every one used to render into a single long scroll with a
+  scroll-spy renaming the sticky bar as each divider passed under it. One channel is now on screen at
+  a time and the URL hash is the channel, which comes with the things people expect for free:
+  `mbedfx.app/#limits` deep-links, the back button steps through channels, and a stale link to a
+  channel that no longer exists falls back to the first one instead of rendering a blank page.
+- **A channel drawer on portrait mobile.** Below 800px the sidebar was `display: none` with nothing
+  in its place. That was survivable while everything was one scroll and became a dead end the moment
+  channels started hiding each other — a phone could reach exactly the channel it landed on. There is
+  now a toggle in the header opening the channel list as a drawer, closable by the scrim, by Escape,
+  or by picking a channel. It reports its state with `aria-expanded`.
+- **A version badge on the site**, beside the server name where Discord puts a server's own identity.
+  The page is a static asset with no template step, so the number is in the markup — and pinned to
+  `package.json` by a test, because a badge that silently disagrees with the release makes every bug
+  report ambiguous.
+
+### Fixed
+- **The `convert` channel had no bold header.** Reported as an inconsistency and it was one, though
+  not about boldness: every channel had a bold `# name` divider except `convert`, which sat at the
+  top where the sticky bar already stood in for one. With a single channel on screen that divider
+  repeats the bar directly above it, so the whole set went rather than `convert` gaining one — which
+  is also what Discord does.
+
+### Changed
+- Channels are each a `<section class="chan">` around their own content. They were not wrapped at
+  all: a channel's header bar was a *sibling* of the article holding its body, so there was no single
+  element per channel to show or hide. A test now fails if a future channel is added unwrapped, or if
+  the sidebar and the sections stop naming the same set.
+
+1129 tests, `node --test`; `tsc --noEmit` clean.
+
+---
+
 ## [1.0.1] — 2026-08-02
 
 Three defects found in the first day of real use, all on the converter page or the seam behind it.
