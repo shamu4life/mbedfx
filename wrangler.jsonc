@@ -1,0 +1,141 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  // RENAMED IN PLACE 2026-07-30, and the previous note here was WRONG: Cloudflare CAN rename a
+  // Worker. Verified against the account after the owner did it — same service tag
+  // <redacted> and same created_on (2026-07-17), new name. No second
+  // service, no route migration, no outage.
+  //
+  // THIS MUST MATCH THE LIVE SERVICE OR A DEPLOY FORKS IT. `wrangler deploy` creates the named
+  // Worker if it does not exist, so leaving this as the old name after the rename would stand up
+  // a SECOND, EMPTY service and hand it the four custom domains listed in `routes` — taking them
+  // off the one that is actually serving. That is an outage, not a warning.
+  // MERGING TWO PRs BACK TO BACK RACES THEIR DEPLOYS, and the OLDER one can win. Observed
+  // 2026-07-30: #11 and #12 were merged seconds apart, Workers Builds started a build for each
+  // (22:27:32 for the #11 commit, 22:27:35 for the #12 commit), BOTH reported success, and the
+  // script that ended up live was the earlier commit — verified by fetching the deployed bundle,
+  // which contained PeerTube but zero occurrences of `metashare`.
+  //
+  // Nothing fails loudly when this happens: main is correct, both checks are green, and the PR
+  // is merged. Only the deployed script is stale. WAIT FOR ONE DEPLOY TO FINISH BEFORE MERGING
+  // THE NEXT, and when a change must be live, verify against the deployed bundle rather than
+  // against a green build.
+  "name": "mbedfx",
+  // The deploy entry pairs the fetch handler with the container's Durable Object export. Tests still
+  // import src/worker.ts directly, which never imports @cloudflare/containers (see src/index.ts).
+  "main": "src/index.ts",
+  "compatibility_date": "2026-07-01",
+  "observability": { "enabled": true },
+  "workers_dev": false,
+  // PHASE-2 VIDEO PLAYBACK. The media-resolver container (ffmpeg + yt-dlp) and its R2 mux cache. A
+  // `wrangler deploy` from here on builds the container image, so a Docker-compatible CLI (Docker
+  // Desktop or Colima) must be running — see container/README.md. Optional shared secret:
+  // `wrangler secret put RESOLVER_SECRET` and set the same value on the container.
+  "r2_buckets": [
+    // R2 BUCKETS CANNOT BE RENAMED. Pointing the binding at a new name does not move anything: the
+    // old `fxeverything-media` keeps its objects and this one starts EMPTY. That is safe here and
+    // only here, because every object in it is a regenerable mux artefact keyed by refKey — the cost
+    // of the switch is that each video is muxed once more, not that anything is lost. Delete the old
+    // bucket once traffic has moved, or it bills for storage nobody reads.
+    // THE 60-DAY EXPIRY LIVES ON THE BUCKET, NOT HERE, and that is worth writing down because it is
+    // invisible to this repo and was LOST ONCE. Nothing in wrangler.jsonc can express a lifecycle
+    // rule, so when the 2026-07-30 rename pointed the binding at a new bucket, the expiry silently
+    // did not come with it — and nothing failed, because the code never deletes anything itself:
+    //
+    //     "Old objects are simply never read again; R2 has no cost pressure to delete them
+    //      urgently and a lifecycle rule is the right eventual broom" — worker.ts, metaCacheKey
+    //
+    // Re-added 2026-07-30 as rule `expire-60d`, all prefixes:
+    //     wrangler r2 bucket lifecycle add mbedfx-media expire-60d --expire-days 60
+    //
+    // 60 CLEARS EVERY LOGICAL TTL IN THE CODE with room to spare — the longest is YT_META_TTL_MS at
+    // 30 days — so the sweep can only remove objects that were already dead to us. Both prefixes
+    // share this bucket (`mux/{refKey}/{i}` and `meta/{generation}/{refKey}.json`) and both are
+    // pure cache: everything here is regenerable from the platform it came from.
+    //
+    // IF THIS BUCKET IS EVER SWAPPED AGAIN, re-add the rule. A missing one costs no correctness,
+    // only unbounded storage — which is exactly why nobody would notice.
+    { "binding": "MEDIA_CACHE", "bucket_name": "mbedfx-media" }
+  ],
+  "containers": [
+    // max_instances is HEADROOM, not the concurrency plan: worker.ts pools every mux/meta call onto
+    // RESOLVER_SLOTS (4) stable instance names, so steady state needs 4. The extra room covers the
+    // overlap when a deploy resets instances ("Durable Object reset because its code was updated") or a
+    // previous generation is still sleeping out its `sleepAfter` — without it, those stragglers hold the
+    // whole cap and EVERY mux fails with "Maximum number of running container instances exceeded", which
+    // the media route can only degrade into a video-less card.
+    // `name` IS PINNED TO THE OLD BRAND ON PURPOSE, and removing it breaks every deploy.
+    //
+    // Wrangler DERIVES a container application name from the Worker name when this is absent, so
+    // the 2026-07-30 rename made it ask Cloudflare for `mbedfx-mediaresolver` — and the deploy
+    // failed with DURABLE_OBJECT_ALREADY_HAS_APPLICATION, because the MediaResolver DO is already
+    // attached to the application created under the old name. A Durable Object class can own
+    // exactly one container application, so this is not a naming preference: it is the identity of
+    // a live resource, and the only way to keep updating it is to keep calling it what it is.
+    //
+    // Renaming it for tidiness means deleting the application and letting the DO re-attach, which
+    // re-provisions every container instance. Not worth it for a string only the dashboard shows.
+    { "name": "fxeverything-mediaresolver", "class_name": "MediaResolver", "image": "./container/Dockerfile", "max_instances": 10, "instance_type": "basic" }
+  ],
+  "durable_objects": {
+    "bindings": [
+      { "name": "MEDIA_RESOLVER", "class_name": "MediaResolver" }
+    ]
+  },
+  "migrations": [
+    { "tag": "v1", "new_sqlite_classes": ["MediaResolver"] }
+  ],
+  // THE APEX CUTOVER (2026-07-25). fxeverything now serves megapenispoopenfarten.sex itself, not just
+  // its staging subdomain — the Phase 3 step this file used to describe as pending.
+  //
+  // COMPATIBILITY WAS VERIFIED BEFORE THE MOVE, not after: every url shape the live fxtiktok worker
+  // answered still resolves here. /t/{code} (its short form) and /@user/video/{id} both render the
+  // same card for the same post — checked against /t/ZTSw2mYwR/ on staging, which produced the
+  // identical og:title and a working og:video. fxeverything is a superset: same TikTok coverage plus
+  // Twitter, Instagram, Threads, Reddit, Bluesky, YouTube and Facebook.
+  //
+  // ONE DELIBERATE BEHAVIOUR CHANGE at the root: fxtiktok answered `/` with a 302 to its own GitHub
+  // repo. This worker serves the placeholder in public/ instead (the link converter is Phase 5).
+  //
+  // THERE IS NO LONGER A ROLLBACK TARGET. This said, for one day, that deleting the apex entry
+  // below would let fxtiktok resume — true then, false now: the owner DELETED the fxtiktok worker
+  // from the account on 2026-07-26, taking its apex custom domain and its
+  // `*.megapenispoopenfarten.sex/*` wildcard route with it. Removing the apex entry now would leave
+  // the apex serving NOTHING, not the old worker.
+  //
+  // Recorded because the stale version was the dangerous kind of comment: it would have talked a
+  // future reader into a "cheap, reversible" edit whose actual effect is an outage. If the apex ever
+  // does need to leave this worker, the replacement has to be stood up first — there is nothing
+  // behind it to fall back to. (The fxtiktok GitHub fork still exists and could be redeployed, but
+  // that is a deliberate rebuild, not a one-line revert.)
+  //
+  // TWO ZONES, DELIBERATELY. mbedfx.app is the project's domain as of 2026-07-30; the original zone
+  // is RETAINED rather than cut over, because every link already pasted into a Discord channel keeps
+  // resolving only while its host does. Retiring it is a later, separate decision — and a safe one
+  // once traffic has moved, which the AE counters can show.
+  //
+  // A NEW SERVING DOMAIN MUST ALSO BE ADDED TO src/platforms/fedihost.ts's OWN_HOSTS. Adding a route
+  // here alone is a silent SSRF hole: a fediverse ref names its own origin, so /{our-host}/post/1
+  // would induce the Worker to fetch itself through the edge. The two lists are coupled and nothing
+  // enforces it but this comment and the test that pins them together.
+  "routes": [
+    { "pattern": "mbedfx.app", "custom_domain": true },
+    { "pattern": "staging.mbedfx.app", "custom_domain": true },
+    { "pattern": "megapenispoopenfarten.sex", "custom_domain": true },
+    { "pattern": "staging.megapenispoopenfarten.sex", "custom_domain": true }
+  ],
+  "assets": {
+    "directory": "./public",
+    "binding": "ASSETS",
+    "run_worker_first": true,
+    "not_found_handling": "none"
+  },
+  // WORKERS AI, for translating a foreign-script post into English beneath the original. The
+  // binding is OPTIONAL in code (Env.AI is `?`), so this line can be removed and every card still
+  // renders — translation simply stops happening. Added 2026-07-30.
+  "ai": { "binding": "AI" },
+  "analytics_engine_datasets": [
+    // A NEW DATASET STARTS AT ZERO. Historical counters stay in `fxeverything_counters` and are still
+    // queryable there; they do not migrate. Renaming was the owner's call, made knowing that.
+    { "binding": "AE", "dataset": "mbedfx_counters" }
+  ]
+}

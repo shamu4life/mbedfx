@@ -1,0 +1,214 @@
+{
+  "images": {
+    "media": [
+      {
+        "kind": "image",
+        "url": "https://cdn.bsky.app/img/feed_fullsize/plain/did:plc:alice/img0@jpeg?sig=deadbeefcafe",
+        "w": 1200,
+        "h": 800,
+        "alt": "first"
+      },
+      {
+        "kind": "image",
+        "url": "https://cdn.bsky.app/img/feed_fullsize/plain/did:plc:alice/img1@jpeg?sig=deadbeefcafe",
+        "w": 900,
+        "h": 1600
+      }
+    ],
+    "activity": {
+      "id": "1098115058097108105099101046098115107121046115111099105097108058051107050097",
+      "url": "https://bsky.app/profile/alice.bsky.social/post/3k2a",
+      "uri": "https://bsky.app/profile/alice.bsky.social/post/3k2a",
+      "created_at": "2026-07-01T12:00:00.000Z",
+      "edited_at": null,
+      "reblog": null,
+      "in_reply_to_id": null,
+      "in_reply_to_account_id": null,
+      "language": null,
+      "content": "two pictures<br><br><b>❤️ 21&ensp;💬 3&ensp;🔁 7&ensp;</b>",
+      "spoiler_text": "",
+      "visibility": "public",
+      "application": {
+        "name": "Bluesky Social",
+        "website": null
+      },
+      "media_attachments": [
+        {
+          "id": "0",
+          "type": "image",
+          "url": "https://staging.megapenispoopenfarten.sex/_media/bs%3Aalice.bsky.social%3A3k2a/0",
+          "preview_url": "https://staging.megapenispoopenfarten.sex/_media/bs%3Aalice.bsky.social%3A3k2a/0",
+          "remote_url": null,
+          "preview_remote_url": null,
+          "text_url": null,
+          "description": "first",
+          "meta": {
+            "original": {
+              "width": 1200,
+              "height": 800,
+              "size": "1200x800",
+              "aspect": 1.5
+            }
+          }
+        },
+        {
+          "id": "1",
+          "type": "image",
+          "url": "https://staging.megapenispoopenfarten.sex/_media/bs%3Aalice.bsky.social%3A3k2a/1",
+          "preview_url": "https://staging.megapenispoopenfarten.sex/_media/bs%3Aalice.bsky.social%3A3k2a/1",
+          "remote_url": null,
+          "preview_remote_url": null,
+          "text_url": null,
+          "description": null,
+          "meta": {
+            "original": {
+              "width": 900,
+              "height": 1600,
+              "size": "900x1600",
+              "aspect": 0.5625
+            }
+          }
+        }
+      ],
+      "account": {
+        "id": "alice.bsky.social",
+        "display_name": "Alice",
+        "username": "alice.bsky.social",
+        "acct": "alice.bsky.social",
+        "url": "https://bsky.app/profile/alice.bsky.social",
+        "uri": "https://bsky.app/profile/alice.bsky.social",
+        "created_at": "2026-07-01T12:00:00.000Z",
+        "locked": false,
+        "bot": false,
+        "discoverable": true,
+        "indexable": false,
+        "group": false,
+        "avatar": "https://staging.megapenispoopenfarten.sex/_media/bs%3Aalice.bsky.social%3A3k2a/avatar",
+        "avatar_static": "https://staging.megapenispoopenfarten.sex/_media/bs%3Aalice.bsky.social%3A3k2a/avatar",
+        "followers_count": 0,
+        "following_count": 0,
+        "statuses_count": 0,
+        "hide_collections": false,
+        "noindex": false,
+        "emojis": [],
+        "roles": [],
+        "fields": []
+      },
+      "mentions": [],
+      "tags": [],
+      "emojis": [],
+      "card": null,
+      "poll": null
+    },
+    "oembed": {
+      "author_name": "❤️ 21   💬 3   🔁 7",
+      "author_url": "https://bsky.app/profile/alice.bsky.social/post/3k2a",
+      "provider_name": "mbedfx",
+      "provider_url": "https://staging.megapenispoopenfarten.sex",
+      "title": "Embed",
+      "type": "rich",
+      "version": "1.0"
+    },
+    "html": {
+      "discord": "<!doctype html><html><head><meta property=\"og:title\" content=\"Alice (@alice.bsky.social)\"/><meta property=\"og:description\" content=\"two pictures\"/><meta property=\"og:url\" content=\"https://bsky.app/profile/alice.bsky.social/post/3k2a\"/><meta property=\"og:site_name\" content=\"mbedfx\"/><meta name=\"theme-color\" content=\"#0085ff\"/><meta property=\"theme-color\" content=\"#0085ff\"/><meta name=\"twitter:card\" content=\"summary_large_image\"/><link rel=\"canonical\" href=\"https://bsky.app/profile/alice.bsky.social/post/3k2a\"/><link rel=\"alternate\" type=\"application/activity+json\" href=\"https://staging.megapenispoopenfarten.sex/users/alice.bsky.social/statuses/1098115058097108105099101046098115107121046115111099105097108058051107050097\"/><link rel=\"alternate\" type=\"application/json+oembed\" href=\"https://staging.megapenispoopenfarten.sex/_oembed/1098115058097108105099101046098115107121046115111099105097108058051107050097\"/></head><body></body></html>",
+      "telegram": "<!doctype html><html><head><meta property=\"og:title\" content=\"Alice (@alice.bsky.social)\"/><meta property=\"og:description\" content=\"two pictures\"/><meta property=\"og:url\" content=\"https://bsky.app/profile/alice.bsky.social/post/3k2a\"/><meta property=\"og:site_name\" content=\"mbedfx\"/><meta property=\"og:image\" content=\"https://staging.megapenispoopenfarten.sex/_media/bs%3Aalice.bsky.social%3A3k2a/0\"/><meta property=\"og:image:width\" content=\"1200\"/><meta property=\"og:image:height\" content=\"800\"/><meta name=\"twitter:card\" content=\"summary_large_image\"/></head><body></body></html>",
+      "other-bot": "<!doctype html><html><head><meta property=\"og:title\" content=\"Alice (@alice.bsky.social)\"/><meta property=\"og:description\" content=\"two pictures\"/><meta property=\"og:url\" content=\"https://bsky.app/profile/alice.bsky.social/post/3k2a\"/><meta property=\"og:site_name\" content=\"mbedfx\"/><meta name=\"theme-color\" content=\"#0085ff\"/><meta property=\"theme-color\" content=\"#0085ff\"/><meta property=\"og:image\" content=\"https://staging.megapenispoopenfarten.sex/_media/bs%3Aalice.bsky.social%3A3k2a/0\"/><meta property=\"og:image:width\" content=\"1200\"/><meta property=\"og:image:height\" content=\"800\"/><meta name=\"twitter:card\" content=\"summary_large_image\"/></head><body></body></html>"
+    }
+  },
+  "video": {
+    "media": [
+      {
+        "kind": "video",
+        "url": "https://video.bsky.app/watch/did:plc:bob/abc/playlist.m3u8",
+        "w": 720,
+        "h": 1280,
+        "alt": "a clip",
+        "poster": "https://video.bsky.app/watch/did:plc:bob/abc/thumbnail.jpg",
+        "remux": {
+          "video": "https://video.bsky.app/watch/did:plc:bob/abc/playlist.m3u8"
+        }
+      }
+    ],
+    "activity": {
+      "id": "1098115058098111098046098115107121046115111099105097108058051118049100",
+      "url": "https://bsky.app/profile/bob.bsky.social/post/3v1d",
+      "uri": "https://bsky.app/profile/bob.bsky.social/post/3v1d",
+      "created_at": "2026-07-02T09:30:00.000Z",
+      "edited_at": null,
+      "reblog": null,
+      "in_reply_to_id": null,
+      "in_reply_to_account_id": null,
+      "language": null,
+      "content": "a video post<br><br><b>❤️ 5&ensp;</b>",
+      "spoiler_text": "",
+      "visibility": "public",
+      "application": {
+        "name": "Bluesky Social",
+        "website": null
+      },
+      "media_attachments": [
+        {
+          "id": "0",
+          "type": "video",
+          "url": "https://staging.megapenispoopenfarten.sex/_media/bs%3Abob.bsky.social%3A3v1d/0",
+          "preview_url": "https://staging.megapenispoopenfarten.sex/_media/bs%3Abob.bsky.social%3A3v1d/poster0",
+          "remote_url": null,
+          "preview_remote_url": null,
+          "text_url": null,
+          "description": "a clip",
+          "meta": {
+            "original": {
+              "width": 720,
+              "height": 1280,
+              "size": "720x1280",
+              "aspect": 0.5625
+            }
+          }
+        }
+      ],
+      "account": {
+        "id": "bob.bsky.social",
+        "display_name": "Bob",
+        "username": "bob.bsky.social",
+        "acct": "bob.bsky.social",
+        "url": "https://bsky.app/profile/bob.bsky.social",
+        "uri": "https://bsky.app/profile/bob.bsky.social",
+        "created_at": "2026-07-02T09:30:00.000Z",
+        "locked": false,
+        "bot": false,
+        "discoverable": true,
+        "indexable": false,
+        "group": false,
+        "avatar": "https://staging.megapenispoopenfarten.sex/_media/bs%3Abob.bsky.social%3A3v1d/avatar",
+        "avatar_static": "https://staging.megapenispoopenfarten.sex/_media/bs%3Abob.bsky.social%3A3v1d/avatar",
+        "followers_count": 0,
+        "following_count": 0,
+        "statuses_count": 0,
+        "hide_collections": false,
+        "noindex": false,
+        "emojis": [],
+        "roles": [],
+        "fields": []
+      },
+      "mentions": [],
+      "tags": [],
+      "emojis": [],
+      "card": null,
+      "poll": null
+    },
+    "oembed": {
+      "author_name": "❤️ 5",
+      "author_url": "https://bsky.app/profile/bob.bsky.social/post/3v1d",
+      "provider_name": "mbedfx",
+      "provider_url": "https://staging.megapenispoopenfarten.sex",
+      "title": "Embed",
+      "type": "rich",
+      "version": "1.0"
+    },
+    "html": {
+      "discord": "<!doctype html><html><head><meta property=\"og:title\" content=\"Bob (@bob.bsky.social)\"/><meta property=\"og:description\" content=\"a video post\"/><meta property=\"og:url\" content=\"https://bsky.app/profile/bob.bsky.social/post/3v1d\"/><meta property=\"og:site_name\" content=\"mbedfx\"/><meta property=\"og:type\" content=\"video.other\"/><meta property=\"og:video\" content=\"https://staging.megapenispoopenfarten.sex/_media/bs%3Abob.bsky.social%3A3v1d/0.mp4\"/><meta property=\"og:video:type\" content=\"video/mp4\"/><meta property=\"og:video:width\" content=\"720\"/><meta property=\"og:video:height\" content=\"1280\"/><meta property=\"twitter:title\" content=\"Bob (@bob.bsky.social)\"/><meta property=\"twitter:site\" content=\"@bob.bsky.social\"/><meta property=\"twitter:creator\" content=\"@bob.bsky.social\"/><meta property=\"twitter:player\" content=\"https://staging.megapenispoopenfarten.sex/_media/bs%3Abob.bsky.social%3A3v1d/0.mp4\"/><meta property=\"twitter:player:stream\" content=\"https://staging.megapenispoopenfarten.sex/_media/bs%3Abob.bsky.social%3A3v1d/0.mp4\"/><meta property=\"twitter:player:stream:content_type\" content=\"video/mp4\"/><meta property=\"twitter:player:width\" content=\"720\"/><meta property=\"twitter:player:height\" content=\"1280\"/><meta name=\"theme-color\" content=\"#0085ff\"/><meta property=\"theme-color\" content=\"#0085ff\"/><link rel=\"alternate\" type=\"application/activity+json\" href=\"https://staging.megapenispoopenfarten.sex/users/bob.bsky.social/statuses/1098115058098111098046098115107121046115111099105097108058051118049100\"/><link rel=\"alternate\" type=\"application/json+oembed\" href=\"https://staging.megapenispoopenfarten.sex/_oembed/1098115058098111098046098115107121046115111099105097108058051118049100\"/></head><body></body></html>",
+      "telegram": "<!doctype html><html><head><meta property=\"og:title\" content=\"Bob (@bob.bsky.social)\"/><meta property=\"og:description\" content=\"a video post\"/><meta property=\"og:url\" content=\"https://bsky.app/profile/bob.bsky.social/post/3v1d\"/><meta property=\"og:site_name\" content=\"mbedfx\"/><meta property=\"og:type\" content=\"video.other\"/><meta property=\"og:video\" content=\"https://staging.megapenispoopenfarten.sex/_media/bs%3Abob.bsky.social%3A3v1d/0\"/><meta property=\"og:video:secure_url\" content=\"https://staging.megapenispoopenfarten.sex/_media/bs%3Abob.bsky.social%3A3v1d/0\"/><meta property=\"og:video:type\" content=\"video/mp4\"/><meta property=\"og:video:width\" content=\"720\"/><meta property=\"og:video:height\" content=\"1280\"/><meta name=\"twitter:card\" content=\"player\"/></head><body></body></html>",
+      "other-bot": "<!doctype html><html><head><meta property=\"og:title\" content=\"Bob (@bob.bsky.social)\"/><meta property=\"og:description\" content=\"a video post\"/><meta property=\"og:url\" content=\"https://bsky.app/profile/bob.bsky.social/post/3v1d\"/><meta property=\"og:site_name\" content=\"mbedfx\"/><meta name=\"theme-color\" content=\"#0085ff\"/><meta property=\"theme-color\" content=\"#0085ff\"/><meta property=\"og:type\" content=\"video.other\"/><meta property=\"og:video\" content=\"https://staging.megapenispoopenfarten.sex/_media/bs%3Abob.bsky.social%3A3v1d/0\"/><meta property=\"og:video:secure_url\" content=\"https://staging.megapenispoopenfarten.sex/_media/bs%3Abob.bsky.social%3A3v1d/0\"/><meta property=\"og:video:type\" content=\"video/mp4\"/><meta property=\"og:video:width\" content=\"720\"/><meta property=\"og:video:height\" content=\"1280\"/><meta name=\"twitter:card\" content=\"player\"/><meta name=\"twitter:image\" content=\"https://staging.megapenispoopenfarten.sex/_alt/0\"/></head><body></body></html>"
+    }
+  }
+}

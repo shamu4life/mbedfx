@@ -1,0 +1,43 @@
+{
+  "images": {
+    "ref": { "p": "bs", "handle": "alice.bsky.social", "rkey": "3k2a" },
+    "raw": {
+      "thread": {
+        "post": {
+          "uri": "at://did:plc:alice/app.bsky.feed.post/3k2a",
+          "author": { "handle": "alice.bsky.social", "displayName": "Alice", "avatar": "https://cdn.bsky.app/img/avatar/plain/did:plc:alice/av@jpeg?sig=deadbeefcafe" },
+          "record": { "text": "two pictures", "createdAt": "2026-07-01T12:00:00Z" },
+          "replyCount": 3,
+          "repostCount": 7,
+          "likeCount": 21,
+          "embed": {
+            "images": [
+              { "fullsize": "https://cdn.bsky.app/img/feed_fullsize/plain/did:plc:alice/img0@jpeg?sig=deadbeefcafe", "alt": "first", "aspectRatio": { "width": 1200, "height": 800 } },
+              { "fullsize": "https://cdn.bsky.app/img/feed_fullsize/plain/did:plc:alice/img1@jpeg?sig=deadbeefcafe", "aspectRatio": { "width": 900, "height": 1600 } }
+            ]
+          }
+        }
+      }
+    }
+  },
+  "video": {
+    "ref": { "p": "bs", "handle": "bob.bsky.social", "rkey": "3v1d" },
+    "raw": {
+      "thread": {
+        "post": {
+          "uri": "at://did:plc:bob/app.bsky.feed.post/3v1d",
+          "author": { "handle": "bob.bsky.social", "displayName": "Bob", "avatar": "https://cdn.bsky.app/img/avatar/plain/did:plc:bob/av@jpeg?sig=deadbeefcafe" },
+          "record": { "text": "a video post", "createdAt": "2026-07-02T09:30:00Z" },
+          "likeCount": 5,
+          "embed": {
+            "$type": "app.bsky.embed.video#view",
+            "playlist": "https://video.bsky.app/watch/did:plc:bob/abc/playlist.m3u8",
+            "thumbnail": "https://video.bsky.app/watch/did:plc:bob/abc/thumbnail.jpg",
+            "alt": "a clip",
+            "aspectRatio": { "width": 720, "height": 1280 }
+          }
+        }
+      }
+    }
+  }
+}

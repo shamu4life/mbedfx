@@ -1,0 +1,59 @@
+{
+  "id": "ap7py4g16tye0g68",
+  "createdAt": "2026-07-28T04:27:25.057Z",
+  "userId": "aikhdsnlkkcv38e0",
+  "user": {
+    "id": "aikhdsnlkkcv38e0",
+    "name": "Alex Fixture",
+    "username": "fixture_user_1",
+    "host": null,
+    "avatarUrl": "https://example.invalid/fixture-avatar.png",
+    "avatarBlurhash": "eMF6#DaJ:*xb%O#QRjJnRio2=zNZEdRPROyGoeM^jbac,:snOZXSWo",
+    "description": "Azutsune: :Celeste_blue:, she/her\nEcco: :Celeste_yellow:, they/them\nMuna: :Celeste_red:, she/her\n\nThose who knew me before probably moved  on, but I find myself right back in the fediverse yet again.\n\nNO LONGER A MINOR !!!!! RED ALERT RED ALERT I MAY POST SUGGESTIVE STUFF NOW YOU ARE WARNED I WILL CW IT OR WHATEVER\n\nI'm Azutsune. Some of you maaay know me as zink, depending on what circles you've been in.\n\nThat there is Ecco {hii !} who is my tulpa and perhaps even my closest friend. \n\n[And I'm muna, the silly !!! hehe]\n\n{Together, we tell a bigger story than our individual parts.} And I believe it's up to us to be able to put this story to its rightful happy ending. [So tag along! Who knows where you might end up...]\n\nProfile picture is by RUWA!!!",
+    "createdAt": "2026-02-10T18:10:43.665Z",
+    "avatarDecorations": [],
+    "isBot": false,
+    "isCat": true,
+    "noindex": false,
+    "enableRss": false,
+    "mandatoryCW": null,
+    "rejectQuotes": false,
+    "attributionDomains": [],
+    "isSilenced": false,
+    "speakAsCat": true,
+    "approved": true,
+    "followersCount": 0,
+    "followingCount": 0,
+    "notesCount": 2347,
+    "emojis": {
+      "therian": "https://cdn.transfem.social/files/a63a676d-b2a7-4174-b514-169a225a79d4.png",
+      "Celeste_blue": "https://cdn.transfem.social/files/330e0492-be01-4953-a78f-f8e436e40a79.gif",
+      "Celeste_yellow": "https://cdn.transfem.social/files/00064a94-dd17-4370-9025-0fd225c02863.gif",
+      "Celeste_red": "https://cdn.transfem.social/files/87e3d415-e675-48a5-bead-524dda523e35.gif"
+    },
+    "onlineStatus": "unknown",
+    "badgeRoles": [
+      {
+        "name": "Active User",
+        "iconUrl": "https://transfem.social/emoji/verifiedtrans.webp",
+        "displayOrder": 0
+      }
+    ]
+  },
+  "text": "One of my friends is currently living in an abusive household that is getting worse and worse. I'm not able to help much but if anyone else can support them that would be really really nice of you qwq\n\nhttps://www.gofundme.com/f/help-bonnie-escape-their-abusive-home-situation\n\nhttps://payhip.com/fetchrover\n\nhttps://fetchrover.bandcamp.com/",
+  "cw": "Begpost for friend",
+  "visibility": "public",
+  "localOnly": false,
+  "reactionAcceptance": null,
+  "renoteCount": 0,
+  "repliesCount": 0,
+  "reactionCount": 0,
+  "reactions": {},
+  "reactionEmojis": {},
+  "fileIds": [],
+  "files": [],
+  "replyId": null,
+  "renoteId": null,
+  "clippedCount": 0,
+  "processErrors": null
+}

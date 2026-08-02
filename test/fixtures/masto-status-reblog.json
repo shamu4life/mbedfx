@@ -1,0 +1,238 @@
+{
+  "id": "116987635278582716",
+  "created_at": "2026-07-26T18:14:09.638Z",
+  "in_reply_to_id": null,
+  "in_reply_to_account_id": null,
+  "sensitive": false,
+  "spoiler_text": "",
+  "visibility": "public",
+  "language": null,
+  "uri": "https://mstdn.social/users/stux/statuses/116987635278582716/activity",
+  "url": "https://mstdn.social/users/stux/statuses/116987635278582716/activity",
+  "replies_count": 0,
+  "reblogs_count": 0,
+  "favourites_count": 0,
+  "quotes_count": 0,
+  "edited_at": null,
+  "content": "",
+  "reblog": {
+    "id": "116987632262686613",
+    "created_at": "2026-07-26T18:13:23.000Z",
+    "in_reply_to_id": "116987608029227796",
+    "in_reply_to_account_id": "5168",
+    "sensitive": false,
+    "spoiler_text": "",
+    "visibility": "public",
+    "language": "en",
+    "uri": "https://hactivedirectory.com/users/josh/statuses/116987632246012070",
+    "url": "https://hactivedirectory.com/@josh/116987632246012070",
+    "replies_count": 6,
+    "reblogs_count": 27,
+    "favourites_count": 62,
+    "quotes_count": 0,
+    "edited_at": null,
+    "content": "<p><span class=\"h-card\" translate=\"no\"><a href=\"https://mstdn.social/@stux\" class=\"u-url mention\" rel=\"nofollow noopener\" target=\"_blank\">@<span>stux</span></a></span> I'm slightly hijacking this thread:</p><p>If you are new to the <a href=\"https://hactivedirectory.com/tags/fediverse\" class=\"mention hashtag\" rel=\"nofollow noopener\" target=\"_blank\">#<span>fediverse</span></a> or just unfamiliar, this is an <a href=\"https://hactivedirectory.com/tags/admin\" class=\"mention hashtag\" rel=\"nofollow noopener\" target=\"_blank\">#<span>admin</span></a> warning fellow admins who to <a href=\"https://hactivedirectory.com/tags/block\" class=\"mention hashtag\" rel=\"nofollow noopener\" target=\"_blank\">#<span>block</span></a>.  Seems obvious right?  </p><p>You might make the comparison that it's one restaurant warning other fellow restaurants who to refuse service to.  Not quite.  People like me who are on small private instance *STILL* benefit.  I cannot thank <span class=\"h-card\" translate=\"no\"><a href=\"https://mstdn.social/@stux\" class=\"u-url mention\" rel=\"nofollow noopener\" target=\"_blank\">@<span>stux</span></a></span> and many other admins enough for the service they provide to EVERYONE, even if he's not *my* actual admin.</p>",
+    "reblog": null,
+    "account": {
+      "id": "110950541669883227",
+      "username": "josh",
+      "acct": "josh@hactivedirectory.com",
+      "display_name": "Josh (I fight for the users!)",
+      "locked": false,
+      "bot": false,
+      "discoverable": true,
+      "indexable": false,
+      "group": false,
+      "created_at": "2025-01-21T00:00:00.000Z",
+      "note": "<p>Pro <a href=\"https://hactivedirectory.com/tags/democracy\" class=\"mention hashtag\" rel=\"nofollow noopener\" target=\"_blank\">#<span>democracy</span></a>, <a href=\"https://hactivedirectory.com/tags/gay\" class=\"mention hashtag\" rel=\"nofollow noopener\" target=\"_blank\">#<span>gay</span></a>, <a href=\"https://hactivedirectory.com/tags/tech\" class=\"mention hashtag\" rel=\"nofollow noopener\" target=\"_blank\">#<span>tech</span></a> enthusiast <a href=\"https://hactivedirectory.com/tags/bro\" class=\"mention hashtag\" rel=\"nofollow noopener\" target=\"_blank\">#<span>bro</span></a>.  Death to <a href=\"https://hactivedirectory.com/tags/facebook\" class=\"mention hashtag\" rel=\"nofollow noopener\" target=\"_blank\">#<span>facebook</span></a>!  <a href=\"https://hactivedirectory.com/tags/totk\" class=\"mention hashtag\" rel=\"nofollow noopener\" target=\"_blank\">#<span>totk</span></a> (and all things <a href=\"https://hactivedirectory.com/tags/zelda\" class=\"mention hashtag\" rel=\"nofollow noopener\" target=\"_blank\">#<span>zelda</span></a>) and <a href=\"https://hactivedirectory.com/tags/kingdomhearts\" class=\"mention hashtag\" rel=\"nofollow noopener\" target=\"_blank\">#<span>kingdomhearts</span></a> are my happy place.  I'm inclined to <a href=\"https://hactivedirectory.com/tags/philosophy\" class=\"mention hashtag\" rel=\"nofollow noopener\" target=\"_blank\">#<span>philosophy</span></a>, <a href=\"https://hactivedirectory.com/tags/thoughtful\" class=\"mention hashtag\" rel=\"nofollow noopener\" target=\"_blank\">#<span>thoughtful</span></a>, adopt <a href=\"https://hactivedirectory.com/tags/stoicism\" class=\"mention hashtag\" rel=\"nofollow noopener\" target=\"_blank\">#<span>stoicism</span></a> whenever possible, soft spot for <a href=\"https://hactivedirectory.com/tags/law\" class=\"mention hashtag\" rel=\"nofollow noopener\" target=\"_blank\">#<span>law</span></a>, interested in <a href=\"https://hactivedirectory.com/tags/uspol\" class=\"mention hashtag\" rel=\"nofollow noopener\" target=\"_blank\">#<span>uspol</span></a> and <a href=\"https://hactivedirectory.com/tags/politics\" class=\"mention hashtag\" rel=\"nofollow noopener\" target=\"_blank\">#<span>politics</span></a> abroad. </p><p>I believe in both <a href=\"https://hactivedirectory.com/tags/enterprise\" class=\"mention hashtag\" rel=\"nofollow noopener\" target=\"_blank\">#<span>enterprise</span></a> tech and <a href=\"https://hactivedirectory.com/tags/smallweb\" class=\"mention hashtag\" rel=\"nofollow noopener\" target=\"_blank\">#<span>smallweb</span></a>.</p><p><a href=\"https://hactivedirectory.com/tags/pittsburgh\" class=\"mention hashtag\" rel=\"nofollow noopener\" target=\"_blank\">#<span>pittsburgh</span></a> native who lived all over the place and then came home.  <br><a href=\"https://hactivedirectory.com/tags/fediverse\" class=\"mention hashtag\" rel=\"nofollow noopener\" target=\"_blank\">#<span>fediverse</span></a> forever!! </p><p>Proud husbro to <span class=\"h-card\" translate=\"no\"><a href=\"https://hactivedirectory.com/@mrburns\" class=\"u-url mention\" rel=\"nofollow noopener\" target=\"_blank\">@<span>mrburns</span></a></span> and doggo-dad to <span class=\"h-card\" translate=\"no\"><a href=\"https://hactivedirectory.com/@harleythedoggo\" class=\"u-url mention\" rel=\"nofollow noopener\" target=\"_blank\">@<span>harleythedoggo</span></a></span>.</p>",
+      "url": "https://hactivedirectory.com/@josh",
+      "uri": "https://hactivedirectory.com/users/josh",
+      "avatar": "https://media.mstdn.social/cache/accounts/avatars/110/950/541/669/883/227/original/106867953d3504f2.png",
+      "avatar_static": "https://media.mstdn.social/cache/accounts/avatars/110/950/541/669/883/227/original/106867953d3504f2.png",
+      "avatar_description": "A picture of me with a smirk smile, wearing a grey drawstring hoodie, and a yellow Pittsburgh Pirates hat",
+      "header": "https://media.mstdn.social/cache/accounts/headers/110/950/541/669/883/227/original/f413bb8b91b6973a.png",
+      "header_static": "https://media.mstdn.social/cache/accounts/headers/110/950/541/669/883/227/original/f413bb8b91b6973a.png",
+      "header_description": "My dog, Harley, the goodest boi, with his head on a pillow looking directly at the viewer",
+      "followers_count": 662,
+      "following_count": 1026,
+      "statuses_count": 12192,
+      "last_status_at": "2026-07-28",
+      "hide_collections": true,
+      "show_media": true,
+      "show_media_replies": true,
+      "show_featured": true,
+      "feature_approval": {
+        "automatic": [
+          "public"
+        ],
+        "manual": [],
+        "current_user": "denied"
+      },
+      "emojis": [],
+      "fields": [
+        {
+          "name": "I am the",
+          "value": "same Josh as before",
+          "verified_at": null
+        },
+        {
+          "name": "just now on",
+          "value": "stock Masto",
+          "verified_at": null
+        },
+        {
+          "name": "the most stable genius",
+          "value": "in terms of stability",
+          "verified_at": null
+        },
+        {
+          "name": "30-50",
+          "value": "feral hogs",
+          "verified_at": null
+        }
+      ]
+    },
+    "media_attachments": [],
+    "mentions": [
+      {
+        "id": "5168",
+        "username": "stux",
+        "url": "https://mstdn.social/@stux",
+        "acct": "stux"
+      }
+    ],
+    "tags": [
+      {
+        "name": "Fediverse",
+        "url": "https://mstdn.social/tags/Fediverse"
+      },
+      {
+        "name": "admin",
+        "url": "https://mstdn.social/tags/admin"
+      },
+      {
+        "name": "block",
+        "url": "https://mstdn.social/tags/block"
+      }
+    ],
+    "emojis": [],
+    "tagged_collections": [],
+    "quote": null,
+    "card": null,
+    "poll": null,
+    "quote_approval": {
+      "automatic": [
+        "public"
+      ],
+      "manual": [],
+      "current_user": "denied"
+    }
+  },
+  "account": {
+    "id": "5168",
+    "username": "stux",
+    "acct": "stux",
+    "display_name": "stux⚡️",
+    "locked": false,
+    "bot": false,
+    "discoverable": true,
+    "indexable": true,
+    "group": false,
+    "created_at": "2019-11-03T00:00:00.000Z",
+    "note": "<p>From the Netherlands 🇳🇱</p><p>Social media needs to be fun, safe and secure again. Our team and I are working hard to keep that possible here for you♥️</p>",
+    "url": "https://mstdn.social/@stux",
+    "uri": "https://mstdn.social/users/stux",
+    "avatar": "https://media.mstdn.social/accounts/avatars/000/005/168/original/c85be6683862c045.png",
+    "avatar_static": "https://media.mstdn.social/accounts/avatars/000/005/168/original/c85be6683862c045.png",
+    "avatar_description": "",
+    "header": "https://media.mstdn.social/accounts/headers/000/005/168/original/03255dcbca1b79f7.png",
+    "header_static": "https://media.mstdn.social/accounts/headers/000/005/168/original/03255dcbca1b79f7.png",
+    "header_description": "",
+    "followers_count": 166213,
+    "following_count": 34480,
+    "statuses_count": 134941,
+    "last_status_at": "2026-07-28",
+    "hide_collections": false,
+    "show_media": true,
+    "show_media_replies": true,
+    "show_featured": true,
+    "noindex": false,
+    "feature_approval": {
+      "automatic": [
+        "public"
+      ],
+      "manual": [],
+      "current_user": "denied"
+    },
+    "emojis": [
+      {
+        "shortcode": "stux",
+        "url": "https://media.mstdn.social/custom_emojis/images/000/014/090/original/0a3aadb65926b676.png",
+        "static_url": "https://media.mstdn.social/custom_emojis/images/000/014/090/static/0a3aadb65926b676.png",
+        "visible_in_picker": true
+      },
+      {
+        "shortcode": "patreon",
+        "url": "https://media.mstdn.social/custom_emojis/images/000/002/305/original/2c41bbb32a5f3019.png",
+        "static_url": "https://media.mstdn.social/custom_emojis/images/000/002/305/static/2c41bbb32a5f3019.png",
+        "visible_in_picker": true
+      },
+      {
+        "shortcode": "kofi",
+        "url": "https://media.mstdn.social/custom_emojis/images/000/002/306/original/c7c126610b0412b3.png",
+        "static_url": "https://media.mstdn.social/custom_emojis/images/000/002/306/static/c7c126610b0412b3.png",
+        "visible_in_picker": true
+      },
+      {
+        "shortcode": "paypal",
+        "url": "https://media.mstdn.social/custom_emojis/images/000/005/209/original/ba0b18e7c5fb0b6f.png",
+        "static_url": "https://media.mstdn.social/custom_emojis/images/000/005/209/static/ba0b18e7c5fb0b6f.png",
+        "visible_in_picker": true
+      }
+    ],
+    "roles": [
+      {
+        "id": "3",
+        "name": "Owner",
+        "color": "#cf6b1a"
+      }
+    ],
+    "fields": [
+      {
+        "name": "Info :stux:",
+        "value": "<a href=\"https://stux.me\" target=\"_blank\" rel=\"nofollow noopener me\" translate=\"no\"><span class=\"invisible\">https://</span><span class=\"\">stux.me</span><span class=\"invisible\"></span></a>",
+        "verified_at": "2025-06-12T13:47:54.031+00:00"
+      },
+      {
+        "name": "Patreon :patreon:",
+        "value": "<a href=\"https://patreon.com/mstdn\" target=\"_blank\" rel=\"nofollow noopener me\" translate=\"no\"><span class=\"invisible\">https://</span><span class=\"\">patreon.com/mstdn</span><span class=\"invisible\"></span></a>",
+        "verified_at": "2020-06-14T20:54:39.335+00:00"
+      },
+      {
+        "name": "Ko-Fi :kofi:",
+        "value": "<a href=\"https://ko-fi.com/mstdn\" target=\"_blank\" rel=\"nofollow noopener me\" translate=\"no\"><span class=\"invisible\">https://</span><span class=\"\">ko-fi.com/mstdn</span><span class=\"invisible\"></span></a>",
+        "verified_at": null
+      },
+      {
+        "name": "PayPal :paypal:",
+        "value": "<a href=\"https://paypal.me/stuxOS\" target=\"_blank\" rel=\"nofollow noopener me\" translate=\"no\"><span class=\"invisible\">https://</span><span class=\"\">paypal.me/stuxOS</span><span class=\"invisible\"></span></a>",
+        "verified_at": null
+      }
+    ]
+  },
+  "media_attachments": [],
+  "mentions": [],
+  "tags": [],
+  "emojis": [],
+  "tagged_collections": [],
+  "quote": null,
+  "card": null,
+  "poll": null,
+  "quote_approval": {
+    "automatic": [
+      "public"
+    ],
+    "manual": [],
+    "current_user": "denied"
+  }
+}

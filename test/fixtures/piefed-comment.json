@@ -1,0 +1,108 @@
+{
+  "comment_view": {
+    "activity_alert": false,
+    "banned_from_community": false,
+    "can_auth_user_moderate": false,
+    "comment": {
+      "answer": false,
+      "ap_id": "https://piefed.social/comment/12285388",
+      "body": "What a waste of money. Why go to school if you’re just going to use AI? What are you paying for?",
+      "deleted": false,
+      "distinguished": false,
+      "emoji_reactions": null,
+      "id": 12285388,
+      "language_id": 1,
+      "local": true,
+      "locked": false,
+      "path": "0.12285388",
+      "post_id": 2240362,
+      "published": "2026-07-28T02:58:36.690576Z",
+      "removed": false,
+      "user_id": 218909
+    },
+    "community": {
+      "actor_id": "https://lemmy.world/c/technology",
+      "ai_generated": false,
+      "ap_domain": "lemmy.world",
+      "banned": false,
+      "deleted": false,
+      "hidden": false,
+      "icon": "https://media.piefed.social/communities/yH/ZB/yHZB5cilcH1GGyv.png",
+      "id": 81,
+      "instance_id": 9,
+      "local": false,
+      "name": "technology",
+      "nsfw": false,
+      "published": "2023-06-11T02:16:17.173483Z",
+      "question_answer": false,
+      "removed": false,
+      "restricted_to_mods": false,
+      "title": "Technology",
+      "updated": "2023-06-11T02:16:17.173483Z"
+    },
+    "counts": {
+      "child_count": 1,
+      "comment_id": 12285388,
+      "downvotes": 1,
+      "published": "2026-07-28T02:58:36.690576Z",
+      "score": 6,
+      "upvotes": 7
+    },
+    "creator": {
+      "actor_id": "https://piefed.social/u/Sirdubdee",
+      "banned": false,
+      "bot": false,
+      "deleted": false,
+      "extra_fields": [],
+      "id": 218909,
+      "instance_id": 1,
+      "local": true,
+      "published": "2026-01-24T04:17:39.807138Z",
+      "title": "Sirdubdee",
+      "user_name": "Sirdubdee"
+    },
+    "creator_banned_from_community": false,
+    "creator_blocked": false,
+    "creator_is_admin": false,
+    "creator_is_moderator": false,
+    "my_vote": 0,
+    "post": {
+      "ai_generated": false,
+      "ap_id": "https://piefed.social/c/technology@lemmy.world/p/2240362/professor-s-invisible-prompt-trap-catches-32-students-cheating-on-their-midterm-with-ai",
+      "body": "In an online discussion post, Alcorn State University history professor Dr. Jason Gibson posed a question that represented part of his students' midterm. It was about the...",
+      "community_id": 81,
+      "cross_posts": [
+        {
+          "community_name": "Hacker News",
+          "post_id": 2241119,
+          "reply_count": 10
+        }
+      ],
+      "deleted": false,
+      "emoji_reactions": null,
+      "flair": "",
+      "id": 2240362,
+      "image_details": {
+        "height": 341,
+        "width": 512
+      },
+      "instance_sticky": false,
+      "language_id": 1,
+      "local": true,
+      "locked": false,
+      "nsfw": false,
+      "post_type": "Link",
+      "published": "2026-07-27T14:41:57.632370Z",
+      "removed": false,
+      "small_thumbnail_url": "https://media.piefed.social/posts/Ie/CD/IeCDe0wBOS7Or4o.webp",
+      "sticky": false,
+      "tags": "AI, tech, college, aislop, Exams, cheating",
+      "thumbnail_url": "https://media.piefed.social/posts/Ie/CD/IeCDe0wBOS7Or4o_512.webp",
+      "title": "Professor's invisible prompt trap catches 32 students cheating on their midterm with AI",
+      "url": "https://www.techspot.com/news/113243-professor-invisible-prompt-trap-catches-32-students-cheating.html",
+      "user_id": 247273
+    },
+    "saved": false,
+    "subscribed": "NotSubscribed"
+  }
+}

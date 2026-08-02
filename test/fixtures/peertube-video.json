@@ -1,0 +1,397 @@
+{
+  "id": 71157,
+  "uuid": "f2eae269-2996-44fe-9040-af57e241be0d",
+  "shortUUID": "vZNcho9kCoVzc8wZwacPtc",
+  "url": "https://tube.tchncs.de/videos/watch/f2eae269-2996-44fe-9040-af57e241be0d",
+  "name": "2026 POrtal effigy burn",
+  "category": {
+    "id": 10,
+    "label": "Entertainment"
+  },
+  "licence": {
+    "id": 5,
+    "label": "Attribution - Non Commercial - Share Alike"
+  },
+  "language": {
+    "id": "en",
+    "label": "English"
+  },
+  "privacy": {
+    "id": 1,
+    "label": "Public"
+  },
+  "nsfw": false,
+  "nsfwFlags": 0,
+  "nsfwSummary": null,
+  "truncatedDescription": "Effigy burn at POrtal, July 2026. Drums by the inimitable Lulu, Mulligan Twice, and Mulligan's campmate whose name I really don't recall (sorry!). Timelapse on a potato Pixel 7 from up on Hummingbird Hill.",
+  "description": "Effigy burn at POrtal, July 2026. Drums by the inimitable Lulu, Mulligan Twice, and Mulligan's campmate whose name I really don't recall (sorry!). Timelapse on a potato Pixel 7 from up on Hummingbird Hill.",
+  "isLocal": false,
+  "duration": 215,
+  "aspectRatio": 1.7778,
+  "views": 27,
+  "viewers": 0,
+  "downloads": 52,
+  "likes": 0,
+  "dislikes": 0,
+  "thumbnailPath": "/lazy-static/thumbnails/24aea2d0-92e0-4534-a156-43cdc8959b6f.jpg",
+  "previewPath": "/lazy-static/thumbnails/a7e401e7-8b1a-44e0-98ab-7fd663169e42.jpg",
+  "thumbnails": [
+    {
+      "height": 157,
+      "width": 280,
+      "aspectRatio": "16:9",
+      "fileUrl": "https://framatube.org/lazy-static/thumbnails/24aea2d0-92e0-4534-a156-43cdc8959b6f.jpg"
+    },
+    {
+      "height": 480,
+      "width": 850,
+      "aspectRatio": "16:9",
+      "fileUrl": "https://framatube.org/lazy-static/thumbnails/6f8138cb-1b09-4288-8ab6-a627559cdf01.jpg"
+    },
+    {
+      "height": 720,
+      "width": 1280,
+      "aspectRatio": "16:9",
+      "fileUrl": "https://framatube.org/lazy-static/thumbnails/5f2cbfc8-03ad-408d-9afe-d926afc984b4.jpg"
+    },
+    {
+      "height": 1400,
+      "width": 1400,
+      "aspectRatio": "1:1",
+      "fileUrl": "https://framatube.org/lazy-static/thumbnails/e2cd3241-6869-468c-922b-b5ec04a73530.jpg"
+    },
+    {
+      "height": 1080,
+      "width": 1920,
+      "aspectRatio": "16:9",
+      "fileUrl": "https://framatube.org/lazy-static/thumbnails/a7e401e7-8b1a-44e0-98ab-7fd663169e42.jpg"
+    }
+  ],
+  "embedPath": "/videos/embed/vZNcho9kCoVzc8wZwacPtc",
+  "createdAt": "2026-07-29T21:43:12.545Z",
+  "updatedAt": "2026-07-30T11:03:34.879Z",
+  "publishedAt": "2026-07-29T21:43:12.545Z",
+  "originallyPublishedAt": null,
+  "isLive": false,
+  "account": {
+    "url": "https://tube.tchncs.de/accounts/guyjantic",
+    "name": "guyjantic",
+    "host": "tube.tchncs.de",
+    "avatars": [
+      {
+        "height": 48,
+        "width": 48,
+        "path": "/lazy-static/avatars/af220a34-2c98-49d9-b73b-deb23ebd74fb.jpg",
+        "fileUrl": "https://framatube.org/lazy-static/avatars/af220a34-2c98-49d9-b73b-deb23ebd74fb.jpg",
+        "createdAt": "2025-02-16T21:03:39.819Z",
+        "updatedAt": "2026-03-24T23:32:12.133Z"
+      },
+      {
+        "height": 600,
+        "width": 600,
+        "path": "/lazy-static/avatars/31740de2-77f3-4b9e-b557-a46aa8c9499e.jpg",
+        "fileUrl": "https://framatube.org/lazy-static/avatars/31740de2-77f3-4b9e-b557-a46aa8c9499e.jpg",
+        "createdAt": "2025-02-16T21:03:39.834Z",
+        "updatedAt": "2025-02-16T21:03:39.834Z"
+      },
+      {
+        "height": 1500,
+        "width": 1500,
+        "path": "/lazy-static/avatars/d4ac9c2f-2f97-49e1-9976-aca3d78f196d.jpg",
+        "fileUrl": "https://framatube.org/lazy-static/avatars/d4ac9c2f-2f97-49e1-9976-aca3d78f196d.jpg",
+        "createdAt": "2025-02-16T21:03:39.841Z",
+        "updatedAt": "2025-12-15T14:40:45.619Z"
+      },
+      {
+        "height": 120,
+        "width": 120,
+        "path": "/lazy-static/avatars/475a15d8-fc96-4490-a31d-5f1e9c77db35.jpg",
+        "fileUrl": "https://framatube.org/lazy-static/avatars/475a15d8-fc96-4490-a31d-5f1e9c77db35.jpg",
+        "createdAt": "2025-02-16T21:03:39.824Z",
+        "updatedAt": "2026-06-16T21:00:55.323Z"
+      }
+    ],
+    "id": 53908,
+    "followingCount": 0,
+    "followersCount": 23,
+    "createdAt": "2021-07-20T15:41:43.058Z",
+    "displayName": "Guy Jantic",
+    "description": "Songs. Probably silly. Possibly parodies. Definitely the worst production values imaginable. I go by Guy Jantic (for slightly more silly videos) and also Tom Stearns (for the occasional serious ones).",
+    "updatedAt": "2025-02-16T21:05:08.619Z"
+  },
+  "channel": {
+    "url": "https://tube.tchncs.de/video-channels/ad_hoc",
+    "name": "ad_hoc",
+    "host": "tube.tchncs.de",
+    "avatars": [],
+    "id": 4178,
+    "followingCount": 0,
+    "followersCount": 0,
+    "createdAt": "2025-12-25T01:50:49.378Z",
+    "banners": [],
+    "displayName": "ad hoc videos",
+    "description": "recordings of other stuff as it comes up",
+    "support": null,
+    "isLocal": false,
+    "updatedAt": "2026-07-29T21:43:14.309Z",
+    "ownerAccount": {
+      "url": "https://tube.tchncs.de/accounts/guyjantic",
+      "name": "guyjantic",
+      "host": "tube.tchncs.de",
+      "avatars": [
+        {
+          "height": 48,
+          "width": 48,
+          "path": "/lazy-static/avatars/af220a34-2c98-49d9-b73b-deb23ebd74fb.jpg",
+          "fileUrl": "https://framatube.org/lazy-static/avatars/af220a34-2c98-49d9-b73b-deb23ebd74fb.jpg",
+          "createdAt": "2025-02-16T21:03:39.819Z",
+          "updatedAt": "2026-03-24T23:32:12.133Z"
+        },
+        {
+          "height": 600,
+          "width": 600,
+          "path": "/lazy-static/avatars/31740de2-77f3-4b9e-b557-a46aa8c9499e.jpg",
+          "fileUrl": "https://framatube.org/lazy-static/avatars/31740de2-77f3-4b9e-b557-a46aa8c9499e.jpg",
+          "createdAt": "2025-02-16T21:03:39.834Z",
+          "updatedAt": "2025-02-16T21:03:39.834Z"
+        },
+        {
+          "height": 1500,
+          "width": 1500,
+          "path": "/lazy-static/avatars/d4ac9c2f-2f97-49e1-9976-aca3d78f196d.jpg",
+          "fileUrl": "https://framatube.org/lazy-static/avatars/d4ac9c2f-2f97-49e1-9976-aca3d78f196d.jpg",
+          "createdAt": "2025-02-16T21:03:39.841Z",
+          "updatedAt": "2025-12-15T14:40:45.619Z"
+        },
+        {
+          "height": 120,
+          "width": 120,
+          "path": "/lazy-static/avatars/475a15d8-fc96-4490-a31d-5f1e9c77db35.jpg",
+          "fileUrl": "https://framatube.org/lazy-static/avatars/475a15d8-fc96-4490-a31d-5f1e9c77db35.jpg",
+          "createdAt": "2025-02-16T21:03:39.824Z",
+          "updatedAt": "2026-06-16T21:00:55.323Z"
+        }
+      ],
+      "id": 53908,
+      "followingCount": 0,
+      "followersCount": 23,
+      "createdAt": "2021-07-20T15:41:43.058Z",
+      "displayName": "Guy Jantic",
+      "description": "Songs. Probably silly. Possibly parodies. Definitely the worst production values imaginable. I go by Guy Jantic (for slightly more silly videos) and also Tom Stearns (for the occasional serious ones).",
+      "updatedAt": "2025-02-16T21:05:08.619Z"
+    }
+  },
+  "comments": 0,
+  "pluginData": {},
+  "blacklisted": false,
+  "blacklistedReason": null,
+  "streamingPlaylists": [
+    {
+      "id": 2555912,
+      "type": 1,
+      "playlistUrl": "https://media.tube.tchncs.de/streaming-playlists/hls/f2eae269-2996-44fe-9040-af57e241be0d/c9345ee6-1e86-464a-b1bb-fe32c639e53d-master.m3u8",
+      "segmentsSha256Url": "https://media.tube.tchncs.de/streaming-playlists/hls/f2eae269-2996-44fe-9040-af57e241be0d/f26de652-f7ae-425c-8e6c-f2137b63b1db-segments-sha256.json",
+      "redundancies": [
+        {
+          "baseUrl": "https://video.mycrowd.ca/static/redundancy/hls/f2eae269-2996-44fe-9040-af57e241be0d"
+        }
+      ],
+      "files": [
+        {
+          "id": 1643567,
+          "resolution": {
+            "id": 1080,
+            "label": "1080p"
+          },
+          "width": 1920,
+          "height": 1080,
+          "magnetUri": "magnet:?xs=https%3A%2F%2Fframatube.org%2Flazy-static%2Ftorrents%2F3b360cda-ef05-4f21-9412-3759fc086427-1080-hls.torrent&xt=urn:btih:a5519f13fdaccf33904a5b6099a240ae07d80268&dn=2026+POrtal+effigy+burn&tr=wss%3A%2F%2Ftube.tchncs.de%2Ftracker%2Fsocket&tr=https%3A%2F%2Ftube.tchncs.de%2Ftracker%2Fannounce&ws=https%3A%2F%2Fmedia.tube.tchncs.de%2Fstreaming-playlists%2Fhls%2Ff2eae269-2996-44fe-9040-af57e241be0d%2F6b0e2f3c-58c0-45bb-a958-948dbfc4b0fd-1080-fragmented.mp4",
+          "size": 185294551,
+          "fps": 30,
+          "torrentUrl": "https://framatube.org/lazy-static/torrents/3b360cda-ef05-4f21-9412-3759fc086427-1080-hls.torrent",
+          "torrentDownloadUrl": "https://framatube.org/download/torrents/3b360cda-ef05-4f21-9412-3759fc086427-1080-hls.torrent",
+          "fileUrl": "https://media.tube.tchncs.de/streaming-playlists/hls/f2eae269-2996-44fe-9040-af57e241be0d/6b0e2f3c-58c0-45bb-a958-948dbfc4b0fd-1080-fragmented.mp4",
+          "fileDownloadUrl": "https://tube.tchncs.de/download/streaming-playlists/hls/videos/f2eae269-2996-44fe-9040-af57e241be0d-1080-fragmented.mp4",
+          "metadataUrl": "https://tube.tchncs.de/api/v1/videos/f2eae269-2996-44fe-9040-af57e241be0d/metadata/969301",
+          "hasAudio": true,
+          "hasVideo": true,
+          "playlistUrl": "https://media.tube.tchncs.de/streaming-playlists/hls/f2eae269-2996-44fe-9040-af57e241be0d/6b0e2f3c-58c0-45bb-a958-948dbfc4b0fd-1080.m3u8",
+          "storage": null
+        },
+        {
+          "id": 1643568,
+          "resolution": {
+            "id": 480,
+            "label": "480p"
+          },
+          "width": 854,
+          "height": 480,
+          "magnetUri": "magnet:?xs=https%3A%2F%2Fframatube.org%2Flazy-static%2Ftorrents%2F30f38f34-164a-45ae-b31f-79250c9a2177-480-hls.torrent&xt=urn:btih:248d7042068eedfda7545437b546d5a4f5a50700&dn=2026+POrtal+effigy+burn&tr=wss%3A%2F%2Ftube.tchncs.de%2Ftracker%2Fsocket&tr=https%3A%2F%2Ftube.tchncs.de%2Ftracker%2Fannounce&ws=https%3A%2F%2Fmedia.tube.tchncs.de%2Fstreaming-playlists%2Fhls%2Ff2eae269-2996-44fe-9040-af57e241be0d%2Feafaf6b0-66fb-44c1-82e0-1aa75e8bab31-480-fragmented.mp4",
+          "size": 25345190,
+          "fps": 30,
+          "torrentUrl": "https://framatube.org/lazy-static/torrents/30f38f34-164a-45ae-b31f-79250c9a2177-480-hls.torrent",
+          "torrentDownloadUrl": "https://framatube.org/download/torrents/30f38f34-164a-45ae-b31f-79250c9a2177-480-hls.torrent",
+          "fileUrl": "https://media.tube.tchncs.de/streaming-playlists/hls/f2eae269-2996-44fe-9040-af57e241be0d/eafaf6b0-66fb-44c1-82e0-1aa75e8bab31-480-fragmented.mp4",
+          "fileDownloadUrl": "https://tube.tchncs.de/download/streaming-playlists/hls/videos/f2eae269-2996-44fe-9040-af57e241be0d-480-fragmented.mp4",
+          "metadataUrl": "https://tube.tchncs.de/api/v1/videos/f2eae269-2996-44fe-9040-af57e241be0d/metadata/969306",
+          "hasAudio": true,
+          "hasVideo": true,
+          "playlistUrl": "https://media.tube.tchncs.de/streaming-playlists/hls/f2eae269-2996-44fe-9040-af57e241be0d/eafaf6b0-66fb-44c1-82e0-1aa75e8bab31-480.m3u8",
+          "storage": null
+        },
+        {
+          "id": 1643569,
+          "resolution": {
+            "id": 360,
+            "label": "360p"
+          },
+          "width": 640,
+          "height": 360,
+          "magnetUri": "magnet:?xs=https%3A%2F%2Fframatube.org%2Flazy-static%2Ftorrents%2Ffa30707c-ea91-4780-8ac3-772771dab800-360-hls.torrent&xt=urn:btih:4bae76413dc8771bf65ecbe4fe2ba4233c46538f&dn=2026+POrtal+effigy+burn&tr=wss%3A%2F%2Ftube.tchncs.de%2Ftracker%2Fsocket&tr=https%3A%2F%2Ftube.tchncs.de%2Ftracker%2Fannounce&ws=https%3A%2F%2Fmedia.tube.tchncs.de%2Fstreaming-playlists%2Fhls%2Ff2eae269-2996-44fe-9040-af57e241be0d%2F7fc57d0d-8244-4b62-8e5c-bedad889cc7d-360-fragmented.mp4",
+          "size": 16192508,
+          "fps": 30,
+          "torrentUrl": "https://framatube.org/lazy-static/torrents/fa30707c-ea91-4780-8ac3-772771dab800-360-hls.torrent",
+          "torrentDownloadUrl": "https://framatube.org/download/torrents/fa30707c-ea91-4780-8ac3-772771dab800-360-hls.torrent",
+          "fileUrl": "https://media.tube.tchncs.de/streaming-playlists/hls/f2eae269-2996-44fe-9040-af57e241be0d/7fc57d0d-8244-4b62-8e5c-bedad889cc7d-360-fragmented.mp4",
+          "fileDownloadUrl": "https://tube.tchncs.de/download/streaming-playlists/hls/videos/f2eae269-2996-44fe-9040-af57e241be0d-360-fragmented.mp4",
+          "metadataUrl": "https://tube.tchncs.de/api/v1/videos/f2eae269-2996-44fe-9040-af57e241be0d/metadata/969307",
+          "hasAudio": true,
+          "hasVideo": true,
+          "playlistUrl": "https://media.tube.tchncs.de/streaming-playlists/hls/f2eae269-2996-44fe-9040-af57e241be0d/7fc57d0d-8244-4b62-8e5c-bedad889cc7d-360.m3u8",
+          "storage": null
+        },
+        {
+          "id": 1643570,
+          "resolution": {
+            "id": 0,
+            "label": "Audio only"
+          },
+          "width": 0,
+          "height": 0,
+          "magnetUri": "magnet:?xs=https%3A%2F%2Fframatube.org%2Flazy-static%2Ftorrents%2F80b581c6-9d68-4efb-b7e8-033064869fb7-0-hls.torrent&xt=urn:btih:de53ddda564f0a47c308ad4df1be758da440961e&dn=2026+POrtal+effigy+burn&tr=wss%3A%2F%2Ftube.tchncs.de%2Ftracker%2Fsocket&tr=https%3A%2F%2Ftube.tchncs.de%2Ftracker%2Fannounce&ws=https%3A%2F%2Fmedia.tube.tchncs.de%2Fstreaming-playlists%2Fhls%2Ff2eae269-2996-44fe-9040-af57e241be0d%2F990bf8a8-a73f-4b0d-b05a-5c125bd443a9-0-fragmented.mp4",
+          "size": 4270407,
+          "fps": 0,
+          "torrentUrl": "https://framatube.org/lazy-static/torrents/80b581c6-9d68-4efb-b7e8-033064869fb7-0-hls.torrent",
+          "torrentDownloadUrl": "https://framatube.org/download/torrents/80b581c6-9d68-4efb-b7e8-033064869fb7-0-hls.torrent",
+          "fileUrl": "https://media.tube.tchncs.de/streaming-playlists/hls/f2eae269-2996-44fe-9040-af57e241be0d/990bf8a8-a73f-4b0d-b05a-5c125bd443a9-0-fragmented.mp4",
+          "fileDownloadUrl": "https://tube.tchncs.de/download/streaming-playlists/hls/videos/f2eae269-2996-44fe-9040-af57e241be0d-0-fragmented.mp4",
+          "metadataUrl": "https://tube.tchncs.de/api/v1/videos/f2eae269-2996-44fe-9040-af57e241be0d/metadata/969305",
+          "hasAudio": true,
+          "hasVideo": false,
+          "playlistUrl": "https://media.tube.tchncs.de/streaming-playlists/hls/f2eae269-2996-44fe-9040-af57e241be0d/990bf8a8-a73f-4b0d-b05a-5c125bd443a9-0.m3u8",
+          "storage": null
+        }
+      ]
+    }
+  ],
+  "files": [
+    {
+      "id": 1643563,
+      "resolution": {
+        "id": 1080,
+        "label": "1080p"
+      },
+      "width": 1920,
+      "height": 1080,
+      "magnetUri": "magnet:?xs=https%3A%2F%2Fframatube.org%2Flazy-static%2Ftorrents%2F3b3bf52d-b00c-4379-b784-400f0747596f-1080.torrent&xt=urn:btih:a39ad29ba619306a0c38e65507cee3ba34a97bbf&dn=2026+POrtal+effigy+burn&tr=wss%3A%2F%2Ftube.tchncs.de%2Ftracker%2Fsocket&tr=https%3A%2F%2Ftube.tchncs.de%2Ftracker%2Fannounce&ws=https%3A%2F%2Fmedia.tube.tchncs.de%2Fvideos%2Fffc34ac8-a0f9-4aac-9029-a9abb5871e20-1080.mp4",
+      "size": 185366741,
+      "fps": 30,
+      "torrentUrl": "https://framatube.org/lazy-static/torrents/3b3bf52d-b00c-4379-b784-400f0747596f-1080.torrent",
+      "torrentDownloadUrl": "https://framatube.org/download/torrents/3b3bf52d-b00c-4379-b784-400f0747596f-1080.torrent",
+      "fileUrl": "https://media.tube.tchncs.de/videos/ffc34ac8-a0f9-4aac-9029-a9abb5871e20-1080.mp4",
+      "fileDownloadUrl": "https://tube.tchncs.de/download/web-videos/f2eae269-2996-44fe-9040-af57e241be0d-1080.mp4",
+      "metadataUrl": "https://tube.tchncs.de/api/v1/videos/f2eae269-2996-44fe-9040-af57e241be0d/metadata/969300",
+      "hasAudio": true,
+      "hasVideo": true,
+      "storage": null
+    },
+    {
+      "id": 1643564,
+      "resolution": {
+        "id": 480,
+        "label": "480p"
+      },
+      "width": 854,
+      "height": 480,
+      "magnetUri": "magnet:?xs=https%3A%2F%2Fframatube.org%2Flazy-static%2Ftorrents%2F87980a48-9e03-4944-9d24-ba6b1e285ff8-480.torrent&xt=urn:btih:8b0708dc50a522265d76db1c08d762901536bf00&dn=2026+POrtal+effigy+burn&tr=wss%3A%2F%2Ftube.tchncs.de%2Ftracker%2Fsocket&tr=https%3A%2F%2Ftube.tchncs.de%2Ftracker%2Fannounce&ws=https%3A%2F%2Fmedia.tube.tchncs.de%2Fvideos%2F7145b1e6-012f-4aa3-8e5b-7add5998747d-480.mp4",
+      "size": 25419724,
+      "fps": 30,
+      "torrentUrl": "https://framatube.org/lazy-static/torrents/87980a48-9e03-4944-9d24-ba6b1e285ff8-480.torrent",
+      "torrentDownloadUrl": "https://framatube.org/download/torrents/87980a48-9e03-4944-9d24-ba6b1e285ff8-480.torrent",
+      "fileUrl": "https://media.tube.tchncs.de/videos/7145b1e6-012f-4aa3-8e5b-7add5998747d-480.mp4",
+      "fileDownloadUrl": "https://tube.tchncs.de/download/web-videos/f2eae269-2996-44fe-9040-af57e241be0d-480.mp4",
+      "metadataUrl": "https://tube.tchncs.de/api/v1/videos/f2eae269-2996-44fe-9040-af57e241be0d/metadata/969303",
+      "hasAudio": true,
+      "hasVideo": true,
+      "storage": null
+    },
+    {
+      "id": 1643565,
+      "resolution": {
+        "id": 360,
+        "label": "360p"
+      },
+      "width": 640,
+      "height": 360,
+      "magnetUri": "magnet:?xs=https%3A%2F%2Fframatube.org%2Flazy-static%2Ftorrents%2F630b88ba-47da-4ca7-a893-22200f313294-360.torrent&xt=urn:btih:35ff0858feea6375d37eef402d89a5a6396eba97&dn=2026+POrtal+effigy+burn&tr=wss%3A%2F%2Ftube.tchncs.de%2Ftracker%2Fsocket&tr=https%3A%2F%2Ftube.tchncs.de%2Ftracker%2Fannounce&ws=https%3A%2F%2Fmedia.tube.tchncs.de%2Fvideos%2F20187eca-5c01-4304-9514-bbecd234a28a-360.mp4",
+      "size": 16265542,
+      "fps": 30,
+      "torrentUrl": "https://framatube.org/lazy-static/torrents/630b88ba-47da-4ca7-a893-22200f313294-360.torrent",
+      "torrentDownloadUrl": "https://framatube.org/download/torrents/630b88ba-47da-4ca7-a893-22200f313294-360.torrent",
+      "fileUrl": "https://media.tube.tchncs.de/videos/20187eca-5c01-4304-9514-bbecd234a28a-360.mp4",
+      "fileDownloadUrl": "https://tube.tchncs.de/download/web-videos/f2eae269-2996-44fe-9040-af57e241be0d-360.mp4",
+      "metadataUrl": "https://tube.tchncs.de/api/v1/videos/f2eae269-2996-44fe-9040-af57e241be0d/metadata/969304",
+      "hasAudio": true,
+      "hasVideo": true,
+      "storage": null
+    },
+    {
+      "id": 1643566,
+      "resolution": {
+        "id": 0,
+        "label": "Audio only"
+      },
+      "width": 0,
+      "height": 0,
+      "magnetUri": "magnet:?xs=https%3A%2F%2Fframatube.org%2Flazy-static%2Ftorrents%2Fea0b8bb6-2e07-4f0b-81ab-c50eeebb0fd0-0.torrent&xt=urn:btih:60ae42db7c757895419f395a0beb69ac5565fbca&dn=2026+POrtal+effigy+burn&tr=wss%3A%2F%2Ftube.tchncs.de%2Ftracker%2Fsocket&tr=https%3A%2F%2Ftube.tchncs.de%2Ftracker%2Fannounce&ws=https%3A%2F%2Fmedia.tube.tchncs.de%2Fvideos%2F1a0ed048-52e4-4300-8d63-3221d1f1df31-0.mp4",
+      "size": 4261365,
+      "fps": 0,
+      "torrentUrl": "https://framatube.org/lazy-static/torrents/ea0b8bb6-2e07-4f0b-81ab-c50eeebb0fd0-0.torrent",
+      "torrentDownloadUrl": "https://framatube.org/download/torrents/ea0b8bb6-2e07-4f0b-81ab-c50eeebb0fd0-0.torrent",
+      "fileUrl": "https://media.tube.tchncs.de/videos/1a0ed048-52e4-4300-8d63-3221d1f1df31-0.mp4",
+      "fileDownloadUrl": "https://tube.tchncs.de/download/web-videos/f2eae269-2996-44fe-9040-af57e241be0d-0.mp4",
+      "metadataUrl": "https://tube.tchncs.de/api/v1/videos/f2eae269-2996-44fe-9040-af57e241be0d/metadata/969302",
+      "hasAudio": true,
+      "hasVideo": false,
+      "storage": null
+    }
+  ],
+  "liveSchedules": [],
+  "support": null,
+  "tags": [
+    "burn",
+    "burningman",
+    "drums",
+    "regionalburn",
+    "usa"
+  ],
+  "commentsPolicy": {
+    "id": 1,
+    "label": "Enabled"
+  },
+  "downloadEnabled": true,
+  "waitTranscoding": true,
+  "inputFileUpdatedAt": "2026-07-29T20:07:11.798Z",
+  "state": {
+    "id": 1,
+    "label": "Published"
+  },
+  "trackerUrls": [
+    "wss://tube.tchncs.de/tracker/socket",
+    "https://tube.tchncs.de/tracker/announce"
+  ],
+  "embedPrivacyPolicy": {
+    "id": 1,
+    "label": "All allowed"
+  }
+}

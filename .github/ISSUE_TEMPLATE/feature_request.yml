@@ -1,0 +1,43 @@
+name: Feature request
+description: Suggest a site, a card improvement, or something the converter should do
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: >
+        What problem does this solve, or what limitation does it address?
+        "I want X" is less useful than "When I do Y, I can't Z because…"
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What you have in mind
+    validations:
+      required: true
+
+  - type: input
+    id: example
+    attributes:
+      label: An example link
+      description: >
+        If this is about a site or a post shape we do not handle yet, a real link is worth
+        more than a description of one — it is what the work gets tested against.
+      placeholder: "https://example.com/some/post/123"
+    validations:
+      required: false
+
+  - type: textarea
+    id: scope
+    attributes:
+      label: Scope notes
+      description: >
+        Optional — flag anything that affects scope. Worth knowing: this project does NATIVE
+        extraction, so "route it to another fixer" is out of scope by design. Anything needing
+        an account, a login, or a paid API is very likely out too — the whole point is that a
+        reader pastes a link and it works, with nobody signed in to anything.
+    validations:
+      required: false

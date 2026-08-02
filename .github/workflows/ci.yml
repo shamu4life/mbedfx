@@ -1,0 +1,49 @@
+# Tests and typecheck. THIS WORKFLOW DOES NOT DEPLOY — read the next paragraph before adding a
+# deploy step back.
+#
+# DEPLOYS BELONG TO CLOUDFLARE WORKERS BUILDS (connected to this repo in the Cloudflare dashboard,
+# 2026-07-26). It watches main and pushes to the apex itself. An earlier version of this file also
+# ran `wrangler deploy` on push to main, which would mean TWO systems deploying the same worker from
+# the same commit: they race on the container image and on which version ends up live, and the loser
+# silently overwrites the winner. One deployer, always.
+#
+# WHAT THAT COSTS, AND HOW TO GET IT BACK. When this file owned the deploy, tests ran BEFORE any
+# Cloudflare credential was used, so a red suite could not ship. Cloudflare Workers Builds runs its
+# own build command instead, and the DEFAULT is just `npx wrangler deploy` — which does not run
+# tests. So this workflow reports a failure but cannot BLOCK a deploy. To restore the gate, set the
+# build command in the Cloudflare dashboard to run the suite first:
+#
+#     npm ci && npm test && npx wrangler deploy
+#
+# That matters more here than on a typical worker: this one is the origin for og:video urls that
+# Discord CACHES on first fetch, keyed by a url that does not change. A bad deploy is not "revert and
+# move on" — it is a poisoned cache entry that outlives the fix.
+name: ci
+
+on:
+  push:
+    branches: [main, staging]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: ".node-version"
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      # No network, no container, no R2 — the whole suite runs on captured bytes and fake bindings.
+      - name: Test
+        run: npm test
+
+      - name: Typecheck
+        run: npx tsc --noEmit

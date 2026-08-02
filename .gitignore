@@ -1,0 +1,41 @@
+# NO TRAILING SLASH ON node_modules, and that single character is the whole point.
+# `node_modules/` is a DIRECTORY-ONLY pattern. Every plan in docs/superpowers/plans ends its tasks
+# with `git add -A`, and in a git worktree node_modules is a SYMLINK to the parent checkout — not a
+# directory, so the slashed pattern never matched and `git add -A` staged the link itself. The
+# committed artifact is a dangling symlink to ../../../node_modules that resolves only from inside
+# one specific worktree layout and is broken in every clone. Enforced by a test in
+# test/pipeline.test.mjs that asks git's own matcher rather than grepping this file.
+node_modules
+.wrangler/
+dist/
+.dev.vars
+
+# NO TRAILING SLASH ON THESE EITHER, for the same reason as node_modules above — and CI proved it on
+# its first ever run (2026-07-26). `.superpowers/` is a DIRECTORY-ONLY pattern, so `git check-ignore`
+# reports the path as NOT ignored on any checkout where the directory does not happen to exist. It
+# passed locally (the directory is there) and failed in CI (a clean clone, where it is not), which is
+# precisely the "a pattern that LOOKS right does not MATCH" trap the node_modules note describes.
+# Slashless matches whether the path exists, is a directory, or is a symlink.
+#
+# Agent scratch. Swept in by the same `git add -A` and equally not ours to commit.
+.superpowers
+# Browser-automation scratch (traces, page snapshots, screenshots) written during live verification.
+# Same rule as .superpowers: produced by a tool, not by this project, and `git add -A` would take it.
+.playwright-mcp
+# Python bytecode from container/. Written by any `python3 -m py_compile container/server.py` — the
+# standard way to syntax-check the resolver before a container build — so it appears during ordinary
+# verification, not just in unusual sessions. Same `git add -A` hazard as the two patterns above.
+__pycache__
+
+# AGENT AND EDITOR STATE THAT MUST NEVER BE COMMITTED, and `.claude` is the one that matters:
+# in this workspace `.claude/settings.local.json` is exactly where GitHub tokens live. It has been
+# protected only by a MACHINE-GLOBAL ignore file, which does not travel to a clone, a fork, CI, or a
+# second machine — so the protection was real here and absent everywhere else.
+.claude
+
+# Every spelling of a secrets file, not just the one that happens to exist today. `.dev.vars` alone
+# left `.dev.vars.staging`, `.env`, and `container/.env` unignored, which is the same "a pattern that
+# LOOKS right does not MATCH" trap the node_modules note above describes.
+.env
+.env.*
+.dev.vars.*

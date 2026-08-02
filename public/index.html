@@ -1,0 +1,1357 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>mbedfx — links that embed properly</title>
+<meta name="description" content="Paste a social post link, get one that actually unfurls in Discord. Twitter, TikTok, Instagram, YouTube, Bluesky, Reddit, the fediverse and more.">
+<meta name="theme-color" content="#5865F2">
+<!--
+  THE SITE'S OWN CARD. It had a title, a one-line description and NOTHING ELSE — no image, no url,
+  no twitter:card — so sharing mbedfx.app in Discord drew a bare strip of text. A conspicuous way
+  for an embed fixer to fail, and the first thing anyone sees when the link is passed around.
+
+  og:image is a JPEG rather than a PNG deliberately: the artwork is a large smooth gradient, which
+  PNG stores badly (557 KB) and JPEG stores well (44 KB) with no visible loss on the wordmark. It is
+  fetched on every unfurl, so the smaller file is the better citizen.
+
+  The dimensions are declared because Discord will not draw a large image without them — the same
+  rule this project already learned the hard way for post cards.
+-->
+<meta property="og:title" content="mbedfx — social links that embed properly">
+<meta property="og:description" content="Paste a social post link, get one Discord can actually draw. 17 sites, native extraction, no accounts and nothing to install.">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://mbedfx.app/">
+<meta property="og:site_name" content="mbedfx">
+<meta property="og:image" content="https://mbedfx.app/og.jpg">
+<meta property="og:image:type" content="image/jpeg">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="mbedfx.app — social links that embed properly">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="mbedfx — social links that embed properly">
+<meta name="twitter:description" content="Paste a social post link, get one Discord can actually draw. 17 sites, native extraction, no accounts.">
+<meta name="twitter:image" content="https://mbedfx.app/og.jpg">
+<link rel="icon" href="/favicon.ico">
+<script>
+/* Before first paint, so a stored choice never flashes the other theme first. Deliberately tiny and
+   inline: a separate file would 404 anyway, since the worker only serves four asset paths. */
+try {
+  var t = localStorage.getItem('mbedfx-theme');
+  if (t === 'light' || t === 'dark') document.documentElement.setAttribute('data-theme', t);
+} catch (e) { /* private mode, embedded webview: fall through to the OS preference */ }
+</script>
+<style>
+/* ===========================================================================
+   mbedfx. One file. Nothing is fetched from anywhere: no font CDN, no script
+   host, no analytics, and the platform marks below are inline SVG rather than
+   favicon lookups. A tool whose whole job is stripping trackers out of other
+   people's links does not get to leak its visitors to a third party on load.
+
+   The look borrows Discord's own layout language on purpose — this is a thing
+   that makes Discord embeds, so it is shaped like one. Not affiliated with
+   Discord; no Discord marks are used.
+   ======================================================================== */
+
+/**
+ * ONE DECLARATION PER COLOUR, via light-dark(). The `color-scheme` on :root decides which half
+ * applies, so the theme switch below only has to change that one property instead of restating a
+ * whole palette — which is how the two halves drift apart.
+ *
+ * Each token is declared TWICE on purpose: the plain value first, the light-dark() second. A browser
+ * too old for light-dark() drops the second as invalid and keeps the first, so it gets a complete,
+ * readable light theme rather than a page with no colours at all.
+ *
+ * CONTRAST. The muted and faint greys are NOT Discord's. Discord uses #949ba4 for secondary text,
+ * which lands at exactly 4.50:1 on their chat background — nominally AA, with no margin at all, and
+ * most of the places this page uses it are 12–13px. The light theme was worse: #80848e on white is
+ * 3.74:1, an outright AA failure.
+ *
+ * Every foreground/background pair was then MEASURED rather than eyeballed, which caught one more:
+ * the refusal red was 4.47:1 on the dark chat background, i.e. still failing after the greys were
+ * fixed. Worst pair across both themes is now 4.88:1. Ranges, lowest of the two themes:
+ *   --text 9.4+   --head 11.4+   --muted 7.2+   --faint 5.5+   --link 4.9+   --red 4.9+
+ */
+:root {
+  color-scheme: light dark;
+
+  --ui: "gg sans", "Noto Sans", -apple-system, BlinkMacSystemFont, "Segoe UI",
+        Helvetica, Arial, sans-serif;
+  --mono: ui-monospace, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+
+  --rail-bg: #e3e5e8;  --rail-bg: light-dark(#e3e5e8, #1e1f22);
+  --side-bg: #f2f3f5;  --side-bg: light-dark(#f2f3f5, #2b2d31);
+  --chat-bg: #ffffff;  --chat-bg: light-dark(#ffffff, #313338);
+  --embed-bg: #f2f3f5; --embed-bg: light-dark(#f2f3f5, #2b2d31);
+  --input-bg: #ebedef; --input-bg: light-dark(#ebedef, #1e1f22);
+  --code-bg: #f2f3f5;  --code-bg: light-dark(#f2f3f5, #2b2d31);
+
+  --text: #2e3035;     --text: light-dark(#2e3035, #dbdee1);
+  --head: #060607;     --head: light-dark(#060607, #f2f3f5);
+  --muted: #4e5058;    --muted: light-dark(#4e5058, #c3c8ce);
+  --faint: #5c5e66;    --faint: light-dark(#5c5e66, #a9b0ba);
+  --line: #dcdfe3;     --line: light-dark(#dcdfe3, #3f4147);
+
+  --link: #006ce7;     --link: light-dark(#006ce7, #4fb5ff);
+  --blurple: #5865f2;  --blurple: light-dark(#5865f2, #7885f5);
+  --green: #1a7f42;    --green: light-dark(#1a7f42, #3ba55d);
+  --red: #c0392f;      --red: light-dark(#c0392f, #fb8b8e);
+  --amber: #8a6100;    --amber: light-dark(#8a6100, #f0b232);
+
+  --brand-mono: #0b0b0c; --brand-mono: light-dark(#0b0b0c, #e7e9ea);
+}
+
+/* The switch. `color-scheme` is the whole mechanism — every token above follows it. */
+:root[data-theme="light"] { color-scheme: light; }
+:root[data-theme="dark"]  { color-scheme: dark; }
+
+* { box-sizing: border-box; }
+html { scroll-behavior: smooth; }
+@media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } }
+
+body {
+  margin: 0;
+  background: var(--chat-bg);
+  color: var(--text);
+  font-family: var(--ui);
+  font-size: 16px;
+  line-height: 1.375;
+  -webkit-font-smoothing: antialiased;
+}
+a { color: var(--link); text-decoration: none; }
+a:hover { text-decoration: underline; }
+
+/* ---------- app shell ------------------------------------------------- */
+
+.app { display: grid; grid-template-columns: 72px 240px minmax(0, 1fr); }
+
+.rail, .side { position: sticky; top: 0; height: 100dvh; }
+
+.rail {
+  background: var(--rail-bg);
+  display: flex; flex-direction: column; align-items: center;
+  padding: 12px 0; gap: 8px;
+}
+.avatar {
+  width: 48px; height: 48px; border-radius: 16px; flex: none;
+  background: var(--blurple); color: #fff;
+  display: grid; place-items: center;
+  font-weight: 800; font-size: 17px; letter-spacing: -.02em;
+}
+.rail .pill { width: 32px; height: 2px; background: var(--line); border-radius: 2px; margin: 4px 0; }
+
+.side { background: var(--side-bg); padding: 16px 8px; overflow-y: auto; }
+.side .server {
+  font-weight: 700; font-size: 15px; color: var(--head);
+  padding: 0 8px 14px; border-bottom: 1px solid var(--line); margin-bottom: 10px;
+}
+.side .cat {
+  font-size: 11px; font-weight: 700; letter-spacing: .02em; text-transform: uppercase;
+  color: var(--faint); padding: 12px 8px 4px;
+}
+.side a {
+  display: flex; align-items: center; gap: 6px;
+  padding: 6px 8px; border-radius: 4px; color: var(--faint);
+  font-size: 15px; font-weight: 500; text-decoration: none;
+}
+.side a:hover { background: color-mix(in srgb, var(--text) 8%, transparent); color: var(--text); text-decoration: none; }
+.side a.on { background: color-mix(in srgb, var(--text) 12%, transparent); color: var(--head); }
+.side a.on b { color: var(--head); }
+.side a b { color: var(--faint); font-weight: 400; font-size: 18px; line-height: 1; }
+
+/* ---------- chat ------------------------------------------------------ */
+
+.chat { min-width: 0; }
+/* Only the TOP bar is sticky. The in-content ones are section dividers: several sticky elements
+   with the same top offset pile up on each other as you scroll, which looks broken rather than
+   Discord-like. */
+.chanbar {
+  background: var(--chat-bg); border-bottom: 1px solid var(--line);
+  padding: 12px 16px; display: flex; align-items: center; gap: 8px;
+  font-weight: 700; color: var(--head); font-size: 15px;
+}
+.chanbar.top { position: sticky; top: 0; z-index: 5; }
+
+/* Visually hidden, still read aloud. The icons alone are not a label. */
+.sr {
+  position: absolute; width: 1px; height: 1px; overflow: hidden;
+  clip: rect(0 0 0 0); clip-path: inset(50%); white-space: nowrap;
+}
+
+.theme { margin-left: auto; display: inline-flex; gap: 2px; background: var(--input-bg); border-radius: 4px; padding: 2px; }
+.theme button {
+  border: 0; background: transparent; cursor: pointer; border-radius: 3px;
+  padding: 4px 7px; color: var(--faint); display: grid; place-items: center;
+}
+.theme button:hover { color: var(--head); }
+.theme button[aria-pressed="true"] { background: var(--chat-bg); color: var(--head); }
+.theme svg { width: 15px; height: 15px; fill: currentColor; display: block; }
+.chanbar b { color: var(--faint); font-weight: 400; font-size: 20px; line-height: 1; }
+.chanbar .sep { width: 1px; height: 18px; background: var(--line); margin: 0 4px; }
+.chanbar span { font-weight: 400; color: var(--faint); font-size: 13px; }
+
+.msgs { padding: 8px 16px 64px; max-width: 1180px; }
+
+/* Seventeen embeds in one column is a very long scroll for a reference table, so they flow into
+   however many columns fit. Each one keeps the embed shape; only the stacking changes. */
+#grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(310px, 1fr)); gap: 8px; margin-top: 8px; }
+#grid .embed { max-width: none; margin: 0; }
+
+.msg { display: grid; grid-template-columns: 40px minmax(0, 1fr); gap: 16px; padding: 18px 0 2px; }
+.msg .ava { width: 40px; height: 40px; border-radius: 50%; background: var(--blurple);
+  color: #fff; display: grid; place-items: center; font-weight: 800; font-size: 14px; }
+.msg .who { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; margin-bottom: 2px; }
+.msg .who .name { color: var(--head); font-weight: 600; font-size: 16px; }
+.msg .who .bot {
+  background: var(--blurple); color: #fff; font-size: 10px; font-weight: 600;
+  padding: 1px 4px; border-radius: 3px; letter-spacing: .02em; position: relative; top: -1px;
+}
+.msg .who .ts { color: var(--faint); font-size: 12px; }
+.msg p { margin: 0 0 6px; color: var(--text); }
+.msg p.sub { color: var(--muted); font-size: 15px; }
+
+h2.head { font-size: 20px; color: var(--head); margin: 0 0 6px; font-weight: 700; }
+
+/* ---------- embeds ---------------------------------------------------- */
+
+.embed {
+  position: relative; background: var(--embed-bg);
+  border-left: 4px solid var(--c, var(--blurple));
+  border-radius: 4px; padding: 12px 16px 12px 12px;
+  margin: 8px 0; max-width: 520px;
+}
+.embed .author { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+.embed .author svg { width: 20px; height: 20px; flex: none; }
+.embed .author .nm { font-size: 14px; font-weight: 600; color: var(--head); }
+.embed .author .hst { font-size: 12px; color: var(--faint); font-family: var(--mono); }
+.embed ul { list-style: none; margin: 6px 0 0; padding: 0; }
+.embed li {
+  font-family: var(--mono); font-size: 13px; line-height: 1.7;
+  color: var(--text); word-break: break-all;
+}
+.embed li i { color: var(--faint); font-style: normal; }
+.embed .foot {
+  margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--line);
+  font-size: 12px; color: var(--faint);
+}
+
+/* limits embeds are wider and text-led */
+.embed.wide { max-width: 640px; }
+.embed.wide .t { font-weight: 600; color: var(--head); font-size: 15px; margin-bottom: 3px; }
+.embed.wide .d { font-size: 14px; color: var(--muted); }
+
+/* ---------- the converter --------------------------------------------- */
+
+.tool { max-width: 640px; margin: 6px 0 0; }
+.toolbar { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; flex-wrap: wrap; }
+.toolbar .lbl { font-size: 12px; font-weight: 700; text-transform: uppercase; color: var(--faint); letter-spacing: .02em; }
+.seg { margin-left: auto; display: inline-flex; background: var(--input-bg); border-radius: 4px; padding: 2px; gap: 2px; }
+.seg button {
+  border: 0; background: transparent; cursor: pointer; border-radius: 3px;
+  font-family: var(--mono); font-size: 11px; font-weight: 600; color: var(--faint);
+  padding: 5px 9px; white-space: nowrap;
+}
+.seg button[aria-pressed="true"] { background: var(--chat-bg); color: var(--head); }
+
+#url {
+  width: 100%; font-family: var(--mono); font-size: 14px;
+  padding: 11px 12px; border-radius: 4px;
+  border: 1px solid var(--line); background: var(--input-bg); color: var(--text);
+}
+#url:focus { outline: none; border-color: var(--blurple); }
+#url::placeholder { color: var(--faint); }
+
+.out { display: none; margin-top: 10px; }
+.out.show { display: block; }
+
+.res { display: flex; gap: 8px; align-items: center; }
+.res code {
+  flex: 1 1 auto; min-width: 0; font-family: var(--mono); font-size: 13px;
+  background: var(--code-bg); border: 1px solid var(--line); border-radius: 4px;
+  padding: 10px 12px; color: var(--text); word-break: break-all;
+}
+#copy, #copy2 {
+  flex: none; border: 0; border-radius: 4px; cursor: pointer;
+  background: var(--blurple); color: #fff; font-family: var(--ui);
+  font-size: 14px; font-weight: 600; padding: 11px 18px;
+}
+#copy:hover, #copy2:hover { filter: brightness(1.08); }
+#copy.done, #copy2.done { background: var(--green); }
+
+.msgline { margin-top: 8px; font-size: 14px; color: var(--muted); }
+.msgline.bad { color: var(--red); }
+.msgline b { color: var(--head); font-weight: 600; }
+
+
+
+/* ---------- detected-site chip + picker --------------------------------- */
+
+/* The chip says which site we read the link as, on EVERY conversion — the owner asked for it to be
+   always visible AND overridable, because a silent wrong guess is the failure that costs a card. */
+.chip {
+  display: inline-flex; align-items: center; gap: 6px; cursor: pointer;
+  background: var(--input-bg); border: 1px solid var(--line); border-radius: 999px;
+  padding: 3px 10px 3px 7px; font-size: 13px; font-weight: 600; color: var(--head);
+  font-family: var(--ui);
+}
+.chip:hover { border-color: var(--blurple); }
+.chip svg { width: 14px; height: 14px; fill: currentColor; display: block; }
+.chip .caret { color: var(--faint); font-size: 10px; }
+
+/* The picker. Shown for an AMBIGUOUS path (candidates from the router) and for a manual override. */
+.picker { margin-top: 8px; display: none; flex-wrap: wrap; gap: 6px; max-width: 640px; }
+.picker.show { display: flex; }
+.picker button {
+  display: inline-flex; align-items: center; gap: 6px; cursor: pointer;
+  background: var(--embed-bg); border: 1px solid var(--line); border-radius: 4px;
+  padding: 6px 10px; font-size: 13px; font-weight: 600; color: var(--text); font-family: var(--ui);
+}
+.picker button:hover { border-color: var(--blurple); color: var(--head); }
+.picker button svg { width: 14px; height: 14px; fill: currentColor; display: block; }
+.picker .lbl { width: 100%; font-size: 12px; color: var(--faint); font-weight: 600; }
+
+/* ---------- code blocks ----------------------------------------------- */
+
+pre {
+  background: var(--code-bg); border: 1px solid var(--line); border-radius: 4px;
+  padding: 10px 12px; margin: 8px 0; overflow-x: auto; max-width: 640px;
+}
+code, pre { font-family: var(--mono); font-size: 13px; }
+pre b { color: var(--green); font-weight: 700; }
+pre s { color: var(--faint); }
+
+/* ---------- the discord embed preview ----------------------------------
+   A REPLICA, and it says so. Discord's real renderer is closed and version-skewed; this draws the
+   fields we actually send, in Discord's layout, so the shape and content are checkable before a
+   link is pasted. The stripe is our theme-color, which Discord does read — once the tag is spelled
+   name= rather than property=; see discord.ts for the fixer-comparison that established that. */
+.preview { margin-top: 14px; display: none; }
+.preview.show { display: block; }
+.preview .sentrow { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; max-width: 640px; }
+.preview .sent { color: var(--link); font-size: 14px; word-break: break-all; flex: 1;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+/* THE RESULT ROW HIDES WHILE A CARD IS UP. Two boxes showing one url, stacked, was the reported
+   noise — "the card preview is actually all I asked for". It comes back the moment there is no card
+   to read the link off, so the link is never unreachable. */
+.out.hasCard .res { display: none; }
+.pv {
+  position: relative; max-width: 516px; background: var(--embed-bg); border-radius: 4px;
+  padding: 12px 16px 16px; border-left: 4px solid var(--pvc, var(--blurple));
+}
+.pv .who { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+.pv .who img { width: 24px; height: 24px; border-radius: 50%; object-fit: cover; background: var(--line); }
+.pv .who b { font-size: 14px; color: var(--head); font-weight: 600; }
+.pv .body { font-size: 14px; line-height: 1.375; color: var(--text); white-space: pre-wrap; word-break: break-word; }
+/* THE QUOTED POST — an indented block with a left rule, which is how Discord renders the
+   blockquote the card emits. Reported missing from the preview entirely. */
+.pv .quote { margin-top: 8px; padding-left: 12px; border-left: 4px solid var(--line); }
+.pv .quote b { font-size: 14px; color: var(--head); font-weight: 600; }
+.pv .quote .qt { margin-top: 4px; font-size: 14px; line-height: 1.375; color: var(--text);
+  white-space: pre-wrap; word-break: break-word; }
+.pv .stats { display: flex; gap: 14px; margin-top: 8px; font-size: 14px; color: var(--text); font-weight: 600; }
+.pv .shots { margin-top: 12px; display: grid; gap: 4px; border-radius: 4px; overflow: hidden; }
+.pv .shots.n2 { grid-template-columns: 1fr 1fr; }
+.pv .shots.n3, .pv .shots.n4 { grid-template-columns: 1fr 1fr; }
+/* NO LETTERBOX ON A SINGLE ITEM. `object-fit: contain` inside a fixed-height box painted grey bars
+   down both sides of a portrait video, which the real card does not do — it sizes the media to its
+   own aspect and lets it be tall. Reported with a side-by-side screenshot. A multi-item grid still
+   crops, because there the cells must agree with each other. */
+.pv .shot { position: relative; display: block; border-radius: 4px; overflow: hidden; }
+.pv .shot img { display: block; width: 100%; height: auto; max-height: 350px; object-fit: cover; background: var(--line); }
+.pv .shots.n1 .shot { max-width: 350px; }
+.pv .shots.n1 .shot img { max-height: 500px; object-fit: contain; background: none; }
+.pv .play {
+  position: absolute; inset: 0; margin: auto; width: 48px; height: 48px; border-radius: 50%;
+  background: rgba(0,0,0,.6); display: grid; place-items: center; pointer-events: none;
+}
+.pv .play::after { content: ''; border-left: 15px solid #fff; border-top: 9px solid transparent; border-bottom: 9px solid transparent; margin-left: 4px; }
+.pv .foot { margin-top: 8px; font-size: 12px; color: var(--faint); }
+
+.chips { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0 0; max-width: 700px; }
+.chips div {
+  background: var(--embed-bg); border-radius: 4px; padding: 7px 10px;
+  font-size: 13px; color: var(--muted);
+}
+.chips code { color: var(--head); font-size: 12px; }
+
+footer { color: var(--faint); font-size: 13px; padding: 28px 0 0; border-top: 1px solid var(--line); margin-top: 32px; }
+
+/* ---------- narrow ---------------------------------------------------- */
+
+@media (max-width: 800px) {
+  .app { grid-template-columns: minmax(0, 1fr); }
+  .rail, .side { display: none; }
+  .msgs { padding: 8px 12px 48px; }
+  .msg { grid-template-columns: minmax(0, 1fr); gap: 0; }
+  .msg .ava { display: none; }
+}
+/* The channel blurb is the first thing to go; the theme switch is not, since the sidebar that would
+   otherwise host it is already hidden by this point. */
+@media (max-width: 620px) {
+  .chanbar .sep, #chanDesc { display: none; }
+  .seg { margin-left: 0; }
+  .toolbar { align-items: flex-start; }
+}
+</style>
+</head>
+<body>
+
+<div class="app">
+
+  <div class="rail" aria-hidden="true">
+    <div class="avatar">fx</div>
+    <div class="pill"></div>
+  </div>
+
+  <nav class="side">
+    <div class="server">mbedfx</div>
+    <div class="cat">Start here</div>
+    <a href="#convert"><b>#</b> convert</a>
+    <a href="#sites"><b>#</b> sites</a>
+    <div class="cat">Details</div>
+    <a href="#fediverse"><b>#</b> fediverse</a>
+    <a href="#limits"><b>#</b> limits</a>
+    <a href="#nope"><b>#</b> nope</a>
+  </nav>
+
+  <main class="chat">
+    <div class="chanbar top">
+      <b>#</b> <span id="chanName">convert</span> <div class="sep"></div>
+      <span id="chanDesc">Paste a link, get one that embeds.</span>
+      <div class="theme" id="theme" role="group" aria-label="Colour theme">
+        <button type="button" data-theme-set="system" aria-pressed="true" title="Match my system">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 4.5h18a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1h-7v2h3v2H7v-2h3v-2H3a1 1 0 0 1-1-1v-10a1 1 0 0 1 1-1Zm1 2v8h16v-8H4Z"/></svg>
+          <span class="sr">System</span>
+        </button>
+        <button type="button" data-theme-set="light" aria-pressed="false" title="Light">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 17a5 5 0 1 1 0-10 5 5 0 0 1 0 10Zm0-2a3 3 0 1 0 0-6 3 3 0 0 0 0 6Zm-1-13h2v3h-2V2Zm0 17h2v3h-2v-3ZM2 11h3v2H2v-2Zm17 0h3v2h-3v-2ZM4.2 5.6l1.4-1.4 2.1 2.1-1.4 1.4-2.1-2.1Zm12.1 12.1 1.4-1.4 2.1 2.1-1.4 1.4-2.1-2.1Zm2.1-13.5 1.4 1.4-2.1 2.1-1.4-1.4 2.1-2.1ZM6.3 16.3l1.4 1.4-2.1 2.1-1.4-1.4 2.1-2.1Z"/></svg>
+          <span class="sr">Light</span>
+        </button>
+        <button type="button" data-theme-set="dark" aria-pressed="false" title="Dark">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12.3 2a9 9 0 1 0 9.4 11.9A7.5 7.5 0 0 1 12.3 2Z"/></svg>
+          <span class="sr">Dark</span>
+        </button>
+      </div>
+    </div>
+
+    <div class="msgs">
+
+      <!-- ===================== CONVERT ===================== -->
+      <article class="msg chan" id="convert" data-desc="Paste a link, get one that embeds.">
+        <div class="ava">fx</div>
+        <div>
+          <div class="who"><span class="name">mbedfx</span><span class="bot">BOT</span><span class="ts">today</span></div>
+          <p>Paste a social link and I'll hand back one Discord can actually draw. Swap the site's
+             domain for mine and the link still points at the same post.</p>
+
+          <div class="tool">
+            <div class="toolbar">
+              <span class="lbl">Fix a link</span>
+              <div class="seg" role="group" aria-label="Which domain to use">
+                <button type="button" data-host="mbedfx.app" aria-pressed="true">mbedfx.app</button>
+                <button type="button" data-host="megapenispoopenfarten.sex" aria-pressed="false">megapenispoopenfarten.sex</button>
+              </div>
+            </div>
+            <label for="url" style="position:absolute;left:-9999px">Post link</label>
+            <input id="url" type="url" spellcheck="false" autocomplete="off"
+                   placeholder="https://www.tiktok.com/@user/video/7660566211100511518">
+            <div id="out" class="out">
+              <div class="res"><code id="result"></code><button id="copy" type="button">Copy</button></div>
+              <div id="note" class="msgline"></div>
+              <div id="picker" class="picker" role="group" aria-label="Which site is this?"></div>
+            </div>
+            <div id="preview" class="preview" aria-live="polite"></div>
+            <!--
+              NO TIP LINE HERE, DELIBERATELY (owner's call, 2026-08-01: "it's not serving any real
+              purpose especially where it is"). It began as "Runs in your browser. Nothing is sent
+              anywhere", which stopped being true the day /_prep shipped, and the corrected wording
+              was three lines of caveat sitting between the card and the reader. Making NO claim is
+              as honest as making an accurate one and costs the page nothing.
+            -->
+          </div>
+        </div>
+      </article>
+
+      <!-- ===================== SITES ===================== -->
+      <div class="chanbar chan" id="sites" data-desc="17 of them." style="margin:28px -16px 0">
+        <b>#</b> sites <div class="sep"></div><span>17 of them.</span>
+      </div>
+      <article class="msg">
+        <div class="ava">fx</div>
+        <div>
+          <div class="who"><span class="name">mbedfx</span><span class="bot">BOT</span><span class="ts">today</span></div>
+          <h2 class="head">Every path shape that works</h2>
+          <p class="sub">Straight out of the router. If a site isn't here, it's in
+             <a href="#nope">#nope</a>.</p>
+          <div id="grid"></div>
+        </div>
+      </article>
+
+      <!-- ===================== FEDIVERSE ===================== -->
+      <div class="chanbar chan" id="fediverse" data-desc="Mastodon, Misskey, Lemmy, PeerTube." style="margin:28px -16px 0">
+        <b>#</b> fediverse <div class="sep"></div><span>Mastodon, Misskey, Lemmy, PeerTube.</span>
+      </div>
+      <article class="msg">
+        <div class="ava">fx</div>
+        <div>
+          <div class="who"><span class="name">mbedfx</span><span class="bot">BOT</span><span class="ts">today</span></div>
+          <h2 class="head">Keep your instance in the link</h2>
+          <p class="sub">A post id is meaningless without the server it lives on. About one in five
+             bare id lookups against a default server returns a real but completely different post,
+             so there's no default here and no allow-list. Any server works.</p>
+          <p style="margin-top:10px">Slot me in after the <code>https://</code>:</p>
+<pre>https://<b>mbedfx.app</b>/mstdn.social/@stux/116994812581955524</pre>
+          <p>Or just type me in front of the whole thing, which is one <kbd>Home</kbd> keypress:</p>
+<pre>https://<b>mbedfx.app/</b>https://mstdn.social/@stux/116994812581955524</pre>
+          <p class="sub">Works for Mastodon, Pleroma, Akkoma, Iceshrimp, Misskey, Sharkey, Lemmy,
+             PieFed and PeerTube.</p>
+        </div>
+      </article>
+
+      <!-- ===================== LIMITS ===================== -->
+      <div class="chanbar chan" id="limits" data-desc="When you get a wall instead of a post." style="margin:28px -16px 0">
+        <b>#</b> limits <div class="sep"></div><span>When you get a wall instead of a post.</span>
+      </div>
+      <article class="msg">
+        <div class="ava">fx</div>
+        <div>
+          <div class="who"><span class="name">mbedfx</span><span class="bot">BOT</span><span class="ts">today</span></div>
+          <h2 class="head">Some posts can't be shown</h2>
+          <p class="sub">You get a card that says so instead of a broken one that pretends otherwise.</p>
+
+          <div class="embed wide" style="--c:var(--red)">
+            <div class="t">🔒 Private or restricted</div>
+            <div class="d">A protected account, a friends-only post, or a private, banned or
+              quarantined community. Logged-out is logged-out.</div>
+          </div>
+          <div class="embed wide" style="--c:var(--amber)">
+            <div class="t">🔞 Age-gated</div>
+            <div class="d">Needs a signed-in adult account. On YouTube you get the thumbnail and no
+              playback, and that one is permanent rather than worth retrying.</div>
+          </div>
+          <div class="embed wide" style="--c:var(--blurple)">
+            <div class="t">🎬 Video came back as a still</div>
+            <div class="d">Carousels with video flatten to the cover. Instagram reels using
+              major-label audio arrive with no video at all. Anything over 20 minutes or 300 MB
+              isn't remuxed.</div>
+          </div>
+          <div class="embed wide" style="--c:var(--faint)">
+            <div class="t">😕 "Couldn't load this post"</div>
+            <div class="d">The reason isn't knowable. On Threads, private, deleted and age-gated
+              look identical from outside, so I don't guess.</div>
+          </div>
+        </div>
+      </article>
+
+      <!-- ===================== NOPE ===================== -->
+      <div class="chanbar chan" id="nope" data-desc="Things I can't fix." style="margin:28px -16px 0">
+        <b>#</b> nope <div class="sep"></div><span>Things I can't fix.</span>
+      </div>
+      <article class="msg">
+        <div class="ava">fx</div>
+        <div>
+          <div class="who"><span class="name">mbedfx</span><span class="bot">BOT</span><span class="ts">today</span></div>
+          <h2 class="head">Shorteners, mostly</h2>
+          <p class="sub">If the link is just a random code, nothing in it says which site it came
+             from. Open it once and paste wherever it lands.</p>
+          <div class="chips">
+            <div><code>vm.tiktok.com</code> and <code>vt.tiktok.com</code>. <code>tiktok.com/t/…</code> is fine.</div>
+            <div><code>fb.watch</code></div>
+            <div><code>pin.it</code>. Full <code>/pin/…</code> links are fine.</div>
+            <div>Instagram stories</div>
+            <div>Twitch VODs and live channels. Clips only.</div>
+            <div>Facebook text posts. Video, reels and group posts work.</div>
+            <div>Pixelfed and GoToSocial. Their APIs refuse logged-out reads.</div>
+            <div>Bare profile links. There's no post to draw.</div>
+            <div>PeerTube playlists, Friendica, Bilibili, pixiv</div>
+          </div>
+
+          <footer>
+            <p style="margin:0 0 6px">Zero-dependency Cloudflare Worker. It reads the post itself
+              rather than handing you off to someone else's fixer.
+              <a href="https://github.com/shamu4life/mbedfx">Source on GitHub</a>.</p>
+            <p style="margin:0">Not affiliated with Discord. Platform names and marks belong to their
+              owners and are used here to say which sites are supported.</p>
+          </footer>
+        </div>
+      </article>
+
+    </div>
+  </main>
+</div>
+
+<!-- ============================================================================
+     PURE CONVERSION LOGIC. No DOM in here, on purpose: test/landing-convert.test.mjs
+     lifts this exact block out of the file, runs it, and feeds every result through
+     the REAL router. That is what stops this page teaching a URL the worker rejects.
+     ========================================================================= -->
+<script id="mbedfx-convert">
+/* eslint-disable */
+/**
+ * WHICH DOMAIN THE CONVERTER HANDS OUT BY DEFAULT — the one you arrived on.
+ *
+ * Owner's ask: "if I go to megapenispoopenfarten.sex I'd want it to default to using that." Before
+ * this the toggle always started on mbedfx.app, so visiting the original domain and copying a link
+ * silently switched you to the other one. Whichever door you came in is the one you meant.
+ *
+ * STAGING KEEPS ITS PREFIX. Testing on staging.mbedfx.app and being handed production links is the
+ * kind of thing that makes a staging environment worthless, so the subdomain rides along and the
+ * toggle switches the FAMILY under it. Anything we do not recognise (localhost, a file:// preview,
+ * a future hostname) falls back to mbedfx.app rather than emitting links to a host that is not us.
+ *
+ * Returns { host, prefix }: `host` is what to emit now, `prefix` is what a toggle click must keep.
+ */
+function mbedfxDefaultHost(hostname) {
+  var served = String(hostname == null ? '' : hostname).toLowerCase().replace(/\.$/, '');
+  var staging = served.lastIndexOf('staging.', 0) === 0;
+  var family = staging ? served.slice(8) : served;
+  var known = family === 'mbedfx.app' || family === 'megapenispoopenfarten.sex';
+  return known
+    ? { host: served, prefix: staging ? 'staging.' : '', family: family }
+    : { host: 'mbedfx.app', prefix: '', family: 'mbedfx.app' };
+}
+
+function mbedfxConvert(input, host) {
+  host = host || 'mbedfx.app';
+  var raw = String(input == null ? '' : input).trim();
+  if (!raw) return { ok: false, kind: 'empty' };
+
+  // Tolerate a pasted link with no scheme, and a bare path.
+  var u;
+  try {
+    u = new URL(/^[a-z][a-z0-9+.-]*:\/\//i.test(raw) ? raw : (raw.charAt(0) === '/' ? 'https://x.invalid' + raw : 'https://' + raw));
+  } catch (e) { return { ok: false, kind: 'unparseable' }; }
+
+  var h = u.hostname.toLowerCase().replace(/\.$/, '');
+  var path = u.pathname.replace(/\/+$/, '') || '/';
+  var seg = path.split('/').filter(Boolean);
+  /**
+   * `code` rides alongside the display name because the OVERRIDE needs it: forcing a different site
+   * means emitting router vocabulary (/x/, /ig/, /tt/ …), and a display name cannot be forced.
+   */
+  var out = function (p, platform, note, code) {
+    return { ok: true, url: 'https://' + host + p, platform: platform, note: note || '', code: code || null, path: p };
+  };
+  var no = function (why) { return { ok: false, kind: 'unsupported', why: why }; };
+
+  // Already one of ours (or a bare path): pass the path straight through.
+  if (h === 'mbedfx.app' || h === 'megapenispoopenfarten.sex' ||
+      h === 'staging.mbedfx.app' || h === 'staging.megapenispoopenfarten.sex' || h === 'x.invalid') {
+    return out(path === '/' ? '/' : path + (u.searchParams.get('v') ? '?v=' + u.searchParams.get('v') : ''), null,
+      'Already an mbedfx link. Re-pointed at the domain you picked.');
+  }
+
+  // Strip the sub-domains that are pure presentation. i. and clips. are MEANINGFUL and stay.
+  var bare = h.replace(/^(www|m|mobile|old|new|web|amp)\./, '');
+
+  /* ---- shorteners: some resolve to a routable shape, some genuinely cannot ---- */
+
+  if (bare === 'youtu.be' && seg.length === 1) return out('/' + seg[0], 'YouTube', '', 'yt');
+  // Dailymotion + Reddit + Streamable + Imgur shorthands all have a routable equivalent.
+  if (bare === 'dai.ly' && seg.length === 1) return out('/dm/' + seg[0], 'Dailymotion', '', 'dm');
+  if (bare === 'redd.it' && seg.length === 1) {
+    return out('/comments/' + seg[0], 'Reddit',
+      'No subreddit in a bare Reddit link, so the card comes out a bit thinner than usual.', 'rd');
+  }
+  if (bare === 'vm.tiktok.com' || bare === 'vt.tiktok.com') {
+    return no('TikTok’s app shortener hides the post behind a random code. Open it once, then paste the /@user/video/… link it lands on. (tiktok.com/t/… links work fine.)');
+  }
+  if (bare === 'fb.watch') return no('fb.watch hides the post behind a random code with no site in the path. Open it once and paste where it lands.');
+  if (bare === 'pin.it') return no('pin.it hides the pin behind a random code. Open it once and paste the full /pin/… link.');
+
+  /* ---- direct hosts: swap the host, keep the path ---- */
+
+  // [display name, platform code]. The code is the router's ESCAPE token, used only when forcing.
+  var DIRECT = {
+    'twitter.com': ['Twitter', 'x'], 'x.com': ['Twitter', 'x'],
+    'tiktok.com': ['TikTok', 'tt'],
+    'instagram.com': ['Instagram', 'ig'], 'ddinstagram.com': ['Instagram', 'ig'],
+    'threads.com': ['Threads', 'th'], 'threads.net': ['Threads', 'th'],
+    'reddit.com': ['Reddit', 'rd'],
+    'bsky.app': ['Bluesky', 'bs'],
+    'youtube.com': ['YouTube', 'yt'],
+    'facebook.com': ['Facebook', 'fb'],
+    'dailymotion.com': ['Dailymotion', 'dm'],
+    'streamable.com': ['Streamable', 'st'],
+    'twitch.tv': ['Twitch', 'tw'], 'clips.twitch.tv': ['Twitch', 'tw'],
+    'i.imgur.com': ['Imgur', 'im'], 'imgur.com': ['Imgur', 'im']
+  };
+  // Pinterest ships a domain per country; the pin id is the same everywhere.
+  var isPinterest = /(^|\.)pinterest\.[a-z.]{2,}$/.test(bare);
+  var hit = DIRECT[bare] || DIRECT[h] || (isPinterest ? ['Pinterest', 'pn'] : null);
+  var platform = hit ? hit[0] : null;
+  var pcode = hit ? hit[1] : null;
+
+  if (platform) {
+    if (platform === 'Instagram' && seg[0] === 'stories') {
+      return no('Instagram stories aren’t routed. They expire, so there’s no stable post to draw.');
+    }
+    if (platform === 'Twitch') {
+      if (seg[0] === 'videos') return no('Twitch VODs aren’t supported. Clips only.');
+      if (seg[0] === 'embed' && u.searchParams.get('clip')) {
+        return out('/embed?clip=' + u.searchParams.get('clip'), 'Twitch', '', 'tw');
+      }
+      if (seg.length === 1) {
+        // A single segment means opposite things on the two hosts: on clips.twitch.tv it IS the clip
+        // slug; on twitch.tv it is almost always a channel name, which names no post.
+        // The /tw/ prefix forces the Twitch reading, so older and shorter slugs work too rather than
+        // having to pass the worker's shape recogniser on their own.
+        if (bare === 'clips.twitch.tv') return out('/tw/' + seg[0], 'Twitch', '', 'tw');
+        var head = seg[0].slice(0, 16);
+        var looksLikeClip = seg[0].length >= 16 && /^[A-Z]/.test(seg[0]) &&
+          (head.match(/[A-Z]/g) || []).length >= 4;
+        if (!looksLikeClip) return no('That looks like a Twitch channel rather than a clip. Clips only.');
+        return out('/tw/' + seg[0], 'Twitch', '', 'tw');
+      }
+    }
+    if (platform === 'Imgur') {
+      // An album is its own shape; a gallery needs the prefix because /gallery/ is contested with
+      // Reddit and Instagram, and neither of those links should be quietly stolen.
+      if (seg[0] === 'a' && seg.length === 2) return out('/a/' + seg[1], 'Imgur', '', 'im');
+      if (seg[0] === 'gallery' && seg.length === 2) return out('/im/gallery/' + seg[1], 'Imgur', '', 'im');
+      // A bare imgur.com/{id} is undecidable once the host is gone, so force it.
+      if (h === 'imgur.com' && seg.length === 1 && !/\.[a-z0-9]+$/i.test(seg[0])) {
+        return out('/im/' + seg[0], 'Imgur', '', 'im');
+      }
+    }
+    // Bare streamable.com/{id} is likewise undecidable without a forcing prefix.
+    if (platform === 'Streamable' && seg.length === 1 && seg[0] !== 'e' && seg[0] !== 's') {
+      return out('/st/' + seg[0], 'Streamable', '', 'st');
+    }
+    if (platform === 'Dailymotion' && seg.length === 1) return out('/dm/' + seg[0], 'Dailymotion', '', 'dm');
+
+    // YouTube is the one place a query parameter carries the id rather than tracking.
+    if (platform === 'YouTube' && (seg[0] === 'watch' || path === '/watch')) {
+      var v = u.searchParams.get('v');
+      if (v) return out('/watch?v=' + v, 'YouTube', '', 'yt');
+    }
+    if (seg.length === 0) return no('That’s the site’s front page, not a post.');
+    return out(path, platform, '', pcode);
+  }
+
+  /* ---- anything else is treated as a fediverse instance ---- */
+
+  // Matches the worker's own host rule: 2+ labels, alphabetic TLD, no port, no IP literal.
+  if (!/^[a-z0-9.-]+$/.test(h) || !/\.[a-z]{2,}$/.test(h) || /^\d+(\.\d+)*$/.test(h)) {
+    return no('That doesn’t look like a link to a post.');
+  }
+  if (seg.length === 0) return no('That’s a server’s front page, not a post.');
+  return out('/' + h + path, 'Fediverse',
+    'Unrecognised host, so I treated it as a fediverse instance. That’s the right guess for Mastodon, Misskey, Lemmy, PieFed and PeerTube.');
+}
+</script>
+
+<script>
+(function () {
+  var $ = function (id) { return document.getElementById(id); };
+  var input = $('url'), out = $('out'), result = $('result'), note = $('note'), copy = $('copy');
+  // The domain you arrived on leads — see mbedfxDefaultHost. `prefix` carries a staging subdomain
+  // across a toggle click so testing on staging never hands out production links.
+  var origin = mbedfxDefaultHost(location.hostname);
+  var host = origin.host;
+
+  /**
+   * Brand marks, inline. Source: simple-icons 16.27.1 (icon data CC0; the marks themselves remain
+   * their owners' trademarks and are used here only to identify which sites are supported).
+   * Inlined rather than fetched so the page makes zero third-party requests — see the note up top.
+   * Regenerate with: npm pack simple-icons@16 and read the `d` attribute out of icons/<slug>.svg.
+   * `streamable` is NOT in that set, so it uses a generic play glyph rather than a made-up logo.
+   */
+  var ICON = {
+    x: "M14.234 10.162 22.977 0h-2.072l-7.591 8.824L7.251 0H.258l9.168 13.343L.258 24H2.33l8.016-9.318L16.749 24h6.993zm-2.837 3.299-.929-1.329L3.076 1.56h3.182l5.965 8.532.929 1.329 7.754 11.09h-3.182z",
+    tiktok: "M12.525.02c1.31-.02 2.61-.01 3.91-.02.08 1.53.63 3.09 1.75 4.17 1.12 1.11 2.7 1.62 4.24 1.79v4.03c-1.44-.05-2.89-.35-4.2-.97-.57-.26-1.1-.59-1.62-.93-.01 2.92.01 5.84-.02 8.75-.08 1.4-.54 2.79-1.35 3.94-1.31 1.92-3.58 3.17-5.91 3.21-1.43.08-2.86-.31-4.08-1.03-2.02-1.19-3.44-3.37-3.65-5.71-.02-.5-.03-1-.01-1.49.18-1.9 1.12-3.72 2.58-4.96 1.66-1.44 3.98-2.13 6.15-1.72.02 1.48-.04 2.96-.04 4.44-.99-.32-2.15-.23-3.02.37-.63.41-1.11 1.04-1.36 1.75-.21.51-.15 1.07-.14 1.61.24 1.64 1.82 3.02 3.5 2.87 1.12-.01 2.19-.66 2.77-1.61.19-.33.4-.67.41-1.06.1-1.79.06-3.57.07-5.36.01-4.03-.01-8.05.02-12.07z",
+    instagram: "M7.0301.084c-1.2768.0602-2.1487.264-2.911.5634-.7888.3075-1.4575.72-2.1228 1.3877-.6652.6677-1.075 1.3368-1.3802 2.127-.2954.7638-.4956 1.6365-.552 2.914-.0564 1.2775-.0689 1.6882-.0626 4.947.0062 3.2586.0206 3.6671.0825 4.9473.061 1.2765.264 2.1482.5635 2.9107.308.7889.72 1.4573 1.388 2.1228.6679.6655 1.3365 1.0743 2.1285 1.38.7632.295 1.6361.4961 2.9134.552 1.2773.056 1.6884.069 4.9462.0627 3.2578-.0062 3.668-.0207 4.9478-.0814 1.28-.0607 2.147-.2652 2.9098-.5633.7889-.3086 1.4578-.72 2.1228-1.3881.665-.6682 1.0745-1.3378 1.3795-2.1284.2957-.7632.4966-1.636.552-2.9124.056-1.2809.0692-1.6898.063-4.948-.0063-3.2583-.021-3.6668-.0817-4.9465-.0607-1.2797-.264-2.1487-.5633-2.9117-.3084-.7889-.72-1.4568-1.3876-2.1228C21.2982 1.33 20.628.9208 19.8378.6165 19.074.321 18.2017.1197 16.9244.0645 15.6471.0093 15.236-.005 11.977.0014 8.718.0076 8.31.0215 7.0301.0839m.1402 21.6932c-1.17-.0509-1.8053-.2453-2.2287-.408-.5606-.216-.96-.4771-1.3819-.895-.422-.4178-.6811-.8186-.9-1.378-.1644-.4234-.3624-1.058-.4171-2.228-.0595-1.2645-.072-1.6442-.079-4.848-.007-3.2037.0053-3.583.0607-4.848.05-1.169.2456-1.805.408-2.2282.216-.5613.4762-.96.895-1.3816.4188-.4217.8184-.6814 1.3783-.9003.423-.1651 1.0575-.3614 2.227-.4171 1.2655-.06 1.6447-.072 4.848-.079 3.2033-.007 3.5835.005 4.8495.0608 1.169.0508 1.8053.2445 2.228.408.5608.216.96.4754 1.3816.895.4217.4194.6816.8176.9005 1.3787.1653.4217.3617 1.056.4169 2.2263.0602 1.2655.0739 1.645.0796 4.848.0058 3.203-.0055 3.5834-.061 4.848-.051 1.17-.245 1.8055-.408 2.2294-.216.5604-.4763.96-.8954 1.3814-.419.4215-.8181.6811-1.3783.9-.4224.1649-1.0577.3617-2.2262.4174-1.2656.0595-1.6448.072-4.8493.079-3.2045.007-3.5825-.006-4.848-.0608M16.953 5.5864A1.44 1.44 0 1 0 18.39 4.144a1.44 1.44 0 0 0-1.437 1.4424M5.8385 12.012c.0067 3.4032 2.7706 6.1557 6.173 6.1493 3.4026-.0065 6.157-2.7701 6.1506-6.1733-.0065-3.4032-2.771-6.1565-6.174-6.1498-3.403.0067-6.156 2.771-6.1496 6.1738M8 12.0077a4 4 0 1 1 4.008 3.9921A3.9996 3.9996 0 0 1 8 12.0077",
+    threads: "M18.263 11.097c-.03-3.486-1.92-5.586-5.111-5.586-2.13 0-3.922.963-4.863 2.499l2.062 1.438c.535-.843 1.272-1.543 2.628-1.543 1.528 0 2.318.85 2.544 2.431a15 15 0 0 0-2.236-.173c-4.125 0-6.068 1.867-6.068 4.336s1.943 3.99 4.804 3.99c3.139 0 5.013-2.115 5.781-4.735.798.361 1.348 1.204 1.348 2.47 0 3.387-3.907 5.232-7.22 5.232-4.885 0-8.077-3.207-8.077-8.424 0-6.392 4.223-10.487 9.9-10.487 3.808 0 5.69 1.671 6.97 3.914l2.108-1.475C21.44 2.078 18.331 0 13.663 0 6.227 0 1.168 5.277 1.168 12.934c0 7 4.953 11.066 10.856 11.066 4.878 0 9.809-2.846 9.809-7.716 0-2.545-1.46-4.231-3.569-5.187m-6.33 4.855c-1.077 0-2.026-.512-2.026-1.453 0-1.483 1.822-1.934 3.606-1.934.678 0 1.34.045 1.927.173-.422 1.927-1.671 3.215-3.508 3.214Z",
+    reddit: "M12 0C5.373 0 0 5.373 0 12c0 3.314 1.343 6.314 3.515 8.485l-2.286 2.286C.775 23.225 1.097 24 1.738 24H12c6.627 0 12-5.373 12-12S18.627 0 12 0Zm4.388 3.199c1.104 0 1.999.895 1.999 1.999 0 1.105-.895 2-1.999 2-.946 0-1.739-.657-1.947-1.539v.002c-1.147.162-2.032 1.15-2.032 2.341v.007c1.776.067 3.4.567 4.686 1.363.473-.363 1.064-.58 1.707-.58 1.547 0 2.802 1.254 2.802 2.802 0 1.117-.655 2.081-1.601 2.531-.088 3.256-3.637 5.876-7.997 5.876-4.361 0-7.905-2.617-7.998-5.87-.954-.447-1.614-1.415-1.614-2.538 0-1.548 1.255-2.802 2.803-2.802.645 0 1.239.218 1.712.585 1.275-.79 2.881-1.291 4.64-1.365v-.01c0-1.663 1.263-3.034 2.88-3.207.188-.911.993-1.595 1.959-1.595Zm-8.085 8.376c-.784 0-1.459.78-1.506 1.797-.047 1.016.64 1.429 1.426 1.429.786 0 1.371-.369 1.418-1.385.047-1.017-.553-1.841-1.338-1.841Zm7.406 0c-.786 0-1.385.824-1.338 1.841.047 1.017.634 1.385 1.418 1.385.785 0 1.473-.413 1.426-1.429-.046-1.017-.721-1.797-1.506-1.797Zm-3.703 4.013c-.974 0-1.907.048-2.77.135-.147.015-.241.168-.183.305.483 1.154 1.622 1.964 2.953 1.964 1.33 0 2.47-.81 2.953-1.964.057-.137-.037-.29-.184-.305-.863-.087-1.795-.135-2.769-.135Z",
+    bluesky: "M5.202 2.857C7.954 4.922 10.913 9.11 12 11.358c1.087-2.247 4.046-6.436 6.798-8.501C20.783 1.366 24 .213 24 3.883c0 .732-.42 6.156-.667 7.037-.856 3.061-3.978 3.842-6.755 3.37 4.854.826 6.089 3.562 3.422 6.299-5.065 5.196-7.28-1.304-7.847-2.97-.104-.305-.152-.448-.153-.327 0-.121-.05.022-.153.327-.568 1.666-2.782 8.166-7.847 2.97-2.667-2.737-1.432-5.473 3.422-6.3-2.777.473-5.899-.308-6.755-3.369C.42 10.04 0 4.615 0 3.883c0-3.67 3.217-2.517 5.202-1.026",
+    youtube: "M23.498 6.186a3.016 3.016 0 0 0-2.122-2.136C19.505 3.545 12 3.545 12 3.545s-7.505 0-9.377.505A3.017 3.017 0 0 0 .502 6.186C0 8.07 0 12 0 12s0 3.93.502 5.814a3.016 3.016 0 0 0 2.122 2.136c1.871.505 9.376.505 9.376.505s7.505 0 9.377-.505a3.015 3.015 0 0 0 2.122-2.136C24 15.93 24 12 24 12s0-3.93-.502-5.814zM9.545 15.568V8.432L15.818 12l-6.273 3.568z",
+    facebook: "M9.101 23.691v-7.98H6.627v-3.667h2.474v-1.58c0-4.085 1.848-5.978 5.858-5.978.401 0 .955.042 1.468.103a8.68 8.68 0 0 1 1.141.195v3.325a8.623 8.623 0 0 0-.653-.036 26.805 26.805 0 0 0-.733-.009c-.707 0-1.259.096-1.675.309a1.686 1.686 0 0 0-.679.622c-.258.42-.374.995-.374 1.752v1.297h3.919l-.386 2.103-.287 1.564h-3.246v8.245C19.396 23.238 24 18.179 24 12.044c0-6.627-5.373-12-12-12s-12 5.373-12 12c0 5.628 3.874 10.35 9.101 11.647Z",
+    twitch: "M11.571 4.714h1.715v5.143H11.57zm4.715 0H18v5.143h-1.714zM6 0L1.714 4.286v15.428h5.143V24l4.286-4.286h3.428L22.286 12V0zm14.571 11.143l-3.428 3.428h-3.429l-3 3v-3H6.857V1.714h13.714Z",
+    pinterest: "M12.017 0C5.396 0 .029 5.367.029 11.987c0 5.079 3.158 9.417 7.618 11.162-.105-.949-.199-2.403.041-3.439.219-.937 1.406-5.957 1.406-5.957s-.359-.72-.359-1.781c0-1.663.967-2.911 2.168-2.911 1.024 0 1.518.769 1.518 1.688 0 1.029-.653 2.567-.992 3.992-.285 1.193.6 2.165 1.775 2.165 2.128 0 3.768-2.245 3.768-5.487 0-2.861-2.063-4.869-5.008-4.869-3.41 0-5.409 2.562-5.409 5.199 0 1.033.394 2.143.889 2.741.099.12.112.225.085.345-.09.375-.293 1.199-.334 1.363-.053.225-.172.271-.401.165-1.495-.69-2.433-2.878-2.433-4.646 0-3.776 2.748-7.252 7.92-7.252 4.158 0 7.392 2.967 7.392 6.923 0 4.135-2.607 7.462-6.233 7.462-1.214 0-2.354-.629-2.758-1.379l-.749 2.848c-.269 1.045-1.004 2.352-1.498 3.146 1.123.345 2.306.535 3.55.535 6.607 0 11.985-5.365 11.985-11.987C23.97 5.39 18.592.026 11.985.026L12.017 0z",
+    dailymotion: "M21.823 7.327a11.928 11.928 0 0 0-2.606-3.814 12.126 12.126 0 0 0-3.866-2.57A12.246 12.246 0 0 0 10.617 0H1.831a.602.602 0 0 0-.609.603v3.764c0 .162.064.312.179.426l4.164 4.123a.612.612 0 0 0 .439.177h4.56c.806 0 1.56.313 2.125.88.557.559.856 1.296.843 2.075-.029 1.571-1.343 2.849-2.931 2.849h-6.74a.613.613 0 0 0-.432.176.619.619 0 0 0-.178.427v3.764c0 .162.063.312.178.427l4.139 4.099a.647.647 0 0 0 .476.21h2.572a12.276 12.276 0 0 0 4.733-.945 12.145 12.145 0 0 0 3.866-2.571 11.959 11.959 0 0 0 2.607-3.813c.633-1.479.956-3.051.956-4.67 0-1.619-.321-3.19-.956-4.669l.001-.005ZM2.441 4.118V1.982l2.945 2.755.001 2.297-2.946-2.916Zm4.975 17.813-2.945-2.917v-2.137l2.945 2.755v2.299Zm-2.004-5.832h5.19c2.248 0 4.107-1.807 4.147-4.03a4.027 4.027 0 0 0-1.192-2.937 4.203 4.203 0 0 0-2.996-1.239H6.606V5.216h3.996c1.831 0 3.553.706 4.849 1.986a6.724 6.724 0 0 1-.152 9.736 6.875 6.875 0 0 1-4.697 1.84H8.275L5.412 16.1v-.001Zm15.289.1a10.753 10.753 0 0 1-2.345 3.431 10.91 10.91 0 0 1-3.48 2.314 11.018 11.018 0 0 1-4.26.847H8.633v-2.814h1.916c2.145 0 4.161-.802 5.675-2.254a7.88 7.88 0 0 0 2.451-5.728c0-2.177-.87-4.21-2.451-5.728-1.514-1.454-3.528-2.254-5.675-2.254h-4.16L3.383 1.202h7.234c1.479 0 2.911.285 4.259.847a10.957 10.957 0 0 1 3.48 2.313 10.769 10.769 0 0 1 2.345 3.432c.571 1.33.86 2.743.86 4.202 0 1.46-.289 2.873-.86 4.203Z",
+    imgur: "M21.147 3.043c-.002-.113-.069-.182-.189-.191a14.117 14.117 0 00-.51-.045l-.162-.01a21.998 21.998 0 00-1.085-.046l-.217-.005c-.172-.003-.35-.004-.532-.004l-.189-.001c-.295 0-.601.003-.919.01l-.106.003a55.86 55.86 0 00-.87.026l-.237.009c-.335.013-.676.029-1.027.049l-.012.001c-.357.021-.724.045-1.095.071l-.275.021c-.304.023-.609.048-.92.076l-.25.021c-.38.035-.766.074-1.156.115-.08.009-.161.019-.242.027-.319.035-.641.073-.965.113l-.33.042c-.403.051-.806.105-1.212.164a.547.547 0 00-.154.045.303.303 0 00-.097.074l-.003.002c-.045.055-.047.12.004.179.003.004.002.008.005.012l3.488 3.456-6.629 6.596c-.069.067-.068.165 0 .251.856 1.093 1.44 1.793 2.143 2.492.699.703 1.398 1.286 2.493 2.143a.216.216 0 00.132.051.167.167 0 00.119-.051l6.597-6.629 3.455 3.488a.143.143 0 00.101.047c.096 0 .187-.118.212-.292.746-5.141.882-10.051.634-12.31z M15.87 24l6.356-6.357.026-.026.156-.155-.006-.006a3.144 3.144 0 00.822-1.711c.804-5.53.903-10.591.654-12.952a2.904 2.904 0 00-.834-1.812 2.96 2.96 0 00-1.816-.855C20.458.042 19.476 0 18.318 0c-2.999 0-6.667.284-10.063.777a3.143 3.143 0 00-1.887.991L0 8.137V24H15.87zm1.528-6.707c-.151 0-.563.405-.563.613a.1.1 0 01-.099.1.1.1 0 01-.099-.1c0-.208-.411-.613-.563-.613a.1.1 0 01-.099-.1c0-.054.044-.098.099-.098.152 0 .563-.404.563-.614 0-.055.044-.098.099-.098.054 0 .099.043.099.098 0 .21.412.614.563.614a.1.1 0 010 .198zM5.4 7.045c.197 0 .735-.528.735-.801a.13.13 0 01.128-.129c.071 0 .128.058.128.129 0 .272.538.801.735.801.071 0 .128.057.128.128a.128.128 0 01-.128.128c-.197 0-.735.528-.735.801a.128.128 0 01-.128.128.128.128 0 01-.128-.128c0-.273-.538-.801-.735-.801a.128.128 0 010-.256zm-3.99 3.26c0-.065.057-.098.119-.118.69-.228 1.269-.8 1.403-1.554.011-.064.053-.118.118-.118.066 0 .107.054.119.118.133.754.711 1.326 1.401 1.554.062.02.118.053.118.118s-.056.098-.118.119c-.69.227-1.269.799-1.403 1.553-.011.064-.053.119-.119.119-.065 0-.106-.054-.118-.119-.134-.754-.713-1.326-1.403-1.553-.061-.022-.117-.054-.117-.119zm1.565 9.307c-.113 0-.42.302-.42.459 0 .04-.034.073-.074.073a.074.074 0 01-.074-.073c0-.157-.307-.459-.42-.459a.074.074 0 01-.074-.073c0-.039.034-.073.074-.073.113 0 .42-.302.42-.457 0-.042.033-.073.074-.073.04 0 .074.031.074.073 0 .155.307.457.42.457.04 0 .073.034.073.073a.073.073 0 01-.073.073zm.568-3.047c-.14 0-.521.375-.521.568a.092.092 0 11-.183 0c0-.193-.381-.568-.521-.568a.09.09 0 01-.091-.09c0-.051.041-.092.091-.092.14 0 .521-.375.521-.568a.09.09 0 01.092-.09.09.09 0 01.091.09c0 .193.381.568.521.568a.091.091 0 010 .182zm3.334 4.382c-.203 0-.758.546-.758.827 0 .073-.06.133-.132.133a.133.133 0 01-.133-.133c0-.281-.555-.827-.758-.827a.134.134 0 01-.133-.133c0-.073.059-.132.133-.132.204 0 .758-.545.758-.828 0-.071.06-.132.133-.132.073 0 .132.061.132.132 0 .283.555.828.758.828.074 0 .133.059.133.132a.133.133 0 01-.133.133zm1.922-.806c-1.086-.851-1.869-1.498-2.653-2.287-.789-.784-1.436-1.566-2.287-2.654-.626-.8-.566-1.897.144-2.607l.001-.001.002-.001L9.364 7.26 7.149 5.066l-.003-.003-.002-.003c-.52-.52-.7-1.27-.472-1.958.148-.447.464-.802.867-1.049a1.983 1.983 0 01.371-.19 2.1 2.1 0 01.468-.131c.005 0 .009-.003.014-.004C11.746 1.24 15.363.96 18.317.96h.002c1.125 0 2.072.041 2.818.121.469.046.903.249 1.228.576.328.331.525.767.562 1.237.243 2.311.144 7.253-.651 12.714-.001.01-.006.016-.007.025a2.258 2.258 0 01-.18.586c-.006.014-.01.028-.018.042-.333.699-1.001 1.163-1.771 1.163-.51 0-.992-.2-1.358-.567l-.003-.002-.004-.004-2.192-2.215-5.333 5.359-.001.002h-.001a1.94 1.94 0 01-1.378.573c-.44 0-.877-.151-1.231-.429zm2.576 2.09c-.139 0-.518.373-.518.566a.09.09 0 01-.091.09.09.09 0 01-.09-.09c0-.193-.379-.566-.519-.566a.09.09 0 110-.18c.139 0 .519-.373.519-.566a.09.09 0 01.09-.09c.05 0 .091.041.091.09 0 .193.379.566.518.566.05 0 .091.039.091.09s-.04.09-.091.09zm2.115-2.437c.248 0 .922-.662.922-1.003 0-.088.072-.161.161-.161.088 0 .161.073.161.161 0 .341.674 1.003.921 1.003.089 0 .161.073.161.161a.16.16 0 01-.161.161c-.247 0-.921.662-.921 1.005a.162.162 0 01-.161.162.162.162 0 01-.161-.162c0-.343-.674-1.005-.922-1.005a.161.161 0 010-.322z",
+    mastodon: "M23.268 5.313c-.35-2.578-2.617-4.61-5.304-5.004C17.51.242 15.792 0 11.813 0h-.03c-3.98 0-4.835.242-5.288.309C3.882.692 1.496 2.518.917 5.127.64 6.412.61 7.837.661 9.143c.074 1.874.088 3.745.26 5.611.118 1.24.325 2.47.62 3.68.55 2.237 2.777 4.098 4.96 4.857 2.336.792 4.849.923 7.256.38.265-.061.527-.132.786-.213.585-.184 1.27-.39 1.774-.753a.057.057 0 0 0 .023-.043v-1.809a.052.052 0 0 0-.02-.041.053.053 0 0 0-.046-.01 20.282 20.282 0 0 1-4.709.545c-2.73 0-3.463-1.284-3.674-1.818a5.593 5.593 0 0 1-.319-1.433.053.053 0 0 1 .066-.054c1.517.363 3.072.546 4.632.546.376 0 .75 0 1.125-.01 1.57-.044 3.224-.124 4.768-.422.038-.008.077-.015.11-.024 2.435-.464 4.753-1.92 4.989-5.604.008-.145.03-1.52.03-1.67.002-.512.167-3.63-.024-5.545zm-3.748 9.195h-2.561V8.29c0-1.309-.55-1.976-1.67-1.976-1.23 0-1.846.79-1.846 2.35v3.403h-2.546V8.663c0-1.56-.617-2.35-1.848-2.35-1.112 0-1.668.668-1.67 1.977v6.218H4.822V8.102c0-1.31.337-2.35 1.011-3.12.696-.77 1.608-1.164 2.74-1.164 1.311 0 2.302.5 2.962 1.498l.638 1.06.638-1.06c.66-.999 1.65-1.498 2.96-1.498 1.13 0 2.043.395 2.74 1.164.675.77 1.012 1.81 1.012 3.12z",
+    misskey: "M8.91076 16.8915c-1.03957.0038-1.93213-.6294-2.35267-1.366-.22516-.3217-.66989-.4364-.6761 0v2.0148c0 .8094-.29152 1.5097-.87581 2.1002-.56755.573-1.25977.8595-2.0779.8595-.80014 0-1.49298-.2865-2.07727-.8601C.28408 19.05 0 18.3497 0 17.5403V6.45968c0-.62378.17553-1.18863.52599-1.69455.36657-.52284.83426-.88582 1.4018-1.08769a2.84574 2.84574 0 0 1 1.00049-.17742c.90125 0 1.65239.35421 2.25281 1.06262l2.99713 3.51572c.06699.05016.263.43696.73192.43696.47016 0 .6916-.3868.75796-.43758l2.9717-3.5151c.6178-.70841 1.377-1.06262 2.2782-1.06262.3337 0 .6675.05893 1.0012.17742.5669.20187 1.0259.56422 1.377 1.08769.3665.50592.5501 1.07077.5501 1.69455V17.5403c0 .8094-.2915 1.5097-.8758 2.1002-.5675.573-1.2604.8595-2.0779.8595-.8008 0-1.493-.2865-2.0779-.8601-.5669-.5899-.8504-1.2902-.8504-2.0996v-2.0148c-.0496-.5499-.5303-.2032-.7009 0-.4503.8431-1.31369 1.3616-2.35264 1.366ZM21.447 8.60998c-.7009 0-1.3015-.24449-1.8019-.73348-.4838-.50571-.7257-1.11277-.7257-1.82118s.2419-1.30711.7257-1.79611c.5004-.50571 1.101-.75856 1.8019-.75856.7009 0 1.3017.25285 1.8025.75856.5003.489.7505 1.0877.7505 1.79611 0 .70841-.2502 1.31547-.7505 1.82118-.5008.48899-1.1016.73348-1.8025.73348Zm.0248.50655c.7009 0 1.2935.25285 1.7777.75856.5003.50571.7505 1.11301.7505 1.82181v6.2484c0 .7084-.2502 1.3155-.7505 1.8212-.4838.489-1.0764.7335-1.7777.7335-.7005 0-1.3011-.2445-1.8019-.7335-.5003-.5057-.7505-1.1128-.7505-1.8212v-6.2484c0-.7084.2502-1.3157.7505-1.82181.5004-.50571 1.101-.75856 1.8019-.75856Z",
+    peertube: "M12 6.545v10.91L20.727 12M3.273 12v12L12 17.455M3.273 0v12L12 6.545",
+    lemmy: "M2.9595 4.2228a3.9132 3.9132 0 0 0-.332.019c-.8781.1012-1.67.5699-2.155 1.3862-.475.8-.5922 1.6809-.35 2.4971.2421.8162.8297 1.5575 1.6982 2.1449.0053.0035.0106.0076.0163.0114.746.4498 1.492.7431 2.2877.8994-.02.3318-.0272.6689-.006 1.0181.0634 1.0432.4368 2.0006.996 2.8492l-2.0061.8189a.4163.4163 0 0 0-.2276.2239.416.416 0 0 0 .0879.455.415.415 0 0 0 .2941.1231.4156.4156 0 0 0 .1595-.0312l2.2093-.9035c.408.4859.8695.9315 1.3723 1.318.0196.0151.0407.0264.0603.0423l-1.2918 1.7103a.416.416 0 0 0 .664.501l1.314-1.7385c.7185.4548 1.4782.7927 2.2294 1.0242.3833.7209 1.1379 1.1871 2.0202 1.1871.8907 0 1.6442-.501 2.0242-1.2072.744-.2347 1.4959-.5729 2.2073-1.0262l1.332 1.7606a.4157.4157 0 0 0 .7439-.1936.4165.4165 0 0 0-.0799-.3074l-1.3099-1.7345c.0083-.0075.0178-.0113.0261-.0188.4968-.3803.9549-.8175 1.3622-1.2939l2.155.8794a.4156.4156 0 0 0 .5412-.2276.4151.4151 0 0 0-.2273-.5432l-1.9438-.7928c.577-.8538.9697-1.8183 1.0504-2.8693.0268-.3507.0242-.6914.0079-1.0262.7905-.1572 1.5321-.4502 2.2737-.8974.0053-.0033.011-.0076.0163-.0113.8684-.5874 1.456-1.3287 1.6982-2.145.2421-.8161.125-1.697-.3501-2.497-.4849-.8163-1.2768-1.2852-2.155-1.3863a3.2175 3.2175 0 0 0-.332-.0189c-.7852-.0151-1.6231.229-2.4286.6942-.5926.342-1.1252.867-1.5433 1.4387-1.1699-.6703-2.6923-1.0476-4.5635-1.0785a15.5768 15.5768 0 0 0-.5111 0c-2.085.034-3.7537.43-5.0142 1.1449-.0033-.0038-.0045-.0114-.008-.0152-.4233-.5916-.973-1.1365-1.5835-1.489-.8055-.465-1.6434-.7083-2.4286-.6941Zm.2858.7365c.5568.042 1.1696.2358 1.7787.5875.485.28.9757.7554 1.346 1.2696a5.6875 5.6875 0 0 0-.4969.4085c-.9201.8516-1.4615 1.9597-1.668 3.2335-.6809-.1402-1.3183-.3945-1.984-.7948-.7553-.5128-1.2159-1.1225-1.4004-1.7445-.1851-.624-.1074-1.2712.2776-1.9196.3743-.63.9275-.9534 1.6118-1.0322a2.796 2.796 0 0 1 .5352-.0076Zm17.5094 0a2.797 2.797 0 0 1 .5353.0075c.6842.0786 1.2374.4021 1.6117 1.0322.385.6484.4627 1.2957.2776 1.9196-.1845.622-.645 1.2317-1.4004 1.7445-.6578.3955-1.2881.6472-1.9598.7888-.1942-1.2968-.7375-2.4338-1.666-3.302a5.5639 5.5639 0 0 0-.4709-.3923c.3645-.49.8287-.9428 1.2938-1.2113.6091-.3515 1.2219-.5454 1.7787-.5875ZM12.006 6.0036a14.832 14.832 0 0 1 .487 0c2.3901.0393 4.0848.67 5.1631 1.678 1.1501 1.0754 1.6423 2.6006 1.499 4.467-.1311 1.7079-1.2203 3.2281-2.652 4.324-.694.5313-1.4626.9354-2.2254 1.2294.0031-.0453.014-.0888.014-.1349.0029-1.1964-.9313-2.2133-2.2918-2.2133-1.3606 0-2.3222 1.0154-2.2918 2.2213.0013.0507.014.0972.0181.1471-.781-.2933-1.5696-.7013-2.2777-1.2456-1.4239-1.0945-2.4997-2.6129-2.6037-4.322-.1129-1.8567.3778-3.3382 1.5212-4.3965C7.5094 6.7 9.352 6.047 12.006 6.0036Zm-3.6419 6.8291c-.6053 0-1.0966.4903-1.0966 1.0966 0 .6063.4913 1.0986 1.0966 1.0986s1.0966-.4923 1.0966-1.0986c0-.6063-.4913-1.0966-1.0966-1.0966zm7.2819.0113c-.5998 0-1.0866.4859-1.0866 1.0866s.4868 1.0885 1.0866 1.0885c.5997 0 1.0865-.4878 1.0865-1.0885s-.4868-1.0866-1.0865-1.0866zM12 16.0835c1.0237 0 1.5654.638 1.5634 1.4829-.0018.7849-.6723 1.485-1.5634 1.485-.9167 0-1.54-.5629-1.5634-1.493-.0212-.8347.5397-1.4749 1.5634-1.4749Z",
+    // NOT a Streamable logo — simple-icons has no Streamable mark, and inventing one would be worse
+    // than an obviously generic glyph. A plain play button says "video host" without faking a brand.
+    play: "M12 0C5.373 0 0 5.373 0 12s5.373 12 12 12 12-5.373 12-12S18.627 0 12 0zm-2 17.5v-11l8 5.5-8 5.5z"
+  };
+
+  /**
+   * Rail colours. Five of these brands are literally #000000 in the icon set (X, TikTok, Threads,
+   * Lemmy, Dailymotion), which is invisible against a dark background and nearly invisible against a
+   * light one, so they use --brand-mono and flip with the colour scheme. TikTok takes its own pink
+   * accent instead, because that reads as TikTok far faster than a black bar does.
+   */
+  var MONO = 'var(--brand-mono)';
+  var PLATFORMS = [
+    { name: 'Twitter', host: 'x.com · twitter.com', icon: 'x', rail: MONO,
+      paths: ['jack/status/20', 'i/status/1491475671058681863'], note: '' },
+    { name: 'TikTok', host: 'tiktok.com', icon: 'tiktok', rail: '#FF0050',
+      paths: ['@mysticaquarium/video/7660566211100511518', '@user/photo/7412345678901234567', 't/ZTSw2mYwR'], note: '' },
+    { name: 'Instagram', host: 'instagram.com', icon: 'instagram', rail: '#FF0069',
+      paths: ['p/DbN6SsKum-9', 'reel/Da5ynsiuAZ_', 'tv/BsOGulcndj-'], note: 'Posts, reels and IGTV. Not stories.' },
+    { name: 'Threads', host: 'threads.com', icon: 'threads', rail: MONO,
+      paths: ['@dexerto/post/DbWxxQjFe4u', 'share/Fixture08X'], note: 'Video arrives as the cover image.' },
+    { name: 'Reddit', host: 'reddit.com', icon: 'reddit', rail: '#FF4500',
+      paths: ['r/pics/comments/haucpf', 'r/pics/s/uucSZtDEbI', 'comments/haucpf'], note: 'App /s/ links resolve first.' },
+    { name: 'Bluesky', host: 'bsky.app', icon: 'bluesky', rail: '#1185FE',
+      paths: ['profile/alice.bsky.social/post/3k2a'], note: 'Handles and did:plc: both work.' },
+    { name: 'YouTube', host: 'youtube.com · youtu.be', icon: 'youtube', rail: '#FF0000',
+      paths: ['watch?v=dQw4w9WgXcQ', 'shorts/dQw4w9WgXcQ', 'dQw4w9WgXcQ'], note: 'Age-restricted videos are thumbnail only.' },
+    { name: 'Facebook', host: 'facebook.com', icon: 'facebook', rail: '#0866FF',
+      paths: ['watch?v=10153231379946729', 'reel/2209468366484962', 'share/v/Fixture03X', 'groups/328668786145521/posts/1391536379858751'],
+      note: 'Video, reels and group posts. Not text posts.' },
+    { name: 'Twitch', host: 'twitch.tv · clips.twitch.tv', icon: 'twitch', rail: '#9146FF',
+      paths: ['xqc/clip/DeliciousDelightfulPicklesWOOP', 'clip/DeliciousDelightfulPicklesWOOP'],
+      note: 'Clips only. No VODs, no live channels.' },
+    { name: 'Pinterest', host: 'pinterest.com', icon: 'pinterest', rail: '#BD081C',
+      paths: ['pin/66287425756772418'], note: 'Every regional domain works.' },
+    { name: 'Dailymotion', host: 'dailymotion.com · dai.ly', icon: 'dailymotion', rail: MONO,
+      paths: ['video/xaqwy7q', 'dm/xaqwy7q'], note: '' },
+    { name: 'Streamable', host: 'streamable.com', icon: 'play', rail: '#0F90FA',
+      paths: ['e/moo', 'st/moo'], note: '' },
+    { name: 'Imgur', host: 'imgur.com · i.imgur.com', icon: 'imgur', rail: '#1BB76E',
+      paths: ['a/iX265HX', 'A61SaA1.gifv', 'im/A61SaA1', 'im/gallery/YcAQlkx'],
+      // "first 4" was WRONG and outlived the cap it described — normalize.ts's MAX_ITEMS is 20. The
+      // four-image belief came from misreading Mastodon's server-side MEDIA_ATTACHMENTS_LIMIT as a rule
+      // this project applies; attachments() has never capped. Corrected 2026-08-01.
+      note: 'Albums show up to 20 images. Photos and gifs both work.' },
+    { name: 'Mastodon', host: 'any instance', icon: 'mastodon', rail: '#6364FF',
+      paths: ['mstdn.social/@stux/116994812581955524'], note: 'Also Pleroma, Akkoma, Iceshrimp.' },
+    { name: 'Misskey', host: 'any instance', icon: 'misskey', rail: '#A1CA03',
+      paths: ['misskey.io/notes/ap7sliijot1f03nr'], note: 'Also Sharkey, Iceshrimp.' },
+    { name: 'Lemmy', host: 'any instance', icon: 'lemmy', rail: MONO,
+      paths: ['lemmy.world/post/49966212', 'piefed.social/c/technology@lemmy.world/p/2240362'], note: 'Also PieFed.' },
+    { name: 'PeerTube', host: 'any instance', icon: 'peertube', rail: '#F1680D',
+      paths: ['framatube.org/w/vZNcho9kCoVzc8wZwacPtc'], note: 'Live streams show the cover only.' }
+  ];
+
+  /**
+   * Display name -> the router's platform code. Kept beside PLATFORMS rather than inside it because
+   * the table is presentation and this is routing vocabulary; the test asserts every row has one.
+   */
+  var CODE_OF = {
+    'Twitter': 'x', 'TikTok': 'tt', 'Instagram': 'ig', 'Threads': 'th', 'Reddit': 'rd',
+    'Bluesky': 'bs', 'YouTube': 'yt', 'Facebook': 'fb', 'Twitch': 'tw', 'Pinterest': 'pn',
+    'Dailymotion': 'dm', 'Streamable': 'st', 'Imgur': 'im',
+    'Mastodon': 'ms', 'Misskey': 'mk', 'Lemmy': 'lm', 'PeerTube': 'pt'
+  };
+
+  var esc = function (s) {
+    return String(s).replace(/[&<>"]/g, function (c) {
+      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c];
+    });
+  };
+  var mark = function (slug, fill) {
+    return '<svg viewBox="0 0 24 24" fill="' + fill + '" aria-hidden="true"><path d="' + ICON[slug] + '"/></svg>';
+  };
+
+  $('grid').innerHTML = PLATFORMS.map(function (p) {
+    return '<div class="embed" style="--c:' + p.rail + '">' +
+      '<div class="author">' + mark(p.icon, p.rail) +
+        '<span class="nm">' + esc(p.name) + '</span>' +
+        '<span class="hst">' + esc(p.host) + '</span></div>' +
+      '<ul>' + p.paths.map(function (x) { return '<li><i>/</i>' + esc(x) + '</li>'; }).join('') + '</ul>' +
+      (p.note ? '<div class="foot">' + esc(p.note) + '</div>' : '') + '</div>';
+  }).join('');
+
+  /**
+   * EVERY PLATFORM, for the override list. Ordered as the sites table is, so the picker reads the
+   * same way the page does. `code` is the router's ESCAPE token — forcing is `/{code}{path}`.
+   */
+  var ALL = PLATFORMS.map(function (p) { return { code: CODE_OF[p.name], name: p.name, icon: p.icon, rail: p.rail }; })
+    .filter(function (p) { return !!p.code; });
+  var BY_CODE = {};
+  ALL.forEach(function (p) { BY_CODE[p.code] = p; });
+
+  var picker = $('picker');
+
+  /**
+   * THE CHIP IS THE ONLY DOOR TO THE PICKER, so it must render whenever an override is meaningful —
+   * which includes the two cases it used to skip:
+   *
+   *   1. A REFUSAL. The chip was drawn only on success, so the one moment you actually want to force a
+   *      platform — "I can't read this" — was the one moment the override was unreachable.
+   *   2. A PLATFORM WITH NO CODE. The fediverse branch guesses by design and says so out loud
+   *      ("Unrecognised host, so I treated it as a fediverse instance"). It passed no code, so the
+   *      single case in this converter that ADMITS to guessing was the single case offering no way to
+   *      correct the guess.
+   *
+   * `code` may be null: BY_CODE simply misses, the mark is skipped, and the chip still opens the list.
+   */
+  function chipFor(code, label) {
+    var p = code ? BY_CODE[code] : null;
+    return '<button type="button" class="chip" id="siteChip" title="Read as ' + esc(label) + ' — click to change">'
+      + (p ? mark(p.icon, p.rail) : '') + esc(label) + '<span class="caret">▾</span></button>';
+  }
+
+  /** Render the override list, or the router's own candidates for an ambiguous path. */
+  function showPicker(list, label) {
+    picker.innerHTML = '<span class="lbl">' + esc(label) + '</span>' + list.map(function (p) {
+      var m = BY_CODE[p.code];
+      return '<button type="button" data-force="' + esc(p.code) + '">'
+        + (m ? mark(m.icon, m.rail) : '') + esc(p.name) + '</button>';
+    }).join('');
+    picker.className = 'picker show';
+  }
+  function hidePicker() { picker.className = 'picker'; picker.innerHTML = ''; }
+
+  /**
+   * The pasted url's own path, or null. ONE definition, because the refusal branch and the force
+   * handler must agree exactly: offering the override for a link that then cannot be forced is worse
+   * than not offering it, and two copies of this rule is how that drift happens.
+   */
+  function pathOf(v) {
+    try {
+      var p = new URL(String(v).trim()).pathname;
+      return p && p !== '/' ? p : null;
+    } catch (e) { return null; }
+  }
+
+  picker.addEventListener('click', function (e) {
+    var b = e.target.closest && e.target.closest('[data-force]');
+    if (!b) return;
+    var code = b.getAttribute('data-force');
+    var r = mbedfxConvert(input.value, host);
+    // Force by prefixing the router's escape token onto the path we already computed. A path we could
+    // not read at all has none, so fall back to the pasted url's own path.
+    var path = r.ok ? r.path : pathOf(input.value);
+    if (!path) return;
+    forced = code;
+    result.textContent = 'https://' + host + '/' + code + path;
+    result.style.display = ''; copy.style.display = '';
+    note.className = 'msgline';
+    note.innerHTML = 'Forced to <b>' + esc((BY_CODE[code] || {}).name || code) + '</b>.';
+    hidePicker();
+    prep(result.textContent);
+    // The whole point of forcing is that the previous reading was wrong, so the card under it is too.
+    card(result.textContent);
+  });
+
+  var forced = null;
+
+  function render() {
+    var r = mbedfxConvert(input.value, host);
+    forced = null;
+    hidePicker();
+    if (!r.ok && r.kind === 'empty') { outClass(false); return; }
+    outClass(true);
+    if (r.ok) {
+      result.style.display = ''; copy.style.display = '';
+      result.textContent = r.url;
+      note.className = 'msgline';
+      // THE CHIP, on every conversion. A detected site shown is a detected site that can be
+      // corrected; the note alone said it in prose and could not be acted on.
+      // A platform without a code still gets a chip — see chipFor. The fediverse guess is the case
+      // that matters: it is the one reading this converter admits is a guess.
+      var chip = r.platform ? chipFor(r.code, r.platform) : '';
+      note.innerHTML = chip + (r.note ? ' ' + esc(r.note) : (r.platform ? ' — ready to paste.' : ''));
+      // The domain toggle reaches here without going through schedulePrep, so the already-drawn
+      // preview would otherwise keep announcing the OTHER domain's link. Same card, same post — only
+      // the host changed — so the line is corrected in place rather than the card being refetched.
+      syncSent();
+    } else {
+      result.style.display = 'none'; copy.style.display = 'none';
+      note.className = 'msgline bad';
+      var why = r.why || (r.kind === 'unparseable' ? 'That doesn’t parse as a link.' : 'Not something I can fix.');
+      /**
+       * A REFUSAL STILL OFFERS THE OVERRIDE, as long as there is a path to force. Every refusal here
+       * is a JUDGEMENT — "that looks like a channel rather than a clip", "stories aren't routed",
+       * "this shortener hides the post" — and some of them are wrong about a link the worker could
+       * actually draw. Telling someone no and hiding the only way to say "read it as X anyway" makes
+       * a guess look like a verdict.
+       *
+       * Withheld when nothing parses as a url, because there is no path to prefix and the picker would
+       * be a button that cannot do anything.
+       */
+      note.textContent = why;
+      if (pathOf(input.value)) note.innerHTML = esc(why) + ' ' + chipFor(null, 'Read it as…');
+    }
+  }
+
+  // Clicking the chip offers every site — the "overridable" half of the ask.
+  note.addEventListener('click', function (e) {
+    if (!e.target.closest || !e.target.closest('#siteChip')) return;
+    if (picker.className.indexOf('show') > -1) { hidePicker(); return; }
+    showPicker(ALL, 'Read it as:');
+  });
+
+  /**
+   * ASK THE WORKER TO GET READY — resolve a share code to its real permalink, and start the mux so
+   * the video is warm before this link is pasted into Discord.
+   *
+   * DEBOUNCED, AND ONLY ON A COMPLETE-LOOKING LINK. This costs an upstream fetch and possibly a
+   * container job, so it must not fire per keystroke. It runs once the field has settled, and only
+   * for something the converter already accepted — never for half a url someone is still typing.
+   *
+   * THE PAGE NEVER WAITS ON IT. render() has already shown a usable link by the time this starts; a
+   * resolved permalink or a "warming" note REPLACES that only if the answer arrives. A slow or failed
+   * prep is invisible, which is the right failure mode for an optimisation.
+   */
+  var prepTimer = null, prepped = Object.create(null);
+  function prep(url) {
+    var path = url.slice(url.indexOf('/', 8));
+    if (prepped[path]) return;
+    prepped[path] = true;
+    fetch('/_prep?p=' + encodeURIComponent(path), { headers: { accept: 'application/json' } })
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (j) {
+        if (!j) return;
+        /**
+         * AN AMBIGUOUS PATH BECOMES A CHOICE. The candidates are the ROUTER'S — the same list a human
+         * gets from the chooser page — not something guessed here: only route() knows /gallery/{id}
+         * is contested between Reddit, Instagram and Imgur.
+         */
+        if (!j.ok && j.reason === 'ambiguous' && j.candidates && j.candidates.length) {
+          result.style.display = 'none'; copy.style.display = 'none';
+          note.className = 'msgline';
+          note.textContent = 'That path exists on more than one site, so it is not guessed.';
+          showPicker(j.candidates.map(function (c) { return { code: c.platform, name: c.name }; }),
+            'Which site did you mean?');
+          return;
+        }
+        if (!j.ok) return;
+        // Only speak up when there is something to say: a resolved share code changes the link under
+        // the reader's cursor, and a warming mux explains a wait they would otherwise not understand.
+        if (j.url && j.url !== url) {
+          result.textContent = j.url;
+          note.className = 'msgline';
+          /**
+           * A CHIP, AND THE PLATFORM'S NAME — this line used to print `j.platform` raw inside <b>, so
+           * a resolved Threads share link announced itself as "th". That is the ROUTER'S ESCAPE TOKEN,
+           * vocabulary this page otherwise never shows anyone.
+           *
+           * It also replaced the chip with dead text, which quietly undid the fix directly above: after
+           * a successful unfurl the override became unreachable again, on exactly the links most likely
+           * to be read as the wrong site (a bare /share/{code} names no platform at all).
+           */
+          note.innerHTML = chipFor(j.platform, (BY_CODE[j.platform] || {}).name || j.platform)
+            + ' — share link resolved to the real post.';
+        }
+        if (j.warming) {
+          note.className = 'msgline';
+          note.innerHTML = (note.innerHTML ? note.innerHTML + ' ' : '')
+            + 'Video is downloading now, so it plays on the first paste.';
+        }
+      })
+      .catch(function () { /* an optimisation that fails is just the old behaviour */ });
+  }
+
+  /* ---------- the discord preview ------------------------------------------
+   *
+   * WHY THE WORKER HAS TO ANSWER THIS. A browser fetching the converted url is classified `human`
+   * and 302s to the platform — there is no user-agent this page can set from script — so the fields
+   * Discord reads are not reachable from here. /_card renders as Discord and hands back the post.
+   *
+   * IT IS A REPLICA AND IT SAYS SO. Discord's renderer is closed and skews by client version; this
+   * draws the fields we actually send, in Discord's layout. The purpose is checking CONTENT — right
+   * post, right author, video vs still, translation present — before a link is pasted, not pixel
+   * parity.
+   */
+  var preview = $('preview'), cardTimer = null, cardSeq = 0;
+
+  /**
+   * THE ONLY WRITER OF out.className, and it exists because there were five.
+   *
+   * render() set it to the literal 'out show'; drawCard and hidePreview did string surgery to add
+   * and remove ' hasCard'. Flipping the domain toggle calls render(), which OVERWROTE the whole
+   * string and silently dropped hasCard — so the result row reappeared UNDER a preview that was
+   * still showing, and the reader got the same link twice with two Copy buttons. Reported with a
+   * screenshot.
+   *
+   * `cardUp` is the state; this is the only thing that projects it onto the DOM. Any new caller
+   * changes the boolean, never the string.
+   */
+  var cardUp = false;
+  function outClass(shown) {
+    out.className = 'out' + (shown ? ' show' : '') + (cardUp && shown ? ' hasCard' : '');
+  }
+
+  function esc2(s) { return esc(s == null ? '' : s); }
+
+  /**
+   * THE STATS COME FROM THE WORKER PRE-FORMATTED, and this function only lays them out.
+   *
+   * It used to build them here from the raw counts, and it got two things wrong that a side-by-side
+   * screenshot caught: the ORDER (the card is likes, replies, reposts; this had likes, reposts,
+   * replies) and the ROUNDING (the card truncates, this used toFixed, which rounds — so 999,950
+   * renders "1000K" here and "999.9K" there).
+   *
+   * Both were one mistake: a preview that re-implements a renderer drifts from it. The worker now
+   * sends statParts(post) — literally the array the card is built from — so neither can happen again.
+   */
+  /**
+   * The quoted post, drawn the way the card draws it. The byline is sent PRE-FORMATTED by the worker
+   * — the same `byline()` the card's own quote header uses — so the two cannot disagree about how an
+   * author is written, which is the drift that produced the wrong stat order.
+   */
+  function quoteBlock(q) {
+    if (!q) return '';
+    return '<div class="quote"><b>Quoting ' + esc2(q.byline) + '</b>'
+      + (q.text ? '<div class="qt">' + esc2(q.text) + '</div>' : '')
+      + '</div>';
+  }
+
+  function statLine(stats) {
+    if (!stats || !stats.length) return '';
+    return '<div class="stats">'
+      + stats.map(function (b) { return '<span>' + esc2(b) + '</span>'; }).join('')
+      + '</div>';
+  }
+
+  function drawCard(sent, j) {
+    if (!j || !j.ok) {
+      // A gate is Discord's own wording; anything else is not worth a fake card.
+      // A FAILED CARD KEEPS THE RESULT ROW, because the preview is not carrying the link here.
+      cardUp = false; outClass(true);
+      preview.innerHTML = '<div class="sentrow"><span class="sent" id="sentline"></span></div>'
+        + '<div class="pv"><div class="body">' + esc2(j && j.gate ? j.gate : 'No preview — this link does not resolve to a post.') + '</div></div>';
+      preview.className = 'preview show';
+      syncSent();
+      return;
+    }
+    /**
+     * A VIDEO IS DRAWN FROM ITS POSTER, never from `url` — `url` is the mp4, and an <img> pointed at
+     * one fails SILENTLY, which is how a YouTube card came out as a title and a blank space. Images
+     * use `url` because for them the bytes are the picture.
+     */
+    var shots = (j.media || []).slice(0, 4).map(function (m) {
+      return { still: m.kind === 'video' ? m.poster : (m.poster || m.url), video: m.kind === 'video' };
+    }).filter(function (m) { return !!m.still; });
+    var media = shots.length
+      ? '<div class="shots n' + shots.length + '">' + shots.map(function (m) {
+          return '<span class="shot">'
+            + '<img src="' + esc2(m.still) + '" alt="" loading="lazy">'
+            + (m.video ? '<span class="play"></span>' : '') + '</span>';
+        }).join('') + '</div>'
+      : '';
+    var body = (j.title ? '<b>' + esc2(j.title) + '</b>\n' : '') + esc2(j.text || '');
+    // The card carries the link now, so the standalone result row stands down — see .out.hasCard.
+    cardUp = true; outClass(true);
+    preview.innerHTML = '<div class="sentrow"><span class="sent" id="sentline"></span>'
+      + '<button type="button" id="copy2">Copy</button></div>'
+      + '<div class="pv" style="--pvc:' + esc2(j.color || '#5865f2') + '">'
+      + '<div class="who">'
+      + (j.author && j.author.avatar ? '<img src="' + esc2(j.author.avatar) + '" alt="">' : '')
+      + '<b>' + esc2(j.author && (j.author.byline || j.author.name) || '') + '</b>'
+      + '</div>'
+      + '<div class="body">' + body + '</div>'
+      + quoteBlock(j.quote)
+      + statLine(j.stats)
+      + media
+      + '<div class="foot">' + esc2(footLine(j)) + '</div>'
+      + '</div>';
+    preview.className = 'preview show';
+    // Fill the first line from the result field — see syncSent for why it is derived and not passed.
+    syncSent();
+  }
+
+  /**
+   * THE PREVIEW'S FIRST LINE IS THE LINK YOU WOULD COPY — read from the result field rather than
+   * passed in, so the two cannot disagree.
+   *
+   * They DID disagree, reported with a screenshot: the copy field offered
+   * megapenispoopenfarten.sex/R6e1_IlvmQs while the preview above the card announced
+   * mbedfx.app/watch?v=R6e1_IlvmQs — a different domain AND a different path shape. Two causes, one
+   * class of bug: the sent line was a snapshot of whatever url happened to be current when the fetch
+   * was fired, and the domain toggle calls render() (which rewrites the result field) without
+   * touching the preview at all.
+   *
+   * A preview of a link you are not about to paste is worse than no preview, so this is derived, not
+   * copied — and render() calls it, which is what makes switching domains update both.
+   */
+  function syncSent() {
+    var el = document.getElementById('sentline');
+    if (el) el.textContent = result.textContent || '';
+  }
+
+  /**
+   * THE FOOTER, WITH THE DATE — reported missing against a real card that shows one.
+   *
+   * IT PRINTS WHAT WE SEND, INCLUDING WHEN THAT IS WRONG. The YouTube card this was reported on
+   * carries createdAt 1970-01-01, and Discord draws that epoch to every viewer. Hiding a junk date
+   * here would make the preview flatter the card instead of describing it, which is the one thing a
+   * preview must never do — so an implausible date is shown AND flagged.
+   *
+   * "Implausible" is deliberately crude (before 2005, which predates YouTube itself) because the
+   * only case that matters is a zero/absent timestamp becoming a real one.
+   */
+  function footLine(j) {
+    var t = j && j.createdAt ? new Date(j.createdAt) : null;
+    if (!t || isNaN(t.getTime())) return 'mbedfx';
+    /**
+     * THE TIME, AND THE SEPARATOR DISCORD ACTUALLY USES. Reported from a side-by-side: the real card
+     * reads "mbedfx | 06/12/2026 2:54 PM" and this read "mbedfx \u2022 Jun 12, 2026" \u2014 a different divider,
+     * a different date format, and no time at all.
+     *
+     * `undefined` locale on purpose: Discord renders the stamp in the READER'S locale and timezone,
+     * not the poster's, so the preview has to do the same or it will disagree with the card for
+     * everyone outside one timezone. The field widths are pinned (2-digit day and month) because the
+     * card pads them and "6/12/26" is a visibly different line from "06/12/2026".
+     */
+    // The two halves are formatted SEPARATELY and joined with a space, because toLocaleString puts a
+    // comma between them ("06/12/2026, 2:54 PM") and the card does not.
+    var stamp = t.toLocaleDateString(undefined, { year: 'numeric', month: '2-digit', day: '2-digit' })
+      + ' ' + t.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
+    // An implausible date is SHOWN and FLAGGED rather than hidden \u2014 the card draws it either way, and
+    // a preview that quietly tidied it up would be flattering the card instead of describing it.
+    return t.getFullYear() < 2005
+      ? 'mbedfx | ' + stamp + '  \u26a0 no upload date'
+      : 'mbedfx | ' + stamp;
+  }
+
+  function hidePreview() {
+    preview.className = 'preview'; preview.innerHTML = '';
+    // The link has to remain copyable with no card on screen.
+    cardUp = false; outClass(false);
+  }
+
+  function card(url) {
+    var path = url.slice(url.indexOf('/', 8));
+    var seq = ++cardSeq;
+    fetch('/_card?p=' + encodeURIComponent(path), { headers: { accept: 'application/json' } })
+      .then(function (r) { return r.ok ? r.json() : null; })
+      // LAST REQUEST WINS. Typing fires these in order and they do not return in order; without the
+      // sequence check a slow early card can land on top of the one the reader is looking at.
+      .then(function (j) { if (seq === cardSeq) drawCard(url, j); })
+      .catch(function () { if (seq === cardSeq) hidePreview(); });
+  }
+
+  function schedulePrep() {
+    clearTimeout(prepTimer);
+    clearTimeout(cardTimer);
+    var r = mbedfxConvert(input.value, host);
+    if (!r.ok) { hidePreview(); return; }
+    prepTimer = setTimeout(function () { prep(r.url); }, 600);
+    // Later than prep, and deliberately: prep may REPLACE the url (a share code unfurls), and drawing
+    // the card for a url that is about to change wastes a render and shows the wrong one first.
+    cardTimer = setTimeout(function () { card(result.textContent || r.url); }, 900);
+  }
+
+  input.addEventListener('input', function () { render(); schedulePrep(); });
+  input.addEventListener('paste', function () { setTimeout(function () { render(); schedulePrep(); }, 0); });
+
+  /**
+   * THE THEME SWITCH. Reported as "there's no light mode", which was exactly right: the page had a
+   * complete light theme that no visitor could ever reach, because it was keyed only on the OS
+   * setting. Anyone whose machine is dark saw dark and nothing else.
+   *
+   * Three states rather than two. A plain toggle silently overrides the OS forever after one click,
+   * so "System" has to stay reachable — and it is the default.
+   */
+  (function theme() {
+    var root = document.documentElement;
+    var buttons = [].slice.call(document.querySelectorAll('[data-theme-set]'));
+    var read = function () {
+      try { return localStorage.getItem('mbedfx-theme') || 'system'; } catch (e) { return 'system'; }
+    };
+    var paint = function (mode) {
+      if (mode === 'system') root.removeAttribute('data-theme');
+      else root.setAttribute('data-theme', mode);
+      buttons.forEach(function (b) {
+        b.setAttribute('aria-pressed', String(b.getAttribute('data-theme-set') === mode));
+      });
+    };
+    buttons.forEach(function (b) {
+      b.addEventListener('click', function () {
+        var mode = b.getAttribute('data-theme-set');
+        try {
+          if (mode === 'system') localStorage.removeItem('mbedfx-theme');
+          else localStorage.setItem('mbedfx-theme', mode);
+        } catch (e) { /* the choice still applies for this page view */ }
+        paint(mode);
+      });
+    });
+    paint(read());
+  })();
+
+  /**
+   * Keep the sticky header naming the section you are actually looking at, and light up the matching
+   * channel in the sidebar. Without it the bar reads "# convert" while you are three sections down,
+   * which is the one detail that gave the whole conceit away.
+   */
+  (function spy() {
+    var sections = [].slice.call(document.querySelectorAll('.chan[id]'));
+    if (!sections.length) return;
+    var nameEl = $('chanName'), descEl = $('chanDesc');
+    var links = {};
+    [].forEach.call(document.querySelectorAll('.side a[href^="#"]'), function (a) {
+      links[a.getAttribute('href').slice(1)] = a;
+    });
+
+    var current = '';
+    function update() {
+      // The last section whose heading has passed under the sticky bar is the one being read.
+      var active = sections[0];
+      for (var i = 0; i < sections.length; i++) {
+        if (sections[i].getBoundingClientRect().top <= 140) active = sections[i];
+      }
+      if (active.id === current) return;
+      current = active.id;
+      nameEl.textContent = active.id;
+      descEl.textContent = active.getAttribute('data-desc') || '';
+      for (var k in links) if (links[k]) links[k].classList.toggle('on', k === current);
+    }
+
+    var queued = false;
+    addEventListener('scroll', function () {
+      if (queued) return;
+      queued = true;
+      requestAnimationFrame(function () { queued = false; update(); });
+    }, { passive: true });
+    update();
+  })();
+
+  var segs = document.querySelectorAll('.seg button');
+  Array.prototype.forEach.call(segs, function (b) {
+    // Reflect where we actually are, rather than leaving the first button pressed by default: on
+    // megapenispoopenfarten.sex the SECOND one is the truthful answer.
+    b.setAttribute('aria-pressed', String(b.getAttribute('data-host') === origin.family));
+    b.addEventListener('click', function () {
+      host = origin.prefix + b.getAttribute('data-host');
+      Array.prototype.forEach.call(segs, function (o) {
+        o.setAttribute('aria-pressed', String(o === b));
+      });
+      render();
+    });
+  });
+
+  /**
+   * ONE COPY BEHAVIOUR, TWO BUTTONS. The preview's button is created and destroyed with the card, so
+   * it cannot carry a listener of its own — the click is caught here by delegation and forwarded to
+   * the same code path. Re-implementing the clipboard write beside it is how the two would drift on
+   * the fallback path, the "Copied" feedback, or the text itself.
+   */
+  preview.addEventListener('click', function (e) {
+    if (e.target && e.target.id === 'copy2') copy.click();
+  });
+
+  copy.addEventListener('click', function () {
+    var text = result.textContent;
+    var done = function () {
+      var mirror = document.getElementById('copy2');
+      copy.textContent = 'Copied'; copy.className = 'done';
+      if (mirror) { mirror.textContent = 'Copied'; mirror.className = 'done'; }
+      setTimeout(function () {
+        copy.textContent = 'Copy'; copy.className = '';
+        var m2 = document.getElementById('copy2');
+        if (m2) { m2.textContent = 'Copy'; m2.className = ''; }
+      }, 1400);
+    };
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).then(done, done);
+    } else {
+      var t = document.createElement('textarea');
+      t.value = text; document.body.appendChild(t); t.select();
+      try { document.execCommand('copy'); } catch (e) {}
+      document.body.removeChild(t); done();
+    }
+  });
+})();
+</script>
+
+</body>
+</html>

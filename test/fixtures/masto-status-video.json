@@ -1,0 +1,123 @@
+{
+  "id": "116995942822091302",
+  "created_at": "2026-07-28T05:24:19.000Z",
+  "in_reply_to_id": null,
+  "in_reply_to_account_id": null,
+  "sensitive": false,
+  "spoiler_text": "",
+  "visibility": "public",
+  "language": "es",
+  "uri": "https://sportsbots.xyz/users/somos_FOX/statuses/2081974010259104079",
+  "url": "https://twitter.com/somos_FOX/status/2081974010259104079",
+  "replies_count": 0,
+  "reblogs_count": 0,
+  "favourites_count": 0,
+  "quotes_count": 0,
+  "edited_at": null,
+  "content": "<p>¡CONFIANZA TOTAL!💪</p><p>“DEMOSTRAMOS QUE SOMOS CANDIDATOS”: Samir Inda. </p><p>🇨🇷0-2🇲🇽</p><p><a href=\"https://twitter.com/hashtag/Sub20\" class=\"mention hashtag\" rel=\"nofollow noopener\" target=\"_blank\">#<span>Sub20</span></a></p>",
+  "reblog": null,
+  "account": {
+    "id": "115141547087754590",
+    "username": "somos_FOX",
+    "acct": "somos_FOX@sportsbots.xyz",
+    "display_name": "FOX 🤖",
+    "locked": false,
+    "bot": true,
+    "discoverable": true,
+    "indexable": false,
+    "group": false,
+    "created_at": "2023-08-16T00:00:00.000Z",
+    "note": "<p>Unofficial bot that mirrors FOX’s Twitter feed.</p><p>🏆🇲🇽 LA LIGA MX ES AQUÍ👇</p>",
+    "url": "https://sportsbots.xyz/users/somos_FOX",
+    "uri": "https://sportsbots.xyz/users/somos_FOX",
+    "avatar": "https://media.mstdn.social/cache/accounts/avatars/115/141/547/087/754/590/original/154ef98e073ae9a0.jpg",
+    "avatar_static": "https://media.mstdn.social/cache/accounts/avatars/115/141/547/087/754/590/original/154ef98e073ae9a0.jpg",
+    "avatar_description": "",
+    "header": "https://mstdn.social/headers/original/missing.png",
+    "header_static": "https://mstdn.social/headers/original/missing.png",
+    "header_description": "",
+    "followers_count": 50400,
+    "following_count": 200,
+    "statuses_count": 17304,
+    "last_status_at": "2026-07-28",
+    "hide_collections": false,
+    "show_media": true,
+    "show_media_replies": true,
+    "show_featured": true,
+    "feature_approval": {
+      "automatic": [],
+      "manual": [],
+      "current_user": "denied"
+    },
+    "emojis": [],
+    "fields": [
+      {
+        "name": "Twitter",
+        "value": "<a href=\"https://twitter.com/somos_FOX\" rel=\"nofollow noopener\" target=\"_blank\"><span class=\"invisible\">https://</span><span class=\"\">twitter.com/somos_FOX</span></a>",
+        "verified_at": null
+      },
+      {
+        "name": "Website",
+        "value": "<a href=\"https://www.foxone.mx/checkout\" rel=\"nofollow noopener\" target=\"_blank\"><span class=\"invisible\">https://</span><span class=\"\">foxone.mx/checkout</span><span class=\"invisible\"></span></a>",
+        "verified_at": null
+      },
+      {
+        "name": "Managed by",
+        "value": "<span class=\"h-card\"><a href=\"https://mastodon.social/@sportsbots\" class=\"u-url mention\" rel=\"nofollow noopener\" target=\"_blank\">@<span>sportsbots</span></a></span>",
+        "verified_at": null
+      },
+      {
+        "name": "Retention",
+        "value": "<span class=\"h-card\">90 days</span>",
+        "verified_at": null
+      }
+    ]
+  },
+  "media_attachments": [
+    {
+      "id": "116995942703328157",
+      "type": "video",
+      "url": "https://media.mstdn.social/cache/media_attachments/files/116/995/942/703/328/157/original/d7993a9fc58c0a1f.mp4",
+      "preview_url": "https://media.mstdn.social/cache/media_attachments/files/116/995/942/703/328/157/small/d7993a9fc58c0a1f.png",
+      "remote_url": "https://video.twimg.com/amplify_video/2081973909633548288/vid/avc1/1280x720/g_1GCcoJlUsd4XOJ.mp4?tag=14",
+      "preview_remote_url": null,
+      "text_url": null,
+      "meta": {
+        "original": {
+          "width": 1280,
+          "height": 720,
+          "frame_rate": "30000/1001",
+          "duration": 85.333333,
+          "bitrate": 1102650
+        },
+        "small": {
+          "width": 640,
+          "height": 360,
+          "size": "640x360",
+          "aspect": 1.7777777777777777
+        }
+      },
+      "description": null,
+      "blurhash": "UGEVQm%CY6rZ~W%G%LxIIWbY,.S}i{NGNao3"
+    }
+  ],
+  "mentions": [],
+  "tags": [
+    {
+      "name": "sub20",
+      "url": "https://mstdn.social/tags/sub20"
+    }
+  ],
+  "emojis": [],
+  "tagged_collections": [],
+  "quote": null,
+  "card": null,
+  "poll": null,
+  "quote_approval": {
+    "automatic": [
+      "public"
+    ],
+    "manual": [],
+    "current_user": "denied"
+  }
+}

@@ -1,0 +1,86 @@
+name: Bug report
+description: A card is wrong, missing, or a link will not resolve
+labels: [bug]
+body:
+  - type: input
+    id: link
+    attributes:
+      label: The link
+      description: >
+        The mbedfx link that misbehaved, and the original if it differs. This is the single
+        most useful thing in the report — most bugs here are one specific post, not a whole site.
+      placeholder: "https://mbedfx.app/@user/video/7660566211100511518"
+    validations:
+      required: true
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What did the card show — or not show?
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: What should have happened
+    validations:
+      required: true
+
+  - type: dropdown
+    id: site
+    attributes:
+      label: Which site is the post on?
+      options:
+        - Twitter
+        - TikTok
+        - Instagram
+        - Threads
+        - Reddit
+        - Bluesky
+        - YouTube
+        - Facebook
+        - Twitch
+        - Pinterest
+        - Dailymotion
+        - Streamable
+        - Imgur
+        - Mastodon / Misskey / Lemmy / PeerTube (fediverse)
+        - The converter page itself
+        - Other / not sure
+    validations:
+      required: true
+
+  - type: dropdown
+    id: surface
+    attributes:
+      label: Where did you see it?
+      options:
+        - Discord
+        - The converter page preview
+        - Telegram
+        - Somewhere else
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: still-broken
+    attributes:
+      label: Does it still happen?
+      description: >
+        Cards are cached for about 15 minutes, and a cold video can take two or three
+        views before it plays — so a quick re-check separates a real bug from a warm-up.
+      options:
+        - label: I waited a few minutes and tried again, and it still happens
+          required: false
+
+  - type: textarea
+    id: context
+    attributes:
+      label: Anything else
+      description: >
+        A screenshot of the card is worth a lot. If the post is private, age-gated, or has
+        since been deleted, say so — that changes what the right answer is.
+    validations:
+      required: false

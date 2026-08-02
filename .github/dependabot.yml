@@ -1,0 +1,20 @@
+# Dependency updates. Two ecosystems: the npm devDependencies (wrangler, typescript) and the
+# GitHub Actions used by CI. Monthly rather than weekly — this project has three direct
+# dependencies and a weekly cadence would be noise.
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: "/"
+    schedule:
+      interval: monthly
+    commit-message:
+      prefix: chore
+    labels: ["dependencies"]
+
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: monthly
+    commit-message:
+      prefix: ci
+    labels: ["dependencies"]

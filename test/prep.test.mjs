@@ -1,0 +1,456 @@
+import { test } from 'node:test'
+import assert from 'node:assert/strict'
+import { handle } from '../src/worker.ts'
+import { route } from '../src/router.ts'
+import { readFileSync } from 'node:fs'
+
+/**
+ * /_prep — THE FIXER PAGE GETTING READY. Requested 2026-07-31: "if someone puts in a video which
+ * would be going through yt-dlp then when they submit the link it kicks off the download/mux in the
+ * background", plus the earlier ask to unfurl a share url "to the full thing instead of just
+ * replacing the url".
+ *
+ * WHY AN ENDPOINT MAY DO REAL WORK, which is the thing to re-read before widening it. Everything
+ * /_prep does is what a Discordbot GET of the same url already does seconds later, reachable by
+ * anyone who sets a User-Agent: the same fetch, the same container dispatch, behind the same
+ * SPECULATIVE_MUX_CAP and the same muxOnce dedupe. It buys LATENCY, NOT PERMISSION. If a change ever
+ * makes that sentence false, the endpoint has become an amplifier and needs its own gate.
+ *
+ * The prewarm the worker already had is gated on the post cache holding the ref — deliberately, so a
+ * never-fetched id cannot boot a container. That gate makes it USELESS for the case here, which is a
+ * link nobody has fetched yet, so this path runs the full render and discards it.
+ */
+
+const ctx = () => {
+  const pending = []
+  return { ctx: { waitUntil(p) { pending.push(p) } }, settle: () => Promise.allSettled(pending) }
+}
+const fakeCache = () => {
+  const m = new Map()
+  return { async match(k) { const v = m.get(k); return v ? v.clone() : undefined }, async put(k, v) { m.set(k, v.clone()) } }
+}
+const fakeR2 = () => {
+  const store = new Map()
+  return {
+    store,
+    async head(k) { const v = store.get(k); return v ? { size: v.length } : null },
+    async get(k) { const v = store.get(k); return v ? { body: new Response(v).body, size: v.length, uploaded: new Date() } : null },
+    // MUST CONSUME THE BODY. muxOnce streams the container's response into R2, so a put that stores
+    // the ReadableStream without draining it leaves the pipe open forever and the test hangs.
+    async put(k, body) {
+      const bytes = typeof body === 'string' ? body : new Uint8Array(await new Response(body).arrayBuffer())
+      store.set(k, bytes)
+    },
+  }
+}
+
+/** Records every container call so a test can prove work did or did not start. */
+function fakeResolver() {
+  const seen = { meta: 0, mux: 0, pages: [] }
+  return {
+    seen,
+    binding: {
+      getByName() {
+        return {
+          async fetch(_u, init) {
+            const body = JSON.parse(init.body)
+            if (body.page) seen.pages.push(body.page)
+            if (body.meta === true) { seen.meta++; return Response.json({ title: 'a video', width: 1, height: 1 }) }
+            seen.mux++
+            return new Response('MP4', { headers: { 'content-type': 'video/mp4', 'content-length': '3' } })
+          },
+        }
+      },
+    },
+  }
+}
+
+const envWith = binding => ({
+  AE: { writeDataPoint() {} },
+  ASSETS: { async fetch() { return new Response('a') } },
+  MEDIA_RESOLVER: binding,
+  MEDIA_CACHE: fakeR2(),
+})
+/**
+ * A STUBBED fetchPost, because these tests must reach no network. It mints a post whose media matches
+ * what the ref implies — a remux video for the platforms prewarmable() names, a plain image otherwise
+ * — which is the only property the prep path actually reads.
+ */
+const REMUX = new Set(['yt', 'fb', 'dm', 'st', 'im'])
+const stubFetchPost = async ref => ({
+  ref,
+  canonical: 'https://example.invalid/post',
+  author: { name: 'n', handle: 'h', url: 'https://example.invalid' },
+  text: '',
+  createdAt: new Date('2026-07-01T00:00:00Z'),
+  counts: {},
+  sensitive: false,
+  media: REMUX.has(ref.p)
+    ? [{ kind: 'video', url: 'https://example.invalid/v', w: 0, h: 0, poster: 'https://example.invalid/p.jpg', remux: { page: `https://example.invalid/page/${ref.id ?? ref.code ?? 'x'}` } }]
+    : [{ kind: 'image', url: 'https://example.invalid/i.jpg', w: 10, h: 10 }],
+})
+
+const deps = over => ({
+  cache: fakeCache(),
+  fetchPost: stubFetchPost,
+  resolveShortlink: async () => ({ kind: 'unresolved' }),
+  resolveRedditShare: async () => null,
+  resolveMetaShare: async () => null,
+  ...over,
+})
+const prep = p => new Request('https://mbedfx.app/_prep?p=' + encodeURIComponent(p))
+
+test('THE ROUTER RECOGNISES /_prep, and refuses it with no target', () => {
+  assert.deepEqual(route(new URL('https://mbedfx.app/_prep?p=/jack/status/20')),
+    { kind: 'prep', target: '/jack/status/20' })
+  assert.equal(route(new URL('https://mbedfx.app/_prep')).kind, 'notfound')
+  assert.equal(route(new URL('https://mbedfx.app/_prep?p=')).kind, 'notfound')
+})
+
+test('IT ANSWERS WITH THE CANONICAL, ON OUR OWN ORIGIN', async () => {
+  const { ctx: c } = ctx()
+  const j = await (await handle(prep('/jack/status/20'), envWith(fakeResolver().binding), c, deps())).json()
+  assert.equal(j.ok, true)
+  assert.equal(j.platform, 'x')
+  assert.equal(j.url, 'https://mbedfx.app/jack/status/20', 'the link the page should show')
+  assert.equal(j.canonical, 'https://x.com/jack/status/20')
+})
+
+test('A VIDEO STARTS ITS MUX — the whole point of the request', async () => {
+  /**
+   * The reported problem: the FIRST paste of a cold video degrades to a still, because the mux only
+   * starts when Discord arrives. The page knows a link is about to be shared, so the download starts
+   * then instead.
+   */
+  const { seen, binding } = fakeResolver()
+  const { ctx: c, settle } = ctx()
+  const j = await (await handle(prep('/watch?v=dQw4w9WgXcQ'), envWith(binding), c, deps())).json()
+  assert.equal(j.warming, true, 'the page is told, so it can explain the wait')
+  await settle()
+  assert.ok(seen.mux >= 1, 'the container was actually asked for the video')
+  assert.ok(seen.pages.some(p => p.includes('dQw4w9WgXcQ')), 'and for the right one')
+})
+
+test('A PLATFORM WITH NO MUX COSTS NO CONTAINER CALL AT ALL', async () => {
+  /**
+   * A page that fired a full render at every pasted link would spend an upstream fetch on every
+   * debounced keystroke for platforms that have no video path. prewarmable() is the existing answer
+   * to "does this ref imply a mux", reused rather than re-spelled.
+   */
+  const { seen, binding } = fakeResolver()
+  const { ctx: c, settle } = ctx()
+  const j = await (await handle(prep('/pin/66287425756772418'), envWith(binding), c, deps())).json()
+  assert.equal(j.ok, true)
+  assert.equal(j.warming, false, 'nothing to warm')
+  await settle()
+  assert.equal(seen.mux, 0, 'and nothing was warmed')
+  assert.equal(seen.meta, 0)
+})
+
+test('A SHARE CODE IS RESOLVED TO THE REAL POST — "the full thing, not just the url"', async () => {
+  const { ctx: c } = ctx()
+  const j = await (await handle(prep('/share/Fixture03X'), envWith(fakeResolver().binding), c, deps({
+    resolveMetaShare: async () => 'https://www.threads.com/@dexerto/post/DbWxxQjFe4u?xmt=AQG0&slof=1',
+  }))).json()
+  assert.equal(j.ok, true)
+  assert.equal(j.platform, 'th')
+  assert.equal(j.url, 'https://mbedfx.app/@dexerto/post/DbWxxQjFe4u', 'the permalink, not the share code')
+  for (const junk of ['xmt', 'slof', 'Fixture03X']) {
+    assert.ok(!j.url.includes(junk) && !j.canonical.includes(junk), `${junk} must not survive`)
+  }
+})
+
+test('AN UNRESOLVABLE SHARE CODE IS AN HONEST no, not a guess', async () => {
+  const { ctx: c } = ctx()
+  const j = await (await handle(prep('/share/Fixture03X'), envWith(fakeResolver().binding), c,
+    deps({ resolveMetaShare: async () => null }))).json()
+  assert.equal(j.ok, false)
+  assert.equal(j.reason, 'metashare', 'it stayed an unresolved share code')
+})
+
+test('JUNK AND NON-POSTS ARE REFUSED WITHOUT SIDE EFFECTS', async () => {
+  const { seen, binding } = fakeResolver()
+  const { ctx: c, settle } = ctx()
+  for (const target of ['/', '/mrbeast', '/definitely/not/a/post', '/gallery/YcAQlkx', 'not a path', '']) {
+    const res = await handle(prep(target), envWith(binding), c, deps())
+    const j = await res.json().catch(() => null)
+    if (j) assert.equal(j.ok, false, `${JSON.stringify(target)} must not claim success`)
+  }
+  await settle()
+  assert.equal(seen.mux, 0, 'nothing unroutable may reach the container')
+  assert.equal(seen.meta, 0)
+})
+
+test('IT CANNOT BE NESTED INTO ITSELF', async () => {
+  // /_prep?p=/_prep?p=… must not recurse. The inner route is 'prep', which is not a post.
+  const { ctx: c } = ctx()
+  const j = await (await handle(prep('/_prep?p=/watch?v=dQw4w9WgXcQ'), envWith(fakeResolver().binding), c, deps())).json()
+  assert.equal(j.ok, false)
+  assert.equal(j.reason, 'prep', 'one level, and it stops there')
+})
+
+test('AN ABSOLUTE TARGET CANNOT POINT AT ANOTHER ORIGIN', async () => {
+  /**
+   * THE SECURITY PIN. `p` is attacker-supplied and is turned into a URL. Resolving it against our own
+   * origin is what keeps it a PATH — a target that names another host must not become a fetch we
+   * make on someone's behalf, and must not have its host echoed back as though it were ours.
+   */
+  const { seen, binding } = fakeResolver()
+  const { ctx: c, settle } = ctx()
+  for (const target of [
+    'https://evil.example/watch?v=dQw4w9WgXcQ',
+    '//evil.example/watch?v=dQw4w9WgXcQ',
+    'http://evil.example/jack/status/20',
+  ]) {
+    const res = await handle(prep(target), envWith(binding), c, deps())
+    const j = await res.json().catch(() => null)
+    if (j && j.ok) {
+      assert.ok(j.url.startsWith('https://mbedfx.app/'), `${target} leaked an origin: ${j.url}`)
+      assert.ok(!j.canonical.includes('evil.example'), `${target} leaked into canonical`)
+    }
+  }
+  await settle()
+  assert.ok(!seen.pages.some(p => p.includes('evil.example')), 'no upstream fetch at an attacker host')
+})
+
+test('THE SAME LINK TWICE IS ONE MUX — muxOnce already dedupes, and the page also remembers', async () => {
+  const { seen, binding } = fakeResolver()
+  const { ctx: c, settle } = ctx()
+  const env = envWith(binding)
+  const d = deps()
+  await handle(prep('/watch?v=dQw4w9WgXcQ'), env, c, d)
+  await handle(prep('/watch?v=dQw4w9WgXcQ'), env, c, d)
+  await settle()
+  assert.ok(seen.mux <= 1, `a repeated prep must not re-download, got ${seen.mux}`)
+})
+
+test('THE PAGE DEBOUNCES AND DOES NOT REPEAT ITSELF', () => {
+  // Pinned in the page rather than the worker: this is what stops a fetch per keystroke.
+  const html = readFileSync(new URL('../public/index.html', import.meta.url), 'utf8')
+  assert.match(html, /setTimeout\(function \(\) \{ prep\(r\.url\); \}, 600\)/, 'debounced, not per keystroke')
+  assert.match(html, /if \(prepped\[path\]\) return;/, 'and each link is prepped at most once')
+  assert.match(html, /'\/_prep\?p=' \+ encodeURIComponent\(path\)/, 'the target is encoded')
+})
+
+test('AN AMBIGUOUS PATH HANDS BACK THE ROUTER\'S OWN CANDIDATES', () => {
+  /**
+   * The picker on the fixer page is only honest if its options come from route() rather than from
+   * anything the page guesses — only the router knows /gallery/{id} is contested between Reddit,
+   * Instagram and Imgur, and that Imgur joined that row when albums shipped.
+   */
+  return (async () => {
+    const { ctx: c } = ctx()
+    const j = await (await handle(prep('/gallery/YcAQlkx'), envWith(fakeResolver().binding), c, deps())).json()
+    assert.equal(j.ok, false)
+    assert.equal(j.reason, 'ambiguous')
+    assert.deepEqual(j.candidates.map(x => x.platform), ['rd', 'ig', 'im'])
+    assert.deepEqual(j.candidates.map(x => x.name), ['Reddit', 'Instagram', 'Imgur'],
+      'named for a human, not by code')
+    for (const cand of j.candidates) {
+      assert.equal(cand.url, `https://mbedfx.app/${cand.platform}/gallery/YcAQlkx`,
+        'and each option is the forced url, built from router vocabulary')
+    }
+  })()
+})
+
+/* ===================== /_card — the fixer page's preview ==========================
+ *
+ * WHY THE ENDPOINT EXISTS AT ALL. A browser fetching the converted url is classified `human` and
+ * 302s to the platform; there is no user-agent a page can set from script, so the fields Discord
+ * reads are simply not reachable from the client. /_card renders as Discord and describes the post.
+ *
+ * WHAT THESE PIN. That it describes the POST rather than one seam's markup — the preview must be
+ * right for a card with media (which Discord draws from the Mastodon spoof) and one without (which
+ * it draws from the og head), and parsing either document would have been right for only one.
+ */
+
+const card = p => new Request('https://mbedfx.app/_card?p=' + encodeURIComponent(p))
+
+test('THE ROUTER RECOGNISES /_card, and refuses it with no target', () => {
+  assert.deepEqual(route(new URL('https://mbedfx.app/_card?p=/jack/status/20')),
+    { kind: 'card', target: '/jack/status/20' })
+  assert.equal(route(new URL('https://mbedfx.app/_card')).kind, 'notfound')
+  assert.equal(route(new URL('https://mbedfx.app/_card?p=')).kind, 'notfound')
+})
+
+test('IT DESCRIBES THE POST — author, text, counts, canonical', async () => {
+  const { ctx: c } = ctx()
+  const j = await (await handle(card('/jack/status/20'), envWith(fakeResolver().binding), c, deps())).json()
+  assert.equal(j.ok, true)
+  assert.equal(j.platform, 'x')
+  /**
+   * THE POST'S CANONICAL, NOT THE ROUTER'S — the stub's placeholder is what makes the difference
+   * visible, and the difference is deliberate. The router's canonical is derived from the url that
+   * was pasted; the post's is what normalize resolved it to, and it is what the CARD links to. They
+   * agree for a plain permalink and diverge for anything that resolved (a share code, a shortlink),
+   * which is exactly the case the preview exists to show.
+   */
+  assert.equal(j.canonical, 'https://example.invalid/post')
+  assert.equal(typeof j.author.name, 'string')
+  // The line Discord draws, named for what it is — see the worker's card arm.
+  assert.equal(typeof j.author.byline, 'string')
+  assert.equal(typeof j.text, 'string')
+  assert.ok(j.counts && typeof j.counts === 'object')
+  assert.ok(Array.isArray(j.media))
+})
+
+test('MEDIA IS ADDRESSED THROUGH OUR OWN ORIGIN, never the platform cdn', async () => {
+  /**
+   * The same rule every renderer follows: a platform media url is short-lived and often
+   * hotlink-blocked, so the card points at /_media/{refKey}/{i} and we serve the bytes. A preview
+   * that used the raw upstream url would look right today and break exactly when the real card does
+   * not — which would make it worse than no preview at all.
+   */
+  const { ctx: c } = ctx()
+  const j = await (await handle(card('/jack/status/20'), envWith(fakeResolver().binding), c, deps())).json()
+  for (const m of j.media) {
+    assert.ok(m.url.startsWith('https://mbedfx.app/_media/'), `${m.url} must be ours`)
+    assert.ok(m.kind === 'image' || m.kind === 'video', 'every entry is one or the other')
+  }
+})
+
+test('IT REPORTS THE STRIPE COLOUR, which Discord really does honour', async () => {
+  /**
+   * THIS TEST USED TO ASSERT THE OPPOSITE, and the opposite was wrong. It pinned a `colorHonoured`
+   * flag on the theory that a card with media takes the Mastodon spoof and the spoof carries no
+   * colour — inferred from one reel rendering in Discord's default.
+   *
+   * The spoof was never involved: the head spelled the tag `property="theme-color"`, which Discord
+   * does not read, so it found no colour at all. Established by comparing live heads against the
+   * fixers that DO get coloured stripes, and settled by lgb45 — an fxtwitter fork that ships BOTH
+   * spellings with different values on one head, and renders the name= one. See discord.ts.
+   *
+   * Kept as a test rather than deleted because the field is still worth pinning, and because a
+   * removed assertion leaves no trace of having been wrong.
+   */
+  const { ctx: c } = ctx()
+  const j = await (await handle(card('/jack/status/20'), envWith(fakeResolver().binding), c, deps())).json()
+  assert.equal(typeof j.color, 'string')
+  assert.match(j.color, /^#[0-9a-f]{6}$/i)
+})
+
+test('AN UNROUTABLE TARGET IS A REASON, NOT A CARD', async () => {
+  const { ctx: c } = ctx()
+  for (const [target, reason] of [['/_card?p=/x', 'card'], ['/', 'site']]) {
+    const j = await (await handle(card(target), envWith(fakeResolver().binding), c, deps())).json()
+    assert.equal(j.ok, false)
+    assert.equal(j.reason, reason, `${target} reports what it actually is`)
+  }
+})
+
+test('A TYPED FACEBOOK SHARE IS UNFURLED — the link shown is the real permalink', async () => {
+  /**
+   * REPORTED 2026-08-01: "it's also not unfurling the url as I'd expect". /share/p/{code} routes
+   * straight to a post ref, so prep answered with the share url itself — and with the WRONG LETTER,
+   * because fbCanonical rebuilds every typed share as /share/v/. A reader who pasted a `p` link was
+   * shown a `v` link they never asked for.
+   */
+  const { ctx: c } = ctx()
+  const resolved = 'https://www.facebook.com/100071151613394/posts/1092409469807430/?rdid=junk'
+  const d = deps({ resolveMetaShare: async () => resolved })
+  const j = await (await handle(prep('/share/p/Fixture04X'), envWith(fakeResolver().binding), c, d)).json()
+  assert.equal(j.ok, true)
+  assert.equal(j.canonical, 'https://www.facebook.com/100071151613394/posts/1092409469807430/',
+    'the real permalink, with the tracking stripped')
+  assert.ok(!j.url.includes('/share/'), 'and never the share code the reader pasted')
+})
+
+test('A SHARE THAT WILL NOT RESOLVE STILL ANSWERS — the unfurl is enrichment', async () => {
+  // A resolution miss must cost the page nothing: it still gets a usable link, exactly as before.
+  const { ctx: c } = ctx()
+  const d = deps({ resolveMetaShare: async () => null })
+  const j = await (await handle(prep('/share/p/Fixture04X'), envWith(fakeResolver().binding), c, d)).json()
+  assert.equal(j.ok, true)
+  assert.equal(j.platform, 'fb')
+  assert.ok(j.url, 'a link is still offered')
+})
+
+/* ===================== SHORT LINKS ON THE PAGE'S OWN ENDPOINTS =====================
+ *
+ * REPORTED 2026-08-01: tiktok.com/t/ZTAxTF9aD showed "unresolved" on the fixer page
+ * while the SAME link rendered a correct card in Discord. Both were true, and that is
+ * the bug — the page refused to preview a link that works perfectly when pasted, which
+ * is worse than a broken link because it talks the reader out of a good one.
+ *
+ * These two arms learned to unfurl 'metashare' and never learned 'shortlink'.
+ */
+
+const shortResolved = {
+  kind: 'post',
+  post: { canonical: 'https://www.tiktok.com/@fatboiitit/video/7650584217042144526' },
+}
+
+test('/_prep RESOLVES A SHORT LINK — it must not answer "unresolved" for a link that works', async () => {
+  const { ctx: c } = ctx()
+  const d = deps({ resolveShortlink: async () => shortResolved })
+  const j = await (await handle(prep('/t/ZTAxTF9aD'), envWith(fakeResolver().binding), c, d)).json()
+  assert.equal(j.ok, true, 'the page gets a usable answer')
+  assert.equal(j.platform, 'tt')
+  assert.equal(j.canonical, 'https://www.tiktok.com/@fatboiitit/video/7650584217042144526')
+  assert.ok(!j.url.includes('/t/'), 'and the share code is gone from what it shows')
+})
+
+test('/_card RESOLVES A SHORT LINK, so the preview draws the real post', async () => {
+  const { ctx: c } = ctx()
+  const d = deps({ resolveShortlink: async () => shortResolved })
+  const j = await (await handle(card('/t/ZTAxTF9aD'), envWith(fakeResolver().binding), c, d)).json()
+  assert.equal(j.ok, true)
+  assert.equal(j.platform, 'tt')
+})
+
+test('A SHORT LINK THAT WILL NOT RESOLVE DEGRADES, it does not throw', async () => {
+  // A miss must leave the answer exactly as it was before this path existed.
+  const { ctx: c } = ctx()
+  for (const stub of [
+    async () => ({ kind: 'unresolved' }),
+    async () => null,
+    async () => { throw new TypeError('upstream blew up') },
+  ]) {
+    const j = await (await handle(prep('/t/ZTAxTF9aD'), envWith(fakeResolver().binding), c, deps({ resolveShortlink: stub }))).json()
+    assert.equal(j.ok, false)
+    assert.equal(j.reason, 'shortlink', 'honest about what it could not do')
+  }
+})
+
+test('/_card SENDS THE RENDERER\'S OWN STAT LINE, so the preview cannot drift from the card', async () => {
+  /**
+   * REPORTED 2026-08-01 with a side-by-side screenshot. The real card reads
+   * "❤️ 204.5K  💬 1.3K  🔁 69.2K"; the preview read "❤️ 204.5K  🔁 69.2K  💬 1.3K". The page had
+   * invented its own ORDER, and its own ABBREVIATION — toFixed rounds, abbrev truncates, so 999,950
+   * renders "1000K" one way and "999.9K" the other.
+   *
+   * One mistake, twice: a preview that re-implements a renderer drifts from it. statParts is now the
+   * single source, and this asserts the endpoint actually sends it rather than the raw numbers.
+   */
+  const { ctx: c } = ctx()
+  const j = await (await handle(card('/jack/status/20'), envWith(fakeResolver().binding), c, deps())).json()
+  assert.ok(Array.isArray(j.stats), 'pre-formatted parts, not counts for the page to re-assemble')
+  if (j.stats.length) {
+    // The order is the renderer's: likes, then replies, then reposts.
+    const emoji = j.stats.map(x => Array.from(x)[0])
+    const rank = { '❤': 0, '💬': 1, '🔁': 2 }
+    const seen = emoji.map(e => rank[e]).filter(n => n !== undefined)
+    assert.deepEqual(seen, [...seen].sort((a, b) => a - b), 'likes, replies, reposts — the card order')
+  }
+})
+
+test('/_card CARRIES THE QUOTED POST — a quote-tweet previewed as a different card without it', async () => {
+  /**
+   * REPORTED 2026-08-01 with a side-by-side. Discord drew "Quoting <name> (@handle)" and the quoted
+   * text as an indented block; the preview showed the outer post alone. A quote-tweet therefore
+   * previewed as a substantially emptier card than the one that would actually be posted — which is
+   * the one thing a preview must never do.
+   *
+   * The byline is sent PRE-FORMATTED, by the same byline() the card's own quote header uses, so the
+   * two surfaces cannot disagree about how an author is written. That drift is exactly what produced
+   * the wrong stat order in the same report.
+   */
+  const { ctx: c } = ctx()
+  const j = await (await handle(card('/jack/status/20'), envWith(fakeResolver().binding), c, deps())).json()
+  assert.ok('quote' in j, 'the field is always present, null when there is no quote')
+  if (j.quote) {
+    assert.equal(typeof j.quote.byline, 'string')
+    assert.equal(typeof j.quote.text, 'string')
+    assert.ok(!/<[a-z]/i.test(j.quote.byline), 'pre-formatted text, never markup for the page to trust')
+  }
+})

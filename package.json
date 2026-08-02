@@ -1,0 +1,24 @@
+{
+  "name": "mbedfx",
+  "version": "1.0.0",
+  "license": "MIT",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev",
+    "// deploy": "REFUSES ON PURPOSE. This worker has exactly ONE deployer: Cloudflare Workers Builds, connected to the repo, watching main — merging IS the deploy. A second deployer means two systems racing on the container image and on which version ends up live, and the loser silently overwrites the winner (see .github/workflows/ci.yml). It has already cost this project once: three consecutive Workers Builds failures on main/phase-2/staging while the live worker sat on a hand-uploaded version, which is the nastier half — a hand deploy does not just race, it makes prod look healthy while the pipeline is dead. SAFE TO SHIP AS A REFUSAL, verified 2026-07-31 against the real build config: Cloudflare's own deploy command is `npx wrangler deploy`, invoked DIRECTLY and not through this script, so nothing here can reach the pipeline. NOTE the asymmetry with the *.uwutoowo.com tools, where `wrangler deploy` IS the mechanism — the habit from those repos is what this stops.",
+    "deploy": "echo '\\nRefused. mbedfx deploys via Cloudflare Workers Builds on merge to main — merging is the deploy.\\nTwo deployers race and the loser silently overwrites the winner.\\n\\n  validate locally:  npx wrangler deploy --dry-run\\n  see what shipped:  npx wrangler deployments list\\n' && exit 1",
+    "typecheck": "tsc --noEmit",
+    "test": "node --test",
+    "// build": "THE CI GATE, and it is not a no-op despite a Worker needing no build step. Cloudflare Workers Builds runs `npm run build` before its deploy command; with no such script the build FAILED and nothing shipped (measured 2026-07-26: three consecutive failed builds on main, phase-2 and staging, all 'Missing script: build', while the live worker sat on a hand-uploaded version). Pointing it at the suite turns that required-and-previously-broken step into the gate that was lost when deploys moved off GitHub Actions: a red suite or a type error now fails the build, so it never reaches deploy. This matters more here than on a typical worker because Discord CACHES the og:video url we serve, keyed by a url that never changes — a bad deploy outlives its own fix.",
+    "build": "npm test && tsc --noEmit"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^5",
+    "typescript": "^5",
+    "wrangler": "^4"
+  },
+  "dependencies": {
+    "@cloudflare/containers": "^0.3.7"
+  }
+}

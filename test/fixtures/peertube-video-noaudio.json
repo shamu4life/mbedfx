@@ -1,0 +1,373 @@
+{
+  "id": 56914,
+  "uuid": "3cefaf00-52de-4189-bf65-2e50e8705fd3",
+  "shortUUID": "8wqZmey8w3MAWcbK5kSTMV",
+  "url": "https://video.blender.org/videos/watch/3cefaf00-52de-4189-bf65-2e50e8705fd3",
+  "name": "TEXTURES made simple? Layers & painting galore - Blender Tomorrow",
+  "category": {
+    "id": null,
+    "label": "Unknown"
+  },
+  "licence": {
+    "id": null,
+    "label": "Unknown"
+  },
+  "language": {
+    "id": null,
+    "label": "Unknown"
+  },
+  "privacy": {
+    "id": 1,
+    "label": "Public"
+  },
+  "nsfw": false,
+  "nsfwFlags": 0,
+  "nsfwSummary": null,
+  "truncatedDescription": "Design presentation of the Layered Textures project.\r\nFor more information: https://projects.blender.org/blender/blender/issues/158285\r\nFollow Blender Development: https://code.blender.org",
+  "description": "Design presentation of the Layered Textures project.\r\nFor more information: https://projects.blender.org/blender/blender/issues/158285\r\nFollow Blender Development: https://code.blender.org",
+  "isLocal": true,
+  "duration": 1467,
+  "aspectRatio": 1.7778,
+  "views": 46,
+  "viewers": 0,
+  "downloads": 25,
+  "likes": 5,
+  "dislikes": 0,
+  "thumbnailPath": "/lazy-static/thumbnails/0f35cee0-5367-4c02-ab03-8232be12f6c7.png",
+  "previewPath": "/lazy-static/thumbnails/07fb61d4-1572-4f83-a638-30e11e91a9a1.png",
+  "thumbnails": [
+    {
+      "height": 157,
+      "width": 280,
+      "aspectRatio": "16:9",
+      "fileUrl": "https://video.blender.org/lazy-static/thumbnails/0f35cee0-5367-4c02-ab03-8232be12f6c7.png"
+    },
+    {
+      "height": 480,
+      "width": 850,
+      "aspectRatio": "16:9",
+      "fileUrl": "https://video.blender.org/lazy-static/thumbnails/c933d646-49be-4beb-90e0-3014b6499be6.png"
+    },
+    {
+      "height": 720,
+      "width": 1280,
+      "aspectRatio": "16:9",
+      "fileUrl": "https://video.blender.org/lazy-static/thumbnails/bc95326f-b666-4e49-9df9-1f176faa333b.png"
+    },
+    {
+      "height": 1400,
+      "width": 1400,
+      "aspectRatio": "1:1",
+      "fileUrl": "https://video.blender.org/lazy-static/thumbnails/b13d9dc5-0cd3-4344-904f-b9f8d46c167a.png"
+    },
+    {
+      "height": 1080,
+      "width": 1920,
+      "aspectRatio": "16:9",
+      "fileUrl": "https://video.blender.org/lazy-static/thumbnails/07fb61d4-1572-4f83-a638-30e11e91a9a1.png"
+    }
+  ],
+  "embedPath": "/videos/embed/8wqZmey8w3MAWcbK5kSTMV",
+  "createdAt": "2026-07-28T08:21:36.171Z",
+  "updatedAt": "2026-07-30T12:40:34.360Z",
+  "publishedAt": "2026-07-28T10:04:56.491Z",
+  "originallyPublishedAt": null,
+  "isLive": false,
+  "account": {
+    "url": "https://video.blender.org/accounts/blender",
+    "name": "blender",
+    "host": "video.blender.org",
+    "avatars": [
+      {
+        "height": 48,
+        "width": 48,
+        "path": "/lazy-static/avatars/d81f71c9-cdd8-4c61-a0dd-75a9dfad8dc1.png",
+        "fileUrl": "https://video.blender.org/lazy-static/avatars/d81f71c9-cdd8-4c61-a0dd-75a9dfad8dc1.png",
+        "createdAt": "2026-05-24T11:32:01.734Z",
+        "updatedAt": "2026-05-24T11:32:01.734Z"
+      },
+      {
+        "height": 120,
+        "width": 120,
+        "path": "/lazy-static/avatars/07965da7-5723-40d6-9a61-c034d6ebeabd.png",
+        "fileUrl": "https://video.blender.org/lazy-static/avatars/07965da7-5723-40d6-9a61-c034d6ebeabd.png",
+        "createdAt": "2026-05-24T11:32:01.730Z",
+        "updatedAt": "2026-05-24T11:32:01.730Z"
+      },
+      {
+        "height": 600,
+        "width": 600,
+        "path": "/lazy-static/avatars/1485e2e7-71d0-4e6a-b56d-bf46b2ec40de.png",
+        "fileUrl": "https://video.blender.org/lazy-static/avatars/1485e2e7-71d0-4e6a-b56d-bf46b2ec40de.png",
+        "createdAt": "2026-05-24T11:32:01.724Z",
+        "updatedAt": "2026-05-24T11:32:01.724Z"
+      },
+      {
+        "height": 1500,
+        "width": 1500,
+        "path": "/lazy-static/avatars/b4d1c81e-bded-45e2-a569-413d391cdd82.png",
+        "fileUrl": "https://video.blender.org/lazy-static/avatars/b4d1c81e-bded-45e2-a569-413d391cdd82.png",
+        "createdAt": "2026-05-24T11:32:01.719Z",
+        "updatedAt": "2026-05-24T11:32:01.719Z"
+      }
+    ],
+    "id": 6,
+    "hostRedundancyAllowed": false,
+    "followingCount": 1,
+    "followersCount": 6325,
+    "createdAt": "2018-10-24T14:55:59.623Z",
+    "displayName": "Blender",
+    "description": "Blender is the free and open source 3D creation suite. \n\nIt supports the entirety of the 3D pipeline—modeling, rigging, animation, simulation, rendering, compositing and motion tracking, even video editing and game creation.  \n\nBlender is well suited to individuals and small studios who benefit from its unified pipeline and responsive development process.",
+    "updatedAt": "2022-12-19T21:05:12.414Z",
+    "userId": 4
+  },
+  "channel": {
+    "url": "https://video.blender.org/video-channels/blenderdevelopers",
+    "name": "blenderdevelopers",
+    "host": "video.blender.org",
+    "avatars": [
+      {
+        "height": 48,
+        "width": 48,
+        "path": "/lazy-static/avatars/05e460d8-4e66-4cc1-a542-c55b00347c48.jpg",
+        "fileUrl": "https://video.blender.org/lazy-static/avatars/05e460d8-4e66-4cc1-a542-c55b00347c48.jpg",
+        "createdAt": "2026-05-25T13:11:37.112Z",
+        "updatedAt": "2026-05-25T13:11:37.112Z"
+      },
+      {
+        "height": 120,
+        "width": 120,
+        "path": "/lazy-static/avatars/04060492-3cfc-45a7-bfd9-968aeb3bfb1b.jpg",
+        "fileUrl": "https://video.blender.org/lazy-static/avatars/04060492-3cfc-45a7-bfd9-968aeb3bfb1b.jpg",
+        "createdAt": "2026-05-25T13:11:37.087Z",
+        "updatedAt": "2026-05-25T13:11:37.087Z"
+      },
+      {
+        "height": 600,
+        "width": 600,
+        "path": "/lazy-static/avatars/14e77cc2-31be-41de-a4f5-9dc7faa27e17.jpg",
+        "fileUrl": "https://video.blender.org/lazy-static/avatars/14e77cc2-31be-41de-a4f5-9dc7faa27e17.jpg",
+        "createdAt": "2026-05-25T13:11:37.033Z",
+        "updatedAt": "2026-05-25T13:11:37.033Z"
+      },
+      {
+        "height": 1500,
+        "width": 1500,
+        "path": "/lazy-static/avatars/3b2e46b8-db9a-4c34-ad2e-f0c3c2ec6a32.jpg",
+        "fileUrl": "https://video.blender.org/lazy-static/avatars/3b2e46b8-db9a-4c34-ad2e-f0c3c2ec6a32.jpg",
+        "createdAt": "2026-05-25T13:11:37.011Z",
+        "updatedAt": "2026-05-25T13:11:37.011Z"
+      }
+    ],
+    "id": 2737,
+    "hostRedundancyAllowed": false,
+    "followingCount": 0,
+    "followersCount": 796,
+    "createdAt": "2019-01-12T04:04:40.740Z",
+    "banners": [],
+    "displayName": "Blender Developers",
+    "description": "Official account for development news of Blender, the Free and Open Source 3D creation suite. ",
+    "support": "Join the [Blender Development Fund](https://fund.blender.org/).",
+    "isLocal": true,
+    "updatedAt": "2026-05-25T13:25:21.906Z",
+    "ownerAccount": {
+      "url": "https://video.blender.org/accounts/blender",
+      "name": "blender",
+      "host": "video.blender.org",
+      "avatars": [
+        {
+          "height": 48,
+          "width": 48,
+          "path": "/lazy-static/avatars/d81f71c9-cdd8-4c61-a0dd-75a9dfad8dc1.png",
+          "fileUrl": "https://video.blender.org/lazy-static/avatars/d81f71c9-cdd8-4c61-a0dd-75a9dfad8dc1.png",
+          "createdAt": "2026-05-24T11:32:01.734Z",
+          "updatedAt": "2026-05-24T11:32:01.734Z"
+        },
+        {
+          "height": 120,
+          "width": 120,
+          "path": "/lazy-static/avatars/07965da7-5723-40d6-9a61-c034d6ebeabd.png",
+          "fileUrl": "https://video.blender.org/lazy-static/avatars/07965da7-5723-40d6-9a61-c034d6ebeabd.png",
+          "createdAt": "2026-05-24T11:32:01.730Z",
+          "updatedAt": "2026-05-24T11:32:01.730Z"
+        },
+        {
+          "height": 600,
+          "width": 600,
+          "path": "/lazy-static/avatars/1485e2e7-71d0-4e6a-b56d-bf46b2ec40de.png",
+          "fileUrl": "https://video.blender.org/lazy-static/avatars/1485e2e7-71d0-4e6a-b56d-bf46b2ec40de.png",
+          "createdAt": "2026-05-24T11:32:01.724Z",
+          "updatedAt": "2026-05-24T11:32:01.724Z"
+        },
+        {
+          "height": 1500,
+          "width": 1500,
+          "path": "/lazy-static/avatars/b4d1c81e-bded-45e2-a569-413d391cdd82.png",
+          "fileUrl": "https://video.blender.org/lazy-static/avatars/b4d1c81e-bded-45e2-a569-413d391cdd82.png",
+          "createdAt": "2026-05-24T11:32:01.719Z",
+          "updatedAt": "2026-05-24T11:32:01.719Z"
+        }
+      ],
+      "id": 6,
+      "hostRedundancyAllowed": false,
+      "followingCount": 1,
+      "followersCount": 6325,
+      "createdAt": "2018-10-24T14:55:59.623Z",
+      "displayName": "Blender",
+      "description": "Blender is the free and open source 3D creation suite. \n\nIt supports the entirety of the 3D pipeline—modeling, rigging, animation, simulation, rendering, compositing and motion tracking, even video editing and game creation.  \n\nBlender is well suited to individuals and small studios who benefit from its unified pipeline and responsive development process.",
+      "updatedAt": "2022-12-19T21:05:12.414Z",
+      "userId": 4
+    }
+  },
+  "comments": 1,
+  "blacklisted": false,
+  "blacklistedReason": null,
+  "streamingPlaylists": [
+    {
+      "id": 24745,
+      "type": 1,
+      "playlistUrl": "https://video.blender.org/object-storage/streaming_playlists/hls/3cefaf00-52de-4189-bf65-2e50e8705fd3/f1a237c4-43a0-4001-bf80-5d69e770f8c3-master.m3u8",
+      "segmentsSha256Url": "https://video.blender.org/object-storage/streaming_playlists/hls/3cefaf00-52de-4189-bf65-2e50e8705fd3/86b68b66-d3e9-4421-818e-618080148ea1-segments-sha256.json",
+      "redundancies": [
+        {
+          "baseUrl": "https://crystalstream.mk16.de/static/redundancy/hls/3cefaf00-52de-4189-bf65-2e50e8705fd3"
+        },
+        {
+          "baseUrl": "https://irrsinn.video/static/redundancy/hls/3cefaf00-52de-4189-bf65-2e50e8705fd3"
+        }
+      ],
+      "files": [
+        {
+          "id": 674162,
+          "resolution": {
+            "id": 1080,
+            "label": "1080p"
+          },
+          "width": 1920,
+          "height": 1080,
+          "magnetUri": "magnet:?xs=https%3A%2F%2Fvideo.blender.org%2Flazy-static%2Ftorrents%2F4d0d2c87-ef7a-47e6-9f9d-2a680473251a-1080-hls.torrent&xt=urn:btih:6d71d8fdffe361641de23a0db3205b8559d3f627&dn=TEXTURES+made+simple%3F+Layers+%26+painting+galore+-+Blender+Tomorrow&tr=https%3A%2F%2Fvideo.blender.org%2Ftracker%2Fannounce&tr=wss%3A%2F%2Fvideo.blender.org%3A443%2Ftracker%2Fsocket&ws=https%3A%2F%2Fvideo.blender.org%2Fobject-storage%2Fstreaming_playlists%2Fhls%2F3cefaf00-52de-4189-bf65-2e50e8705fd3%2F6c0af038-bff2-4a6c-959d-61ccbc3614d5-1080-fragmented.mp4",
+          "size": 178750087,
+          "fps": 30,
+          "torrentUrl": "https://video.blender.org/lazy-static/torrents/4d0d2c87-ef7a-47e6-9f9d-2a680473251a-1080-hls.torrent",
+          "torrentDownloadUrl": "https://video.blender.org/download/torrents/4d0d2c87-ef7a-47e6-9f9d-2a680473251a-1080-hls.torrent",
+          "fileUrl": "https://video.blender.org/object-storage/streaming_playlists/hls/3cefaf00-52de-4189-bf65-2e50e8705fd3/6c0af038-bff2-4a6c-959d-61ccbc3614d5-1080-fragmented.mp4",
+          "fileDownloadUrl": "https://video.blender.org/download/streaming-playlists/hls/videos/3cefaf00-52de-4189-bf65-2e50e8705fd3-1080-fragmented.mp4",
+          "metadataUrl": "https://video.blender.org/api/v1/videos/3cefaf00-52de-4189-bf65-2e50e8705fd3/metadata/674162",
+          "hasAudio": true,
+          "hasVideo": true,
+          "playlistUrl": "https://video.blender.org/object-storage/streaming_playlists/hls/3cefaf00-52de-4189-bf65-2e50e8705fd3/6c0af038-bff2-4a6c-959d-61ccbc3614d5-1080.m3u8",
+          "storage": 1
+        },
+        {
+          "id": 674165,
+          "resolution": {
+            "id": 480,
+            "label": "480p"
+          },
+          "width": 854,
+          "height": 480,
+          "magnetUri": "magnet:?xs=https%3A%2F%2Fvideo.blender.org%2Flazy-static%2Ftorrents%2Ffe45e3e6-2903-4f64-9c58-c1f700692109-480-hls.torrent&xt=urn:btih:233bd231e81ddcfe4de96829b41975f8e8568f13&dn=TEXTURES+made+simple%3F+Layers+%26+painting+galore+-+Blender+Tomorrow&tr=https%3A%2F%2Fvideo.blender.org%2Ftracker%2Fannounce&tr=wss%3A%2F%2Fvideo.blender.org%3A443%2Ftracker%2Fsocket&ws=https%3A%2F%2Fvideo.blender.org%2Fobject-storage%2Fstreaming_playlists%2Fhls%2F3cefaf00-52de-4189-bf65-2e50e8705fd3%2F89b7a432-595a-40e2-aa90-9bcc27602b08-480-fragmented.mp4",
+          "size": 73019046,
+          "fps": 30,
+          "torrentUrl": "https://video.blender.org/lazy-static/torrents/fe45e3e6-2903-4f64-9c58-c1f700692109-480-hls.torrent",
+          "torrentDownloadUrl": "https://video.blender.org/download/torrents/fe45e3e6-2903-4f64-9c58-c1f700692109-480-hls.torrent",
+          "fileUrl": "https://video.blender.org/object-storage/streaming_playlists/hls/3cefaf00-52de-4189-bf65-2e50e8705fd3/89b7a432-595a-40e2-aa90-9bcc27602b08-480-fragmented.mp4",
+          "fileDownloadUrl": "https://video.blender.org/download/streaming-playlists/hls/videos/3cefaf00-52de-4189-bf65-2e50e8705fd3-480-fragmented.mp4",
+          "metadataUrl": "https://video.blender.org/api/v1/videos/3cefaf00-52de-4189-bf65-2e50e8705fd3/metadata/674165",
+          "hasAudio": true,
+          "hasVideo": true,
+          "playlistUrl": "https://video.blender.org/object-storage/streaming_playlists/hls/3cefaf00-52de-4189-bf65-2e50e8705fd3/89b7a432-595a-40e2-aa90-9bcc27602b08-480.m3u8",
+          "storage": 1
+        }
+      ]
+    }
+  ],
+  "files": [
+    {
+      "id": 674161,
+      "resolution": {
+        "id": 1080,
+        "label": "1080p"
+      },
+      "width": 1920,
+      "height": 1080,
+      "magnetUri": "magnet:?xs=https%3A%2F%2Fvideo.blender.org%2Flazy-static%2Ftorrents%2Faf39c00b-d95d-4074-948e-42535a592e6b-1080.torrent&xt=urn:btih:bd2ab1c7b29b6e4a8aa173219c006b5c432abc81&dn=TEXTURES+made+simple%3F+Layers+%26+painting+galore+-+Blender+Tomorrow&tr=https%3A%2F%2Fvideo.blender.org%2Ftracker%2Fannounce&tr=wss%3A%2F%2Fvideo.blender.org%3A443%2Ftracker%2Fsocket&ws=https%3A%2F%2Fvideo.blender.org%2Fobject-storage%2Fweb_videos%2F8171e103-e459-49c9-830a-acb207cde812-1080.mp4",
+      "size": 179458341,
+      "fps": 30,
+      "torrentUrl": "https://video.blender.org/lazy-static/torrents/af39c00b-d95d-4074-948e-42535a592e6b-1080.torrent",
+      "torrentDownloadUrl": "https://video.blender.org/download/torrents/af39c00b-d95d-4074-948e-42535a592e6b-1080.torrent",
+      "fileUrl": "https://video.blender.org/object-storage/web_videos/8171e103-e459-49c9-830a-acb207cde812-1080.mp4",
+      "fileDownloadUrl": "https://video.blender.org/download/web-videos/3cefaf00-52de-4189-bf65-2e50e8705fd3-1080.mp4",
+      "metadataUrl": "https://video.blender.org/api/v1/videos/3cefaf00-52de-4189-bf65-2e50e8705fd3/metadata/674161",
+      "hasAudio": true,
+      "hasVideo": true,
+      "storage": 1
+    },
+    {
+      "id": 674163,
+      "resolution": {
+        "id": 480,
+        "label": "480p"
+      },
+      "width": 854,
+      "height": 480,
+      "magnetUri": "magnet:?xs=https%3A%2F%2Fvideo.blender.org%2Flazy-static%2Ftorrents%2F120efa1f-c92d-4c91-8c46-3793e7e9ccd1-480.torrent&xt=urn:btih:3ca908ba1a56d9f716d236a8042411361b14bb88&dn=TEXTURES+made+simple%3F+Layers+%26+painting+galore+-+Blender+Tomorrow&tr=https%3A%2F%2Fvideo.blender.org%2Ftracker%2Fannounce&tr=wss%3A%2F%2Fvideo.blender.org%3A443%2Ftracker%2Fsocket&ws=https%3A%2F%2Fvideo.blender.org%2Fobject-storage%2Fweb_videos%2F41056ea1-7ae8-4398-92f7-90d56eb0e5df-480.mp4",
+      "size": 73605240,
+      "fps": 30,
+      "torrentUrl": "https://video.blender.org/lazy-static/torrents/120efa1f-c92d-4c91-8c46-3793e7e9ccd1-480.torrent",
+      "torrentDownloadUrl": "https://video.blender.org/download/torrents/120efa1f-c92d-4c91-8c46-3793e7e9ccd1-480.torrent",
+      "fileUrl": "https://video.blender.org/object-storage/web_videos/41056ea1-7ae8-4398-92f7-90d56eb0e5df-480.mp4",
+      "fileDownloadUrl": "https://video.blender.org/download/web-videos/3cefaf00-52de-4189-bf65-2e50e8705fd3-480.mp4",
+      "metadataUrl": "https://video.blender.org/api/v1/videos/3cefaf00-52de-4189-bf65-2e50e8705fd3/metadata/674163",
+      "hasAudio": true,
+      "hasVideo": true,
+      "storage": 1
+    },
+    {
+      "id": 674164,
+      "resolution": {
+        "id": 0,
+        "label": "Audio only"
+      },
+      "width": 0,
+      "height": 0,
+      "magnetUri": "magnet:?xs=https%3A%2F%2Fvideo.blender.org%2Flazy-static%2Ftorrents%2F11351990-3cfd-48ca-b550-a9231c349e61-0.torrent&xt=urn:btih:77158eb24b588d81a050e484570c11cf1aa2a988&dn=TEXTURES+made+simple%3F+Layers+%26+painting+galore+-+Blender+Tomorrow&tr=https%3A%2F%2Fvideo.blender.org%2Ftracker%2Fannounce&tr=wss%3A%2F%2Fvideo.blender.org%3A443%2Ftracker%2Fsocket&ws=https%3A%2F%2Fvideo.blender.org%2Fobject-storage%2Fweb_videos%2Fdb792ff9-997a-4195-96ed-42395e222668-0.mp4",
+      "size": 23724431,
+      "fps": 0,
+      "torrentUrl": "https://video.blender.org/lazy-static/torrents/11351990-3cfd-48ca-b550-a9231c349e61-0.torrent",
+      "torrentDownloadUrl": "https://video.blender.org/download/torrents/11351990-3cfd-48ca-b550-a9231c349e61-0.torrent",
+      "fileUrl": "https://video.blender.org/object-storage/web_videos/db792ff9-997a-4195-96ed-42395e222668-0.mp4",
+      "fileDownloadUrl": "https://video.blender.org/download/web-videos/3cefaf00-52de-4189-bf65-2e50e8705fd3-0.mp4",
+      "metadataUrl": "https://video.blender.org/api/v1/videos/3cefaf00-52de-4189-bf65-2e50e8705fd3/metadata/674164",
+      "hasAudio": true,
+      "hasVideo": false,
+      "storage": 1
+    }
+  ],
+  "liveSchedules": [],
+  "support": "Join the [Blender Development Fund](https://fund.blender.org/).",
+  "tags": [
+    "BlenderTomorrow",
+    "b3d",
+    "devfund"
+  ],
+  "commentsPolicy": {
+    "id": 1,
+    "label": "Enabled"
+  },
+  "downloadEnabled": true,
+  "waitTranscoding": true,
+  "inputFileUpdatedAt": null,
+  "state": {
+    "id": 1,
+    "label": "Published"
+  },
+  "trackerUrls": [
+    "https://video.blender.org/tracker/announce",
+    "wss://video.blender.org:443/tracker/socket"
+  ],
+  "embedPrivacyPolicy": {
+    "id": 1,
+    "label": "All allowed"
+  }
+}

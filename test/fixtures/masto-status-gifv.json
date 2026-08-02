@@ -1,0 +1,124 @@
+{
+  "id": "116995940720458991",
+  "created_at": "2026-07-28T05:26:18.000Z",
+  "in_reply_to_id": "116995938217984325",
+  "in_reply_to_account_id": "191777",
+  "sensitive": false,
+  "spoiler_text": "",
+  "visibility": "public",
+  "language": "en",
+  "uri": "https://aus.social/users/jimbob/statuses/116995940590865870",
+  "url": "https://aus.social/@jimbob/116995940590865870",
+  "replies_count": 0,
+  "reblogs_count": 0,
+  "favourites_count": 0,
+  "quotes_count": 0,
+  "edited_at": null,
+  "content": "",
+  "reblog": null,
+  "account": {
+    "id": "191777",
+    "username": "jimbob",
+    "acct": "jimbob@aus.social",
+    "display_name": "ahistorical immaterialist",
+    "locked": false,
+    "bot": false,
+    "discoverable": true,
+    "indexable": false,
+    "group": false,
+    "created_at": "2020-07-21T00:00:00.000Z",
+    "note": "<p>In unceded lutruwita (ex. croweater) somewhere north of nipaluna. Angry scientist (fire, forest and spatial ecology, gis and <a href=\"https://aus.social/tags/rstats\" class=\"mention hashtag\" rel=\"nofollow noopener\" target=\"_blank\">#<span>rstats</span></a>). Weird music maker, proud NTEU</p><p>Matrix: @ozjimbob:matrix.org</p><p>Signal: <a href=\"https://signal.me/#eu/A_wLsxe2etdSXKqgCTZxrnYCWpbIz5BPNtFAOIQsupLaAGFlG3BPv6YYncNWR5vj\" rel=\"nofollow noopener\" translate=\"no\" target=\"_blank\"><span class=\"invisible\">https://</span><span class=\"ellipsis\">signal.me/#eu/A_wLsxe2etdSXKqg</span><span class=\"invisible\">CTZxrnYCWpbIz5BPNtFAOIQsupLaAGFlG3BPv6YYncNWR5vj</span></a></p><p>Simplex: <a href=\"https://smp18.simplex.im/a#P539EhaH1v6kdTg-oYK78PcNUQOvUj0mFQ1zV1UkQXA\" rel=\"nofollow noopener\" translate=\"no\" target=\"_blank\"><span class=\"invisible\">https://</span><span class=\"ellipsis\">smp18.simplex.im/a#P539EhaH1v6</span><span class=\"invisible\">kdTg-oYK78PcNUQOvUj0mFQ1zV1UkQXA</span></a></p>",
+    "url": "https://aus.social/@jimbob",
+    "uri": "https://aus.social/users/jimbob",
+    "avatar": "https://media.mstdn.social/cache/accounts/avatars/000/191/777/original/35560b8995565686.png",
+    "avatar_static": "https://media.mstdn.social/cache/accounts/avatars/000/191/777/original/35560b8995565686.png",
+    "avatar_description": "",
+    "header": "https://media.mstdn.social/cache/accounts/headers/000/191/777/original/b4785b69caa6e0e7.png",
+    "header_static": "https://media.mstdn.social/cache/accounts/headers/000/191/777/original/b4785b69caa6e0e7.png",
+    "header_description": "",
+    "followers_count": 2249,
+    "following_count": 969,
+    "statuses_count": 16671,
+    "last_status_at": "2026-07-28",
+    "hide_collections": false,
+    "show_media": true,
+    "show_media_replies": true,
+    "show_featured": true,
+    "feature_approval": {
+      "automatic": [
+        "public"
+      ],
+      "manual": [],
+      "current_user": "denied"
+    },
+    "emojis": [],
+    "fields": [
+      {
+        "name": "pronouns",
+        "value": "he/him",
+        "verified_at": null
+      },
+      {
+        "name": "location",
+        "value": "Southern Tasmania",
+        "verified_at": null
+      },
+      {
+        "name": "weblog",
+        "value": "<a href=\"https://atriplex.info/blog\" rel=\"nofollow noopener\" translate=\"no\" target=\"_blank\"><span class=\"invisible\">https://</span><span class=\"\">atriplex.info/blog</span><span class=\"invisible\"></span></a>",
+        "verified_at": null
+      },
+      {
+        "name": "music",
+        "value": "<a href=\"https://milford.bandcamp.com\" rel=\"nofollow noopener\" translate=\"no\" target=\"_blank\"><span class=\"invisible\">https://</span><span class=\"\">milford.bandcamp.com</span><span class=\"invisible\"></span></a>",
+        "verified_at": null
+      }
+    ]
+  },
+  "media_attachments": [
+    {
+      "id": "116995940691467417",
+      "type": "gifv",
+      "url": "https://media.mstdn.social/cache/media_attachments/files/116/995/940/691/467/417/original/a569881a7878d3bd.mp4",
+      "preview_url": "https://media.mstdn.social/cache/media_attachments/files/116/995/940/691/467/417/small/a569881a7878d3bd.png",
+      "remote_url": "https://mediacdn.aus.social/media_attachments/files/116/995/939/772/490/085/original/8ff0c26cb35966ce.mp4",
+      "preview_remote_url": null,
+      "text_url": null,
+      "meta": {
+        "focus": {
+          "x": 0.0,
+          "y": 0.0
+        },
+        "original": {
+          "width": 66,
+          "height": 66,
+          "frame_rate": "10/1",
+          "duration": 1.2,
+          "bitrate": 20740
+        },
+        "small": {
+          "width": 66,
+          "height": 66,
+          "size": "66x66",
+          "aspect": 1.0
+        }
+      },
+      "description": "NOAA loading animation",
+      "blurhash": "UoNw=;SM~oofs+azkDj@_2juMys:XTfjjEfR"
+    }
+  ],
+  "mentions": [],
+  "tags": [],
+  "emojis": [],
+  "tagged_collections": [],
+  "quote": null,
+  "card": null,
+  "poll": null,
+  "quote_approval": {
+    "automatic": [
+      "public"
+    ],
+    "manual": [],
+    "current_user": "denied"
+  }
+}

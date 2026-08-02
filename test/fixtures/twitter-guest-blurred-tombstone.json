@@ -1,0 +1,132 @@
+{
+ "data": {
+  "tweetResult": {
+   "result": {
+    "__typename": "TweetTombstone",
+    "tombstone": {
+     "__typename": "BlurredMediaTombstone",
+     "blurred_image_url": "https://pbs.twimg.com/media/GxJIrSUagAAK-ZP?format=jpg&name=240x240",
+     "text": {
+      "entities": [
+       {
+        "fromIndex": 134,
+        "ref": {
+         "type": "TimelineUrl",
+         "url": "https://twitter.com",
+         "urlType": "ExternalUrl"
+        },
+        "toIndex": 140
+       },
+       {
+        "fromIndex": 147,
+        "ref": {
+         "type": "TimelineUrl",
+         "url": "https://help.twitter.com/rules-and-policies/notices-on-twitter",
+         "urlType": "ExternalUrl"
+        },
+        "toIndex": 157
+       }
+      ],
+      "rtl": false,
+      "text": "Age-restricted adult content. This content might not be appropriate for people under 18 years old. To view this media, you’ll need to log in to X. Learn more"
+     },
+     "user_results": {
+      "result": {
+       "__typename": "User",
+       "affiliates_highlighted_label": {},
+       "avatar": {
+        "image_url": "https://pbs.twimg.com/profile_images/1975002535053201408/cU8UYDAA_normal.jpg"
+       },
+       "core": {
+        "created_at": "Tue Jan 25 20:19:15 +0000 2022",
+        "name": "3DrakaiNa 👻 (G.A.N.G)",
+        "screen_name": "3DrakaiNa"
+       },
+       "dm_permissions": {
+        "can_dm": false
+       },
+       "follow_request_sent": false,
+       "has_graduated_access": true,
+       "id": "VXNlcjoxNDg2MDcxMTU2OTEwMzA1Mjgx",
+       "is_blue_verified": true,
+       "legacy": {
+        "default_profile": true,
+        "default_profile_image": false,
+        "description": "Good vibes\n\nAnti Flock/Axom\n\nMemes\n\nAnti-war\n\nCap & ball enjoyer\n\nFreelance engineer\n\n3d printing\n\nPick-me\n\nLunatic with a banjo \n\n3D2A\n\n🌛❤️🌜",
+        "entities": {
+         "description": {},
+         "url": {
+          "urls": [
+           {
+            "display_url": "linktr.ee/3drakaina",
+            "expanded_url": "https://linktr.ee/3drakaina",
+            "indices": [
+             0,
+             23
+            ],
+            "url": "https://t.co/Txnr99FBcO"
+           }
+          ]
+         }
+        },
+        "fast_followers_count": 0,
+        "favourites_count": 243995,
+        "follow_request_sent": false,
+        "followers_count": 23116,
+        "friends_count": 5180,
+        "has_custom_timelines": true,
+        "is_translator": false,
+        "listed_count": 39,
+        "media_count": 36281,
+        "needs_phone_verification": false,
+        "normal_followers_count": 23116,
+        "notifications": false,
+        "pinned_tweet_ids_str": [
+         "2008304394085773600"
+        ],
+        "possibly_sensitive": false,
+        "profile_banner_url": "https://pbs.twimg.com/profile_banners/1486071156910305281/1757110969",
+        "profile_interstitial_type": "",
+        "statuses_count": 124661,
+        "time_zone": "",
+        "translator_type": "none",
+        "url": "https://t.co/Txnr99FBcO",
+        "utc_offset": 0,
+        "withheld_description": "",
+        "withheld_scope": ""
+       },
+       "location": {
+        "location": "Appalachistan"
+       },
+       "media_permissions": {
+        "can_media_tag": false
+       },
+       "privacy": {
+        "protected": false
+       },
+       "profile_bio": {
+        "description": "Good vibes\n\nAnti Flock/Axom\n\nMemes\n\nAnti-war\n\nCap & ball enjoyer\n\nFreelance engineer\n\n3d printing\n\nPick-me\n\nLunatic with a banjo \n\n3D2A\n\n🌛❤️🌜"
+       },
+       "profile_description_language": "en",
+       "profile_image_shape": "Circle",
+       "relationship_perspectives": {
+        "blocked_by": false,
+        "blocking": false,
+        "followed_by": false,
+        "following": false,
+        "muting": false
+       },
+       "rest_id": "1486071156910305281",
+       "super_follow_eligible": false,
+       "super_followed_by": false,
+       "super_following": false,
+       "verification": {
+        "verified": false
+       }
+      }
+     }
+    }
+   }
+  }
+ }
+}
