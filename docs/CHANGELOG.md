@@ -5,6 +5,21 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [1.2.1] — 2026-08-02
+
+### Fixed
+- **The `fx` mark in the README banner still read as off centre.** The previous fix baked it to a PNG
+  so it no longer depended on the viewer's font, and centred it on its INK BOX — which measured
+  exactly 0.00, 0.00 against the tile and was still wrong to look at. "fx" has an ascender and no
+  descender, so its visible weight is not where its bounding box is: the alpha-weighted centroid sat
+  at 54.02, 57.71 in a 112 tile, about two units left and 1.7 down. The mark is now placed on that
+  centroid instead, so the thing being centred is what the eye actually reads rather than what the
+  geometry reports.
+
+1133 tests, `node --test`; `tsc --noEmit` clean.
+
+---
+
 ## [1.2.0] — 2026-08-02
 
 A copyright-blocked Instagram reel now has **three** independent recoveries, tried cheapest first.
