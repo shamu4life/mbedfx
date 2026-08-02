@@ -454,3 +454,62 @@ test('/_card CARRIES THE QUOTED POST — a quote-tweet previewed as a different 
     assert.ok(!/<[a-z]/i.test(j.quote.byline), 'pre-formatted text, never markup for the page to trust')
   }
 })
+
+/* ===================== THE PREVIEW'S OWN DATE =====================
+ *
+ * REPORTED 2026-08-02: "the website seems to always say no upload date".
+ *
+ * It did, and the word ALWAYS is the whole diagnosis. /_card read the yt meta record out of R2 and
+ * never dispatched an extract, on a rule written here as "a cache read, NEVER a container call".
+ * But the record is warmed by the ACTIVITY route — by Discord unfurling the link — so it is cold for
+ * precisely the links a person previews: the ones they have not sent yet. Every fresh YouTube link
+ * previewed as createdAt 1970, drew the page's "⚠ no upload date" flag, and then rendered a correct
+ * date the instant it was pasted into Discord.
+ *
+ * The self-heal that hid this everywhere else cannot fire here, because on this page EVERY view is a
+ * first view. That is why it read as always broken rather than as an occasional cold-cache miss.
+ *
+ * The cost objection that motivated the old rule does not survive being stated: the visitor
+ * previewing this link is about to paste it into Discord, which dispatches the identical
+ * `yt-dlp -J`. Warming here does not ADD a container call, it moves the one already coming.
+ */
+test('/_card WARMS THE YOUTUBE META, so a link nobody has sent yet still previews with its real date', async () => {
+  const { ctx: c } = ctx()
+  let meta = 0
+  const binding = {
+    getByName() {
+      return {
+        async fetch(_u, init) {
+          const body = JSON.parse(init.body)
+          if (body.meta !== true) {
+            return new Response('MP4', { headers: { 'content-type': 'video/mp4', 'content-length': '3' } })
+          }
+          meta++
+          // Epoch SECONDS, as the container's dict carries it. 1256453853 -> 2009-10-25T06:57:33Z,
+          // captured from a real `yt-dlp -J` run.
+          return Response.json({ title: 'a video', width: 1, height: 1, timestamp: 1256453853 })
+        },
+      }
+    },
+  }
+  // new Date(0) is the state every fresh paste is in: a post built before anything knew its date.
+  // uploadDateFrom rejects the epoch as below the 2005 floor, so this is "unknown", not "1970".
+  const cold = async ref => ({ ...(await stubFetchPost(ref)), createdAt: new Date(0) })
+  const j = await (await handle(card('/watch?v=dQw4w9WgXcQ'), envWith(binding), c, deps({ fetchPost: cold }))).json()
+
+  assert.equal(j.ok, true)
+  assert.equal(meta, 1, 'the preview dispatched the extract instead of reading an empty cache and giving up')
+  assert.equal(j.createdAt, '2009-10-25T06:57:33.000Z', 'and it reports the real upload date, not the epoch')
+})
+
+test('IT DOES NOT DISPATCH WHEN THE DATE IS ALREADY KNOWN — the gate that keeps this from costing a call per view', async () => {
+  // The counterpart to the test above, and the reason that one is not simply "always call the
+  // container". A post that already carries a real date was built from a warm record, so there is
+  // nothing to fetch; without this gate every preview of every ordinary video would pay an extract.
+  const { ctx: c } = ctx()
+  const { seen, binding } = fakeResolver()
+  const j = await (await handle(card('/watch?v=dQw4w9WgXcQ'), envWith(binding), c, deps())).json()
+  assert.equal(j.ok, true)
+  assert.equal(seen.meta, 0, 'no extract for a post whose date is already known')
+  assert.equal(j.createdAt, '2026-07-01T00:00:00.000Z', 'and the known date survives untouched')
+})

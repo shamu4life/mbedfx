@@ -495,7 +495,7 @@ footer { color: var(--faint); font-size: 13px; padding: 28px 0 0; border-top: 1p
         <div class="ava">fx</div>
         <div>
           <div class="who"><span class="name">mbedfx</span><span class="bot">BOT</span><span class="ts">today</span></div>
-          <h2 class="head">Keep your instance in the link</h2>
+          <h2 class="head">Keep the instance in the link</h2>
           <p class="sub">A post id is meaningless without the server it lives on. About one in five
              bare id lookups against a default server returns a real but completely different post,
              so there's no default here and no allow-list. Any server works.</p>
@@ -509,15 +509,15 @@ footer { color: var(--faint); font-size: 13px; padding: 28px 0 0; border-top: 1p
       </article>
 
       <!-- ===================== LIMITS ===================== -->
-      <div class="chanbar chan" id="limits" data-desc="When you get a wall instead of a post." style="margin:28px -16px 0">
-        <b>#</b> limits <div class="sep"></div><span>When you get a wall instead of a post.</span>
+      <div class="chanbar chan" id="limits" data-desc="When a link hits a wall instead of a post." style="margin:28px -16px 0">
+        <b>#</b> limits <div class="sep"></div><span>When a link hits a wall instead of a post.</span>
       </div>
       <article class="msg">
         <div class="ava">fx</div>
         <div>
           <div class="who"><span class="name">mbedfx</span><span class="bot">BOT</span><span class="ts">today</span></div>
           <h2 class="head">Some posts can't be shown</h2>
-          <p class="sub">You get a card that says so instead of a broken one that pretends otherwise.</p>
+          <p class="sub">The card says so, instead of pretending otherwise.</p>
 
           <div class="embed wide" style="--c:var(--red)">
             <div class="t">🔒 Private or restricted</div>
@@ -526,7 +526,7 @@ footer { color: var(--faint); font-size: 13px; padding: 28px 0 0; border-top: 1p
           </div>
           <div class="embed wide" style="--c:var(--amber)">
             <div class="t">🔞 Age-gated</div>
-            <div class="d">Needs a signed-in adult account. On YouTube you get the thumbnail and no
+            <div class="d">Needs a signed-in adult account. On YouTube it is the thumbnail and no
               playback, and that one is permanent rather than worth retrying.</div>
           </div>
           <div class="embed wide" style="--c:var(--blurple)">
@@ -567,8 +567,8 @@ footer { color: var(--faint); font-size: 13px; padding: 28px 0 0; border-top: 1p
           </div>
 
           <footer>
-            <p style="margin:0 0 6px">Zero-dependency Cloudflare Worker. It reads the post itself
-              rather than handing you off to someone else's fixer.
+            <p style="margin:0 0 6px">No-framework Cloudflare Worker. It reads the post itself
+              rather than redirecting to someone else's fixer.
               <a href="https://github.com/shamu4life/mbedfx">Source on GitHub</a>.</p>
             <p style="margin:0">Not affiliated with Discord. Platform names and marks belong to their
               owners and are used here to say which sites are supported.</p>
@@ -638,7 +638,7 @@ function mbedfxConvert(input, host) {
   if (h === 'mbedfx.app' || h === 'megapenispoopenfarten.sex' ||
       h === 'staging.mbedfx.app' || h === 'staging.megapenispoopenfarten.sex' || h === 'x.invalid') {
     return out(path === '/' ? '/' : path + (u.searchParams.get('v') ? '?v=' + u.searchParams.get('v') : ''), null,
-      'Already an mbedfx link. Re-pointed at the domain you picked.');
+      'Already an mbedfx link. Re-pointed at the selected domain.');
   }
 
   // Strip the sub-domains that are pure presentation. i. and clips. are MEANINGFUL and stay.
@@ -884,7 +884,7 @@ function mbedfxConvert(input, host) {
    */
   function chipFor(code, label) {
     var p = code ? BY_CODE[code] : null;
-    return '<button type="button" class="chip" id="siteChip" title="Read as ' + esc(label) + ' — click to change">'
+    return '<button type="button" class="chip" id="siteChip" title="Read as ' + esc(label) + '. Click to change">'
       + (p ? mark(p.icon, p.rail) : '') + esc(label) + '<span class="caret">▾</span></button>';
   }
 
@@ -948,7 +948,7 @@ function mbedfxConvert(input, host) {
       // A platform without a code still gets a chip — see chipFor. The fediverse guess is the case
       // that matters: it is the one reading this converter admits is a guess.
       var chip = r.platform ? chipFor(r.code, r.platform) : '';
-      note.innerHTML = chip + (r.note ? ' ' + esc(r.note) : (r.platform ? ' — ready to paste.' : ''));
+      note.innerHTML = chip + (r.note ? ' ' + esc(r.note) : (r.platform ? '. Ready to paste.' : ''));
       // The domain toggle reaches here without going through schedulePrep, so the already-drawn
       // preview would otherwise keep announcing the OTHER domain's link. Same card, same post — only
       // the host changed — so the line is corrected in place rather than the card being refetched.
@@ -1008,9 +1008,9 @@ function mbedfxConvert(input, host) {
         if (!j.ok && j.reason === 'ambiguous' && j.candidates && j.candidates.length) {
           result.style.display = 'none'; copy.style.display = 'none';
           note.className = 'msgline';
-          note.textContent = 'That path exists on more than one site, so it is not guessed.';
+          note.textContent = 'That path exists on more than one site, so I won’t guess.';
           showPicker(j.candidates.map(function (c) { return { code: c.platform, name: c.name }; }),
-            'Which site did you mean?');
+            'Which site?');
           return;
         }
         if (!j.ok) return;
@@ -1029,7 +1029,7 @@ function mbedfxConvert(input, host) {
            * to be read as the wrong site (a bare /share/{code} names no platform at all).
            */
           note.innerHTML = chipFor(j.platform, (BY_CODE[j.platform] || {}).name || j.platform)
-            + ' — share link resolved to the real post.';
+            + '. Share link resolved to the real post.';
         }
         if (j.warming) {
           note.className = 'msgline';
@@ -1108,7 +1108,7 @@ function mbedfxConvert(input, host) {
       // A FAILED CARD KEEPS THE RESULT ROW, because the preview is not carrying the link here.
       cardUp = false; outClass(true);
       preview.innerHTML = '<div class="sentrow"><span class="sent" id="sentline"></span></div>'
-        + '<div class="pv"><div class="body">' + esc2(j && j.gate ? j.gate : 'No preview — this link does not resolve to a post.') + '</div></div>';
+        + '<div class="pv"><div class="body">' + esc2(j && j.gate ? j.gate : 'No preview. This link doesn’t resolve to a post.') + '</div></div>';
       preview.className = 'preview show';
       syncSent();
       return;
@@ -1209,14 +1209,38 @@ function mbedfxConvert(input, host) {
     cardUp = false; outClass(false);
   }
 
-  function card(url) {
+  /**
+   * ONE RE-FETCH WHEN THE ANSWER SAYS IT IS INCOMPLETE, and no more than one.
+   *
+   * `pending` means a translation lost its race but is still running in the worker's waitUntil and
+   * will be in R2 shortly. Everywhere else that self-heals on the next render; this page had no next
+   * render, so a foreign-language post drew untranslated and stayed that way until the reader typed
+   * again. That is the "doesn't really show up super reliably" report.
+   *
+   * NOT a poll. A single retry, because the second fetch reads a warm record rather than paying for
+   * another inference — if it is STILL pending the work is slower than one retry can wait for, and
+   * spinning would cost real money for a card the reader has probably already sent. The card drawn
+   * from the first response stays on screen meanwhile, so this only ever adds the translation.
+   */
+  var CARD_RETRY_MS = 2500;
+
+  function card(url, isRetry) {
     var path = url.slice(url.indexOf('/', 8));
     var seq = ++cardSeq;
     fetch('/_card?p=' + encodeURIComponent(path), { headers: { accept: 'application/json' } })
       .then(function (r) { return r.ok ? r.json() : null; })
       // LAST REQUEST WINS. Typing fires these in order and they do not return in order; without the
       // sequence check a slow early card can land on top of the one the reader is looking at.
-      .then(function (j) { if (seq === cardSeq) drawCard(url, j); })
+      .then(function (j) {
+        if (seq !== cardSeq) return;
+        drawCard(url, j);
+        if (!isRetry && j && j.pending) {
+          cardTimer = setTimeout(function () {
+            // Re-checked on fire: the reader may have typed since, and that newer card wins.
+            if (seq === cardSeq) card(url, true);
+          }, CARD_RETRY_MS);
+        }
+      })
       .catch(function () { if (seq === cardSeq) hidePreview(); });
   }
 

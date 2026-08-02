@@ -1124,6 +1124,20 @@ export const MUX_WAIT_FLOOR_MS = 300
 const MUX_WAIT_API_MS = 9000
 
 /**
+ * THE CONVERTER PAGE'S OWN CEILING, and the reason it is not HTML_DEADLINE_MS.
+ *
+ * /_card used to borrow HTML_DEADLINE_MS, which is a bound on how long a CRAWLER will hold a
+ * connection. /_card is not a crawler: it is an XHR from someone who has just pasted a link and is
+ * watching a spinner, and it exists to predict a card that the activity route renders on
+ * MUX_WAIT_API_MS. A preview given a smaller budget than the thing it previews will disagree with it
+ * whenever the difference matters — which made it useless in exactly the cases worth previewing.
+ *
+ * So it is the SAME number, deliberately aliased rather than copied: if the card's budget ever moves,
+ * the preview's has to move with it or they drift apart again.
+ */
+const CARD_DEADLINE_MS = MUX_WAIT_API_MS
+
+/**
  * ONLY PROMISE og:video WHEN THE VIDEO ACTUALLY EXISTS.
  *
  * THE DEFECT (diagnosed 2026-07-24, the "won't play past the first frame" report). A cold `{page}` mux
@@ -2382,17 +2396,44 @@ async function renderPostRoute(
   // shrinks the mux wait rather than stacking on top of it. FLOORED, never zeroed — see
   // MUX_WAIT_FLOOR_MS: a 0ms race beats R2's own head RPC, so a blown budget used to discard a mux that
   // was already sitting warm in the bucket and then decline to cache the degraded card it produced.
-  const settled = await settleMux(post, env, ctx, Math.max(MUX_WAIT_FLOOR_MS, HTML_DEADLINE_MS - (Date.now() - started)))
-  // What is LEFT after the mux, not a fresh budget — the translation is the least important thing on
-  // this card and must never be the reason Discord gives up on it. A lost race still lands in R2 for
-  // the next reader; see withTranslated.
-  // CAPPED as well as floored — see XLATE_MAX_WAIT_MS. What is left of the deadline is an upper bound
-  // on the whole response, not an allowance the least important element gets to spend in full.
-  const xlate = await withTranslated(
-    settled.post, env, ctx,
-    Math.max(XLATE_WAIT_FLOOR_MS, Math.min(XLATE_MAX_WAIT_MS, HTML_DEADLINE_MS - (Date.now() - started))),
+  /**
+   * CONCURRENT, for the reason the card arm is — and this is the seam DISCORD reads.
+   *
+   * These ran serially: settleMux first, then the translation re-evaluating the SAME
+   * `HTML_DEADLINE_MS - elapsed` expression the mux had just spent. The old comment here argued the
+   * translation should get "what is LEFT after the mux, not a fresh budget", because it "must never
+   * be the reason Discord gives up on it". The intent is right and is kept; the implementation did
+   * something stricter than intended. settleMux does not return early on a cold mux — it races
+   * muxOnce against a timer and spends whatever it is handed — so "what is left" was reliably NOTHING
+   * and the translation fell to its 300ms floor on every post with remux media.
+   *
+   * Measured on a live cold Instagram reel while chasing a different bug: the activity document came
+   * back translated and this document, for the same post at the same moment, came back with the raw
+   * Chinese caption. Two seams, one post, disagreeing — which is the failure this file warns about
+   * more than any other.
+   *
+   * Running them concurrently costs NOTHING against the ceiling, because the response was already
+   * waiting on the mux; the translation now overlaps that wait instead of queueing behind it. The
+   * XLATE_MAX_WAIT_MS cap STAYS, and matters more here than anywhere else: this route's ceiling is
+   * HTML_DEADLINE_MS and overrunning it costs the whole embed, so the translation still may not
+   * become the long pole once the mux is done.
+   *
+   * NOT changed, deliberately: the activity route's uncapped MUX_WAIT_API_MS. There the mux and the
+   * translation are already concurrent on a 9s budget that a cold mux is expected to spend anyway, so
+   * capping the translation would abandon it early to save time the response is spending regardless.
+   */
+  const [settled, xlate] = await Promise.all([
+    settleMux(post, env, ctx, Math.max(MUX_WAIT_FLOOR_MS, HTML_DEADLINE_MS - (Date.now() - started))),
+    // The pre-mux post: the mux rewrites media urls and never touches `text`.
+    withTranslated(
+      post, env, ctx,
+      Math.max(XLATE_WAIT_FLOOR_MS, Math.min(XLATE_MAX_WAIT_MS, HTML_DEADLINE_MS - (Date.now() - started))),
+    ),
+  ])
+  const res = render(
+    { kind: 'post', post: withTranslation(settled.post, xlate.translated, xlate.source) },
+    client, origin,
   )
-  const res = render({ kind: 'post', post: xlate.post }, client, origin)
   // `pending` joins `degraded` for the same reason: caching a card that is missing something still
   // arriving would pin the incomplete version for RESP_TTL.
   if (!settled.degraded && !xlate.pending) {
@@ -2828,11 +2869,42 @@ export async function handle(req: Request, env: Env, ctx: ExecutionContext, d: D
         // The page shows the same 🔞/🔒 wording Discord would, rather than inventing its own.
         return Response.json({ ok: false, reason: 'fetch_fail', gate: renderGate(got.failReason) })
       }
-      const settled = await settleMux(got.post, env, ctx, Math.max(MUX_WAIT_FLOOR_MS, HTML_DEADLINE_MS - (Date.now() - started)))
-      const xlate = await withTranslated(
-        settled.post, env, ctx,
-        Math.max(XLATE_WAIT_FLOOR_MS, Math.min(XLATE_MAX_WAIT_MS, HTML_DEADLINE_MS - (Date.now() - started))),
-      )
+      /**
+       * THE MUX AND THE TRANSLATION RACE CONCURRENTLY, ON THE PREVIEW'S OWN CEILING. Both halves of
+       * that sentence were wrong here, and together they are the whole of "translations don't really
+       * show up super reliably on the preview site".
+       *
+       * SERIAL WAS THE BIGGER HALF. settleMux was awaited FIRST, with the same
+       * `HTML_DEADLINE_MS - elapsed` expression the translation then re-evaluated. A cold mux does not
+       * return early — it races muxOnce against a timer and spends whatever budget it is given, and a
+       * cold mux is 6-9s measured. So on any post carrying remux media the mux consumed the entire
+       * 5s, `5000 - elapsed` went negative, and the translation fell to its 300ms floor. The activity
+       * route never had this because it runs the two in Promise.all.
+       *
+       * 300ms IS NOT ZERO, WHICH IS WHY THE SYMPTOM WAS "UNRELIABLE" RATHER THAN "BROKEN". Google is
+       * measured at 217-798ms (see translate.ts) and translateBest tries it first, so a 300ms race
+       * against that distribution wins sometimes. Same link, two answers, depending on where in the
+       * spread the call landed — which is exactly what was reported.
+       *
+       * IT ALSO STOPS BORROWING DISCORD'S CLOCK. HTML_DEADLINE_MS is a ceiling on a BOT response,
+       * shaped by how long a crawler will hold a connection. /_card is an XHR from a person who has
+       * just pasted a link and is watching a spinner, and the card it is predicting is rendered by
+       * the activity route on MUX_WAIT_API_MS. Giving the preview a smaller budget than the thing it
+       * previews guarantees they disagree — the preview's one job is to not do that.
+       *
+       * SCOPE, so this is not over-claimed: only posts with remux media (yt, fb, dm, st, im, and the
+       * HLS paths) ever hit it. For an image or text post settleMux short-circuits and the
+       * translation always had its full slice.
+       */
+      const [settled, xlate] = await Promise.all([
+        settleMux(got.post, env, ctx, Math.max(MUX_WAIT_FLOOR_MS, CARD_DEADLINE_MS - (Date.now() - started))),
+        // The ORIGINAL post, not the settled one: the mux replaces media urls and never touches
+        // `text`, so there is nothing to wait for. This is the same ordering the activity arm uses.
+        withTranslated(
+          got.post, env, ctx,
+          Math.max(XLATE_WAIT_FLOOR_MS, Math.min(XLATE_MAX_WAIT_MS, CARD_DEADLINE_MS - (Date.now() - started))),
+        ),
+      ])
       /**
        * THE SAME OVERLAYS THE ACTIVITY CALLBACK APPLIES, because a preview that disagrees with the
        * card is worse than no preview.
@@ -2843,13 +2915,38 @@ export async function handle(req: Request, env: Env, ctx: ExecutionContext, d: D
        * exactly what the bug report was filed against, and what sent the first investigation at the
        * date pipeline instead of at a stale cache.
        *
-       * A CACHE READ, NEVER A CONTAINER CALL: one R2 GET on a yt ref. Warming the meta is the activity
-       * route's job (youtubeMeta), and giving a preview endpoint the power to dispatch container work
-       * would hand it a cost the card path deliberately bounds.
+       * IT WARMS THE META, and used to refuse to. The old rule here was "a cache read, NEVER a
+       * container call" — the preview read R2 and took whatever was already there, on the reasoning
+       * that warming is the activity route's job and a preview endpoint should not be able to
+       * dispatch container work.
+       *
+       * That reasoning had a hole, and it is the whole of the reported bug. The meta record is warmed
+       * BY THE ACTIVITY ROUTE — that is, by Discord unfurling the link. So the record is cold for
+       * exactly the links a person is most likely to preview: ones they have not sent yet. Every
+       * paste of a fresh YouTube link previewed with createdAt 1970, drew "⚠ no upload date", and
+       * then rendered correctly the moment it was pasted into Discord. Reported as "the website
+       * seems to ALWAYS say no upload date", which is precisely right: on this page every view is a
+       * first view, so the self-healing that hid this everywhere else never fires here.
+       *
+       * The cost objection does not survive being stated plainly. The visitor previewing this link
+       * is about to paste it into Discord, which dispatches that identical `yt-dlp -J`. Warming here
+       * does not ADD a container call; it moves the one that was already coming a few seconds
+       * earlier. youtubeMeta carries its own bounds — the vouch check, the negative cache,
+       * SPECULATIVE_META_CAP and metaOnce — so the abuse surface is the activity route's, already
+       * reachable by anyone who can GET /watch?v=.
+       *
+       * The cache read is KEPT as the fallback. youtubeMeta returns null early when the post already
+       * carries a real date, and in that case there is still a record worth overlaying for the
+       * description, the counts and the age note — so dropping the read would have quietly traded a
+       * missing date for missing counts.
        */
-      let post = xlate.post
+      // The translation was raced against the ORIGINAL post, so it is composed onto the SETTLED one
+      // here — `xlate.post` carries the pre-mux media and using it would undo the mux. Same two-step
+      // the activity arm does at the toMastodonStatus call.
+      let post = withTranslation(settled.post, xlate.translated, xlate.source)
       if (post.ref.p === 'yt') {
-        const warm = await readCachedMeta<YouTubeMeta>(post.ref, env, YT_META_TTL_MS, ytMetaValid)
+        const warm = await youtubeMeta(post.ref, post, env, ctx)
+          ?? await readCachedMeta<YouTubeMeta>(post.ref, env, YT_META_TTL_MS, ytMetaValid)
         if (warm) {
           post = withAgeNote(
             withCounts(withDescription(withUploadDate(post, warm.timestamp), warm.description), warm),
@@ -2860,6 +2957,20 @@ export async function handle(req: Request, env: Env, ctx: ExecutionContext, d: D
       const own = mediaOf(post).filter(usable)
       return Response.json({
         ok: true,
+        /**
+         * THE ONE THING THE PAGE COULD NOT PREVIOUSLY LEARN: that this answer is incomplete.
+         *
+         * A translation that loses its race sets pending, and everywhere else in the worker that is
+         * enough — renderPostRoute reads it to suppress the response cache, so the NEXT render heals.
+         * The converter page never gets a next render: it fetches /_card once per typing-settle and
+         * draws whatever came back. So the one surface that cannot self-heal was also the only one
+         * not told it needed to.
+         *
+         * The work is still running in ctx.waitUntil and writes to R2 as this response goes out, so a
+         * single re-fetch a couple of seconds later hits the warm path for free rather than paying a
+         * second inference. The page does exactly that and then stops.
+         */
+        pending: xlate.pending === true,
         canonical: post.canonical,
         platform: post.ref.p,
         author: {
