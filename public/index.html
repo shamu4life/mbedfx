@@ -884,7 +884,7 @@ function mbedfxConvert(input, host) {
    */
   function chipFor(code, label) {
     var p = code ? BY_CODE[code] : null;
-    return '<button type="button" class="chip" id="siteChip" title="Read as ' + esc(label) + ' — click to change">'
+    return '<button type="button" class="chip" id="siteChip" title="Read as ' + esc(label) + '. Click to change">'
       + (p ? mark(p.icon, p.rail) : '') + esc(label) + '<span class="caret">▾</span></button>';
   }
 
@@ -948,7 +948,7 @@ function mbedfxConvert(input, host) {
       // A platform without a code still gets a chip — see chipFor. The fediverse guess is the case
       // that matters: it is the one reading this converter admits is a guess.
       var chip = r.platform ? chipFor(r.code, r.platform) : '';
-      note.innerHTML = chip + (r.note ? ' ' + esc(r.note) : (r.platform ? ' — ready to paste.' : ''));
+      note.innerHTML = chip + (r.note ? ' ' + esc(r.note) : (r.platform ? '. Ready to paste.' : ''));
       // The domain toggle reaches here without going through schedulePrep, so the already-drawn
       // preview would otherwise keep announcing the OTHER domain's link. Same card, same post — only
       // the host changed — so the line is corrected in place rather than the card being refetched.
@@ -1008,7 +1008,7 @@ function mbedfxConvert(input, host) {
         if (!j.ok && j.reason === 'ambiguous' && j.candidates && j.candidates.length) {
           result.style.display = 'none'; copy.style.display = 'none';
           note.className = 'msgline';
-          note.textContent = 'That path exists on more than one site, so it is not guessed.';
+          note.textContent = 'That path exists on more than one site, so I won’t guess.';
           showPicker(j.candidates.map(function (c) { return { code: c.platform, name: c.name }; }),
             'Which site did you mean?');
           return;
@@ -1029,7 +1029,7 @@ function mbedfxConvert(input, host) {
            * to be read as the wrong site (a bare /share/{code} names no platform at all).
            */
           note.innerHTML = chipFor(j.platform, (BY_CODE[j.platform] || {}).name || j.platform)
-            + ' — share link resolved to the real post.';
+            + '. Share link resolved to the real post.';
         }
         if (j.warming) {
           note.className = 'msgline';
@@ -1108,7 +1108,7 @@ function mbedfxConvert(input, host) {
       // A FAILED CARD KEEPS THE RESULT ROW, because the preview is not carrying the link here.
       cardUp = false; outClass(true);
       preview.innerHTML = '<div class="sentrow"><span class="sent" id="sentline"></span></div>'
-        + '<div class="pv"><div class="body">' + esc2(j && j.gate ? j.gate : 'No preview — this link does not resolve to a post.') + '</div></div>';
+        + '<div class="pv"><div class="body">' + esc2(j && j.gate ? j.gate : 'No preview. This link doesn’t resolve to a post.') + '</div></div>';
       preview.className = 'preview show';
       syncSent();
       return;

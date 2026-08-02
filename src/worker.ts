@@ -2843,13 +2843,35 @@ export async function handle(req: Request, env: Env, ctx: ExecutionContext, d: D
        * exactly what the bug report was filed against, and what sent the first investigation at the
        * date pipeline instead of at a stale cache.
        *
-       * A CACHE READ, NEVER A CONTAINER CALL: one R2 GET on a yt ref. Warming the meta is the activity
-       * route's job (youtubeMeta), and giving a preview endpoint the power to dispatch container work
-       * would hand it a cost the card path deliberately bounds.
+       * IT WARMS THE META, and used to refuse to. The old rule here was "a cache read, NEVER a
+       * container call" — the preview read R2 and took whatever was already there, on the reasoning
+       * that warming is the activity route's job and a preview endpoint should not be able to
+       * dispatch container work.
+       *
+       * That reasoning had a hole, and it is the whole of the reported bug. The meta record is warmed
+       * BY THE ACTIVITY ROUTE — that is, by Discord unfurling the link. So the record is cold for
+       * exactly the links a person is most likely to preview: ones they have not sent yet. Every
+       * paste of a fresh YouTube link previewed with createdAt 1970, drew "⚠ no upload date", and
+       * then rendered correctly the moment it was pasted into Discord. Reported as "the website
+       * seems to ALWAYS say no upload date", which is precisely right: on this page every view is a
+       * first view, so the self-healing that hid this everywhere else never fires here.
+       *
+       * The cost objection does not survive being stated plainly. The visitor previewing this link
+       * is about to paste it into Discord, which dispatches that identical `yt-dlp -J`. Warming here
+       * does not ADD a container call; it moves the one that was already coming a few seconds
+       * earlier. youtubeMeta carries its own bounds — the vouch check, the negative cache,
+       * SPECULATIVE_META_CAP and metaOnce — so the abuse surface is the activity route's, already
+       * reachable by anyone who can GET /watch?v=.
+       *
+       * The cache read is KEPT as the fallback. youtubeMeta returns null early when the post already
+       * carries a real date, and in that case there is still a record worth overlaying for the
+       * description, the counts and the age note — so dropping the read would have quietly traded a
+       * missing date for missing counts.
        */
       let post = xlate.post
       if (post.ref.p === 'yt') {
-        const warm = await readCachedMeta<YouTubeMeta>(post.ref, env, YT_META_TTL_MS, ytMetaValid)
+        const warm = await youtubeMeta(post.ref, post, env, ctx)
+          ?? await readCachedMeta<YouTubeMeta>(post.ref, env, YT_META_TTL_MS, ytMetaValid)
         if (warm) {
           post = withAgeNote(
             withCounts(withDescription(withUploadDate(post, warm.timestamp), warm.description), warm),
