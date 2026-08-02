@@ -1209,14 +1209,38 @@ function mbedfxConvert(input, host) {
     cardUp = false; outClass(false);
   }
 
-  function card(url) {
+  /**
+   * ONE RE-FETCH WHEN THE ANSWER SAYS IT IS INCOMPLETE, and no more than one.
+   *
+   * `pending` means a translation lost its race but is still running in the worker's waitUntil and
+   * will be in R2 shortly. Everywhere else that self-heals on the next render; this page had no next
+   * render, so a foreign-language post drew untranslated and stayed that way until the reader typed
+   * again. That is the "doesn't really show up super reliably" report.
+   *
+   * NOT a poll. A single retry, because the second fetch reads a warm record rather than paying for
+   * another inference — if it is STILL pending the work is slower than one retry can wait for, and
+   * spinning would cost real money for a card the reader has probably already sent. The card drawn
+   * from the first response stays on screen meanwhile, so this only ever adds the translation.
+   */
+  var CARD_RETRY_MS = 2500;
+
+  function card(url, isRetry) {
     var path = url.slice(url.indexOf('/', 8));
     var seq = ++cardSeq;
     fetch('/_card?p=' + encodeURIComponent(path), { headers: { accept: 'application/json' } })
       .then(function (r) { return r.ok ? r.json() : null; })
       // LAST REQUEST WINS. Typing fires these in order and they do not return in order; without the
       // sequence check a slow early card can land on top of the one the reader is looking at.
-      .then(function (j) { if (seq === cardSeq) drawCard(url, j); })
+      .then(function (j) {
+        if (seq !== cardSeq) return;
+        drawCard(url, j);
+        if (!isRetry && j && j.pending) {
+          cardTimer = setTimeout(function () {
+            // Re-checked on fire: the reader may have typed since, and that newer card wins.
+            if (seq === cardSeq) card(url, true);
+          }, CARD_RETRY_MS);
+        }
+      })
       .catch(function () { if (seq === cardSeq) hidePreview(); });
   }
 

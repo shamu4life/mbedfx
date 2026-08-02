@@ -290,3 +290,87 @@ test('THE CACHE IS KEYED ON WHAT WE ASKED, so changing the question invalidates 
    */
   assert.match(keys[0], /^xlate\/x\d+\//, 'an engine change must be able to invalidate this')
 })
+
+/* ============ THE PREVIEW, WHERE THE MUX USED TO EAT THE TRANSLATION'S BUDGET ============
+ *
+ * REPORTED 2026-08-02: "the translations don't really show up super reliably on the preview site".
+ *
+ * Every test above uses a post with NO MEDIA, deliberately — "so settleMux is a no-op and the only
+ * thing under test is the translation". That is exactly the blind spot the report landed in. The
+ * defect needs a mux to wait for, so no fixture in this file could reach it.
+ *
+ * WHAT WAS WRONG. /_card awaited settleMux FIRST and then re-evaluated `HTML_DEADLINE_MS - elapsed`
+ * for the translation. settleMux does not return early on a cold mux — it races muxOnce against a
+ * timer and spends whatever it is given. So on a post carrying remux media the mux consumed the whole
+ * ceiling, the subtraction went to zero, and the translation fell to its 300ms floor. The activity
+ * route never had this: it runs the two in Promise.all on a flat MUX_WAIT_API_MS.
+ *
+ * WHY "UNRELIABLE" AND NOT "BROKEN". 300ms is not zero. Google is measured at 217-798ms and is tried
+ * first, so the race won some of the time. Same link, two different answers.
+ *
+ * THIS TEST COSTS ~5s OF WALL CLOCK, on purpose. The budget it is proving cannot be exhausted is
+ * HTML_DEADLINE_MS, so the mux has to actually outlast it; a shorter delay would leave budget
+ * unspent and the test would pass against the broken code. Verified by reverting.
+ */
+
+/** The same Japanese post, but carrying remux media — which is what makes settleMux actually wait. */
+const jaVideoPost = ref => ({
+  ...jaPost(ref),
+  media: [{
+    kind: 'video', url: 'https://example.invalid/v', w: 0, h: 0,
+    poster: 'https://example.invalid/p.jpg',
+    remux: { page: 'https://example.invalid/page/1' },
+  }],
+})
+
+/** A resolver whose MUX is slower than the old whole-response ceiling; its meta answers instantly. */
+const slowMuxBinding = ms => ({
+  getByName() {
+    return {
+      async fetch(_u, init) {
+        const body = JSON.parse(init.body)
+        if (body.meta === true) return Response.json({ title: 'a video', width: 1, height: 1 })
+        await new Promise(r => setTimeout(r, ms))
+        return new Response('MP4', { headers: { 'content-type': 'video/mp4', 'content-length': '3' } })
+      },
+    }
+  },
+})
+
+const cardReq = () => new Request('https://mbedfx.app/_card?p=' + encodeURIComponent(PATH))
+
+test('THE PREVIEW TRANSLATES A VIDEO POST EVEN WHEN THE MUX IS SLOW — the two race, they do not queue', async () => {
+  // 800ms: comfortably inside the translation's own 1500ms slice, and comfortably OUTSIDE the 300ms
+  // floor it was being squeezed into. That gap is the whole difference between the two behaviours.
+  const model = async () => {
+    await new Promise(r => setTimeout(r, 800))
+    return { response: 'Tonight, a Latte-chan nap service video' }
+  }
+  const { ctx } = trackingCtx()
+  const env = { ...envWith(model), MEDIA_RESOLVER: slowMuxBinding(HTML_DEADLINE_MS) }
+  const res = await handle(cardReq(), env, ctx, { ...deps(), fetchPost: async ref => jaVideoPost(ref) })
+  const j = await res.json()
+
+  assert.equal(j.ok, true)
+  assert.match(j.text, /Latte-chan nap service video/,
+    'the translation survived a mux that used to consume the entire budget before it started')
+  assert.equal(j.pending, false, 'and it is not reported as still pending')
+})
+
+test('A PREVIEW THAT LOST THE RACE SAYS SO, so the page knows to ask once more', async () => {
+  /**
+   * The other half. /_card returns exactly one answer per typing-settle and the page draws it; there
+   * is no next render to heal on, which is why `pending` had to become part of the response rather
+   * than staying an internal signal that only renderPostRoute consumed.
+   */
+  const tooSlow = async () => {
+    await new Promise(r => setTimeout(r, XLATE_MAX_WAIT_MS * 4))
+    return { response: 'Tonight, a Latte-chan nap service video' }
+  }
+  const { ctx } = trackingCtx()
+  const j = await (await handle(cardReq(), envWith(tooSlow), ctx, deps())).json()
+
+  assert.equal(j.ok, true)
+  assert.equal(j.pending, true, 'the page is told the answer is incomplete')
+  assert.ok(!/Latte-chan/.test(j.text), 'and it is not pretending to have a translation it lost')
+})
