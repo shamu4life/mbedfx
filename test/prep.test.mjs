@@ -513,3 +513,84 @@ test('IT DOES NOT DISPATCH WHEN THE DATE IS ALREADY KNOWN — the gate that keep
   assert.equal(seen.meta, 0, 'no extract for a post whose date is already known')
   assert.equal(j.createdAt, '2026-07-01T00:00:00.000Z', 'and the known date survives untouched')
 })
+
+/* ===================== THE d. DIRECT-MEDIA HOST =====================
+ *
+ * Requested 2026-08-02: "the d. subdomain showing just the media like fxTikTok does". A d.-prefixed
+ * serving domain answers with the post's BYTES rather than a card.
+ */
+
+const DISCORD_UA = 'Mozilla/5.0 (compatible; Discordbot/2.0; +https://discordapp.com)'
+const dReq = (p, host = 'd.mbedfx.app') =>
+  new Request(`https://${host}${p}`, { headers: { 'user-agent': DISCORD_UA } })
+
+test('THE d. HOST REDIRECTS TO THE POST\'S OWN MEDIA, not to a card', async () => {
+  const { ctx: c } = ctx()
+  const res = await handle(dReq('/jack/status/20'), envWith(fakeResolver().binding), c, deps())
+  assert.equal(res.status, 302, 'bytes, via the route that already owns byte-range serving')
+  const loc = res.headers.get('location')
+  assert.match(loc, /\/_media\//, 'it hands off to /_media/ rather than proxying a second way')
+  // The redirect STAYS on d., so a reader who lands there is not bounced to the apex mid-download.
+  assert.match(loc, /^https:\/\/d\.mbedfx\.app\//, `stays on the d. host, got ${loc}`)
+})
+
+test('THE d. HOST SERVES A HUMAN THE SAME BYTES — the one route with no human/bot split', async () => {
+  /**
+   * Everywhere else a human is redirected to the original post, because a card is for a crawler. Here
+   * the bytes ARE the product: someone pasting a d. link wants the file, not the post they already
+   * had. Pinned because "humans get redirected to canonical" is the pattern every other arm follows,
+   * and a well-meaning refactor would happily add it here.
+   */
+  const { ctx: c } = ctx()
+  const human = new Request('https://d.mbedfx.app/jack/status/20', {
+    headers: { 'user-agent': 'Mozilla/5.0 (Macintosh) AppleWebKit/537.36 Chrome/126 Safari/537.36' },
+  })
+  const res = await handle(human, envWith(fakeResolver().binding), c, deps())
+  assert.equal(res.status, 302)
+  assert.match(res.headers.get('location'), /\/_media\//,
+    'a person gets the media too, not a bounce to x.com')
+})
+
+test('route() STAYS HOST-AGNOSTIC — the d. decision is about the RESPONSE, never the ROUTE', () => {
+  /**
+   * This is the invariant the feature was built around rather than through. route() reads pathname
+   * and query and nothing else, which is why /dm/, /st/ and /im/ forcing can exist: dai.ly,
+   * streamable.com and imgur.com all collapse onto one undecidable bare /{id}, and forcing is the
+   * reader saying which they meant. If the host could change routing, every one of those decisions
+   * would need re-measuring per domain.
+   *
+   * So: the same path must route identically under every host, and the d. host chooses only what
+   * shape of RESPONSE comes back.
+   */
+  for (const p of ['/jack/status/20', '/watch?v=dQw4w9WgXcQ', '/reel/DX7byl-oyGR/', '/dm/xaqwy7q', '/_prep?p=/x']) {
+    const apex = route(new URL(`https://mbedfx.app${p}`))
+    const direct = route(new URL(`https://d.mbedfx.app${p}`))
+    assert.deepEqual(direct, apex, `${p} must route identically under d.`)
+  }
+})
+
+test('A d. LINK WITH NOTHING TO SERVE ANSWERS PLAIN TEXT, never an HTML card', async () => {
+  /**
+   * This host promises bytes. Answering a failure with an embed hands a media player a document, and
+   * `curl -O` a page of markup saved under a video's name. The status has to be a real 404 too — a
+   * 200 with an apology is how a downloader ends up with a "video" that will not open.
+   */
+  const { ctx: c } = ctx()
+  const d2 = deps({ fetchPost: async () => null })
+  const res = await handle(dReq('/jack/status/20'), envWith(fakeResolver().binding), c, d2)
+  assert.equal(res.status, 404)
+  assert.match(res.headers.get('content-type'), /text\/plain/)
+  assert.equal(res.headers.get('cache-control'), 'no-store', 'a failure must not be pinned in cache')
+  assert.ok(!(await res.text()).includes('<meta'), 'no markup')
+})
+
+test('ONLY A d. PREFIX COUNTS — a host merely containing "d." is the ordinary card host', async () => {
+  // Anchored so staging.mbedfx.app, and any future host with a d-containing label, keep rendering
+  // cards. A substring test here would silently turn a normal domain into a file server.
+  const { ctx: c } = ctx()
+  for (const host of ['mbedfx.app', 'staging.mbedfx.app', 'old.mbedfx.app']) {
+    const res = await handle(dReq('/jack/status/20', host), envWith(fakeResolver().binding), c, deps())
+    assert.equal(res.status, 200, `${host} still renders a card`)
+    assert.match(res.headers.get('content-type') || '', /text\/html/, `${host} is HTML`)
+  }
+})

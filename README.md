@@ -57,6 +57,18 @@ https://mbedfx.app/x/status/20            Twitter
 
 **You shouldn't need this.** The converter page names the site it read your link as and lets you change it with a click, and an ambiguous path gets you a chooser rather than a wrong guess. If you had to force one by hand, something's wrong on our end — please [file a bug](../../issues/new/choose) with the link.
 
+### Just the media
+
+Put `d.` in front and you get the file itself instead of a card — the video or image, at its own URL, with byte-range support so it seeks and downloads properly.
+
+```
+https://d.megapenispoopenfarten.sex/jack/status/20
+```
+
+Handy for saving a clip, or for anywhere that wants a media URL rather than a link preview. It serves people and crawlers the same bytes — there's no card to render, so there's nothing to tell them apart for.
+
+A post with nothing to serve answers a plain-text 404 rather than an HTML page, so a downloader never ends up with a file full of markup.
+
 ## Supported sites
 
 | | Site | Hosts |
@@ -184,6 +196,8 @@ Know what you're getting:
 Only these run mbedfx:
 
 `mbedfx.app` · `megapenispoopenfarten.sex`
+
+`d.` works on `megapenispoopenfarten.sex` today. On `mbedfx.app` it needs a DNS record that doesn't exist yet, so `d.mbedfx.app` won't resolve until that's added.
 
 Anything else using the name isn't us.
 
