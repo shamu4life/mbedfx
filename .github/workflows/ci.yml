@@ -47,3 +47,12 @@ jobs:
 
       - name: Typecheck
         run: npx tsc --noEmit
+
+      # THE CONTAINER'S PYTHON, EXECUTED. The Node suite above reads container/server.py as TEXT and
+      # asserts on substrings, which can confirm a line exists but not what it produces — that is how a
+      # cookie jar spliced into the middle of `-o <out>` passed every gate and was left armed to break
+      # on the day credentials were added. This step runs the SSRF gate and the yt-dlp argv builders for
+      # real, with subprocess stubbed. It lives here and not in `npm run build` because that script is
+      # also the Workers Builds deploy gate, where python3 is not guaranteed.
+      - name: Container tests
+        run: npm run test:container
