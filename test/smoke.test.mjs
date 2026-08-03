@@ -94,6 +94,46 @@ test('routes are bare hostnames on our own zone — apex claimed, wildcard never
   }
 })
 
+test('THE MUX CEILING IS ONE NUMBER IN TWO FILES — the worker must not refuse what the container allows', () => {
+  /**
+   * MUX_MAX_SECONDS in src/worker.ts is a COPY of MAX_SECONDS in container/server.py, duplicated
+   * because the container is reached over a binding rather than imported: there is no build step that
+   * could share a constant. Nothing but this test makes them agree.
+   *
+   * THE COST OF DISAGREEING IS ASYMMETRIC, which is why "they are close enough" is not good enough:
+   *   - worker LOWER than container: a video that would mux perfectly is refused a mux it never
+   *     attempts, and degrades to a still forever. Silent, and it looks exactly like a slow mux.
+   *   - worker HIGHER than container: the pre-2026-08-03 behaviour returns, where a full response
+   *     deadline is spent dispatching a mux the container's own match filter was always going to
+   *     refuse — 5.2s on the HTML seam and 9.1s on the activity seam, measured, on EVERY view.
+   *
+   * The existing argv test next door pins the SHAPE of the match filter (`duration<?{MAX_SECONDS}`)
+   * and deliberately not its value, so it cannot catch this. Raising the ceiling means editing two
+   * files, and this is what says so at the moment it is forgotten.
+   */
+  const py = readFileSync('container/server.py', 'utf8')
+  const ts = readFileSync('src/worker.ts', 'utf8')
+  const pyMax = py.match(/MAX_SECONDS = int\(os\.environ\.get\("MAX_SECONDS", "(\d+)"\)\)/)
+  const tsMax = ts.match(/const MUX_MAX_SECONDS = (\d+)/)
+  assert.ok(pyMax, 'container/server.py declares a MAX_SECONDS default')
+  assert.ok(tsMax, 'src/worker.ts declares MUX_MAX_SECONDS')
+  assert.equal(tsMax[1], pyMax[1],
+    `the worker's ceiling (${tsMax?.[1]}s) must equal the container's (${pyMax?.[1]}s)`)
+
+  /**
+   * AND THE BYTE CEILING MOVES WITH IT. The mux is `-c copy`, so output size is the SOURCE bitrate
+   * times the duration: raising MAX_SECONDS without raising MAX_BYTES just moves the refusal from the
+   * duration filter to the size filter, for exactly the videos the change was meant to admit, and the
+   * symptom is identical. Pinned as a RATIO rather than a value so the pair can be raised together
+   * without editing this number too.
+   */
+  const pyBytes = py.match(/MAX_BYTES = int\(os\.environ\.get\("MAX_BYTES", "(\d+)"\)\)/)
+  assert.ok(pyBytes, 'container/server.py declares a MAX_BYTES default')
+  const bytesPerSec = Number(pyBytes[1]) / Number(pyMax[1])
+  assert.ok(bytesPerSec > 200_000,
+    `the byte ceiling must allow a real bitrate across the whole duration, got ${Math.round(bytesPerSec)} B/s`)
+})
+
 test('THE CONVERTER PAGE KNOWS EVERY DOMAIN THE WORKER SERVES — routes vs OWN_HOSTS', () => {
   /**
    * A THIRD PLACE THE DOMAIN LIST LIVES, and the one with the quietest failure.
