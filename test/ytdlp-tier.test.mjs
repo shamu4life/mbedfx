@@ -32,6 +32,37 @@ const IM_ALBUM = JSON.parse(fixture('imgur-album.json'))
 
 // ── The container's own argv. Cheap, and it is the ONE regression that silently un-ships Imgur.
 
+test('THE COOKIE JAR IS SPLICED WHERE IT CANNOT LAND INSIDE AN OPTION PAIR', () => {
+  /**
+   * THE DEFECT, AND IT SHIPPED. The jar was first spliced at a NEGATIVE index, "just before the `--`
+   * terminator". In _meta_page that was correct. In _mux_page the argv ends `-o <out> -- <url>`, so the
+   * same reasoning landed the flag BETWEEN `-o` and its value and built:
+   *
+   *     -o --cookies <path> <out> -- <url>
+   *
+   * yt-dlp reads that as an output TEMPLATE literally named "--cookies", so every mux carrying a jar
+   * would have written to the wrong path with the jar left over as a stray positional.
+   *
+   * WHY IT GOT PAST EVERYTHING. It cannot fire without a filled pool, so the whole suite passed, the
+   * build passed, and production was genuinely unaffected — it was armed to break on the day the
+   * credentials arrived, which is the worst time to discover it. Caught by building the argv and
+   * looking at it, not by reading the code, which is the only way this class shows itself.
+   *
+   * Index 1 is safe by construction: yt-dlp options may appear anywhere before `--`, index 1 is never
+   * the value half of a pair, and it cannot drift when the flag list is edited — which is precisely
+   * what a negative index silently does.
+   */
+  const py = readFileSync('container/server.py', 'utf8')
+  const splices = [...py.matchAll(/cmd\[([-\d:]+)\]\s*=\s*jar\.args\(\)/g)].map(m => m[1])
+  assert.equal(splices.length, 2, 'both yt-dlp invocations take the jar')
+  for (const at of splices) {
+    assert.equal(at, '1:1',
+      `a jar must splice at cmd[1:1]; ${at} can land inside an option pair — see this test's comment`)
+  }
+  // And the terminator must still be the last thing before the url, or the splice moved something else.
+  assert.match(py, /"-o", out, "--", _safe_url\(page\)/, 'the mux output pair and terminator are intact')
+})
+
 test('the container match filter admits a duration-less source and still rejects live + long ones', () => {
   const py = readFileSync('container/server.py', 'utf8')
   // ON THE ARGV, NOT THE FILE. The comments beside it QUOTE the old filter verbatim as the evidence
