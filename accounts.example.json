@@ -1,0 +1,10 @@
+[
+  {
+    "label": "alt1",
+    "cookies": "# Netscape HTTP Cookie File\n.youtube.com\tTRUE\t/\tTRUE\t1799999999\tSID\tEXAMPLE-NOT-A-REAL-VALUE\n.youtube.com\tTRUE\t/\tTRUE\t1799999999\tHSID\tEXAMPLE-NOT-A-REAL-VALUE\n"
+  },
+  {
+    "label": "alt2",
+    "cookies": "# Netscape HTTP Cookie File\n.youtube.com\tTRUE\t/\tTRUE\t1799999999\tSID\tEXAMPLE-NOT-A-REAL-VALUE\n"
+  }
+]

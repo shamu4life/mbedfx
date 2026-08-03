@@ -39,3 +39,32 @@ __pycache__
 .env
 .env.*
 .dev.vars.*
+
+# THE FILES THE ACCOUNT POOLS MAKE SOMEBODY DOWNLOAD, which the patterns above do not cover and
+# which did not exist as a risk until X_ACCOUNTS / IG_ACCOUNTS / YT_ACCOUNTS shipped.
+#
+# The workflow those secrets require is: export a cookies.txt from a browser you are logged into,
+# save it, paste its contents into `wrangler secret put`. Every step of that ends with a live session
+# sitting in a file, and the obvious place to save it is whatever directory the terminal is already
+# in — which is this one. `.dev.vars` never matched any of these names.
+#
+# A LEAKED JAR IS A LOGGED-IN ACCOUNT, not a config value: it is a bearer credential that works from
+# anywhere until the account's session is revoked, and it cannot be rotated by changing a password
+# somebody would have to notice was changed.
+#
+# Slashless and broad on purpose, per the note above: `cookies.txt` at the root and
+# `container/cookies.txt` are the same mistake, and the second one is likelier because that is where
+# the thing consuming it lives.
+cookies.txt
+*cookies.txt
+*.cookies
+cookies*.json
+accounts.json
+*accounts.json
+secrets.json
+*.secrets
+
+# NOT ignored, and deliberately: the committed example carries invented values so somebody can see
+# the shape without ever opening a real one. If this line ever has to be removed, the example has
+# stopped being an example.
+!accounts.example.json

@@ -6,6 +6,8 @@ import { handle, metaCacheKey } from '../src/worker.ts'
 import { refKey } from '../src/refkey.ts'
 import { encodeStatusId } from '../src/statusid.ts'
 import { normalizeYouTube } from '../src/platforms/youtube/normalize.ts'
+import { execFileSync } from 'node:child_process'
+import { readFileSync as _rf } from 'node:fs'
 
 /**
  * THE ACCOUNT POOLS — reading them, and WHICH CONTAINER CALLS MAY SPEND THEM.
@@ -495,4 +497,58 @@ test('THE META CACHE KEY IS GENERATION-SCOPED, so a PRE-COOKIE record is invisib
   const gen = key.split('/')[1]
   assert.equal(metaCacheKey({ p: 'fb', kind: 'watch', id: 'x' }).split('/')[1], gen,
     'one generation for one container pool — two would be two things to keep in step')
+})
+
+test('THE FILES THIS FEATURE MAKES SOMEBODY DOWNLOAD ARE GITIGNORED — .dev.vars matched none of them', () => {
+  /**
+   * THE FOOTGUN THIS FEATURE INTRODUCED. Filling the pools requires exporting a cookies.txt from a
+   * logged-in browser, saving it, and pasting its contents into `wrangler secret put`. Every step ends
+   * with a live session in a file, and the obvious place to save one is whatever directory the terminal
+   * is already in — which is the repo.
+   *
+   * `.dev.vars`, `.env` and `.env.*` were already ignored and matched NONE of these names. A leaked jar
+   * is not a config value: it is a bearer credential that works from anywhere until the session is
+   * revoked, and it cannot be rotated by changing a password somebody would notice.
+   *
+   * Asserted through `git check-ignore` rather than by reading .gitignore for a substring, because a
+   * pattern that LOOKS right is exactly the trap the file's own comments describe — `cookies.txt` at the
+   * root and `container/cookies.txt` are the same mistake, and the second is likelier.
+   */
+  const ignored = p => {
+    try {
+      execFileSync('git', ['check-ignore', '-q', '--no-index', p], { stdio: 'ignore' })
+      return true
+    } catch {
+      return false
+    }
+  }
+  for (const p of [
+    'cookies.txt', 'container/cookies.txt', 'yt-cookies.txt', 'ig-cookies.txt',
+    'accounts.json', 'src/accounts.json', 'secrets.json', 'alt1.cookies', 'cookies-alt1.json',
+  ]) {
+    assert.ok(ignored(p), `${p} holds a live session and must never be committable`)
+  }
+  // And the example must stay committable, or it stops being an example.
+  assert.equal(ignored('accounts.example.json'), false, 'the invented-value example is not a secret')
+})
+
+test('THE COMMITTED EXAMPLE IS A POOL THE CODE ACTUALLY ACCEPTS, and carries no real-looking value', () => {
+  /**
+   * An example that does not parse teaches the wrong shape, and it rots silently: nothing else reads
+   * this file, so a change to parseAccounts or to the documented shape would leave it quietly wrong
+   * while still looking authoritative. docs/CREDENTIALS.md points at it by name.
+   *
+   * The second assertion is the one that matters more. A worked example is the single likeliest place
+   * for a real credential to get committed by someone "just filling it in to test" — so the values are
+   * pinned as obviously invented, and this fails if they ever stop being.
+   */
+  const raw = _rf('accounts.example.json', 'utf8')
+  const pool = parseAccounts(raw)
+  assert.equal(pool.length, 2, 'it must show a POOL, since picking at random is the whole design')
+  assert.ok(pool.every(a => a.label), 'every entry is labelled — the only field safe to log')
+  assert.ok(pool.every(a => a.cookies?.startsWith('# Netscape')), 'and carries a Netscape-shaped jar')
+  for (const a of pool) {
+    assert.match(a.cookies, /EXAMPLE-NOT-A-REAL-VALUE/,
+      'example cookie values must be self-evidently fake')
+  }
 })

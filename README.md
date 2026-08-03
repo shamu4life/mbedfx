@@ -219,6 +219,8 @@ Everything below has a working default, which is why a fresh deploy needs none o
 
 Set with `npx wrangler secret put <NAME>`.
 
+The three `*_ACCOUNTS` pools have their own guide — how to export a cookies.txt without invalidating it, how to turn one into JSON, what is and isn't wired up yet, and why the local files are gitignored: **[docs/CREDENTIALS.md](docs/CREDENTIALS.md)**. `accounts.example.json` shows the finished shape with invented values.
+
 ## Contributing
 
 Bug reports and feature requests are welcome — see [CONTRIBUTING.md](.github/CONTRIBUTING.md) and the [issue templates](../../issues/new/choose).
