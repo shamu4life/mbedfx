@@ -8,7 +8,7 @@
 [![Version](https://img.shields.io/github/v/release/shamu4life/mbedfx?style=flat&label=version&color=5865f2)](docs/CHANGELOG.md)
 
 [![Cloudflare Workers](https://img.shields.io/badge/Deployed_on-Cloudflare_Workers-f38020?style=flat&logo=cloudflare&logoColor=white)](https://workers.cloudflare.com)
-[![Tests](https://img.shields.io/badge/tests-1100%2B-22c55e?style=flat)](test)
+[![Last commit](https://img.shields.io/github/last-commit/shamu4life/mbedfx?style=flat&label=updated&color=22c55e)](../../commits/main)
 
 </div>
 
