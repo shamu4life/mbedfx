@@ -653,3 +653,48 @@ test('THE FOOTER BELONGS TO THE PAGE, NOT TO A CHANNEL', () => {
   assert.equal((HTML.match(/<footer/g) || []).length, 1, 'exactly one footer on the page')
   assert.match(HTML, /Not affiliated with Discord/, 'and it still carries the trademark note')
 })
+
+test('THE MEDIA-ONLY TOGGLE EMITS A d. LINK, and composes with the domain toggle', () => {
+  /**
+   * Requested 2026-08-02. The d. host answers with the post's bytes instead of a card; this exposes
+   * that on the page. Pinned at the markup level because the two controls are INDEPENDENT — media-only
+   * is an on/off, the domain is a one-of-two — and the failure that matters is one silently replacing
+   * the other rather than composing with it.
+   */
+  assert.match(HTML, /id="mediaOnly"/, 'the control exists')
+  assert.match(HTML, /function sendHost\(\)\s*\{\s*return mediaOnly \? 'd\.' \+ host : host; \}/,
+    'the d. prefix is applied to the WHOLE host, so it composes with whichever domain is selected')
+  // Every conversion must go through it, or the copied link and the previewed link can disagree.
+  assert.equal((HTML.match(/mbedfxConvert\(input\.value, host\)/g) || []).length, 0,
+    'no conversion bypasses sendHost()')
+})
+
+test('MEDIA-ONLY DRAWS NO CARD, because a d. link does not unfurl', () => {
+  /**
+   * The correctness trap in this feature. A d. link makes Discord fetch the url and attach the file;
+   * there is no embed. Leaving the mock card on screen would be the largest disagreement between
+   * preview and reality this page could ship — and "a preview that re-implements the renderer drifts
+   * from it" is the rule that already produced the stat-order and abbreviation fixes here.
+   */
+  assert.match(HTML, /function mediaNote\(\)/, 'there is a distinct media-only preview state')
+  assert.match(HTML, /No card\. Discord downloads the file and attaches it\./,
+    'and it says what will actually happen')
+  assert.match(HTML, /if \(mediaOnly\) \{ mediaNote\(\); return; \}/,
+    'the card fetch is skipped entirely rather than fetched and hidden')
+})
+
+test('THE PAGE STILL CARRIES NO VISIBLE EM DASH AND NO SECOND PERSON', () => {
+  /**
+   * Both were owner requests, and both were re-broken by later work — the media-only note arrived
+   * with an em dash, and so did the pitch line and the document title added with the channel router.
+   * A rule that is only ever applied by hand gets re-broken by the next edit, so it is asserted.
+   *
+   * Comments are exempt: they are not visible copy, and the file's explanatory density is deliberate.
+   */
+  const body = HTML.slice(HTML.indexOf('<body'))
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+    .replace(/^\s*\/\/.*$/gm, '')
+    .replace(/<!--[\s\S]*?-->/g, '')
+  assert.equal((body.match(/—/g) || []).length, 0, 'no em dash in anything a visitor reads')
+  assert.equal((body.match(/\b(you|your)\b/gi) || []).length, 0, 'and nothing addresses the reader')
+})
