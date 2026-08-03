@@ -199,9 +199,20 @@ def _mux_page(page: str, out: str, jar=None) -> None:
         "--merge-output-format", "mp4",
         "-o", out, "--", _safe_url(page),
     ]
-    # Spliced before the `--` terminator, never after: everything past `--` is a positional url.
+    # RIGHT AFTER THE PROGRAM NAME, and deliberately not "just before the terminator".
+    #
+    # THE BUG THIS FIXES, caught by asserting on the built argv rather than by reading the code: the
+    # first version spliced at a negative index counted from the end, and landed BETWEEN `-o` and its
+    # value, producing `-o --cookies <path> <out> -- <url>`. yt-dlp reads that as an output TEMPLATE
+    # named "--cookies", so every mux carrying a jar wrote to the wrong place and the jar path became a
+    # stray positional. It could not fire until a pool was filled, so it would have shipped looking
+    # fine and broken on the day the credentials arrived.
+    #
+    # Index 1 has no such hazard: yt-dlp options may appear anywhere before `--`, and nothing here is
+    # positional except the url after it. It also cannot drift when the flag list below is edited,
+    # which the negative index silently could.
     if jar is not None:
-        cmd[-3:-3] = jar.args()
+        cmd[1:1] = jar.args()
     subprocess.run(cmd, check=True, timeout=PROC_TIMEOUT + 60, stdin=subprocess.DEVNULL,
                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
@@ -223,8 +234,11 @@ def _meta_page(page: str, jar=None) -> dict:
     # measurement anonymously (yt:G0sORVBL4kM, age_limit 18, formats: 0, "genuinely unplayable
     # without cookies"); a logged-in jar is what makes that same id resolvable, and it is why the
     # meta path takes cookies too rather than only the mux.
+    #
+    # Index 1, matching _mux_page. This one was correct as a negative splice and is changed anyway, so
+    # the two cannot be reasoned about differently — see the note there for what that cost.
     if jar is not None:
-        cmd[-2:-2] = jar.args()
+        cmd[1:1] = jar.args()
     proc = subprocess.run(cmd, check=True, timeout=PROC_TIMEOUT, stdin=subprocess.DEVNULL,
                           stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
     d = json.loads(proc.stdout or b"{}")
