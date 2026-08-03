@@ -196,16 +196,90 @@ const liveDeps = async () => {
   return { ...deps(), fetchPost: liveFetchPost }
 }
 
+/**
+ * REWRITTEN 2026-08-03, because this test pinned a card that could not work.
+ *
+ * WHAT IT USED TO ASSERT: `og:video:width 544`, `og:video:height 960`, and an `og:video` pointing at
+ * `/_media/dm%3Axaqwy7q/0`. WHAT THE FIXTURE SAYS: `"duration": 4830` — 80.5 minutes, against
+ * MUX_MAX_SECONDS 1500. The container refuses anything over that with its own match filter (see the
+ * argv test at the top of this file), so those bytes can never exist and that url is a permanent 503.
+ * The test was asserting that the card promises a player nobody can ever play, which is the exact
+ * defect serveMuxed's 503 rule exists to contain rather than something to pin.
+ *
+ * WHAT CHANGED IN THE CODE: settleMux's over-ceiling arm always built the poster still, but the
+ * rewritten media array was discarded unless something ELSE on the post degraded — so the remux video
+ * survived and both heads went on advertising it. The arm's result is now applied.
+ *
+ * WHAT THIS TEST ASSERTS INSTEAD: the same thing it always meant to — that the real container dict
+ * reaches the reader. Creator, caption and the no-raw-CDN rule are unchanged; the DIMENSIONS and the
+ * DATE simply had to move to the document that actually carries them for a post with media. Discord
+ * reads the Mastodon spoof there and the og head deliberately ships no og:image (see discord.ts), so
+ * asserting a picture on the head would be asserting against the design.
+ *
+ * NOT A PLATFORM-WIDE CHANGE: Streamable's fixture is 12s and Imgur's declares none, so both keep
+ * their og:video and their test below is the control that says so.
+ */
 test('DAILYMOTION: the real container dict reaches the card — creator, caption, dimensions, date', async () => {
   const { seen, binding } = fakeResolver(DM_META)
-  const html = await (await handle(req('/video/xaqwy7q'), envWith(binding), ctx, await liveDeps())).text()
+  const env = envWith(binding)
+  const d = await liveDeps()
+  const html = await (await handle(req('/video/xaqwy7q'), env, ctx, d)).text()
   assert.equal(seen.pages[0], 'https://www.dailymotion.com/video/xaqwy7q', 'the page comes from the ref alone')
   assert.match(html, /og:title" content="Winter\.Desire \(@Winter\.Desire\)"/, 'the real uploader, not the byline')
   assert.match(html, /og:description" content="Zero to Alpha: Return of the Wolf King"/)
-  assert.match(html, /og:video:width" content="544"/)
-  assert.match(html, /og:video:height" content="960"/)
-  assert.match(html, new RegExp(`og:video" content="[^"]*/_media/${encodeURIComponent(refKey(DM_REF))}/0`))
   assert.ok(!html.includes('dmcdn.net'), 'no raw CDN url leaks into the head')
+
+  // THE SAME env AND deps, so this is the warm post the callback really re-derives rather than a
+  // second independent extract that could disagree with the head.
+  const link = html.match(/activity\+json" href="([^"]+)"/)
+  assert.ok(link, 'a post with media must advertise the spoof — it is where its picture lives')
+  const j = await (await handle(new Request(link[1], { headers: { 'user-agent': DISCORD } }), env, ctx, d)).json()
+
+  assert.equal(j.account.display_name, 'Winter.Desire', 'the uploader survives the seam')
+  // timestamp 1784619335, straight off the container dict — the field the test name has always
+  // claimed and nothing actually checked.
+  assert.equal(String(j.created_at), '2026-07-21T07:35:35.000Z')
+  assert.equal(j.media_attachments[0].meta.original.size, '544x960', 'the dimensions, on the seam that draws them')
+})
+
+test('A VIDEO OVER THE MUX CEILING SHIPS ITS STILL, NOT A PLAYER THAT CAN NEVER EXIST', async () => {
+  /**
+   * THE RULE THE REWRITE ABOVE IS ABOUT, stated on its own so it cannot be lost inside a test named
+   * for something else. 4830s against MUX_MAX_SECONDS 1500: no mux is dispatched (the duration is
+   * already in the meta record, so paying a full deadline to be refused buys nothing), the entry
+   * becomes its poster still, and the card is left CACHEABLE — this verdict is permanent, unlike an
+   * unfinished mux, so `degraded` stays false and /_card reports muxing:false. See test/card-muxing.
+   *
+   * THE PICTURE MUST STILL REACH THE READER, which is the half worth measuring rather than assuming:
+   * a degrade that silently produced a card with no image anywhere would be a worse bug than the dead
+   * player it replaced. Verified end to end here — the attachment is an IMAGE, it is addressed at the
+   * `poster0` slot (bytesIndex moves a `posterOnly` still off the video slot, which answers 503 by
+   * design), it carries `meta.original` (Discord draws NOTHING for an unsized image attachment), and
+   * the slot really 302s to the thumbnail the container reported.
+   */
+  const { binding } = fakeResolver(DM_META)
+  const env = envWith(binding)
+  const d = await liveDeps()
+  const html = await (await handle(req('/video/xaqwy7q'), env, ctx, d)).text()
+
+  assert.doesNotMatch(html, /og:video/, 'no player is promised, at any spelling')
+  assert.doesNotMatch(html, new RegExp(`/_media/${encodeURIComponent(refKey(DM_REF))}/0`),
+    'and nothing on the head names the video slot, which is a permanent 503 for this duration')
+
+  const link = html.match(/activity\+json" href="([^"]+)"/)[1]
+  const j = await (await handle(new Request(link, { headers: { 'user-agent': DISCORD } }), env, ctx, d)).json()
+  assert.equal(j.media_attachments.length, 1)
+  const [a] = j.media_attachments
+  assert.equal(a.type, 'image', 'the still, never a dead player')
+  assert.match(a.url, new RegExp(`/_media/${encodeURIComponent(refKey(DM_REF))}/poster0$`))
+  assert.equal(a.preview_url, a.url, 'both keys, or Discord picks the one that was left behind')
+  assert.ok(a.meta && a.meta.original, 'an image attachment with no size renders as no picture at all')
+
+  // The last hop, because every url above is only a promise until something serves it.
+  const hop = await handle(new Request(a.url, { headers: { 'user-agent': DISCORD } }), env, ctx, d)
+  assert.equal(hop.status, 302, 'the poster slot resolves')
+  assert.equal(hop.headers.get('location'), 'https://s1.dmcdn.net/v/cl3Ss1gPDqxVwKrv7/x1080',
+    'to the thumbnail the container reported — which is why the head is allowed to carry no CDN url')
 })
 
 test('STREAMABLE: no uploader anywhere, so the card carries the platform byline and still plays', async () => {

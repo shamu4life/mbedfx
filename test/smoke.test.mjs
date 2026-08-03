@@ -3,8 +3,15 @@ import assert from 'node:assert/strict'
 import { readFileSync, existsSync } from 'node:fs'
 import { fetchableInstance } from '../src/platforms/fedihost.ts'
 
-/** The zones this project owns and serves. Both are live; see wrangler.jsonc's routes comment. */
-const OUR_ZONES = ['mbedfx.app', 'megapenispoopenfarten.sex']
+/**
+ * The zones this project owns and serves. All three are live; see wrangler.jsonc's routes comment.
+ *
+ * DELIBERATELY NOT DERIVED FROM wrangler.jsonc, even though the SSRF test below reads that file. The
+ * check this feeds — "a route is on a zone we own" — becomes vacuous the moment the list of zones we
+ * own is read out of the list of routes. Keeping it a separate declaration is the whole mechanism: a
+ * route added without a human deciding it belongs here fails, loudly, in a test named for the rule.
+ */
+const OUR_ZONES = ['mbedfx.app', 'megapenispoopenfarten.sex', 'forsen.sex']
 
 test('the only runtime dependency is the container helper, isolated from the fetch path', () => {
   const pkg = JSON.parse(readFileSync('package.json', 'utf8'))
@@ -52,9 +59,9 @@ test('routes are bare hostnames on our own zone — apex claimed, wildcard never
   const cfg = JSON.parse(readFileSync('wrangler.jsonc', 'utf8').replace(/^\s*\/\/.*$/gm, ''))
   const patterns = (cfg.routes ?? []).map(r => r.pattern)
   assert.ok(patterns.length > 0, 'the worker must claim at least one hostname')
-  // TWO ZONES since the 2026-07-30 rename. mbedfx.app is the project's domain; the original zone is
-  // RETAINED rather than cut over, because a link already pasted into Discord resolves only while its
-  // host does. Everything the original single-zone test protected is preserved, per zone.
+  // THREE ZONES. mbedfx.app is the project's domain; megapenispoopenfarten.sex is the original, kept
+  // rather than cut over because a link already pasted into Discord resolves only while its host does;
+  // forsen.sex was added 2026-08-03. Everything the original single-zone test protected holds per zone.
   for (const p of patterns) {
     assert.ok(!p.includes('*'), 'never a wildcard — that would swallow the whole zone')
     const host = p.split('/')[0]
@@ -84,6 +91,34 @@ test('routes are bare hostnames on our own zone — apex claimed, wildcard never
    */
   for (const p of patterns) {
     assert.ok(!p.startsWith('staging.'), `staging.* is retired, found ${p}`)
+  }
+})
+
+test('THE CONVERTER PAGE KNOWS EVERY DOMAIN THE WORKER SERVES — routes vs OWN_HOSTS', () => {
+  /**
+   * A THIRD PLACE THE DOMAIN LIST LIVES, and the one with the quietest failure.
+   *
+   * public/index.html keeps its own OWN_HOSTS, because the page must answer two questions the worker
+   * cannot answer for it: which domain to hand out by default (the one you arrived on), and whether a
+   * pasted link is already ours. A domain in wrangler.jsonc but not in that list does not break — it
+   * serves the page perfectly, then hands out links on a DIFFERENT domain, and tells anyone who pastes
+   * one of its own links back in that the site is unsupported.
+   *
+   * That is invisible from the worker side and invisible in the tests that read wrangler.jsonc, which
+   * is why it gets its own assertion rather than a comment asking the next person to remember.
+   */
+  const cfg = JSON.parse(readFileSync('wrangler.jsonc', 'utf8').replace(/^\s*\/\/.*$/gm, ''))
+  const served = (cfg.routes ?? []).map(r => r.pattern.split('/')[0]).sort()
+  const page = readFileSync('public/index.html', 'utf8')
+  const m = page.match(/var OWN_HOSTS = \[([^\]]*)\]/)
+  assert.ok(m, 'the page declares OWN_HOSTS')
+  const listed = m[1].split(',').map(x => x.trim().replace(/^'|'$/g, '')).filter(Boolean).sort()
+  assert.deepEqual(listed, served, 'the page must list exactly the domains wrangler.jsonc serves')
+
+  // And each one needs a toggle button, or arriving there leaves the pressed state lying about which
+  // domain is in the box. Hidden is fine — unadvertised is not the same as absent.
+  for (const host of served) {
+    assert.ok(page.includes(`data-host="${host}"`), `${host} has a domain button`)
   }
 })
 
