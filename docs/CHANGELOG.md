@@ -5,6 +5,24 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [1.6.2] — 2026-08-03
+
+### Fixed
+- **A `youtu.be` link came back as `/watch?v=`.** The converter page already turns that short form
+  into a bare `/{id}` correctly; `/_prep` then overwrote it, because the link it returns was rebuilt
+  from the **platform's canonical** every time — and YouTube's canonical is the long watch form.
+  Nothing was learned by that rewrite. It only handed back a longer link than the one pasted, on the
+  one screen whose whole job is handing back a tidy one.
+
+  The rewrite exists for a real case and is kept for it: a share code or a shortlink names no post
+  until a hop resolves it, so the page must be given the permalink rather than the opaque token. The
+  test is now "did resolving **change which post this addresses**" rather than "is this the canonical
+  spelling" — and when it did not, whatever was pasted comes back untouched. Both halves are pinned.
+
+1154 tests, `node --test`; `tsc --noEmit` clean.
+
+---
+
 ## [1.6.1] — 2026-08-03
 
 ### Fixed
