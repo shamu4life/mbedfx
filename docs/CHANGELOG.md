@@ -5,6 +5,30 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [1.4.0] — 2026-08-03
+
+### Added
+- **A "media only" checkbox on the converter**, emitting the `d.` link from 1.3.0. It sits beside the
+  domain buttons rather than inside them, because the two are different kinds of choice: the domain
+  is one-of-two, this is an independent on/off, and every conversion routes through one function so
+  the two cannot disagree about the link.
+- **The preview stops drawing a card while it is on.** This is the correctness half of the feature,
+  not a detail. A `d.` link does not unfurl — Discord fetches the url and attaches the file — so
+  leaving the mock card up would be the largest disagreement between preview and reality this page
+  could ship, against its own rule that a preview which re-implements the renderer drifts from it.
+  It says what will happen instead, and the card fetch is skipped rather than made and hidden.
+
+### Fixed
+- **Three visible em dashes that later work had re-introduced**, including one in the new media-only
+  note, one in the `#convert` pitch and one in the document title added with the channel router. The
+  no-em-dash and no-second-person rules are now asserted by a test over the page's visible copy
+  rather than applied by hand, because a rule only ever enforced by memory gets re-broken by the next
+  edit — which is exactly what happened here, twice, by me.
+
+1141 tests, `node --test`; `tsc --noEmit` clean.
+
+---
+
 ## [1.3.0] — 2026-08-02
 
 ### Added

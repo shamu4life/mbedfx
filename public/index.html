@@ -315,7 +315,14 @@ h2.head { font-size: 20px; color: var(--head); margin: 0 0 6px; font-weight: 700
 
 /* ---------- detected-site chip + picker --------------------------------- */
 
-/* The chip says which site we read the link as, on EVERY conversion — the owner asked for it to be
+.mediaonly {
+    display: inline-flex; align-items: center; gap: 6px; margin-left: 10px;
+    font-size: 12px; color: var(--faint); cursor: pointer; user-select: none;
+  }
+  .mediaonly input { accent-color: var(--blurple); margin: 0; cursor: pointer; }
+  .mediaonly:hover { color: var(--text); }
+
+  /* The chip says which site we read the link as, on EVERY conversion — the owner asked for it to be
    always visible AND overridable, because a silent wrong guess is the failure that costs a card. */
 .chip {
   display: inline-flex; align-items: center; gap: 6px; cursor: pointer;
@@ -437,6 +444,7 @@ footer .fine { font-size: 12px; opacity: .8; }
 @media (max-width: 620px) {
   .chanbar .sep, #chanDesc { display: none; }
   .seg { margin-left: 0; }
+    .mediaonly { margin-left: 0; }
   .toolbar { align-items: flex-start; }
 }
 </style>
@@ -459,7 +467,7 @@ footer .fine { font-size: 12px; opacity: .8; }
          hardcoded because this page is a static asset with no template step — and pinned to
          package.json by a test, because a version number that silently disagrees with the release is
          worse than none at all. -->
-    <div class="server">mbedfx <span class="ver" id="ver">v1.3.0</span></div>
+    <div class="server">mbedfx <span class="ver" id="ver">v1.4.0</span></div>
     <div class="cat">Start here</div>
     <a href="#convert"><b>#</b> convert</a>
     <a href="#sites"><b>#</b> sites</a>
@@ -504,7 +512,7 @@ footer .fine { font-size: 12px; opacity: .8; }
         <div>
           <div class="who"><span class="name">mbedfx</span><span class="bot">BOT</span><span class="ts">today</span></div>
           <p>Paste a social link and I'll hand back one Discord can actually draw. Swap the site's
-             domain for mine and the link still points at the same post — read here, not
+             domain for mine and the link still points at the same post. Read here, not
              handed off to someone else's fixer.</p>
 
           <div class="tool">
@@ -514,6 +522,10 @@ footer .fine { font-size: 12px; opacity: .8; }
                 <button type="button" data-host="mbedfx.app" aria-pressed="true">mbedfx.app</button>
                 <button type="button" data-host="megapenispoopenfarten.sex" aria-pressed="false">megapenispoopenfarten.sex</button>
               </div>
+              <!-- Not part of .seg: the domain buttons are a one-of-two choice, this is an
+                   independent on/off that composes with whichever domain is selected. Making it a
+                   third segment would say the three are alternatives, which they are not. -->
+              <label class="mediaonly"><input type="checkbox" id="mediaOnly"> media only</label>
             </div>
             <label for="url" style="position:absolute;left:-9999px">Post link</label>
             <input id="url" type="url" spellcheck="false" autocomplete="off"
@@ -812,6 +824,16 @@ function mbedfxConvert(input, host) {
   // across a toggle click so testing on staging never hands out production links.
   var origin = mbedfxDefaultHost(location.hostname);
   var host = origin.host;
+  /**
+   * MEDIA-ONLY emits the d. host, which answers with the post's BYTES instead of a card.
+   *
+   * Prefixed onto the WHOLE host rather than swapped into it, so it composes with the domain toggle
+   * without either control needing to know about the other. One consequence worth knowing: a
+   * wildcard DNS record covers exactly ONE label, so `d.staging.…` would need a record of its own —
+   * the production hosts are covered, staging is not.
+   */
+  var mediaOnly = false;
+  function sendHost() { return mediaOnly ? 'd.' + host : host; }
 
   /**
    * Brand marks, inline. Source: simple-icons 16.27.1 (icon data CC0; the marks themselves remain
@@ -978,7 +1000,7 @@ function mbedfxConvert(input, host) {
     var b = e.target.closest && e.target.closest('[data-force]');
     if (!b) return;
     var code = b.getAttribute('data-force');
-    var r = mbedfxConvert(input.value, host);
+    var r = mbedfxConvert(input.value, sendHost());
     // Force by prefixing the router's escape token onto the path we already computed. A path we could
     // not read at all has none, so fall back to the pasted url's own path.
     var path = r.ok ? r.path : pathOf(input.value);
@@ -997,7 +1019,7 @@ function mbedfxConvert(input, host) {
   var forced = null;
 
   function render() {
-    var r = mbedfxConvert(input.value, host);
+    var r = mbedfxConvert(input.value, sendHost());
     forced = null;
     hidePicker();
     if (!r.ok && r.kind === 'empty') { outClass(false); return; }
@@ -1287,6 +1309,22 @@ function mbedfxConvert(input, host) {
    */
   var CARD_RETRY_MS = 2500;
 
+  /**
+   * WHAT MEDIA-ONLY SHOWS INSTEAD OF A CARD. A d. link does not unfurl — Discord fetches the url and
+   * attaches the file — so drawing the mock card here would be this page's own worst-case failure:
+   * a preview that confidently disagrees with what gets sent. It says what will actually happen and
+   * keeps the link row, which is what the reader came for.
+   */
+  function mediaNote() {
+    clearTimeout(cardTimer);
+    cardSeq++;                       // any card already in flight must not land on top of this
+    cardUp = false; outClass(true);
+    preview.innerHTML = '<div class="pv"><div class="body">'
+      + 'No card. Discord downloads the file and attaches it.'
+      + '</div></div>';
+    preview.className = 'preview show';
+  }
+
   function card(url, isRetry) {
     var path = url.slice(url.indexOf('/', 8));
     var seq = ++cardSeq;
@@ -1310,11 +1348,14 @@ function mbedfxConvert(input, host) {
   function schedulePrep() {
     clearTimeout(prepTimer);
     clearTimeout(cardTimer);
-    var r = mbedfxConvert(input.value, host);
+    var r = mbedfxConvert(input.value, sendHost());
     if (!r.ok) { hidePreview(); return; }
     prepTimer = setTimeout(function () { prep(r.url); }, 600);
     // Later than prep, and deliberately: prep may REPLACE the url (a share code unfurls), and drawing
     // the card for a url that is about to change wastes a render and shows the wrong one first.
+    // A d. link has no card to fetch, and asking for one would spend a request to draw something
+    // that must not be shown anyway.
+    if (mediaOnly) { mediaNote(); return; }
     cardTimer = setTimeout(function () { card(result.textContent || r.url); }, 900);
   }
 
@@ -1396,7 +1437,7 @@ function mbedfxConvert(input, host) {
       nameEl.textContent = id;
       descEl.textContent = (el && el.getAttribute('data-desc')) || '';
       for (var k in links) if (links[k]) links[k].classList.toggle('on', k === id);
-      document.title = '#' + id + ' — mbedfx';
+      document.title = '#' + id + ' · mbedfx';
       // Switching channel puts you at the top of it. Keeping the old offset lands you halfway down
       // an unrelated body of text, which reads as a rendering fault rather than a navigation.
       if (document.querySelector('.msgs')) scrollTo(0, 0);
@@ -1421,6 +1462,17 @@ function mbedfxConvert(input, host) {
     if (scrim) scrim.addEventListener('click', closeNav);
     addEventListener('keydown', function (e) { if (e.key === 'Escape') closeNav(); });
   })();
+
+  var mediaOnlyBox = $('mediaOnly');
+  if (mediaOnlyBox) {
+    mediaOnlyBox.addEventListener('change', function () {
+      mediaOnly = mediaOnlyBox.checked;
+      render();
+      // render() only rewrites the link; the PREVIEW has to change kind, in both directions.
+      if (mediaOnly) mediaNote();
+      else { hidePreview(); schedulePrep(); }
+    });
+  }
 
   var segs = document.querySelectorAll('.seg button');
   Array.prototype.forEach.call(segs, function (b) {

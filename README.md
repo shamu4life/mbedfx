@@ -65,6 +65,8 @@ Put `d.` in front and you get the file itself instead of a card — the video or
 https://d.megapenispoopenfarten.sex/jack/status/20
 ```
 
+The converter page has a **media only** checkbox that does the same thing, next to the domain buttons. It composes with them, so you can have either domain either way.
+
 Handy for saving a clip, or for anywhere that wants a media URL rather than a link preview. It serves people and crawlers the same bytes — there's no card to render, so there's nothing to tell them apart for.
 
 A post with nothing to serve answers a plain-text 404 rather than an HTML page, so a downloader never ends up with a file full of markup.
