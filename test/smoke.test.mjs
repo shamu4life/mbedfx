@@ -64,16 +64,26 @@ test('routes are bare hostnames on our own zone — apex claimed, wildcard never
     )
     assert.equal(p, host, 'a route must be a bare hostname, with no path')
   }
-  // The cutover itself, pinned so an accidental revert is loud: the apex is ours, as a custom
-  // domain (not a path route), and staging still exists alongside it for pre-prod verification.
+  // The cutover itself, pinned so an accidental revert is loud: the apex is ours, as a custom domain
+  // rather than a path route.
   for (const zone of OUR_ZONES) {
     const apex = (cfg.routes ?? []).find(r => r.pattern === zone)
     assert.ok(apex, `the apex is claimed for ${zone}`)
     assert.equal(apex.custom_domain, true, `${zone} apex is a custom domain — the mechanism the rollback note assumes`)
-    assert.ok(
-      patterns.includes(`staging.${zone}`),
-      `staging.${zone} survives — it is where changes are verified before the apex sees them`,
-    )
+  }
+
+  /**
+   * STAGING IS GONE, and this asserts its absence rather than merely stopping asserting its presence.
+   * It used to require staging.<zone> to survive "because it is where changes are verified before the
+   * apex sees them". That role moved to Workers Builds previews, which give every branch its own
+   * *-mbedfx.<account>.workers.dev url and cost no DNS record, no route and no second certificate.
+   *
+   * Asserted as an absence because a custom domain is exactly the kind of thing that gets added back
+   * by a hand edit in the dashboard and then re-serialised into this file, and nothing else would
+   * notice: it would simply start serving again, quietly, on a hostname nobody is testing.
+   */
+  for (const p of patterns) {
+    assert.ok(!p.startsWith('staging.'), `staging.* is retired, found ${p}`)
   }
 })
 

@@ -1,6 +1,7 @@
-# Dependency updates. Two ecosystems: the npm devDependencies (wrangler, typescript) and the
-# GitHub Actions used by CI. Monthly rather than weekly — this project has three direct
-# dependencies and a weekly cadence would be noise.
+# Dependency updates. Two ecosystems: the npm packages (wrangler, typescript,
+# @cloudflare/workers-types as dev; @cloudflare/containers at RUNTIME — the last is why calling
+# these "devDependencies" was wrong) and the GitHub Actions used by CI. Monthly rather than
+# weekly: there are four direct packages and a weekly cadence would be noise.
 version: 2
 updates:
   - package-ecosystem: npm

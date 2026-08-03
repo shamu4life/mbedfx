@@ -6,10 +6,12 @@ the author, the caption, the counts, and a video that plays inline.
 
 **Stack:** Cloudflare Workers + R2 + Durable Objects + a `yt-dlp`/`ffmpeg` container
 **Language:** TypeScript, no framework, no bundler — Workers runs the modules directly
-**UI:** `public/index.html`, hand-written vanilla JS and CSS, one file
+**UI:** `public/index.html`, hand-written vanilla JS and CSS, one file — its VISIBLE copy carries no
+em dashes and no second person (owner's call; asserted by a test, because both were re-broken by
+later edits within a day of being asked for)
 **Tests:** `node --test`, no test framework, no network
 **Deploy:** Cloudflare Workers Builds on merge to `main` — **merging is the deploy**
-**Version:** 1.4.0
+**Version:** 1.5.0
 
 ---
 
@@ -80,6 +82,15 @@ that were cached, the real video would never appear. Same for a translation that
 **Deadlines are budgets on the WHOLE response, not per-step.** `META_WAIT_API_MS` sat at 4000 while
 the extract it waited for took 2.3–6.7s, so first pastes rendered the epoch — and self-healed on the
 second view, which is why it survived so long.
+
+**The converter preview is a THIRD seam, and it never gets a second chance.** Both self-heal lessons
+above — a degraded card is not cached so the next render fixes it, a lost translation lands in R2 for
+the next reader — quietly assume there IS a next render. `/_card` is fetched once per typing-settle
+and drawn; nobody re-pastes to heal it. That assumption shipped two defects in one day: every YouTube
+preview showed the 1970 epoch because only Discord's own unfurl warmed the date, and translations
+looked "unreliable" because the preview's budget was spent by a mux it queued behind. **When you fix
+something on the two Discord heads, ask what the preview does — it is the surface where "it heals
+next time" means "it never heals".**
 
 **`git add -A` sweeps in agent scratch.** `.gitignore` has four essays about this. Slashless
 patterns, always: a `dir/` pattern does not match a symlink or a not-yet-existent path.

@@ -373,7 +373,7 @@ const withFetch = (fn, body) => async () => {
 }
 
 test('the credential seam is EMPTY — returns null with no accounts', async () => {
-  // THE SEAM IS A TESTED BOUNDARY, NOT A TODO. Shipped empty (no [redacted], no bundled accounts)
+  // THE SEAM IS A TESTED BOUNDARY, NOT A TODO. Shipped empty (no CREDENTIAL_KEY, no bundled accounts)
   // it returns null, and that null is exactly what turns an age-gated tweet into an honest
   // age_restricted failure instead of a half-built credential system. A later phase fills it to return
   // { source:'guest', data } — the same shape fetchGuest returns — and these gated posts become

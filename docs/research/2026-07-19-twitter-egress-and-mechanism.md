@@ -110,8 +110,8 @@ full content.
   `Outcome.failure` routed to `age_restricted`. Do not confuse it with `possibly_sensitive` (an ordinary, fetchable,
   sensitive post that we DO render with the `[sensitive]` marker).
 - **Seam design reference:** FxEmbed `src/providers/twitter/proxy/credentials.ts` — real logged-in accounts,
-  [redacted]-encrypted into the bundle at build time, decrypted via `crypto.subtle` with a `[redacted]`,
-  `[redacted]()` per request, triggered only on the gate. Phase-now ships the seam EMPTY: a named
+  AES-256-GCM-encrypted into the bundle at build time, decrypted via `crypto.subtle` with a `CREDENTIAL_KEY`,
+  `getRandomTwitterAccount()` per request, triggered only on the gate. Phase-now ships the seam EMPTY: a named
   function that returns `null` because there are no accounts. This is a tested boundary, not a TODO.
 
 ---
@@ -174,7 +174,7 @@ reference at all. Both API paths dominate it. Usable as a last-ditch text-only d
 - `src/constants.ts:60` — the hardcoded public web bearer (`GUEST_BEARER_TOKEN`), a public constant.
 - `packages/atmosphere/src/providers/twitter/fetch.ts:48` — `Authorization: env.guestBearerToken`.
 - `packages/atmosphere/src/providers/twitter/fetch.ts` ~126-135 — the per-attempt guest headers/cookie assembly.
-- `packages/atmosphere/src/providers/twitter/fetch.ts:180` — `'[redacted] set but no bundled accounts; using
+- `packages/atmosphere/src/providers/twitter/fetch.ts:180` — `'CREDENTIAL_KEY set but no bundled accounts; using
   guest API'` — proves guest is a real fallback, not vestigial.
 - `packages/atmosphere/src/providers/twitter/fetch.ts:248-256` — the credential escalation ("elongator"); keys on
   `reason === 'NsfwLoggedOut'` (which the current `TweetTombstone` shape does NOT carry — see the age-gate note).

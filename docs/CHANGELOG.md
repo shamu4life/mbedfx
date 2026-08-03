@@ -5,7 +5,77 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
-## [1.4.0] — 2026-08-03
+## [1.5.0] — 2026-08-03
+
+### Fixed
+- **`d.` did nothing on a share link.** Reported on
+  `d.megapenispoopenfarten.sex/r/linuxmemes/s/VRg1iSFn4k`, which behaved identically to the version
+  without it. The host check had been wired into the pasted-permalink route only — a Reddit
+  `/r/{sub}/s/{code}`, a Meta `/share/` code and every shortlink are *different route kinds*, so three
+  of the four ways to reach a post ignored the host entirely. The check moved into the one function
+  they all converge on, so a future route that resolves to a post inherits it rather than having to
+  remember.
+
+  The half that was easy to miss: every one of those routes bounces a **person** to the original post
+  before rendering, because a card is for a crawler. On a `d.` host that sent someone who asked for
+  the file to the post they already had. Those redirects are now guarded too.
+- **Media-only intermittently lost its `d.`**, reported as "it seems to intermittently not work when
+  changing links". `/_prep` answers with a url the WORKER built from the request's origin — the host
+  serving the page — so it knows nothing about the domain toggle or media-only. When a share code
+  unfurled, that answer overwrote a correct link and the `d.` silently reverted.
+
+  **Pre-existing and wider than media-only**: the same line discarded the domain toggle too. Nobody
+  had noticed, because losing a whole `d.` is visible where losing a swap between two domains is not.
+  Both are fixed by re-pointing whatever `/_prep` returns at the host the reader actually chose.
+- **Media-only previewed nothing**, reported as "antithetical to the purpose of previewing on the
+  site", which is right. Half the original reasoning still holds — a `d.` link does not unfurl, so
+  drawing the mock Discord card would be a lie — but the conclusion did not: the honest preview of
+  "Discord attaches this file" is THE FILE. It now shows the media itself, with no card chrome, and
+  fetches the same payload as before rather than skipping the request.
+
+### Changed
+- **Post bodies are capped at 253 characters**, the last three being `...`. Measured before building
+  it, because the instinct needed checking: across the captured fixtures the median caption is 81
+  characters and two thirds are under 200, so Twitter, Instagram and Bluesky were never the problem.
+  The walls are the long-form platforms — Lemmy's median fixture is 3,239 characters and PieFed's
+  1,228. A real Lemmy post now renders at 252 characters instead of 2,224.
+
+  Applied in one place and reached by **both** heads. Capping the Mastodon spoof and not the plain
+  OpenGraph head would, from a reader's side, cap neither.
+
+  It runs **after** translation, deliberately: `withTranslation` composes English first, so a
+  translated post long enough to hit the cap keeps the English and loses the original rather than the
+  other way round. There is a test for that ordering, because it is a decision rather than a
+  coincidence.
+- YouTube's own clamp now uses the same three dots instead of `…`, so the codebase carries one
+  truncation marker rather than two. It survives at 300 because its job is bounding what is **stored
+  in R2 for 30 days**, not what is displayed — at 253 the render cap is tighter, so its marker can no
+  longer reach a card at all.
+- **The `staging.*` custom domains are retired.** Testing is Workers Builds previews now, where each
+  branch gets its own `*-mbedfx.<account>.workers.dev` and costs no DNS record, no route and no
+  second certificate. The converter page's prefix logic moved with it: a preview deployment emits
+  **its own** links, because being handed production links while testing a branch means checking the
+  live worker while believing you checked your change. The smoke test now asserts staging's ABSENCE —
+  a custom domain is exactly the kind of thing that gets re-added by hand in a dashboard and then
+  serves quietly on a hostname nobody is testing.
+- The README's test-count badge became a **last-commit** badge. A count is a number about us rather
+  than about the thing on offer, and it was already wrong — hardcoded at "1100+" against a suite of
+  1,145 — because a hand-maintained badge only stays true while someone remembers it. Shields reads
+  the commit date, so it cannot drift.
+
+### Notes
+- The SSRF own-host list needed no change, which was checked rather than assumed:
+  `platforms/fedihost.ts` already carries `workers.dev` and matches subdomains, so preview hosts were
+  never fetchable as fediverse instances.
+- The ~45 test files that use `staging.megapenispoopenfarten.sex` merely as a request hostname are
+  left alone. `route()` is host-agnostic, so they assert nothing about staging, and rewriting them
+  would be churn across 23 files for no change in behaviour.
+
+1145 tests, `node --test`; `tsc --noEmit` clean.
+
+---
+
+## [1.4.0] — 2026-08-02
 
 ### Added
 - **A "media only" checkbox on the converter**, emitting the `d.` link from 1.3.0. It sits beside the
@@ -108,9 +178,12 @@ Reported on `/reel/DX7byl-oyGR/`, which a competitor played and we drew as a pho
 
 1133 tests, `node --test`; `tsc --noEmit` clean.
 
----
+### Notes
+- **This entry absorbs what was briefly published as 1.1.2.** That version was written up and then
+  superseded before it ever shipped — no tag, no release, no deploy — so a changelog entry for it was
+  a record of something that never happened. Its content is real and is folded in below rather than
+  deleted, because it carries the measurement that sent the fix in the right direction.
 
-## [1.1.2] — 2026-08-02
 
 ### Fixed
 - **A copyright-blocked Instagram reel older than the account's last 12 posts rendered as a photo.**
@@ -137,8 +210,6 @@ Reported on `/reel/DX7byl-oyGR/`, which a competitor played and we drew as a pho
   egress. It fails safe: no container, a refused extract or an oversized result all leave the cover
   still exactly as it is today. The precedent for optimism is Facebook, where Meta decoys the crawler
   from the datacenter and yt-dlp extracts the video anyway — precedent, not proof.
-
-1131 tests, `node --test`; `tsc --noEmit` clean.
 
 ---
 

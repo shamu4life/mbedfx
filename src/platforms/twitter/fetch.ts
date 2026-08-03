@@ -434,19 +434,19 @@ export type TwitterFetch =
 /**
  * THE CREDENTIAL SEAM. Age-gated posts (TweetTombstone) are unreachable credential-free — measured on
  * both paths, both egresses (recon 2026-07-19). FxEmbed surmounts them with a pool of real,
- * [redacted]-encrypted logged-in accounts decrypted with [redacted] and picked at random per
- * request (src/providers/twitter/proxy/credentials.ts). We ship that seam EMPTY: no [redacted], no
+ * AES-256-GCM-encrypted logged-in accounts decrypted with CREDENTIAL_KEY and picked at random per
+ * request (src/providers/twitter/proxy/credentials.ts). We ship that seam EMPTY: no CREDENTIAL_KEY, no
  * accounts, so this returns null and the tweet becomes an honest age_restricted failure.
  *
  * THIS IS THE INJECTION POINT, and it is deliberately a real, tested function rather than a TODO: a
- * later phase fills it (decrypt the bundle, [redacted], fetch TweetResultByRestId with the
+ * later phase fills it (decrypt the bundle, getRandomTwitterAccount, fetch TweetResultByRestId with the
  * account's auth) and returns { source:'guest', data } — the SAME shape fetchGuest's ok result carries,
  * so fromGuest normalizes it with no further change. Filling it turns these exact posts into ordinary
  * successes with zero rearchitecting (spec, the X-platform credential section). Do NOT half-build a
  * credential system here now.
  *
  * `_ref`/`_env` are the signature a filled seam needs (which tweet, and the secret-store binding that
- * holds [redacted] + the bundle); unused while empty, prefixed so tsc does not flag them.
+ * holds CREDENTIAL_KEY + the bundle); unused while empty, prefixed so tsc does not flag them.
  */
 export async function fetchWithCredentials(
   _ref: Extract<PostRef, { p: 'x' }>,

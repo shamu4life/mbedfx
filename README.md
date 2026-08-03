@@ -8,7 +8,7 @@
 [![Version](https://img.shields.io/github/v/release/shamu4life/mbedfx?style=flat&label=version&color=5865f2)](docs/CHANGELOG.md)
 
 [![Cloudflare Workers](https://img.shields.io/badge/Deployed_on-Cloudflare_Workers-f38020?style=flat&logo=cloudflare&logoColor=white)](https://workers.cloudflare.com)
-[![Tests](https://img.shields.io/badge/tests-1100%2B-22c55e?style=flat)](test)
+[![Last commit](https://img.shields.io/github/last-commit/shamu4life/mbedfx?style=flat&label=updated&color=22c55e)](../../commits/main)
 
 </div>
 
@@ -189,7 +189,7 @@ Know what you're getting:
 
 - **No accounts, no cookies, no analytics on the page.** Nothing identifies who pasted a link.
 - **Counters only.** The worker records which platform was asked for and whether it worked. Not urls, not ids, not addresses.
-- **R2 holds two things:** remuxed video, keyed by the post; and translations, keyed by a hash of the text. Both expire after 60 days, and both are regenerable from the platform they came from.
+- **R2 holds three things:** remuxed video, keyed by the post; the metadata the resolver read back (title, uploader, description, poster, timestamp, counts), also keyed by the post; and translations, keyed by a hash of the text. Both expire after 60 days, and both are regenerable from the platform they came from.
 - **Cards cache for about 15 minutes**, which is why a post you just deleted can linger briefly.
 - **Nothing about you reaches the platform.** The worker fetches from its own egress; your IP and user agent stay with us.
 
@@ -199,9 +199,23 @@ Only these run mbedfx:
 
 `mbedfx.app` · `megapenispoopenfarten.sex`
 
-`d.` works on `megapenispoopenfarten.sex` today. On `mbedfx.app` it needs a DNS record that doesn't exist yet, so `d.mbedfx.app` won't resolve until that's added.
+`d.` works on both: `d.mbedfx.app` and `d.megapenispoopenfarten.sex`. A wildcard DNS record covers exactly one label, so a deeper name like `d.staging.…` would need its own record.
 
 Anything else using the name isn't us.
+
+### Optional configuration
+
+Everything below has a working default, which is why a fresh deploy needs none of it.
+
+| Setting | What it does |
+|---|---|
+| `IMGUR_CLIENT_ID` | Imgur's API needs a client id. Without one we fall back to the id yt-dlp publishes — that works, but it's a shared bucket and you're competing with every other tool using it. A free id of your own avoids that. |
+| `IG_GRAPHQL_DOC_ID` | Pins Instagram's shortcode GraphQL query. Meta rotates it; when it dies, the older recoveries carry the card and the `copyright_gql` counter drops to zero. Re-pin without a release. |
+| `TRANSLATE_GOOGLE` | Set to `off` to stop using Google's endpoint and fall back to Workers AI alone. |
+| `RESOLVER_SECRET` | Shared secret the video container requires on every call. |
+| `REDDIT_CLIENT_ID` / `REDDIT_CLIENT_SECRET` | Reddit OAuth, if you have credentials. |
+
+Set with `npx wrangler secret put <NAME>`.
 
 ## Contributing
 

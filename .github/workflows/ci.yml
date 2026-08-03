@@ -9,7 +9,7 @@
 #
 # WHAT THAT COSTS, AND HOW TO GET IT BACK. When this file owned the deploy, tests ran BEFORE any
 # Cloudflare credential was used, so a red suite could not ship. Cloudflare Workers Builds runs its
-# own build command instead, and the DEFAULT is just `npx wrangler deploy` — which does not run
+# own build command instead, and its build command runs `npm run build` first, so the suite gates the deploy as well as the PR (a bare `npx wrangler deploy` — which does not run
 # tests. So this workflow reports a failure but cannot BLOCK a deploy. To restore the gate, set the
 # build command in the Cloudflare dashboard to run the suite first:
 #

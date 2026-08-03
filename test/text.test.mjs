@@ -356,3 +356,73 @@ test('a deeper-than-guaranteed quote chain does not throw and does not recurse',
   assert.doesNotThrow(() => buildPlainText(deep))
   assert.ok(!buildPlainText(deep).includes('GRANDCHILD'))
 })
+
+/* ===================== THE BODY CAP =====================
+ *
+ * Requested 2026-08-03: "cap descriptions at 253 characters with the last three being ...".
+ *
+ * Measured first, because the instinct needed checking: across the captured fixtures the median
+ * caption is 81 characters and two thirds are under 200 — Twitter, Instagram and Bluesky were never
+ * the problem. The long-form platforms are: Lemmy's median fixture is 3,239 characters, PieFed's
+ * 1,228. Those are the walls this exists to stop.
+ */
+
+const cap = { ref: { p: 'x', kind: 'status', id: '1' }, canonical: 'https://x.com/a/status/1',
+  author: { name: 'A', handle: 'a', url: 'https://x.com/a' },
+  createdAt: new Date('2026-01-01T00:00:00Z'), counts: {}, sensitive: false, media: [] }
+
+test('A BODY OVER THE CAP IS CUT TO 253 ENDING IN THREE DOTS, on BOTH heads', () => {
+  /**
+   * Both, or the cap does not exist. A post WITH media is drawn from the Mastodon spoof and one
+   * WITHOUT from the plain OpenGraph head, so capping one and not the other caps neither from a
+   * reader's side — the oldest lesson in this repo, and the one it has re-learned most often.
+   */
+  const post = { ...cap, text: 'y'.repeat(4000) }
+
+  const html = buildContentHtml(post)
+  const htmlRun = (html.match(/y+/) || [''])[0]
+  assert.ok(htmlRun.length <= 250, `spoof body capped, was ${htmlRun.length}`)
+  assert.match(html, /y\.\.\./, 'and marked as cut')
+
+  const plain = buildPlainText(post)
+  const plainRun = (plain.match(/y+/) || [''])[0]
+  assert.ok(plainRun.length <= 250, `plain body capped, was ${plainRun.length}`)
+  assert.match(plain, /y\.\.\./, 'and marked as cut')
+
+  // The whole string is 253: 250 of post plus three dots. Asserted exactly, because "about 250" is
+  // how a cap drifts.
+  assert.equal(plainRun.length + 3, 253, 'exactly the requested length')
+})
+
+test('A BODY UNDER THE CAP IS UNTOUCHED — no dots on a post that fits', () => {
+  // Two thirds of real posts are under 200 characters. The cap must be invisible to them, and a
+  // trailing "..." on a complete sentence would be a lie about the post having been cut.
+  const text = 'z'.repeat(200)
+  const post = { ...cap, text }
+  assert.ok(buildPlainText(post).includes(text), 'the body survives whole')
+  assert.ok(!buildPlainText(post).includes('...'), 'and is not marked as cut')
+})
+
+test('A BODY EXACTLY AT THE CAP IS UNTOUCHED — the boundary is inclusive', () => {
+  // 253 is a cap, not a threshold to exceed. An off-by-one here would put "..." on a post that fits
+  // exactly, which is the same lie as the case above and much harder to notice.
+  const text = 'q'.repeat(253)
+  assert.ok(buildPlainText({ ...cap, text }).includes(text), 'exactly 253 passes through whole')
+  assert.ok(!buildPlainText({ ...cap, text: 'q'.repeat(253) }).includes('...'))
+})
+
+test('A CAPPED TRANSLATION KEEPS THE ENGLISH, because translation puts it first', () => {
+  /**
+   * The consequence of capping AFTER translation, stated as a test so it is a decision rather than
+   * an accident. withTranslation composes English, then the marker, then the original — so a
+   * translated post long enough to hit the cap loses the ORIGINAL and keeps the English, which is
+   * the half a reader of an English-language card actually needs. Reversed, the cap would throw away
+   * the only part they can read.
+   */
+  const english = 'The weather is far too hot today and the barber has opinions about it. '.repeat(4)
+  const post = { ...cap, text: `${english}\n\n🌐 Translated from Chinese\n${'中'.repeat(500)}` }
+  const plain = buildPlainText(post)
+  assert.ok(plain.startsWith('The weather is far too hot'), 'the English survives')
+  assert.ok(!plain.includes('中'), 'the original is what gets dropped, not the translation')
+  assert.ok(plain.endsWith('...'), 'and it says it was cut')
+})
