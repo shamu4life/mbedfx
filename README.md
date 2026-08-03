@@ -214,7 +214,8 @@ Everything below has a working default, which is why a fresh deploy needs none o
 | `TRANSLATE_GOOGLE` | Set to `off` to stop using Google's endpoint and fall back to Workers AI alone. |
 | `RESOLVER_SECRET` | Shared secret the video container requires on every call. |
 | `REDDIT_CLIENT_ID` / `REDDIT_CLIENT_SECRET` | Reddit OAuth, if you have credentials. |
-| `CREDENTIAL_KEY` / `CREDENTIAL_BUNDLE` | **Declared, read by nothing yet.** Age-gated posts need a logged-in account, and the injection point for one is a real tested function that currently returns null — so those posts get an honest 🔞 card rather than a broken one. Setting these changes nothing today; they exist so the secrets can be in place before the account pool is built. |
+| `YT_ACCOUNTS` / `IG_ACCOUNTS` | A JSON array of accounts, each `{"label": "...", "cookies": "<the contents of a Netscape cookies.txt>"}`. Age-gated and login-walled videos are unreachable without one. The jar is written to a private temp file inside the video container for the length of one call and deleted afterwards; it is never logged, cached or put on a card. A malformed value is read as no accounts, so a typo costs the gated posts and nothing else. |
+| `X_ACCOUNTS` | The same array shape, but each entry is `{"label": "...", "auth_token": "...", "ct0": "..."}` — Twitter's wall is beaten by a logged-in API call rather than inside the downloader. **Setting it changes nothing today**: the call that spends it is not built yet, so gated tweets keep getting an honest 🔞 card. The `pool_unused` counter reports when a configured pool went unspent, so this is visible rather than mysterious. |
 
 Set with `npx wrangler secret put <NAME>`.
 

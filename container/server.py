@@ -9,6 +9,12 @@ Two input modes (POST /resolve, JSON body):
   { "video": "<url>", "audio": "<url>"|null }   -> ffmpeg -c copy mux of tracks we already extracted
   { "page": "<url>" }                           -> yt-dlp resolves + merges (yt-dlp-supported sites)
 
+Either {page} mode also accepts an optional "cookies": the CONTENTS of a Netscape cookies.txt, which
+becomes a 0600 temp jar for the length of the call and is unlinked after it, whether it succeeded or
+raised. It is what makes an age-gated source resolvable at all -- without it yt-dlp answers
+`formats: 0` for those and the card degrades honestly rather than wrongly. It is NEVER logged,
+echoed into an error, or returned; see _CookieJar.
+
 Response: 200 video/mp4 (streamed) on success; 4xx/5xx application/json {"error"} on failure. GET
 /health -> 200. REMUX not transcode: `-c copy -movflags +faststart` — lossless, milliseconds of CPU.
 
@@ -84,7 +90,66 @@ def _mux_tracks(video: str, audio: str | None, out: str) -> None:
                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 
-def _mux_page(page: str, out: str) -> None:
+class _CookieJar:
+    """A yt-dlp --cookies file that exists only for the length of one call.
+
+    WHY A FILE AT ALL. yt-dlp reads cookies from a path; there is no argv form, and there must not be
+    one -- argv is world-readable in /proc on this box, so a cookie passed as a flag would be visible
+    to every process in the container. A 0600 file in the private temp dir is the narrow version.
+
+    WHY IT IS A CONTEXT MANAGER. The jar MUST be unlinked even when yt-dlp raises, times out, or the
+    handler returns early; a leaked jar is a live session sitting on disk for the life of the
+    container, which is the one outcome worse than the age gate it was meant to defeat.
+
+    NOTHING HERE IS EVER LOGGED. The contents are not returned, not echoed into an error, and not put
+    in the response -- see the bare `except Exception` arms in the handler, which deliberately answer
+    with a fixed string rather than the exception text for exactly this reason.
+    """
+
+    def __init__(self, cookies):
+        self.cookies = cookies if isinstance(cookies, str) and cookies.strip() else None
+        self.path = None
+
+    def __enter__(self):
+        if not self.cookies:
+            return self
+        # mkstemp is 0600 by the OS and never follows a symlink, so this cannot be pre-created by
+        # something else in the container and read back.
+        fd, self.path = tempfile.mkstemp(prefix="ck", suffix=".txt")
+        try:
+            with os.fdopen(fd, "w") as f:
+                # yt-dlp requires the Netscape header line; a jar without it is rejected outright
+                # ("does not look like a Netscape format cookies file") and the gate stays up with no
+                # sign of why. Prepended rather than demanded of the caller, so an operator can paste
+                # a browser export whether or not their extension emitted the header.
+                if not self.cookies.lstrip().startswith("# Netscape HTTP Cookie File"):
+                    f.write("# Netscape HTTP Cookie File\n")
+                f.write(self.cookies)
+                if not self.cookies.endswith("\n"):
+                    f.write("\n")
+        except BaseException:
+            self._unlink()
+            raise
+        return self
+
+    def __exit__(self, *exc):
+        self._unlink()
+        return False
+
+    def _unlink(self):
+        if self.path:
+            try:
+                os.unlink(self.path)
+            except OSError:
+                pass
+            self.path = None
+
+    def args(self):
+        """The argv fragment, empty when there is no jar -- so callers need no conditional."""
+        return ["--cookies", self.path] if self.path else []
+
+
+def _mux_page(page: str, out: str, jar=None) -> None:
     # `--` ends option parsing so the (validated) url can never be read as a flag. yt-dlp shells out
     # to the ffmpeg in the image for the merge; it fetches media urls the site returns, which is why
     # the WORKER only ever hands this a page on an allowlisted site.
@@ -134,11 +199,14 @@ def _mux_page(page: str, out: str) -> None:
         "--merge-output-format", "mp4",
         "-o", out, "--", _safe_url(page),
     ]
+    # Spliced before the `--` terminator, never after: everything past `--` is a positional url.
+    if jar is not None:
+        cmd[-3:-3] = jar.args()
     subprocess.run(cmd, check=True, timeout=PROC_TIMEOUT + 60, stdin=subprocess.DEVNULL,
                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 
-def _meta_page(page: str) -> dict:
+def _meta_page(page: str, jar=None) -> dict:
     # Metadata ONLY (no download) — the title + thumbnail for the card, for platforms whose crawler/oembed
     # surface is gated from datacenter egress but whose video yt-dlp still resolves (Facebook: Meta decoys
     # facebookexternalhit from datacenter, but yt-dlp extracts the video). Same SSRF guard + `--` as the mux.
@@ -151,6 +219,12 @@ def _meta_page(page: str) -> dict:
     # formats: 0. The post is still correctly unplayable -- it just stops being anonymous.
     cmd = ["yt-dlp", "-J", "--no-warnings", "--no-playlist", "--ignore-no-formats-error",
            "--", _safe_url(page)]
+    # WITH A JAR THIS IS THE CALL THAT STOPS RETURNING `formats: 0`. The comment above records the
+    # measurement anonymously (yt:G0sORVBL4kM, age_limit 18, formats: 0, "genuinely unplayable
+    # without cookies"); a logged-in jar is what makes that same id resolvable, and it is why the
+    # meta path takes cookies too rather than only the mux.
+    if jar is not None:
+        cmd[-2:-2] = jar.args()
     proc = subprocess.run(cmd, check=True, timeout=PROC_TIMEOUT, stdin=subprocess.DEVNULL,
                           stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
     d = json.loads(proc.stdout or b"{}")
@@ -256,11 +330,17 @@ class Handler(BaseHTTPRequestHandler):
             return self._json_error(400, "bad json")
 
         page, video = req.get("page"), req.get("video")
+        # THE ONE FIELD THAT IS NEVER ECHOED. It is pulled out here and handed straight to _CookieJar;
+        # it is not logged, not put in an error body, and not written anywhere but the 0600 jar the
+        # context manager deletes. An absent or non-string value means "no jar", which is the
+        # behaviour every call had before this existed.
+        cookies = req.get("cookies")
 
         # Metadata-only mode: {page, meta: true} -> yt-dlp -J, return {title, thumbnail} JSON. No temp file.
         if isinstance(page, str) and page and req.get("meta") is True:
             try:
-                body = json.dumps(_meta_page(page)).encode()
+                with _CookieJar(cookies) as jar:
+                    body = json.dumps(_meta_page(page, jar)).encode()
                 self.send_response(200)
                 self.send_header("content-type", "application/json")
                 self.send_header("content-length", str(len(body)))
@@ -280,7 +360,8 @@ class Handler(BaseHTTPRequestHandler):
         os.close(fd)
         try:
             if isinstance(page, str) and page:
-                _mux_page(page, out)
+                with _CookieJar(cookies) as jar:
+                    _mux_page(page, out, jar)
             elif isinstance(video, str) and video:
                 _mux_tracks(video, req.get("audio") if isinstance(req.get("audio"), str) else None, out)
             else:

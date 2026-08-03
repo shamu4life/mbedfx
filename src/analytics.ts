@@ -54,6 +54,16 @@ import type { ClientClass, Platform } from './types.ts'
 export type Outcome2 =
   | 'ok' | 'media_hit' | 'media_miss' | 'api_hit' | 'api_miss' | 'api_bad_id' | 'assert_fail'
   | 'fetch_fail' | 'age_restricted' | 'private' | 'ambiguous' | 'notfound'
+  // A credential pool IS SET and the gate was hit anyway. Two very different things land here and the
+  // platform tells them apart: on `x` it is EXPECTED — the secret can be filled today and the
+  // Worker-side call that would spend it is a later phase, so this counts the staging gap rather than
+  // a fault. On `ig`/`yt` it is a REAL SIGNAL: those do spend the pool, so a rising count means the
+  // accounts are logged out, rate-limited, or shadow-flagged, and the jar needs rotating.
+  //
+  // It exists because the predicate it replaces (`credentialSeamArmed`) was written for exactly this
+  // purpose and then never called from anywhere, so it made nothing visible at all. A counter in the
+  // arm that would have used the credential is the version that cannot rot the same way.
+  | 'pool_unused'
   // The three copyright recoveries, in the order they are tried. copyright_gql = the shortcode
   // GraphQL query answered (cheapest, and the only one with no window). copyright_recovered = it did
   // not, but the account feed had the post, so it was recent. copyright_remux = neither, and the page
@@ -140,12 +150,30 @@ export interface Env {
    * that does not exist, so `credentialSeamArmed` below exists purely to make the difference visible
    * in analytics rather than leaving it to memory.
    *
-   * CREDENTIAL_KEY   — the AES-256-GCM key the account bundle is decrypted with, at request time.
-   * CREDENTIAL_BUNDLE — the encrypted pool itself: logged-in accounts, one picked at random per
-   *                     request so no single account carries the whole load.
+   * ONE SECRET PER PLATFORM, each a JSON array of accounts, one picked at random per request so no
+   * single account carries the whole load. Read only through src/credentials.ts, which is total: a
+   * malformed secret is an EMPTY pool, never a throw, because these are consulted on the path for
+   * ordinary posts too and a stray comma must not 500 a platform that has nothing to do with gates.
+   *
+   * WHY PLAINTEXT. This briefly declared CREDENTIAL_KEY + an AES-256-GCM CREDENTIAL_BUNDLE, copied
+   * from FxEmbed. That design answers a threat we do not have: FxEmbed self-hosts, where the bundle
+   * sits on a disk somebody else may read. A Worker secret is encrypted at rest, unreadable from the
+   * dashboard, and absent from the repo, so a second layer buys nothing while costing a key stored in
+   * the same place as what it protects — and a bespoke encrypt step on every rotation, which is the
+   * step most likely to be skipped.
+   *
+   * WHERE EACH GATE IS BEATEN DIFFERS, and it decides what belongs in each secret:
+   *   X_ACCOUNTS  — Twitter's is beaten in the WORKER (a GraphQL call), so these carry auth_token+ct0.
+   *   IG_ACCOUNTS — Instagram's is beaten inside yt-dlp, so these carry a `cookies` jar.
+   *   YT_ACCOUNTS — YouTube likewise: age_limit 18 answers `formats: 0` until a jar is present.
+   *
+   * SETTING X_ACCOUNTS STILL CHANGES NOTHING TODAY — the Worker-side call that would spend it is a
+   * later phase. That is deliberate staging, and it is COUNTED (`pool_unused`) rather than left to
+   * memory, because a variable that looks live and is inert is worse than one that does not exist.
    */
-  CREDENTIAL_KEY?: string
-  CREDENTIAL_BUNDLE?: string
+  X_ACCOUNTS?: string
+  IG_ACCOUNTS?: string
+  YT_ACCOUNTS?: string
   // The Reddit OAuth app's credentials (a "script"/"web" app registered as shamu4life). Reddit
   // blocks anonymous access from datacenter IPs, so `rd` alone of the six needs a stored secret;
   // fetchReddit exchanges these for an app-only bearer token. Set with `wrangler secret put`. These
@@ -173,17 +201,6 @@ export interface Env {
  * TwitFix shut down in 2022 over a public log of processed URLs and the harassment
  * that followed, with zero legal contact. We have nothing to leak.
  */
-/**
- * Is the credential seam CONFIGURED but still unimplemented?
- *
- * Exists so that setting the secrets and getting nothing is visible rather than mysterious. Once the
- * pool is wired this predicate stops being interesting and should go; while it is true, an age_restricted
- * card is expected behaviour and not a regression.
- */
-export const credentialSeamArmed = (env: Env): boolean =>
-  typeof env.CREDENTIAL_KEY === 'string' && env.CREDENTIAL_KEY.length > 0
-  && typeof env.CREDENTIAL_BUNDLE === 'string' && env.CREDENTIAL_BUNDLE.length > 0
-
 export function count(env: Env, platform: Platform | 'none', outcome: Outcome2, client: ClientClass): void {
   env.AE?.writeDataPoint({ blobs: [platform, outcome, client], doubles: [1] })
 }
