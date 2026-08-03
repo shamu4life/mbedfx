@@ -1196,6 +1196,51 @@ const MUX_WAIT_API_MS = 9000
  */
 const CARD_DEADLINE_MS = MUX_WAIT_API_MS
 
+  /**
+   * The still, never a dead player — and it MUST CARRY `posterOnly` AND KEEP `poster`, which is the
+   * one place this shape deliberately differs from withResolver's.
+   *
+   * THE DEFECT THAT REQUIRES IT (measured on yt:Jky5ZXI0axc, 1431s, refused by the container's
+   * MAX_SECONDS match-filter): this degrade rewrites the entry WITHOUT MOVING IT, and the renderers
+   * mint a picture url from the array POSITION. The /_media/ route re-derives the post from the
+   * cache — and a degraded card is deliberately NOT response-cached (see the caller) — so at that
+   * position the route still finds the remux VIDEO, muxes, fails again, and answers notReady():
+   * 503 no-store. The card therefore shipped an IMAGE url that 503s and Discord drew a bare
+   * title+description box, while the correct still sat reachable at `/_media/{key}/poster0` the
+   * whole time. `posterOnly` is what tells the renderers to name that slot (see bytesIndex).
+   *
+   * `poster` IS KEPT rather than left behind on the original entry because bytesIndex requires a
+   * string poster before it will mint a slot — pickMedia's poster branch has no fallback to m.url,
+   * so a slot on a posterless entry is a guaranteed 404. It is also honest: on a still, `url` and
+   * `poster` are the same bytes. Inert everywhere else, since every reader of `poster` is gated on
+   * the attachment being a video.
+   *
+   * IT DOES NOT MAKE A VIDEO URL SERVE AN IMAGE (serveMuxed's rule, stated twice above). No url's
+   * contents change; only which of two already-correct urls the degraded CARD names.
+   *
+   * WHY withResolver's DEGRADE IS NOT GIVEN THE FLAG: its rewrite is applied inside getPost, so the
+   * /_media/ ROUTE sees it too and the bare `{i}` already resolves to the poster there — and that
+   * degrade drops `poster`, so a poster slot would 404. See the comment at withResolver.
+   */
+  /**
+   * THE POSTER'S DIMENSIONS, NOT THE VIDEO'S — see Media.posterW. Copying `w`/`h` across is what
+   * shipped a card Discord refused to draw: a remux video carries 0x0 on purpose, the still
+   * inherited it, mastodon.ts then omitted `meta.original`, and an image attachment with no size
+   * renders as nothing at all. Falls back to the video's dimensions, which is right for every
+   * platform whose poster and video are the same shape.
+   */
+function stillOf(m: Media): Media | null {
+  if (!m.poster) return null
+  return {
+    kind: 'image' as const,
+    url: m.poster,
+    poster: m.poster,
+    w: m.posterW ?? m.w,
+    h: m.posterH ?? m.h,
+    posterOnly: true as const,
+  }
+}
+
 /**
  * ONLY PROMISE og:video WHEN THE VIDEO ACTUALLY EXISTS.
  *
@@ -1226,6 +1271,20 @@ async function settleMux(
   if (!own.some(m => m?.remux?.page)) return { post, degraded: false }
 
   let degraded = false
+  /**
+   * A SECOND FLAG, BECAUSE THE ARRAY CAN CHANGE WITHOUT THE CARD BEING INCOMPLETE.
+   *
+   * `degraded` answers one question only: may this response be cached? The over-ceiling rewrite below
+   * must NOT set it, because that verdict is permanent and re-deciding it on every view was the cost
+   * this whole path exists to stop paying.
+   *
+   * But the early return was `if (!degraded) return { post }` — the ORIGINAL post — so a post whose
+   * only video is over the ceiling had its rewrite computed and then thrown away. The card went on
+   * advertising og:video at /_media/{key}/0, which the container refuses forever: a permanent 503 at
+   * a url the card promises, which is the exact shape of the bug the posterOnly comment below was
+   * written for. One flag was being asked to mean both "changed" and "incomplete".
+   */
+  let rewritten = false
   const media = await Promise.all(own.map(async (m, i) => {
     if (!m?.remux?.page) return m
     /**
@@ -1242,66 +1301,40 @@ async function settleMux(
      * cannot change.
      */
     if (typeof m.duration === 'number' && m.duration > MUX_MAX_SECONDS) {
-      return m.poster
-        ? { ...m, kind: 'image' as const, url: m.poster, w: m.posterW ?? m.w, h: m.posterH ?? m.h }
-        : m
+      // The same still the unfinished-mux path produces, from the same function, because the two
+      // shapes MUST NOT DRIFT: this one was hand-rolled with a spread and so kept `remux` and lacked
+      // `posterOnly`, which is precisely the combination stillOf's comment says renders as nothing.
+      const still = stillOf(m)
+      /**
+       * NO POSTER, SO THERE IS NOTHING TO DEGRADE TO, and the entry is left alone rather than dropped.
+       * This is the one case that still names a video url the container will refuse forever. Left
+       * deliberately: dropping it makes an emptier card without making a truer one, and the reason is
+       * already ON the card in words for the tier where this is reachable (see withLengthNote). Every
+       * yt-dlp source measured so far carries a thumbnail, so this is a hole in theory before it is
+       * one in practice — but it IS the remaining hole, and it should be found written down.
+       */
+      if (!still) return m
+      rewritten = true
+      return still
     }
     const key = `mux/${refKey(post.ref)}/${i}`
     // The mux runs to completion regardless of who wins this race — waitUntil keeps it alive past the
     // response, so a slow video is ready for the next render rather than being restarted from scratch.
     const work = muxOnce(env, key, m.remux, refKey(post.ref)).catch(() => null)
     ctx.waitUntil(work)
-    const timeout = new Promise<null>(resolve => setTimeout(() => resolve(null), budgetMs))
-    const head = await Promise.race([work, timeout])
+    // deadline(), not a bare Promise.race: an uncleared timer stays armed for the full budget even
+    // when the container answers instantly, holding the isolate open for nothing. deadline's own
+    // comment records that this cost the test suite 6 seconds before it was fixed there.
+    const head = await deadline(work, budgetMs)
     if (head) return m
     degraded = true
-    /**
-     * The still, never a dead player — and it MUST CARRY `posterOnly` AND KEEP `poster`, which is the
-     * one place this shape deliberately differs from withResolver's.
-     *
-     * THE DEFECT THAT REQUIRES IT (measured on yt:Jky5ZXI0axc, 1431s, refused by the container's
-     * MAX_SECONDS match-filter): this degrade rewrites the entry WITHOUT MOVING IT, and the renderers
-     * mint a picture url from the array POSITION. The /_media/ route re-derives the post from the
-     * cache — and a degraded card is deliberately NOT response-cached (see the caller) — so at that
-     * position the route still finds the remux VIDEO, muxes, fails again, and answers notReady():
-     * 503 no-store. The card therefore shipped an IMAGE url that 503s and Discord drew a bare
-     * title+description box, while the correct still sat reachable at `/_media/{key}/poster0` the
-     * whole time. `posterOnly` is what tells the renderers to name that slot (see bytesIndex).
-     *
-     * `poster` IS KEPT rather than left behind on the original entry because bytesIndex requires a
-     * string poster before it will mint a slot — pickMedia's poster branch has no fallback to m.url,
-     * so a slot on a posterless entry is a guaranteed 404. It is also honest: on a still, `url` and
-     * `poster` are the same bytes. Inert everywhere else, since every reader of `poster` is gated on
-     * the attachment being a video.
-     *
-     * IT DOES NOT MAKE A VIDEO URL SERVE AN IMAGE (serveMuxed's rule, stated twice above). No url's
-     * contents change; only which of two already-correct urls the degraded CARD names.
-     *
-     * WHY withResolver's DEGRADE IS NOT GIVEN THE FLAG: its rewrite is applied inside getPost, so the
-     * /_media/ ROUTE sees it too and the bare `{i}` already resolves to the poster there — and that
-     * degrade drops `poster`, so a poster slot would 404. See the comment at withResolver.
-     */
-    /**
-     * THE POSTER'S DIMENSIONS, NOT THE VIDEO'S — see Media.posterW. Copying `w`/`h` across is what
-     * shipped a card Discord refused to draw: a remux video carries 0x0 on purpose, the still
-     * inherited it, mastodon.ts then omitted `meta.original`, and an image attachment with no size
-     * renders as nothing at all. Falls back to the video's dimensions, which is right for every
-     * platform whose poster and video are the same shape.
-     */
-    return m.poster
-      ? {
-        kind: 'image' as const,
-        url: m.poster,
-        poster: m.poster,
-        w: m.posterW ?? m.w,
-        h: m.posterH ?? m.h,
-        posterOnly: true as const,
-      }
-      : null
+    return stillOf(m)
   }))
 
-  if (!degraded) return { post, degraded: false }
-  return { post: { ...post, media: media.filter((m): m is Media => m != null) }, degraded: true }
+  // `rewritten` is checked too, or the over-ceiling still is computed and discarded. `degraded` is
+  // returned as it stands: that rewrite is permanent and its card is meant to cache.
+  if (!degraded && !rewritten) return { post, degraded: false }
+  return { post: { ...post, media: media.filter((m): m is Media => m != null) }, degraded }
 }
 
 /**
@@ -2441,6 +2474,81 @@ async function withTranslated(
   }
 }
 
+/**
+ * RESOLVE A ROUTE THAT ONLY NAMES A POST INDIRECTLY — for the two JSON endpoints the converter page
+ * talks to, and for BOTH of them out of one function.
+ *
+ * THIS IS THE THIRD TIME THIS SHIPPED BROKEN, which is why it is a function now rather than a third
+ * pair of copies. These arms learned 'metashare', then had to be taught 'shortlink' (tiktok.com/t/
+ * ZTAxTF9aD previewed as "unresolved" while the same link drew a perfect card in Discord), and still
+ * did not know 'redditshare' — so /r/{sub}/s/{code}, the link the Reddit app's own share button
+ * hands you, answered {ok:false, reason:'redditshare'} and the page said "this link doesn't resolve
+ * to a post" about a link that unfurls correctly the moment it is pasted into Discord.
+ *
+ * That failure is worse than a broken link, because it talks the reader out of a GOOD one, on the
+ * one surface whose whole job is to reassure them before they send it. And it is invisible from the
+ * render path, which has resolved all three kinds since each shipped: the converter preview is a
+ * THIRD SEAM, and every one of these was the render path being fixed while the preview was forgotten.
+ *
+ * The sweep test in test/prep.test.mjs fails until every post-yielding route kind is handled here, so
+ * a FOURTH kind cannot be added without this being updated.
+ *
+ * TOTAL BY CONSTRUCTION: every resolver call is wrapped, and any miss returns `inner` untouched, so
+ * the caller degrades to exactly the answer it gave before. A share code that cannot be resolved is
+ * still an honest "this names no post"; it must never become a 500 on a public path.
+ *
+ * COSTS NOTHING WHEN WARM: these are the same doors the bot render already went through, so a code
+ * whose card has been drawn is answered from cache rather than re-hopping upstream.
+ */
+async function unwrapToPost(inner: Route, d: Deps, env: Env, client: ClientClass): Promise<Route> {
+  const asPost = (u: string | null | undefined): Route | null => {
+    if (!u) return null
+    try {
+      const r = route(new URL(u))
+      return r.kind === 'post' ? r : null
+    } catch {
+      return null
+    }
+  }
+
+  if (inner.kind === 'metashare') {
+    let loc: string | null = null
+    try {
+      loc = await d.resolveMetaShare(inner.code)
+    } catch {
+      loc = null
+    }
+    return asPost(loc ? stripMetaTracking(loc) : null) ?? inner
+  }
+
+  if (inner.kind === 'shortlink') {
+    let got: Awaited<ReturnType<Deps['resolveShortlink']>> | null = null
+    try {
+      got = await d.resolveShortlink(inner.p, inner.code, env, client)
+    } catch {
+      got = null
+    }
+    return asPost(got?.kind === 'post' ? got.post?.canonical : null) ?? inner
+  }
+
+  if (inner.kind === 'redditshare') {
+    /**
+     * The /s/ code is opaque and the resolve is a single 301 follow, exactly as the render path does
+     * it. Routed from the RESOLVED CANONICAL rather than from the ref the resolver also hands back,
+     * so this seam and the render path cannot derive a different ref from the same code.
+     */
+    let got: { ref: Extract<PostRef, { p: 'rd' }>; canonical: string } | null = null
+    try {
+      got = await d.resolveRedditShare(inner.canonical, env)
+    } catch {
+      got = null
+    }
+    return asPost(got?.canonical) ?? inner
+  }
+
+  return inner
+}
+
 async function renderPostRoute(
   ref: PostRef, canonical: string, d: Deps, env: Env, ctx: ExecutionContext, client: ClientClass, origin: string,
 ): Promise<Response> {
@@ -2850,50 +2958,8 @@ export async function handle(req: Request, env: Env, ctx: ExecutionContext, d: D
       const pasted = inner
       // A share code names no post until a hop resolves it, so the page gets the REAL permalink
       // rather than the opaque token it pasted — the "unfurl to the full thing" half of the ask.
-      if (inner.kind === 'metashare') {
-        let loc: string | null = null
-        try {
-          loc = await d.resolveMetaShare(inner.code)
-        } catch {
-          loc = null
-        }
-        const resolved = loc ? route(new URL(stripMetaTracking(loc))) : null
-        inner = resolved && resolved.kind === 'post' ? resolved : inner
-      }
-      /**
-       * A SHORT LINK IS RESOLVED TOO, not just a Meta share code.
-       *
-       * REPORTED 2026-08-01: tiktok.com/t/ZTAxTF9aD showed "unresolved" on the fixer page while the
-       * SAME link rendered a correct card in Discord. Both halves are true, and that is the bug — the
-       * page refused to preview a link that works perfectly when pasted, which is worse than a broken
-       * link because it talks the reader out of a good one.
-       *
-       * The cause is that this arm learned to unfurl 'metashare' and never learned 'shortlink', so a
-       * /t/{code} fell through to {ok:false, reason:'shortlink'}. The post route has resolved these
-       * since it shipped; only the two endpoints the PAGE talks to were left out.
-       *
-       * The resolution is the cached one the bot render already paid for whenever the card has been
-       * drawn — d.resolveShortlink is the same door, so a warm code costs no upstream hop.
-       */
-      if (inner.kind === 'shortlink') {
-        let got: Awaited<ReturnType<Deps['resolveShortlink']>> | null = null
-        try {
-          got = await d.resolveShortlink(inner.p, inner.code, env, client)
-        } catch {
-          got = null
-        }
-        const canon = got?.kind === 'post' ? got.post?.canonical : null
-        let resolved: Route | null = null
-        if (canon) {
-          try {
-            resolved = route(new URL(canon))
-          } catch {
-            resolved = null
-          }
-        }
-        // A miss leaves `inner` alone, so the answer degrades to exactly what it was before.
-        if (resolved && resolved.kind === 'post') inner = resolved
-      }
+      inner = await unwrapToPost(inner, d, env, client)
+
       if (inner.kind !== 'post') {
         /**
          * AN AMBIGUOUS PATH HANDS BACK ITS CANDIDATES, so the page can offer a choice instead of a
@@ -3036,50 +3102,8 @@ export async function handle(req: Request, env: Env, ctx: ExecutionContext, d: D
       }
       // A share code names no post until a hop resolves it — the same unfurl /_prep does, so the
       // preview follows the link the page is actually about to hand somebody.
-      if (inner.kind === 'metashare') {
-        let loc: string | null = null
-        try {
-          loc = await d.resolveMetaShare(inner.code)
-        } catch {
-          loc = null
-        }
-        const resolved = loc ? route(new URL(stripMetaTracking(loc))) : null
-        inner = resolved && resolved.kind === 'post' ? resolved : inner
-      }
-      /**
-       * A SHORT LINK IS RESOLVED TOO, not just a Meta share code.
-       *
-       * REPORTED 2026-08-01: tiktok.com/t/ZTAxTF9aD showed "unresolved" on the fixer page while the
-       * SAME link rendered a correct card in Discord. Both halves are true, and that is the bug — the
-       * page refused to preview a link that works perfectly when pasted, which is worse than a broken
-       * link because it talks the reader out of a good one.
-       *
-       * The cause is that this arm learned to unfurl 'metashare' and never learned 'shortlink', so a
-       * /t/{code} fell through to {ok:false, reason:'shortlink'}. The post route has resolved these
-       * since it shipped; only the two endpoints the PAGE talks to were left out.
-       *
-       * The resolution is the cached one the bot render already paid for whenever the card has been
-       * drawn — d.resolveShortlink is the same door, so a warm code costs no upstream hop.
-       */
-      if (inner.kind === 'shortlink') {
-        let got: Awaited<ReturnType<Deps['resolveShortlink']>> | null = null
-        try {
-          got = await d.resolveShortlink(inner.p, inner.code, env, client)
-        } catch {
-          got = null
-        }
-        const canon = got?.kind === 'post' ? got.post?.canonical : null
-        let resolved: Route | null = null
-        if (canon) {
-          try {
-            resolved = route(new URL(canon))
-          } catch {
-            resolved = null
-          }
-        }
-        // A miss leaves `inner` alone, so the answer degrades to exactly what it was before.
-        if (resolved && resolved.kind === 'post') inner = resolved
-      }
+      inner = await unwrapToPost(inner, d, env, client)
+
       if (inner.kind !== 'post') return Response.json({ ok: false, reason: inner.kind })
 
       const got = await getPost(inner.ref, d, env, client, ctx)
@@ -3190,6 +3214,23 @@ export async function handle(req: Request, env: Env, ctx: ExecutionContext, d: D
          * second inference. The page does exactly that and then stops.
          */
         pending: xlate.pending === true,
+        /**
+         * A VIDEO IS STILL BEING MUXED, and this is the only way the page can know.
+         *
+         * settleMux degrades an unfinished video to its POSTER STILL and keeps working in waitUntil,
+         * so the payload is indistinguishable from a post that only ever had a picture: kind 'image',
+         * a url that resolves, nothing wrong with it. The reader saw a frozen frame and no reason for
+         * it, which is why "why is this just an image" keeps being asked about a link that is fine.
+         *
+         * Distinct from the LENGTH note, which is the opposite case and must not be confused with it:
+         * over the ceiling the answer is final and permanent, and the card says so in words. This flag
+         * means the opposite — come back in a moment and it will be a video.
+         *
+         * Reported as wanting "a progress bar for the download". It cannot be a progress bar: yt-dlp
+         * and ffmpeg run inside the container and the Worker sees a Durable Object that has either
+         * finished or not. A truthful indeterminate spinner beats a fake percentage.
+         */
+        muxing: settled.degraded === true,
         canonical: post.canonical,
         platform: post.ref.p,
         author: {

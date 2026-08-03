@@ -404,6 +404,24 @@ pre s { color: var(--faint); }
 .pv .play::after { content: ''; border-left: 15px solid #fff; border-top: 9px solid transparent; border-bottom: 9px solid transparent; margin-left: 4px; }
 .pv .foot { margin-top: 8px; font-size: 12px; color: var(--faint); }
 
+/* THE MUXING INDICATOR. Sits where the play badge sits, because it is standing in for one: this is a
+   video whose bytes are not ready, and the badge would be a promise the card cannot keep yet. */
+.pv .prep { position: absolute; inset: 0; margin: auto; width: 48px; height: 48px; border-radius: 50%;
+  background: rgba(0,0,0,.6); display: grid; place-items: center; pointer-events: none; }
+.pv .prep::after { content: ''; width: 22px; height: 22px; border-radius: 50%;
+  border: 2px solid rgba(255,255,255,.28); border-top-color: #fff; animation: prepspin .8s linear infinite; }
+@keyframes prepspin { to { transform: rotate(360deg); } }
+/* A spinner is decoration; the WORDS below the card carry the same fact. Someone who asked the OS to
+   stop moving things should not be the only one who cannot tell a video is coming. */
+@media (prefers-reduced-motion: reduce) { .pv .prep::after { animation: none; } }
+.pv .preplbl { margin-top: 8px; font-size: 12px; color: var(--faint); display: flex; gap: 6px; align-items: center; }
+/* The label's own dot. Not redundant with .prep above: a post whose poster never loaded — or which
+   has no poster at all — renders no overlay, and the sentence would then be the only sign anything
+   is happening, with nothing to suggest it is still happening. */
+.pv .prepdot { flex: none; width: 11px; height: 11px; border-radius: 50%;
+  border: 2px solid var(--line); border-top-color: var(--faint); animation: prepspin .8s linear infinite; }
+@media (prefers-reduced-motion: reduce) { .pv .prepdot { animation: none; } }
+
 .chips { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0 0; max-width: 700px; }
 .chips div {
   background: var(--embed-bg); border-radius: 4px; padding: 7px 10px;
@@ -468,7 +486,7 @@ footer .fine { font-size: 12px; opacity: .8; }
          hardcoded because this page is a static asset with no template step — and pinned to
          package.json by a test, because a version number that silently disagrees with the release is
          worse than none at all. -->
-    <div class="server">mbedfx <span class="ver" id="ver">v1.6.2</span></div>
+    <div class="server">mbedfx <span class="ver" id="ver">v1.7.0</span></div>
     <div class="cat">Start here</div>
     <a href="#convert"><b>#</b> convert</a>
     <a href="#sites"><b>#</b> sites</a>
@@ -682,14 +700,33 @@ footer .fine { font-size: 12px; opacity: .8; }
  * Returns { host, prefix, family }: `host` is what to emit now, `family` is which toggle button
  * should read as pressed, `prefix` is what a toggle click must preserve.
  */
+/**
+ * THE DOMAINS THIS PAGE OFFERS — deliberately NOT the list of domains the worker answers on.
+ *
+ * WHY IT IS NOT THE ROUTES ARRAY: a name written here ships to every reader of this page on every
+ * domain — view-source does not care that a button is hidden — so a domain the worker serves but
+ * which is not meant to be advertised must not appear here at all. The worker serving that domain is
+ * a separate question, settled in wrangler.jsonc and fedihost.ts, and links pasted from it unfurl
+ * exactly the same. All this array decides is which domains this page NAMES.
+ *
+ * A visitor on an unlisted domain is handed mbedfx.app links, which is the same fallback localhost
+ * and a file:// open have always had, and they work — see the unrecognised-host test, which exists
+ * because emitting links to a host that may not be ours is the one outcome worth ruling out.
+ *
+ * ONE LIST, not the two that were here before: it was spelled once to pick the default domain and
+ * again to recognise a link that is already ours, and a host present in the first but missing from
+ * the second was not rejected — it was read as an unsupported SITE, so pasting one of our own links
+ * back into the page answered "we don't do that one" about our own domain.
+ */
+var PUBLIC_HOSTS = ['mbedfx.app', 'megapenispoopenfarten.sex'];
+
 function mbedfxDefaultHost(hostname) {
   var served = String(hostname == null ? '' : hostname).toLowerCase().replace(/\.$/, '');
   // A Workers preview. Emitted as-is so a link pasted from it reaches the build under test.
   if (/(^|\.)workers\.dev$/.test(served)) {
     return { host: served, prefix: '', family: 'mbedfx.app', preview: true };
   }
-  var known = served === 'mbedfx.app' || served === 'megapenispoopenfarten.sex';
-  return known
+  return PUBLIC_HOSTS.indexOf(served) >= 0
     ? { host: served, prefix: '', family: served }
     : { host: 'mbedfx.app', prefix: '', family: 'mbedfx.app' };
 }
@@ -720,8 +757,7 @@ function mbedfxConvert(input, host) {
   // Already one of ours (or a bare path): pass the path straight through.
   // A preview host counts as ours too, or pasting a link copied FROM a preview back INTO it would
   // be read as an unsupported site rather than re-pointed. x.invalid is the tests' own stand-in.
-  if (h === 'mbedfx.app' || h === 'megapenispoopenfarten.sex' ||
-      /(^|\.)workers\.dev$/.test(h) || h === 'x.invalid') {
+  if (PUBLIC_HOSTS.indexOf(h) >= 0 || /(^|\.)workers\.dev$/.test(h) || h === 'x.invalid') {
     return out(path === '/' ? '/' : path + (u.searchParams.get('v') ? '?v=' + u.searchParams.get('v') : ''), null,
       'Already an mbedfx link. Re-pointed at the selected domain.');
   }
@@ -1247,9 +1283,34 @@ function mbedfxConvert(input, host) {
       ? '<div class="shots n' + shots.length + '">' + shots.map(function (m) {
           return '<span class="shot">'
             + '<img src="' + esc2(m.still) + '" alt="" loading="lazy">'
-            + (m.video ? '<span class="play"></span>' : '') + '</span>';
+            /**
+             * THE SPINNER GOES ON THE STILL, WHICH IS THE ENTRY THAT IS NOT A VIDEO.
+             *
+             * First written as `m.video ? (muxing ? prep : play)`, which never drew: settleMux
+             * degrades an unfinished video to kind 'image', so the very entry the spinner is FOR
+             * reports video:false and took the empty branch. The badge was unreachable in the only
+             * case it exists to cover, and the sentence below the card was carrying it alone.
+             *
+             * Read the other way round it is exactly right: a finished video gets the play badge, and
+             * a still on a card that is still muxing is a video that has not arrived yet.
+             */
+            + (m.video ? '<span class="play"></span>' : (j.muxing ? '<span class="prep"></span>' : ''))
+            + '</span>';
         }).join('') + '</div>'
       : '';
+    /**
+     * SAID IN WORDS AS WELL AS IN MOTION. The spinner alone is ambiguous — it reads as "the page is
+     * loading" rather than "the video is being prepared on the server", and it says nothing about the
+     * thing the reader most needs to know: THE LINK IS ALREADY CORRECT. It can be copied and sent now;
+     * whoever opens it gets the video once the mux lands, because the card is re-rendered per view and
+     * a degraded one is deliberately never cached.
+     */
+    var prep = j.muxing
+      ? '<div class="preplbl"><span class="prepdot"></span><span>Preparing the video. The link is ready to send now.</span></div>'
+      : (j.muxSlow
+          ? '<div class="preplbl"><span>Still preparing. A long video takes a while; the link works now '
+            + 'and shows the video once it is ready.</span></div>'
+          : '');
     var body = (j.title ? '<b>' + esc2(j.title) + '</b>\n' : '') + esc2(j.text || '');
     // The card carries the link now, so the standalone result row stands down — see .out.hasCard.
     cardUp = true; outClass(true);
@@ -1264,6 +1325,7 @@ function mbedfxConvert(input, host) {
       + quoteBlock(j.quote)
       + statLine(j.stats)
       + media
+      + prep
       + '<div class="foot">' + esc2(footLine(j)) + '</div>'
       + '</div>';
     preview.className = 'preview show';
@@ -1349,6 +1411,26 @@ function mbedfxConvert(input, host) {
   var CARD_RETRY_MS = 2500;
 
   /**
+   * POLLING WHILE A VIDEO MUXES, which is a different shape from the translation retry above and
+   * cannot share its "exactly one re-fetch" rule.
+   *
+   * A translation either lands within one retry or is not worth waiting for. A mux is bounded by the
+   * SOURCE, not by us: a 40-second clip is ready almost immediately, a 20-minute one is not, and the
+   * honest answer for both is "watch until it is done or until waiting stops being useful".
+   *
+   * CHEAP TO REPEAT, which is what makes the poll affordable where the translation's was not. A
+   * /_card for a muxing post does no upstream fetch and no inference — the post is served from cache
+   * and the only question asked is whether the Durable Object has finished. The expensive work is
+   * already running in waitUntil and is not started again by asking.
+   *
+   * CAPPED, because an indicator that spins forever is a lie of a different kind. At the cap the
+   * spinner is replaced with a sentence rather than simply stopping: the link still works, the video
+   * still arrives, and the reader should not conclude from a vanished spinner that something failed.
+   */
+  var MUX_POLL_MS = 2500;
+  var MUX_POLL_MAX = 10;      // 25s, then say so in words instead
+
+  /**
    * WHAT MEDIA-ONLY SHOWS INSTEAD OF A CARD. A d. link does not unfurl — Discord fetches the url and
    * attaches the file — so drawing the mock card here would be this page's own worst-case failure:
    * a preview that confidently disagrees with what gets sent. It says what will actually happen and
@@ -1421,9 +1503,10 @@ function mbedfxConvert(input, host) {
    */
   var lastCard = null;   // { path, j }
 
-  function card(url, isRetry) {
+  function card(url, isRetry, muxTries) {
     var path = url.slice(url.indexOf('/', 8));
     var seq = ++cardSeq;
+    muxTries = muxTries || 0;
     fetch('/_card?p=' + encodeURIComponent(path), { headers: { accept: 'application/json' } })
       .then(function (r) { return r.ok ? r.json() : null; })
       // LAST REQUEST WINS. Typing fires these in order and they do not return in order; without the
@@ -1434,11 +1517,26 @@ function mbedfxConvert(input, host) {
         // Media-only needs the SAME answer — it is where the media urls come from — just drawn as the
         // file rather than as a card. Skipping the fetch is what left the page previewing nothing.
         if (mediaOnly) { drawMediaOnly(url, j); return; }
+        /**
+         * AT THE CAP THE PAYLOAD ITSELF IS SETTLED, not a copy of it passed to one draw.
+         *
+         * lastCard holds this very object and every redraw reads it — a domain switch, a media-only
+         * toggle. Marking only the draw would leave `muxing` true in the payload, so the next toggle
+         * would put the spinner back with nothing polling behind it: an indicator that spins forever
+         * because the thing that was supposed to stop it already gave up.
+         */
+        if (j && j.muxing && muxTries >= MUX_POLL_MAX) { j.muxing = false; j.muxSlow = true; }
         drawCard(url, j);
-        if (!isRetry && j && j.pending) {
+        if (j && j.muxing) {
           cardTimer = setTimeout(function () {
             // Re-checked on fire: the reader may have typed since, and that newer card wins.
-            if (seq === cardSeq) card(url, true);
+            if (seq === cardSeq) card(url, isRetry, muxTries + 1);
+          }, MUX_POLL_MS);
+          return;                     // one timer at a time; the mux poll re-checks pending anyway
+        }
+        if (!isRetry && j && j.pending) {
+          cardTimer = setTimeout(function () {
+            if (seq === cardSeq) card(url, true, muxTries);
           }, CARD_RETRY_MS);
         }
       })
@@ -1605,6 +1703,7 @@ function mbedfxConvert(input, host) {
 
   var segs = document.querySelectorAll('.seg button');
   Array.prototype.forEach.call(segs, function (b) {
+
     // Reflect where we actually are, rather than leaving the first button pressed by default: on
     // megapenispoopenfarten.sex the SECOND one is the truthful answer.
     b.setAttribute('aria-pressed', String(b.getAttribute('data-host') === origin.family));

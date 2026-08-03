@@ -50,7 +50,7 @@ export const MAX_BODY = 512 * 1024
  * mbedfx.app was added 2026-07-30 alongside the original domain, which is retained: links already
  * pasted in Discord keep resolving, so both are genuinely serving and both must be refused here.
  */
-const OWN_HOSTS = ['mbedfx.app', 'megapenispoopenfarten.sex', 'workers.dev']
+const OWN_HOSTS = ['mbedfx.app', 'megapenispoopenfarten.sex', 'forsen.sex', 'workers.dev']
 
 export function fetchableInstance(host: string, self?: string): boolean {
   if (!FEDI_HOST.test(host)) return false

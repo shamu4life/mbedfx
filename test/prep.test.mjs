@@ -664,6 +664,196 @@ test('/_prep LEAVES A LINK ALONE WHEN IT ALREADY NAMES THE SAME POST', async () 
     'while `canonical` still reports the platform form, which is what it is for')
 })
 
+/* ===================== REDDIT SHARE LINKS ON THE PAGE'S OWN ENDPOINTS =====================
+ *
+ * REPORTED FROM PRODUCTION 2026-08-03 with a screenshot: pasting
+ * https://www.reddit.com/r/linuxmemes/s/QHrYqsQGGY into the converter page answered "No preview.
+ * This link doesn't resolve to a post." The same link, pasted into Discord, unfurls correctly —
+ * the render path has resolved 'redditshare' since the day that route kind shipped. Reproduced
+ * against prod: both /_prep and /_card answered {"ok":false,"reason":"redditshare"}.
+ *
+ * SAME DEFECT, THIRD TIME. Each arm carried its own inline unwrap, taught 'metashare' first and
+ * 'shortlink' after the tiktok.com/t/ report above, and never taught 'redditshare' at all — so the
+ * one route kind whose url comes out of the Reddit app's OWN share button fell through to
+ * `if (inner.kind !== 'post')` and was reported back verbatim as the reason. Worse than a broken
+ * link, because it talks a reader out of a link that works, on the screen whose entire job is to
+ * reassure them before they send it.
+ *
+ * The unwrap is one shared function now (unwrapToPost in src/worker.ts) and the sweep at the bottom
+ * of this file fails until every indirect kind is handled there.
+ */
+
+/**
+ * A resolved /s/ token: what a 301 follow hands back. The RESOLVER'S canonical is what unwrapToPost
+ * routes from — deliberately, so this seam and the render path cannot derive different refs from one
+ * code — so the slug is left on it exactly as Reddit's own redirect carries it.
+ */
+const redditShareResolved = (sub, id) => ({
+  ref: { p: 'rd', sub, id },
+  canonical: `https://www.reddit.com/r/${sub}/comments/${id}/a_penguin_writes_bash/`,
+})
+
+/**
+ * A fetchPost that ECHOES THE REF back as content. Asserting `ok: true` alone would pass for a card
+ * describing the wrong post, so every field a test reads here is derived from the id the resolver
+ * produced — which is the only way to show the resolved permalink is what actually got fetched.
+ */
+const echoRedditPost = async ref => ({
+  ref,
+  canonical: `https://www.reddit.com/r/${ref.sub}/comments/${ref.id}/a_penguin_writes_bash/`,
+  author: {
+    name: `author_of_${ref.id}`,
+    handle: `u/author_of_${ref.id}`,
+    url: 'https://www.reddit.com/user/author',
+  },
+  text: `the post behind ${ref.id}`,
+  createdAt: new Date('2026-08-03T12:00:00Z'),
+  counts: { likes: 12, replies: 3 },
+  sensitive: false,
+  media: [{ kind: 'image', url: 'https://i.redd.it/fixture.jpg', w: 640, h: 480 }],
+})
+
+test('/_card RESOLVES A REDDIT /s/ SHARE LINK, so the app\'s own share button previews instead of being refused', async () => {
+  /**
+   * THE REPORTED BUG, pinned at the endpoint that drew the screenshot. /_card answered
+   * {ok:false, reason:'redditshare'} and the page rendered "This link doesn't resolve to a post" —
+   * about a link Discord unfurls perfectly, because only this seam had never learned the kind.
+   *
+   * ASSERTED ON CONTENT, NOT ON A FLAG. `ok: true` is satisfied by a card describing anything at
+   * all; what has to be true is that the card describes the post the /s/ token RESOLVED TO, so the
+   * author line, the text and the canonical are all checked against the id the resolver returned.
+   */
+  const { ctx: c } = ctx()
+  const d = deps({
+    fetchPost: echoRedditPost,
+    resolveRedditShare: async () => redditShareResolved('linuxmemes', 'card1rd'),
+  })
+  const j = await (await handle(card('/r/linuxmemes/s/QHrYqsQGGY'), envWith(fakeResolver().binding), c, d)).json()
+  assert.equal(j.ok, true, `the preview must draw a card, got reason ${j.reason}`)
+  assert.equal(j.platform, 'rd')
+  assert.equal(j.text, 'the post behind card1rd', 'the resolved post\'s own text, not a stand-in')
+  assert.match(j.author.byline, /author_of_card1rd/, 'and its own author line')
+  assert.ok(j.canonical.includes('/comments/card1rd/'), `the permalink, got ${j.canonical}`)
+  assert.ok(!j.canonical.includes('QHrYqsQGGY'), 'the opaque share token is gone')
+})
+
+test('/_prep HANDS BACK THE RESOLVED PERMALINK for a Reddit /s/ link, never the opaque token', async () => {
+  /**
+   * The other half of the same report. /_prep is what the page shows in the box and what a reader
+   * copies out of it, so answering {ok:false, reason:'redditshare'} left them with nothing to send
+   * — and answering with the /s/ url would be no better, because unfurling the share code to the
+   * full permalink is the ask this endpoint exists for ("the full thing instead of just replacing
+   * the url", 2026-07-31).
+   */
+  const { ctx: c, settle } = ctx()
+  const d = deps({
+    fetchPost: echoRedditPost,
+    resolveRedditShare: async () => redditShareResolved('linuxmemes', 'prep1rd'),
+  })
+  const j = await (await handle(prep('/r/linuxmemes/s/9CxZq7wTvB'), envWith(fakeResolver().binding), c, d)).json()
+  await settle()
+  assert.equal(j.ok, true, `the page must get a usable answer, got reason ${j.reason}`)
+  assert.equal(j.platform, 'rd')
+  assert.equal(j.url, 'https://mbedfx.app/r/linuxmemes/comments/prep1rd', 'the permalink on our own origin')
+  assert.equal(j.canonical, 'https://www.reddit.com/r/linuxmemes/comments/prep1rd')
+  for (const junk of ['/s/', '9CxZq7wTvB']) {
+    assert.ok(!j.url.includes(junk) && !j.canonical.includes(junk), `${junk} must not survive`)
+  }
+})
+
+test('A REDDIT SHARE THAT WILL NOT RESOLVE IS AN HONEST no on BOTH endpoints, never a 500', async () => {
+  /**
+   * The degrade path, which is what makes the fix safe to have made at all: unwrapToPost hands back
+   * the route UNTOUCHED on any miss, so the answer is exactly the one both arms gave before they
+   * learned the kind. A resolver that returns null and one that THROWS have to land in the same
+   * place — /_prep and /_card are public paths with no try/catch above them, so an unhandled
+   * rejection here is an HTTP 500 on the converter page rather than a card that says "couldn't
+   * load", and the reason field is the only thing the page can explain itself with.
+   */
+  const { ctx: c } = ctx()
+  const stubs = [
+    async () => null,
+    async () => { throw new TypeError('reddit hung up mid-redirect') },
+  ]
+  for (const [i, stub] of stubs.entries()) {
+    for (const make of [prep, card]) {
+      const req = make(`/r/linuxmemes/s/MissFixture${i}`)
+      const res = await handle(req, envWith(fakeResolver().binding), c,
+        deps({ fetchPost: echoRedditPost, resolveRedditShare: stub }))
+      assert.equal(res.status, 200, 'a resolver miss is an answer, not a crash')
+      const j = await res.json()
+      assert.equal(j.ok, false)
+      assert.equal(j.reason, 'redditshare', 'honest about what it could not do')
+    }
+  }
+})
+
+test('EVERY INDIRECT POST-YIELDING ROUTE KIND IS UNWRAPPED — the sweep that stops a FOURTH being forgotten', () => {
+  /**
+   * THE POINT OF THIS FILE'S LAST THREE BUGS, WRITTEN AS AN ASSERTION.
+   *
+   * 'metashare' was taught to these two arms, then 'shortlink' after tiktok.com/t/ZTAxTF9aD
+   * previewed as "unresolved", then 'redditshare' after /r/{sub}/s/{code} said the link doesn't
+   * resolve to a post. Three times the render path already handled the kind and the converter
+   * preview did not, and three times nothing failed until a human pasted a link and filed a report.
+   * That is the same silent-omission shape as parseRefKey's allowlist, which is why it gets the same
+   * answer: a sweep that fails until the new kind is a DECISION rather than an oversight.
+   *
+   * DERIVED, NOT LISTED. The set is read out of the Route union in src/types.ts — every kind that
+   * carries a `canonical`, minus 'post' itself. `canonical` is the discriminator because it is
+   * exactly what unwrapToPost needs: a url a resolver can hop from and route() can turn into a ref.
+   * A hardcoded trio here would be a second copy of the very list that keeps going stale.
+   *
+   * AND THE WHOLE UNION IS PINNED TOO, for the case the derivation cannot see: a future
+   * post-yielding kind that carries no `canonical` would slip through the filter silently. Any new
+   * arm at all fails the first assertion instead, which forces someone to say which sort it is.
+   */
+  const types = readFileSync(new URL('../src/types.ts', import.meta.url), 'utf8')
+  const from = types.indexOf('export type Route =')
+  const to = types.indexOf('export type Outcome')
+  assert.ok(from > 0 && to > from, 'src/types.ts still declares Route above Outcome')
+  const union = types.slice(from, to)
+  const arms = [...union.matchAll(/^\s*\|\s*\{\s*kind: '([a-z]+)'([^}]*)\}/gm)]
+    .map(m => ({ kind: m[1], fields: m[2] }))
+
+  const ALL_KINDS = [
+    'activity', 'ambiguous', 'badid', 'card', 'media', 'metashare', 'notfound',
+    'oembed', 'post', 'prep', 'redditshare', 'shortlink', 'site',
+  ]
+  assert.deepEqual(arms.map(a => a.kind).sort(), ALL_KINDS,
+    'A Route kind was added or removed. If it can resolve to a post through a network hop, teach '
+    + 'unwrapToPost in src/worker.ts as well as adding it here; if it can never yield a post, adding '
+    + 'it to ALL_KINDS is the whole change.')
+
+  // Every derived kind must be one the ROUTER actually mints, or the derivation is over-reporting
+  // and this test would start demanding an unwrap for a shape no url can reach.
+  const router = readFileSync(new URL('../src/router.ts', import.meta.url), 'utf8')
+  const indirect = arms
+    .filter(a => a.kind !== 'post' && /canonical\s*:/.test(a.fields))
+    .map(a => a.kind)
+    .sort()
+  assert.ok(indirect.length >= 3, `the derivation found ${indirect.length} indirect kinds, expected at least 3`)
+  for (const kind of indirect) {
+    assert.ok(router.includes(`kind: '${kind}'`), `src/router.ts must actually mint ${kind}`)
+  }
+
+  // What unwrapToPost handles, read out of the function itself rather than trusted.
+  const worker = readFileSync(new URL('../src/worker.ts', import.meta.url), 'utf8')
+  const start = worker.indexOf('async function unwrapToPost(')
+  assert.ok(start > 0, 'src/worker.ts still declares unwrapToPost — if it was renamed, rename it here too')
+  const end = worker.indexOf('\n}\n', start)
+  assert.ok(end > start, 'the unwrapToPost body is delimited by a column-0 closing brace')
+  const body = worker.slice(start, end)
+  const handled = [...new Set([...body.matchAll(/inner\.kind === '([a-z]+)'/g)].map(m => m[1]))].sort()
+
+  assert.deepEqual(handled, indirect,
+    `unwrapToPost handles [${handled}] and the Route union says the indirect post-yielding kinds are `
+    + `[${indirect}]. Add the missing branch to unwrapToPost in src/worker.ts: resolve the code, then `
+    + `route() the resolved url and return it when it is a post, returning \`inner\` on any miss. `
+    + `(If the branch exists but is not spelled \`inner.kind === '<kind>'\`, this test cannot see it — `
+    + `fix the spelling or the matcher above.)`)
+})
+
 test('/_prep STILL UNFURLS A LINK THAT NAMES NO POST UNTIL IT IS RESOLVED', async () => {
   /**
    * The other half, and the reason the rewrite exists at all. A share code or a shortlink is an opaque

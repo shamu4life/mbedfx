@@ -3,8 +3,15 @@ import assert from 'node:assert/strict'
 import { readFileSync, existsSync } from 'node:fs'
 import { fetchableInstance } from '../src/platforms/fedihost.ts'
 
-/** The zones this project owns and serves. Both are live; see wrangler.jsonc's routes comment. */
-const OUR_ZONES = ['mbedfx.app', 'megapenispoopenfarten.sex']
+/**
+ * The zones this project owns and serves. All three are live; see wrangler.jsonc's routes comment.
+ *
+ * DELIBERATELY NOT DERIVED FROM wrangler.jsonc, even though the SSRF test below reads that file. The
+ * check this feeds — "a route is on a zone we own" — becomes vacuous the moment the list of zones we
+ * own is read out of the list of routes. Keeping it a separate declaration is the whole mechanism: a
+ * route added without a human deciding it belongs here fails, loudly, in a test named for the rule.
+ */
+const OUR_ZONES = ['mbedfx.app', 'megapenispoopenfarten.sex', 'forsen.sex']
 
 test('the only runtime dependency is the container helper, isolated from the fetch path', () => {
   const pkg = JSON.parse(readFileSync('package.json', 'utf8'))
@@ -52,9 +59,9 @@ test('routes are bare hostnames on our own zone — apex claimed, wildcard never
   const cfg = JSON.parse(readFileSync('wrangler.jsonc', 'utf8').replace(/^\s*\/\/.*$/gm, ''))
   const patterns = (cfg.routes ?? []).map(r => r.pattern)
   assert.ok(patterns.length > 0, 'the worker must claim at least one hostname')
-  // TWO ZONES since the 2026-07-30 rename. mbedfx.app is the project's domain; the original zone is
-  // RETAINED rather than cut over, because a link already pasted into Discord resolves only while its
-  // host does. Everything the original single-zone test protected is preserved, per zone.
+  // THREE ZONES. mbedfx.app is the project's domain; megapenispoopenfarten.sex is the original, kept
+  // rather than cut over because a link already pasted into Discord resolves only while its host does;
+  // forsen.sex was added 2026-08-03. Everything the original single-zone test protected holds per zone.
   for (const p of patterns) {
     assert.ok(!p.includes('*'), 'never a wildcard — that would swallow the whole zone')
     const host = p.split('/')[0]
@@ -85,6 +92,87 @@ test('routes are bare hostnames on our own zone — apex claimed, wildcard never
   for (const p of patterns) {
     assert.ok(!p.startsWith('staging.'), `staging.* is retired, found ${p}`)
   }
+})
+
+test('THE MUX CEILING IS ONE NUMBER IN TWO FILES — the worker must not refuse what the container allows', () => {
+  /**
+   * MUX_MAX_SECONDS in src/worker.ts is a COPY of MAX_SECONDS in container/server.py, duplicated
+   * because the container is reached over a binding rather than imported: there is no build step that
+   * could share a constant. Nothing but this test makes them agree.
+   *
+   * THE COST OF DISAGREEING IS ASYMMETRIC, which is why "they are close enough" is not good enough:
+   *   - worker LOWER than container: a video that would mux perfectly is refused a mux it never
+   *     attempts, and degrades to a still forever. Silent, and it looks exactly like a slow mux.
+   *   - worker HIGHER than container: the pre-2026-08-03 behaviour returns, where a full response
+   *     deadline is spent dispatching a mux the container's own match filter was always going to
+   *     refuse — 5.2s on the HTML seam and 9.1s on the activity seam, measured, on EVERY view.
+   *
+   * The existing argv test next door pins the SHAPE of the match filter (`duration<?{MAX_SECONDS}`)
+   * and deliberately not its value, so it cannot catch this. Raising the ceiling means editing two
+   * files, and this is what says so at the moment it is forgotten.
+   */
+  const py = readFileSync('container/server.py', 'utf8')
+  const ts = readFileSync('src/worker.ts', 'utf8')
+  const pyMax = py.match(/MAX_SECONDS = int\(os\.environ\.get\("MAX_SECONDS", "(\d+)"\)\)/)
+  const tsMax = ts.match(/const MUX_MAX_SECONDS = (\d+)/)
+  assert.ok(pyMax, 'container/server.py declares a MAX_SECONDS default')
+  assert.ok(tsMax, 'src/worker.ts declares MUX_MAX_SECONDS')
+  assert.equal(tsMax[1], pyMax[1],
+    `the worker's ceiling (${tsMax?.[1]}s) must equal the container's (${pyMax?.[1]}s)`)
+
+  /**
+   * AND THE BYTE CEILING MOVES WITH IT. The mux is `-c copy`, so output size is the SOURCE bitrate
+   * times the duration: raising MAX_SECONDS without raising MAX_BYTES just moves the refusal from the
+   * duration filter to the size filter, for exactly the videos the change was meant to admit, and the
+   * symptom is identical. Pinned as a RATIO rather than a value so the pair can be raised together
+   * without editing this number too.
+   */
+  const pyBytes = py.match(/MAX_BYTES = int\(os\.environ\.get\("MAX_BYTES", "(\d+)"\)\)/)
+  assert.ok(pyBytes, 'container/server.py declares a MAX_BYTES default')
+  const bytesPerSec = Number(pyBytes[1]) / Number(pyMax[1])
+  assert.ok(bytesPerSec > 200_000,
+    `the byte ceiling must allow a real bitrate across the whole duration, got ${Math.round(bytesPerSec)} B/s`)
+})
+
+test('EVERY DOMAIN THE PAGE OFFERS IS ONE THE WORKER SERVES — a subset, deliberately not equality', () => {
+  /**
+   * REWRITTEN 2026-08-03. This asserted EQUALITY between public/index.html's host list and
+   * wrangler.jsonc's routes, on the reasoning that a served domain missing from the page would hand
+   * out links on a different domain than the one you arrived at.
+   *
+   * THAT REASONING WAS RIGHT ABOUT THE MECHANISM AND WRONG ABOUT THE GOAL. A name in that array ships
+   * to every reader of the page on every domain — view-source does not care whether a button is
+   * hidden — so equality forces every serving domain to be ADVERTISED. Not every domain is meant to
+   * be, and a domain the page never names still serves cards identically: the worker's routes and
+   * fedihost's OWN_HOSTS are what make a domain work, and neither involves this page.
+   *
+   * The direction that still matters is the other one, and it is the one that breaks: a button for a
+   * domain the worker does NOT serve hands out links that cannot resolve, from the one screen whose
+   * whole job is to hand out links that do. So this is a SUBSET check now.
+   *
+   * A visitor on an unlisted domain falls back to mbedfx.app links, which work — the same fallback
+   * localhost and a file:// open have always had. See the unrecognised-host test in
+   * test/landing-convert.test.mjs, which exists because emitting links to a host that may not be ours
+   * is the one outcome worth ruling out, and which is why the page does not simply trust whatever
+   * host served it.
+   */
+  const cfg = JSON.parse(readFileSync('wrangler.jsonc', 'utf8').replace(/^\s*\/\/.*$/gm, ''))
+  const served = new Set((cfg.routes ?? []).map(r => r.pattern.split('/')[0]))
+  const page = readFileSync('public/index.html', 'utf8')
+
+  const m = page.match(/var PUBLIC_HOSTS = \[([^\]]*)\]/)
+  assert.ok(m, 'the page declares PUBLIC_HOSTS')
+  const offered = m[1].split(',').map(x => x.trim().replace(/^'|'$/g, '')).filter(Boolean)
+  assert.ok(offered.length > 0, 'and it offers at least one domain')
+  for (const host of offered) {
+    assert.ok(served.has(host), `the page offers ${host}, which wrangler.jsonc does not serve`)
+  }
+
+  // Every offered domain needs a button, or the toggle cannot reach it. The reverse is checked too:
+  // a button whose domain is not in the array would be pressed and then emit somebody else's host.
+  const buttons = [...page.matchAll(/data-host="([^"]+)"/g)].map(x => x[1])
+  assert.deepEqual([...buttons].sort(), [...offered].sort(),
+    'the domain buttons and PUBLIC_HOSTS must be the same set')
 })
 
 test('EVERY SERVING ZONE IS REFUSED BY THE SSRF GUARD — the coupling wrangler.jsonc claims', () => {

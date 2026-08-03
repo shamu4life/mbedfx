@@ -5,6 +5,59 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [1.7.0] — 2026-08-03
+
+### Added
+- **The Workers Builds preview url is pinned on**, and the reason it needed a commit rather than a
+  dashboard click generalises. `wrangler.jsonc` is DESIRED STATE: every deploy reconciles Cloudflare
+  to it, and merging is the deploy here, so anything set by hand in the dashboard survives until the
+  next merge and no further. `preview_urls` had an extra wrinkle on top of that — it was not in the
+  config **at all**, and a key the config does not mention gets wrangler's default reapplied rather
+  than being left alone. **Absent does not mean unchanged.** It is spelled out now.
+
+  The same reconciliation governs the `routes` array, so a serving domain that is not in this file
+  does not exist for longer than one merge. Adding one touches several places and most fail silently:
+  the routes array; `OWN_HOSTS` in `src/platforms/fedihost.ts`, without which a fediverse ref naming
+  our own origin makes the Worker fetch itself back through the edge; and `OWN_HOSTS` in
+  `public/index.html`, without which the page serves on the new domain while handing out links on a
+  different one and calling our own links unsupported. All are pinned by tests now.
+
+- **A spinner while a video is being muxed.** `settleMux` degrades an unfinished video to its poster
+  still and keeps working in the background, and the card payload was then indistinguishable from a
+  post that only ever had a picture. A reader saw a frozen frame with no reason given, which is why
+  "why is this just an image" kept being asked about links that were fine. `/_card` now reports
+  `muxing`, and the page shows an indeterminate spinner and polls until it clears.
+
+  It is not a progress bar, and cannot be: yt-dlp and ffmpeg run inside the container, and the Worker
+  sees a Durable Object that has either finished or not. An honest spinner beats an invented
+  percentage. The label says the thing that actually matters — the link is already correct and can be
+  sent now — and the poll is capped at 25s, after which the spinner is replaced by a sentence rather
+  than left turning forever.
+
+### Fixed
+- **A video too long to mux advertised a video url that could never resolve.** The over-ceiling
+  degrade was computed and then thrown away: `settleMux` ended with `if (!degraded) return { post }`,
+  returning the ORIGINAL post, and that arm deliberately does not set `degraded` because its verdict
+  is permanent and re-deciding it every view was the cost the path exists to avoid. One flag was
+  being asked to mean both "the array changed" and "the card is incomplete". So the card went on
+  naming `og:video` at `/_media/{key}/0`, which the container refuses forever: a permanent 503 at a
+  url the card promises. Caught by the Dailymotion fixture, 4830s against a 1500s ceiling.
+
+  The still shape is now one function, `stillOf`. The over-ceiling arm had hand-rolled its own with a
+  spread, which kept `remux` and lacked `posterOnly` — precisely the combination that renders as
+  nothing at all, and the defect `posterOnly` was introduced to fix.
+
+- **`settleMux` armed a 9-second timer it never cleared**, on every render that reached the race, even
+  when the container answered instantly. The `deadline()` helper already existed and already cleared
+  its timer; its own comment records that this cost the test suite 6 seconds before it was fixed
+  there. Now used here too.
+
+- **The muxing spinner was drawn on the one entry that can never be it.** Written first as
+  `m.video ? (muxing ? spinner : play) : ''`, which never fired: a degrading video becomes kind
+  `image`, so the entry the spinner exists for reported `video: false` and took the empty branch.
+
+---
+
 ## [1.6.2] — 2026-08-03
 
 ### Fixed

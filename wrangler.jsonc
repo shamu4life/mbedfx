@@ -26,6 +26,21 @@
   "compatibility_date": "2026-07-01",
   "observability": { "enabled": true },
   "workers_dev": false,
+  // PREVIEW URLS, kept on. <version>-mbedfx.<subdomain>.workers.dev is where a branch build is checked
+  // now that the staging custom domains are retired.
+  //
+  // Spelled here because ABSENT DOES NOT MEAN UNCHANGED: wrangler applies its own default on every
+  // deploy for any setting the config does not mention, so enabling this in the dashboard lasted only
+  // until the next merge. Same trap as the routes array below, and it presented the same way — a
+  // setting that "keeps getting reset" by nobody.
+  //
+  // Distinct from workers_dev above, which is the UNVERSIONED mbedfx.<subdomain>.workers.dev and stays
+  // off: a permanent second public hostname is not wanted, a per-version preview is.
+  //
+  // LINE COMMENTS ONLY IN THIS FILE. The smoke tests read it with a `//`-stripping regex, so a /* */
+  // block breaks their JSON parse and fails three unrelated assertions — which is exactly what a
+  // block comment here did before this line existed.
+  "preview_urls": true,
   // PHASE-2 VIDEO PLAYBACK. The media-resolver container (ffmpeg + yt-dlp) and its R2 mux cache. A
   // `wrangler deploy` from here on builds the container image, so a Docker-compatible CLI (Docker
   // Desktop or Colima) must be running — see container/README.md. Optional shared secret:
@@ -123,7 +138,12 @@
     // set of certificates, and cannot be mistaken for a production host by someone reading a link.
     // The two staging.* custom domains that used to sit here were retired 2026-08-03.
     { "pattern": "mbedfx.app", "custom_domain": true },
-    { "pattern": "megapenispoopenfarten.sex", "custom_domain": true }
+    { "pattern": "megapenispoopenfarten.sex", "custom_domain": true },
+    // forsen.sex, added 2026-08-03. IT WAS ALREADY LIVE and kept disappearing, which is the lesson
+    // worth recording: this array is the DESIRED STATE, not a starting point. Every deploy reconciles
+    // Cloudflare to match it, so a custom domain added in the dashboard survives exactly until the
+    // next merge — and merges are the deploy here. A domain that is not in this file does not exist.
+    { "pattern": "forsen.sex", "custom_domain": true }
   ],
   "assets": {
     "directory": "./public",
