@@ -468,7 +468,7 @@ footer .fine { font-size: 12px; opacity: .8; }
          hardcoded because this page is a static asset with no template step — and pinned to
          package.json by a test, because a version number that silently disagrees with the release is
          worse than none at all. -->
-    <div class="server">mbedfx <span class="ver" id="ver">v1.6.0</span></div>
+    <div class="server">mbedfx <span class="ver" id="ver">v1.6.1</span></div>
     <div class="cat">Start here</div>
     <a href="#convert"><b>#</b> convert</a>
     <a href="#sites"><b>#</b> sites</a>
@@ -1410,6 +1410,17 @@ function mbedfxConvert(input, host) {
     syncMediaOnlyAvailability(j);
   }
 
+  /**
+   * THE LAST CARD PAYLOAD, KEPT SO A TOGGLE NEED NOT REFETCH.
+   *
+   * The two drawings — the mock Discord card and the media-only one — are built from the SAME /_card
+   * answer; only the rendering differs. Re-requesting it on a toggle bought nothing and cost two real
+   * problems: a ~900ms window with no preview at all, and a race, because a fetch already in flight
+   * could land after the toggle and draw the wrong kind or none. Redrawing from the payload in hand is
+   * instant and cannot race.
+   */
+  var lastCard = null;   // { path, j }
+
   function card(url, isRetry) {
     var path = url.slice(url.indexOf('/', 8));
     var seq = ++cardSeq;
@@ -1419,6 +1430,7 @@ function mbedfxConvert(input, host) {
       // sequence check a slow early card can land on top of the one the reader is looking at.
       .then(function (j) {
         if (seq !== cardSeq) return;
+        lastCard = { path: path, j: j };
         // Media-only needs the SAME answer — it is where the media urls come from — just drawn as the
         // file rather than as a card. Skipping the fetch is what left the page previewing nothing.
         if (mediaOnly) { drawMediaOnly(url, j); return; }
@@ -1554,10 +1566,39 @@ function mbedfxConvert(input, host) {
   if (mediaOnlyBox) {
     mediaOnlyBox.addEventListener('change', function () {
       mediaOnly = mediaOnlyBox.checked;
+      /**
+       * DROP THE OLD CARD WITHOUT TOUCHING THE RESULT ROW.
+       *
+       * This used to call hidePreview(), which was wrong in a way that was invisible from its name:
+       * hidePreview also runs outClass(false), hiding the LINK and the Copy button, not just the card.
+       * That is right where it is otherwise used — "the input does not parse, there is nothing to
+       * show" — and wrong here, where the link is perfectly valid and has merely changed host. The
+       * result was that every toggle blanked the whole output for the ~900ms until the next card
+       * landed, and left it blank for good if that fetch was slow or failed.
+       *
+       * So the card is cleared directly and render() decides the row's visibility, as it does
+       * everywhere else. cardUp goes false FIRST so render()'s outClass sees the truth.
+       */
+      cardUp = false;
       render();
-      // render() only rewrites the link. The preview has to be REDRAWN in the other kind, and the
-      // card payload is the same either way, so both directions just re-run the normal path.
-      hidePreview();
+      /**
+       * REDRAW, DO NOT REFETCH. Both drawings come from one payload, so if the answer for THIS post is
+       * already in hand the other kind can be drawn immediately — no blank gap, and no second request
+       * that could land out of order behind the first.
+       *
+       * cardSeq is bumped so any fetch still in flight cannot land on top of this draw; without that,
+       * a toggle during a slow request drew the previous post's answer in the new kind.
+       */
+      var url = result.textContent || '';
+      var path = url ? url.slice(url.indexOf('/', 8)) : '';
+      cardSeq++;
+      if (lastCard && lastCard.path === path) {
+        if (mediaOnly) drawMediaOnly(url, lastCard.j);
+        else drawCard(url, lastCard.j);
+        return;
+      }
+      preview.className = 'preview';
+      preview.innerHTML = '';
       schedulePrep();
     });
   }
