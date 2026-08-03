@@ -1053,6 +1053,13 @@ const RESOLVER_SLOTS = 4
 // in _meta_page all along — but because the STORED RECORD SHAPE did. ytMetaValid correctly does not
 // require the new field, so every warm g6 record would keep serving a date with no description for up
 // to YT_META_TTL_MS (30 days). The generation is the documented single invalidation switch.
+//
+// g7 -> g8, 2026-08-01. The value in use, and it was missing from this log — which is the one defect
+// a generation history can have, because the log IS the record of why each bump happened and a gap in
+// it reads as "nobody knows". Same reason as g7 and worth restating rather than cross-referencing:
+// _meta_page began returning view_count/like_count/comment_count, so the STORED SHAPE changed again.
+// A warm g7 record has no counts, and a missing count is indistinguishable from a post that genuinely
+// has none — so the card would quietly show nothing for up to 30 days rather than visibly failing.
 const RESOLVER_GENERATION = 'g8'
 /** `slotKey` is the POST (refKey), never the operation — see RESOLVER_SLOTS for the 74% measurement. */
 function resolverStub(resolver: NonNullable<Env['MEDIA_RESOLVER']>, slotKey: string) {

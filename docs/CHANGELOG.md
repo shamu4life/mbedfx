@@ -75,7 +75,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
-## [1.4.0] — 2026-08-03
+## [1.4.0] — 2026-08-02
 
 ### Added
 - **A "media only" checkbox on the converter**, emitting the `d.` link from 1.3.0. It sits beside the
@@ -178,9 +178,12 @@ Reported on `/reel/DX7byl-oyGR/`, which a competitor played and we drew as a pho
 
 1133 tests, `node --test`; `tsc --noEmit` clean.
 
----
+### Notes
+- **This entry absorbs what was briefly published as 1.1.2.** That version was written up and then
+  superseded before it ever shipped — no tag, no release, no deploy — so a changelog entry for it was
+  a record of something that never happened. Its content is real and is folded in below rather than
+  deleted, because it carries the measurement that sent the fix in the right direction.
 
-## [1.1.2] — 2026-08-02
 
 ### Fixed
 - **A copyright-blocked Instagram reel older than the account's last 12 posts rendered as a photo.**
@@ -207,8 +210,6 @@ Reported on `/reel/DX7byl-oyGR/`, which a competitor played and we drew as a pho
   egress. It fails safe: no container, a refused extract or an oversized result all leave the cover
   still exactly as it is today. The precedent for optimism is Facebook, where Meta decoys the crawler
   from the datacenter and yt-dlp extracts the video anyway — precedent, not proof.
-
-1131 tests, `node --test`; `tsc --noEmit` clean.
 
 ---
 

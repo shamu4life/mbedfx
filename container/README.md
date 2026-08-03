@@ -1,7 +1,7 @@
 # media-resolver — the mbedfx video remux/resolve container
 
 A tiny **ffmpeg + yt-dlp** service that turns a DASH/HLS video (or any yt-dlp-supported page) into one
-**progressive, faststart MP4** the Worker can serve as `og:video`. It's how Reddit / Threads / Bluesky
+**progressive, faststart MP4** the Worker can serve as `og:video`. It's how Reddit / Bluesky / Instagram
 (and, best-effort, YouTube / Vimeo / Dailymotion / Facebook / ~1800 more) get *playable* video instead
 of a cover still. It is our own self-hosted, single-purpose Cobalt — we own it, so no third-party uptime
 or extractor-drift dependency.
@@ -30,7 +30,9 @@ video yt-dlp still resolves (Facebook: Meta decoys `facebookexternalhit` from da
 
 ```jsonc
 { "_type": …, "title": …, "thumbnail": …, "uploader": …, "uploader_id": …, "uploader_url": …,
-  "description": …, "width": …, "height": …, "duration": …, "timestamp": … }
+  "description": …, "width": …, "height": …, "duration": …, "timestamp": …,
+  // added 2026-08-01, g8 — a record written before that has none, which is why the generation moved
+  "view_count": …, "like_count": …, "comment_count": …, "age_limit": … }
 ```
 
 `_type` (added 2026-07-26, g5) is yt-dlp's own kind and is the ONLY field that tells a video from a
@@ -89,17 +91,20 @@ Once the container is live, the Worker's `/_media/` route automatically serves m
 carry a `remux` source; without it (or before it finishes provisioning) those videos render the cover
 still — the Worker checks the bindings and degrades safely, so a card is never broken.
 
-**Redeploys don't recycle running instances.** A container instance is per-`getByName` key and keeps the
-OLD image until it sleeps (`sleepAfter`, 10m) or is otherwise recycled. After a rebuild, test with a
-**fresh post** (a new key → a new instance on the new image) — an already-exercised post can keep muxing
-on the previous image for a while.
+**Redeploys don't recycle running instances.** Instances are POOLED onto `RESOLVER_SLOTS` keys, not
+minted per post, and one keeps the OLD image until it sleeps (`sleepAfter`, 10m) or is otherwise
+recycled. So a fresh post is NOT a reliable way to reach the new image — it will most likely land on
+an existing warm slot. This contradicted the pooling description earlier in this file; that one was
+right. To test a rebuild, wait out `sleepAfter` or recycle the instances.
 
 Optional: `npx wrangler secret put RESOLVER_SECRET` and set the same `RESOLVER_SECRET` on the container
-(add it under `containers[].image_vars` or as a container secret) to require the shared-secret header.
+(as a container secret — NOT `containers[].image_vars`, which wrangler documents as build-time only,
+so a value set there never reaches the running instance) to require the shared-secret header.
 
-## Status (2026-07-22)
+## Status (2026-08-03)
 
-Deployed to **staging** and validated end-to-end. **Reddit** and **Bluesky** single videos play (their
+Deployed to **production** and validated end-to-end; the staging environment it was
+originally verified on has since been retired in favour of Workers Builds previews. **Reddit** and **Bluesky** single videos play (their
 HLS muxes to a progressive faststart MP4); each was confirmed live — a real post → 200 `video/mp4`, valid
 `ftyp`, Range 206, cached in R2 so it muxes once. **Threads** (DASH) is not wired yet.
 

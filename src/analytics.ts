@@ -21,7 +21,8 @@ import type { ClientClass, Platform } from './types.ts'
  * null came back) and STACKS on top of the worker's own `fetch_fail`, no double-count.
  */
 /**
- * `copyright_recovered` is the ONE SUCCESS counter here that reports a repair rather than an outcome:
+ * `copyright_recovered` is the MIDDLE of three repair counters, not the only one — see the Outcome2
+ * comment below for the trio. It reports a repair rather than an outcome:
  * an Instagram post whose embed came back rights-struck (no video_url) and whose video we then got
  * back off the v1 user feed. It is worth its own name because the mechanism is UNCONFIRMED FROM
  * CLOUDFLARE EGRESS — every measurement behind it is residential — and the recovery is written to
