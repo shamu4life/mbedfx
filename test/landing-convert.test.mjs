@@ -734,3 +734,37 @@ test('THE PAGE STILL CARRIES NO VISIBLE EM DASH AND NO SECOND PERSON', () => {
   assert.equal((body.match(/—/g) || []).length, 0, 'no em dash in anything a visitor reads')
   assert.equal((body.match(/\b(you|your)\b/gi) || []).length, 0, 'and nothing addresses the reader')
 })
+
+test('TOGGLING MEDIA-ONLY NEVER HIDES THE LINK, and never refetches', () => {
+  /**
+   * Reported 2026-08-03: toggling media-only "just absolutely destroys the copyable link and the
+   * preview". Two causes, both mine.
+   *
+   * THE LINK VANISHED because the handler called hidePreview(), whose name says card and whose body
+   * also runs outClass(false) — hiding the result row and the Copy button. That is correct where it is
+   * otherwise used ("the input does not parse, there is nothing to show") and wrong on a toggle, where
+   * the link is valid and has merely changed host. Every toggle blanked the output until the next card
+   * landed, and left it blank for good if that fetch was slow or failed.
+   *
+   * THE PREVIEW RACED because the toggle refetched. Both drawings come from ONE /_card payload — only
+   * the rendering differs — so a second request bought nothing and could land out of order behind the
+   * first. The payload in hand is redrawn instead: instant, and impossible to race.
+   *
+   * Verified in a browser at six rapid toggles: the row stayed visible at every step, the kind
+   * alternated correctly, and the toggles caused ZERO extra fetches.
+   */
+  // Comments are stripped before this check: the handler's own comment EXPLAINS that it used to call
+  // hidePreview, and a naive text search matches that prose and fails on a correct file.
+  const handler = HTML.slice(HTML.indexOf("mediaOnlyBox.addEventListener"))
+    .slice(0, 2000)
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+    .replace(/^\s*\/\/.*$/gm, '')
+  assert.ok(!/hidePreview\(\)/.test(handler),
+    'the toggle must not CALL hidePreview — that hides the link, not just the card')
+  assert.match(HTML, /var lastCard = null;/, 'the last payload is kept')
+  assert.match(HTML, /lastCard = \{ path: path, j: j \};/, 'and recorded on every answer')
+  assert.match(HTML, /if \(lastCard && lastCard\.path === path\) \{/,
+    'so a toggle redraws from it rather than issuing a second request')
+  assert.match(HTML, /cardSeq\+\+;/,
+    'and bumps the sequence so an in-flight fetch cannot land on top of the redraw')
+})

@@ -5,6 +5,30 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [1.6.1] — 2026-08-03
+
+### Fixed
+- **Toggling media-only blanked the copyable link and the preview.** Two causes, both introduced with
+  the toggle.
+
+  The link vanished because the handler called `hidePreview()` — a name that says *card* and a body
+  that also runs `outClass(false)`, hiding the result row and the Copy button. That is correct where
+  it is otherwise used ("the input does not parse, there is nothing to show") and wrong on a toggle,
+  where the link is valid and has merely changed host. So every toggle blanked the output until the
+  next card landed, and left it blank for good if that fetch was slow or failed.
+
+  The preview raced because the toggle **refetched**. Both drawings are built from one `/_card`
+  payload — only the rendering differs — so a second request bought nothing and could land out of
+  order behind the first. The payload already in hand is now redrawn instead, and `cardSeq` is bumped
+  so an in-flight answer cannot land on top of it.
+
+  Verified in a browser at six rapid toggles with a deliberately slow stub: the row stayed visible at
+  every step, the kind alternated correctly, and the toggles caused **zero** extra requests.
+
+1152 tests, `node --test`; `tsc --noEmit` clean.
+
+---
+
 ## [1.6.0] — 2026-08-03
 
 Reported: a 24-minute YouTube video "still just pulling up as a frozen image". The still was correct —
