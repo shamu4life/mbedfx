@@ -134,32 +134,45 @@ test('THE MUX CEILING IS ONE NUMBER IN TWO FILES — the worker must not refuse 
     `the byte ceiling must allow a real bitrate across the whole duration, got ${Math.round(bytesPerSec)} B/s`)
 })
 
-test('THE CONVERTER PAGE KNOWS EVERY DOMAIN THE WORKER SERVES — routes vs OWN_HOSTS', () => {
+test('EVERY DOMAIN THE PAGE OFFERS IS ONE THE WORKER SERVES — a subset, deliberately not equality', () => {
   /**
-   * A THIRD PLACE THE DOMAIN LIST LIVES, and the one with the quietest failure.
+   * REWRITTEN 2026-08-03. This asserted EQUALITY between public/index.html's host list and
+   * wrangler.jsonc's routes, on the reasoning that a served domain missing from the page would hand
+   * out links on a different domain than the one you arrived at.
    *
-   * public/index.html keeps its own OWN_HOSTS, because the page must answer two questions the worker
-   * cannot answer for it: which domain to hand out by default (the one you arrived on), and whether a
-   * pasted link is already ours. A domain in wrangler.jsonc but not in that list does not break — it
-   * serves the page perfectly, then hands out links on a DIFFERENT domain, and tells anyone who pastes
-   * one of its own links back in that the site is unsupported.
+   * THAT REASONING WAS RIGHT ABOUT THE MECHANISM AND WRONG ABOUT THE GOAL. A name in that array ships
+   * to every reader of the page on every domain — view-source does not care whether a button is
+   * hidden — so equality forces every serving domain to be ADVERTISED. Not every domain is meant to
+   * be, and a domain the page never names still serves cards identically: the worker's routes and
+   * fedihost's OWN_HOSTS are what make a domain work, and neither involves this page.
    *
-   * That is invisible from the worker side and invisible in the tests that read wrangler.jsonc, which
-   * is why it gets its own assertion rather than a comment asking the next person to remember.
+   * The direction that still matters is the other one, and it is the one that breaks: a button for a
+   * domain the worker does NOT serve hands out links that cannot resolve, from the one screen whose
+   * whole job is to hand out links that do. So this is a SUBSET check now.
+   *
+   * A visitor on an unlisted domain falls back to mbedfx.app links, which work — the same fallback
+   * localhost and a file:// open have always had. See the unrecognised-host test in
+   * test/landing-convert.test.mjs, which exists because emitting links to a host that may not be ours
+   * is the one outcome worth ruling out, and which is why the page does not simply trust whatever
+   * host served it.
    */
   const cfg = JSON.parse(readFileSync('wrangler.jsonc', 'utf8').replace(/^\s*\/\/.*$/gm, ''))
-  const served = (cfg.routes ?? []).map(r => r.pattern.split('/')[0]).sort()
+  const served = new Set((cfg.routes ?? []).map(r => r.pattern.split('/')[0]))
   const page = readFileSync('public/index.html', 'utf8')
-  const m = page.match(/var OWN_HOSTS = \[([^\]]*)\]/)
-  assert.ok(m, 'the page declares OWN_HOSTS')
-  const listed = m[1].split(',').map(x => x.trim().replace(/^'|'$/g, '')).filter(Boolean).sort()
-  assert.deepEqual(listed, served, 'the page must list exactly the domains wrangler.jsonc serves')
 
-  // And each one needs a toggle button, or arriving there leaves the pressed state lying about which
-  // domain is in the box. Hidden is fine — unadvertised is not the same as absent.
-  for (const host of served) {
-    assert.ok(page.includes(`data-host="${host}"`), `${host} has a domain button`)
+  const m = page.match(/var PUBLIC_HOSTS = \[([^\]]*)\]/)
+  assert.ok(m, 'the page declares PUBLIC_HOSTS')
+  const offered = m[1].split(',').map(x => x.trim().replace(/^'|'$/g, '')).filter(Boolean)
+  assert.ok(offered.length > 0, 'and it offers at least one domain')
+  for (const host of offered) {
+    assert.ok(served.has(host), `the page offers ${host}, which wrangler.jsonc does not serve`)
   }
+
+  // Every offered domain needs a button, or the toggle cannot reach it. The reverse is checked too:
+  // a button whose domain is not in the array would be pressed and then emit somebody else's host.
+  const buttons = [...page.matchAll(/data-host="([^"]+)"/g)].map(x => x[1])
+  assert.deepEqual([...buttons].sort(), [...offered].sort(),
+    'the domain buttons and PUBLIC_HOSTS must be the same set')
 })
 
 test('EVERY SERVING ZONE IS REFUSED BY THE SSRF GUARD — the coupling wrangler.jsonc claims', () => {

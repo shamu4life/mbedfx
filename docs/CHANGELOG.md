@@ -8,20 +8,19 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ## [1.7.0] — 2026-08-03
 
 ### Added
-- **`forsen.sex` serves mbedfx**, and the reason it needed a commit rather than a dashboard click is
-  the interesting part. It was already live as a custom domain and kept vanishing. `wrangler.jsonc`
-  is DESIRED STATE: every deploy reconciles Cloudflare to the `routes` array, and merging is the
-  deploy here, so a domain added by hand survived until the next merge and no further. Same cause for
-  the `*-mbedfx.<account>.workers.dev` preview url, with an extra wrinkle: `preview_urls` was not in
-  the config **at all**, and a key the config does not mention gets wrangler's default reapplied
-  rather than being left alone. Absent does not mean unchanged. Both are spelled out now.
+- **The Workers Builds preview url is pinned on**, and the reason it needed a commit rather than a
+  dashboard click generalises. `wrangler.jsonc` is DESIRED STATE: every deploy reconciles Cloudflare
+  to it, and merging is the deploy here, so anything set by hand in the dashboard survives until the
+  next merge and no further. `preview_urls` had an extra wrinkle on top of that — it was not in the
+  config **at all**, and a key the config does not mention gets wrangler's default reapplied rather
+  than being left alone. **Absent does not mean unchanged.** It is spelled out now.
 
-  Adding a serving domain touches four places and three of them fail silently, so all four are pinned
-  by tests: the routes array; `OWN_HOSTS` in `src/platforms/fedihost.ts`, without which a fediverse
-  ref naming our own origin makes the Worker fetch itself through the edge; `OWN_HOSTS` in
+  The same reconciliation governs the `routes` array, so a serving domain that is not in this file
+  does not exist for longer than one merge. Adding one touches several places and most fail silently:
+  the routes array; `OWN_HOSTS` in `src/platforms/fedihost.ts`, without which a fediverse ref naming
+  our own origin makes the Worker fetch itself back through the edge; and `OWN_HOSTS` in
   `public/index.html`, without which the page serves on the new domain while handing out links on a
-  different one and calling our own links unsupported; and README's "Official domains", whose whole
-  purpose is authenticity, so an omission there tells readers a domain we run is an impostor.
+  different one and calling our own links unsupported. All are pinned by tests now.
 
 - **A spinner while a video is being muxed.** `settleMux` degrades an unfinished video to its poster
   still and keeps working in the background, and the card payload was then indistinguishable from a

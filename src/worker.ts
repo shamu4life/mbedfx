@@ -2474,6 +2474,81 @@ async function withTranslated(
   }
 }
 
+/**
+ * RESOLVE A ROUTE THAT ONLY NAMES A POST INDIRECTLY — for the two JSON endpoints the converter page
+ * talks to, and for BOTH of them out of one function.
+ *
+ * THIS IS THE THIRD TIME THIS SHIPPED BROKEN, which is why it is a function now rather than a third
+ * pair of copies. These arms learned 'metashare', then had to be taught 'shortlink' (tiktok.com/t/
+ * ZTAxTF9aD previewed as "unresolved" while the same link drew a perfect card in Discord), and still
+ * did not know 'redditshare' — so /r/{sub}/s/{code}, the link the Reddit app's own share button
+ * hands you, answered {ok:false, reason:'redditshare'} and the page said "this link doesn't resolve
+ * to a post" about a link that unfurls correctly the moment it is pasted into Discord.
+ *
+ * That failure is worse than a broken link, because it talks the reader out of a GOOD one, on the
+ * one surface whose whole job is to reassure them before they send it. And it is invisible from the
+ * render path, which has resolved all three kinds since each shipped: the converter preview is a
+ * THIRD SEAM, and every one of these was the render path being fixed while the preview was forgotten.
+ *
+ * The sweep test in test/prep.test.mjs fails until every post-yielding route kind is handled here, so
+ * a FOURTH kind cannot be added without this being updated.
+ *
+ * TOTAL BY CONSTRUCTION: every resolver call is wrapped, and any miss returns `inner` untouched, so
+ * the caller degrades to exactly the answer it gave before. A share code that cannot be resolved is
+ * still an honest "this names no post"; it must never become a 500 on a public path.
+ *
+ * COSTS NOTHING WHEN WARM: these are the same doors the bot render already went through, so a code
+ * whose card has been drawn is answered from cache rather than re-hopping upstream.
+ */
+async function unwrapToPost(inner: Route, d: Deps, env: Env, client: ClientClass): Promise<Route> {
+  const asPost = (u: string | null | undefined): Route | null => {
+    if (!u) return null
+    try {
+      const r = route(new URL(u))
+      return r.kind === 'post' ? r : null
+    } catch {
+      return null
+    }
+  }
+
+  if (inner.kind === 'metashare') {
+    let loc: string | null = null
+    try {
+      loc = await d.resolveMetaShare(inner.code)
+    } catch {
+      loc = null
+    }
+    return asPost(loc ? stripMetaTracking(loc) : null) ?? inner
+  }
+
+  if (inner.kind === 'shortlink') {
+    let got: Awaited<ReturnType<Deps['resolveShortlink']>> | null = null
+    try {
+      got = await d.resolveShortlink(inner.p, inner.code, env, client)
+    } catch {
+      got = null
+    }
+    return asPost(got?.kind === 'post' ? got.post?.canonical : null) ?? inner
+  }
+
+  if (inner.kind === 'redditshare') {
+    /**
+     * The /s/ code is opaque and the resolve is a single 301 follow, exactly as the render path does
+     * it. Routed from the RESOLVED CANONICAL rather than from the ref the resolver also hands back,
+     * so this seam and the render path cannot derive a different ref from the same code.
+     */
+    let got: { ref: Extract<PostRef, { p: 'rd' }>; canonical: string } | null = null
+    try {
+      got = await d.resolveRedditShare(inner.canonical, env)
+    } catch {
+      got = null
+    }
+    return asPost(got?.canonical) ?? inner
+  }
+
+  return inner
+}
+
 async function renderPostRoute(
   ref: PostRef, canonical: string, d: Deps, env: Env, ctx: ExecutionContext, client: ClientClass, origin: string,
 ): Promise<Response> {
@@ -2883,50 +2958,8 @@ export async function handle(req: Request, env: Env, ctx: ExecutionContext, d: D
       const pasted = inner
       // A share code names no post until a hop resolves it, so the page gets the REAL permalink
       // rather than the opaque token it pasted — the "unfurl to the full thing" half of the ask.
-      if (inner.kind === 'metashare') {
-        let loc: string | null = null
-        try {
-          loc = await d.resolveMetaShare(inner.code)
-        } catch {
-          loc = null
-        }
-        const resolved = loc ? route(new URL(stripMetaTracking(loc))) : null
-        inner = resolved && resolved.kind === 'post' ? resolved : inner
-      }
-      /**
-       * A SHORT LINK IS RESOLVED TOO, not just a Meta share code.
-       *
-       * REPORTED 2026-08-01: tiktok.com/t/ZTAxTF9aD showed "unresolved" on the fixer page while the
-       * SAME link rendered a correct card in Discord. Both halves are true, and that is the bug — the
-       * page refused to preview a link that works perfectly when pasted, which is worse than a broken
-       * link because it talks the reader out of a good one.
-       *
-       * The cause is that this arm learned to unfurl 'metashare' and never learned 'shortlink', so a
-       * /t/{code} fell through to {ok:false, reason:'shortlink'}. The post route has resolved these
-       * since it shipped; only the two endpoints the PAGE talks to were left out.
-       *
-       * The resolution is the cached one the bot render already paid for whenever the card has been
-       * drawn — d.resolveShortlink is the same door, so a warm code costs no upstream hop.
-       */
-      if (inner.kind === 'shortlink') {
-        let got: Awaited<ReturnType<Deps['resolveShortlink']>> | null = null
-        try {
-          got = await d.resolveShortlink(inner.p, inner.code, env, client)
-        } catch {
-          got = null
-        }
-        const canon = got?.kind === 'post' ? got.post?.canonical : null
-        let resolved: Route | null = null
-        if (canon) {
-          try {
-            resolved = route(new URL(canon))
-          } catch {
-            resolved = null
-          }
-        }
-        // A miss leaves `inner` alone, so the answer degrades to exactly what it was before.
-        if (resolved && resolved.kind === 'post') inner = resolved
-      }
+      inner = await unwrapToPost(inner, d, env, client)
+
       if (inner.kind !== 'post') {
         /**
          * AN AMBIGUOUS PATH HANDS BACK ITS CANDIDATES, so the page can offer a choice instead of a
@@ -3069,50 +3102,8 @@ export async function handle(req: Request, env: Env, ctx: ExecutionContext, d: D
       }
       // A share code names no post until a hop resolves it — the same unfurl /_prep does, so the
       // preview follows the link the page is actually about to hand somebody.
-      if (inner.kind === 'metashare') {
-        let loc: string | null = null
-        try {
-          loc = await d.resolveMetaShare(inner.code)
-        } catch {
-          loc = null
-        }
-        const resolved = loc ? route(new URL(stripMetaTracking(loc))) : null
-        inner = resolved && resolved.kind === 'post' ? resolved : inner
-      }
-      /**
-       * A SHORT LINK IS RESOLVED TOO, not just a Meta share code.
-       *
-       * REPORTED 2026-08-01: tiktok.com/t/ZTAxTF9aD showed "unresolved" on the fixer page while the
-       * SAME link rendered a correct card in Discord. Both halves are true, and that is the bug — the
-       * page refused to preview a link that works perfectly when pasted, which is worse than a broken
-       * link because it talks the reader out of a good one.
-       *
-       * The cause is that this arm learned to unfurl 'metashare' and never learned 'shortlink', so a
-       * /t/{code} fell through to {ok:false, reason:'shortlink'}. The post route has resolved these
-       * since it shipped; only the two endpoints the PAGE talks to were left out.
-       *
-       * The resolution is the cached one the bot render already paid for whenever the card has been
-       * drawn — d.resolveShortlink is the same door, so a warm code costs no upstream hop.
-       */
-      if (inner.kind === 'shortlink') {
-        let got: Awaited<ReturnType<Deps['resolveShortlink']>> | null = null
-        try {
-          got = await d.resolveShortlink(inner.p, inner.code, env, client)
-        } catch {
-          got = null
-        }
-        const canon = got?.kind === 'post' ? got.post?.canonical : null
-        let resolved: Route | null = null
-        if (canon) {
-          try {
-            resolved = route(new URL(canon))
-          } catch {
-            resolved = null
-          }
-        }
-        // A miss leaves `inner` alone, so the answer degrades to exactly what it was before.
-        if (resolved && resolved.kind === 'post') inner = resolved
-      }
+      inner = await unwrapToPost(inner, d, env, client)
+
       if (inner.kind !== 'post') return Response.json({ ok: false, reason: inner.kind })
 
       const got = await getPost(inner.ref, d, env, client, ctx)

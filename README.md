@@ -197,9 +197,9 @@ Know what you're getting:
 
 Only these run mbedfx:
 
-`mbedfx.app` · `megapenispoopenfarten.sex` · `forsen.sex`
+`mbedfx.app` · `megapenispoopenfarten.sex`
 
-`d.` works on all three: `d.mbedfx.app`, `d.megapenispoopenfarten.sex`, `d.forsen.sex`. A wildcard DNS record covers exactly one label, so a deeper name like `d.staging.…` would need its own record.
+`d.` works on both: `d.mbedfx.app` and `d.megapenispoopenfarten.sex`. A wildcard DNS record covers exactly one label, so a deeper name like `d.staging.…` would need its own record.
 
 Anything else using the name isn't us.
 
