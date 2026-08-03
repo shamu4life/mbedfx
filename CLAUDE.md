@@ -11,7 +11,7 @@ em dashes and no second person (owner's call; asserted by a test, because both w
 later edits within a day of being asked for)
 **Tests:** `node --test`, no test framework, no network
 **Deploy:** Cloudflare Workers Builds on merge to `main` — **merging is the deploy**
-**Version:** 1.5.0
+**Version:** 1.6.0
 
 ---
 

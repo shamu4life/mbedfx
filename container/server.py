@@ -37,8 +37,12 @@ from urllib.parse import urlsplit
 # them arrive late. They now mux like anything else: the first paste renders the still card (the card only
 # promises a video that exists), the mux keeps running, R2 keeps it, and every later view plays it
 # instantly. Above this the download stops being worth a container slot at all.
-MAX_SECONDS = int(os.environ.get("MAX_SECONDS", "1200"))
-MAX_BYTES = int(os.environ.get("MAX_BYTES", "314572800"))     # 300 MB output ceiling
+MAX_SECONDS = int(os.environ.get("MAX_SECONDS", "1500"))
+MAX_BYTES = int(os.environ.get("MAX_BYTES", "393216000"))     # 375 MB output ceiling
+# RAISED WITH MAX_SECONDS, 2026-08-03, and they must move together. The mux is `-c copy`, so
+# output size is the SOURCE bitrate times the duration — a 25% longer ceiling with an unchanged
+# byte ceiling would just move the refusal from the duration filter to the size filter for the
+# videos the duration change was meant to admit, and the symptom would be identical.
 PROC_TIMEOUT = int(os.environ.get("PROC_TIMEOUT", "120"))     # per-subprocess wall clock
 RESOLVER_SECRET = os.environ.get("RESOLVER_SECRET")           # shared secret; enforced when set
 # ffmpeg protocols we permit: enough for http(s) media and HLS/DASH segment fetches, and NOTHING that

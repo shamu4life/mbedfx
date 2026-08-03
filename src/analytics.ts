@@ -125,6 +125,27 @@ export interface Env {
    * means re-pinning it is a config change, not a patch release.
    */
   IG_GRAPHQL_DOC_ID?: string
+  /**
+   * THE CREDENTIAL SEAM'S BINDINGS. Declared so they can be set now; READ BY NOTHING YET, and that is
+   * stated here rather than discovered later.
+   *
+   * Age-gated posts are unreachable credential-free — measured on both paths and both egresses. The
+   * injection point is a real, tested function (fetchWithCredentials in platforms/twitter/fetch.ts)
+   * that returns null, so those posts become an honest age_restricted card instead of a broken one.
+   * What it needs is an account pool, and that is a credential-management decision and a ToS
+   * conversation rather than a coding task, which is why the seam shipped empty.
+   *
+   * SETTING THESE CHANGES NOTHING TODAY. They are here so the secrets can be put in place ahead of the
+   * work, not because the work is done — a variable that looks live and is inert is worse than one
+   * that does not exist, so `credentialSeamArmed` below exists purely to make the difference visible
+   * in analytics rather than leaving it to memory.
+   *
+   * CREDENTIAL_KEY   — the AES-256-GCM key the account bundle is decrypted with, at request time.
+   * CREDENTIAL_BUNDLE — the encrypted pool itself: logged-in accounts, one picked at random per
+   *                     request so no single account carries the whole load.
+   */
+  CREDENTIAL_KEY?: string
+  CREDENTIAL_BUNDLE?: string
   // The Reddit OAuth app's credentials (a "script"/"web" app registered as shamu4life). Reddit
   // blocks anonymous access from datacenter IPs, so `rd` alone of the six needs a stored secret;
   // fetchReddit exchanges these for an app-only bearer token. Set with `wrangler secret put`. These
@@ -152,6 +173,17 @@ export interface Env {
  * TwitFix shut down in 2022 over a public log of processed URLs and the harassment
  * that followed, with zero legal contact. We have nothing to leak.
  */
+/**
+ * Is the credential seam CONFIGURED but still unimplemented?
+ *
+ * Exists so that setting the secrets and getting nothing is visible rather than mysterious. Once the
+ * pool is wired this predicate stops being interesting and should go; while it is true, an age_restricted
+ * card is expected behaviour and not a regression.
+ */
+export const credentialSeamArmed = (env: Env): boolean =>
+  typeof env.CREDENTIAL_KEY === 'string' && env.CREDENTIAL_KEY.length > 0
+  && typeof env.CREDENTIAL_BUNDLE === 'string' && env.CREDENTIAL_BUNDLE.length > 0
+
 export function count(env: Env, platform: Platform | 'none', outcome: Outcome2, client: ClientClass): void {
   env.AE?.writeDataPoint({ blobs: [platform, outcome, client], doubles: [1] })
 }

@@ -174,6 +174,35 @@ export function withDescription(post: Post, description: unknown): Post {
   return { ...post, text: add }
 }
 
+/**
+ * THE NOTE FOR A VIDEO TOO LONG TO MUX, and the duration that lets the worker skip trying.
+ *
+ * Two jobs in one pass because they need the same fact and the same moment. The duration lands on the
+ * media entry, which is what settleMux consults to avoid dispatching a mux that the container will
+ * refuse; and when it is over the ceiling the card gains a line saying so.
+ *
+ * WITHOUT THE NOTE THIS IS A SILENT DEGRADE, which is the one failure mode this project says it will
+ * not ship: "when a post can't be shown, the card says why — not a blank rectangle". A 24-minute video
+ * quietly becoming a picture is that rectangle with a thumbnail in it. Reported exactly that way.
+ *
+ * PREPENDED, like the age note, so it survives the body cap — the cap trims the END, and a note only a
+ * short post can afford is not a note.
+ */
+export const LENGTH_NOTE = '🎬 Too long to play here — open it on YouTube'
+
+export function withLengthNote(post: Post, duration: unknown, maxSeconds: number): Post {
+  if (!post) return post
+  if (typeof duration !== 'number' || !Number.isFinite(duration) || duration <= 0) return post
+  const media = Array.isArray(post.media) ? post.media : []
+  // The duration rides along regardless of length: it is what lets the mux be SKIPPED rather than
+  // attempted and timed out, and a video under the ceiling benefits from that decision being cheap too.
+  const withDur = media.map(m => (m && m.remux ? { ...m, duration } : m))
+  if (duration <= maxSeconds) return { ...post, media: withDur }
+  const cur = typeof post.text === 'string' ? post.text : ''
+  if (cur.includes(LENGTH_NOTE)) return { ...post, media: withDur }
+  return { ...post, media: withDur, text: cur ? `${LENGTH_NOTE}\n\n${cur}` : LENGTH_NOTE }
+}
+
 export function withAgeNote(post: Post, ageLimit: unknown): Post {
   if (!post) return post
   if (typeof ageLimit !== 'number' || !Number.isFinite(ageLimit) || ageLimit <= 0) return post

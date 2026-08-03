@@ -5,6 +5,47 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [1.6.0] — 2026-08-03
+
+Reported: a 24-minute YouTube video "still just pulling up as a frozen image". The still was correct —
+it is past the mux ceiling, which the README and the site both already documented. Three things around
+it were not.
+
+### Changed
+- **The mux ceiling is 25 minutes**, up from 20 (`MAX_SECONDS` 1200 → 1500). `MAX_BYTES` moved with it,
+  300 MB → 375 MB, and the two have to: the mux is a stream copy, so output size is source bitrate ×
+  duration. Raising only the duration would move the refusal from the duration filter to the size
+  filter for exactly the videos the change was meant to admit, with an identical symptom.
+
+### Added
+- **The card now says why a long video is a picture.** "When a post can't be shown, the card says why —
+  not a blank rectangle" is a promise this README makes; private, age-gated and deleted all kept it and
+  a too-long video silently did not. Applied on **both** seams, because the activity document is what
+  Discord reads for a post with media, which is every video.
+- **`CREDENTIAL_KEY` and `CREDENTIAL_BUNDLE` are declared** so the secrets can be set ahead of the work.
+  **They are read by nothing yet**, and that is stated in the type, the README and a `credentialSeamArmed`
+  predicate — a variable that looks live and is inert is worse than one that does not exist.
+
+### Fixed
+- **A video past the ceiling no longer costs a full deadline on every view.** The duration is known
+  (it is in the meta record, kept 30 days) but nothing consulted it, so every render dispatched a mux
+  the container refuses and then waited out the budget. Measured on the reported video: 5.2s on the
+  HTML seam, 9.1s on the activity seam, and 5.1s again on a **second** view, because a degraded card is
+  deliberately not response-cached. It now skips the dispatch and does **not** set `degraded` — that
+  flag means "incomplete, something is still coming", which is true of a slow mux and false of a
+  permanent verdict about an immutable property.
+- **The media-only toggle disables itself for a post with no media.** A `d.` link to a text post can
+  only 404, and the page already had the card payload that says so. Disabled with a reason rather than
+  hidden, and switched off if it was on.
+
+### Notes
+- `RESOLVER_GENERATION` g8 → g9. The stored record gained `duration`; a warm g8 record has none, so a
+  long video would keep paying the full deadline this change exists to stop.
+
+1151 tests, `node --test`; `tsc --noEmit` clean.
+
+---
+
 ## [1.5.0] — 2026-08-03
 
 ### Fixed
