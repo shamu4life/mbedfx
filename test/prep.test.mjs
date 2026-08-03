@@ -646,3 +646,35 @@ test('THE APEX IS UNCHANGED BY ALL OF THAT — a share link still renders a card
   assert.equal(res.status, 200)
   assert.match(res.headers.get('content-type') || '', /text\/html/, 'still a card on the apex')
 })
+
+test('/_prep LEAVES A LINK ALONE WHEN IT ALREADY NAMES THE SAME POST', async () => {
+  /**
+   * Reported 2026-08-03: pasting youtu.be/{id} came back as /watch?v={id}. The page converts that short
+   * form to a bare /{id} correctly on its own, and /_prep then overwrote it — because the url was
+   * rebuilt from the PLATFORM'S canonical every time, and YouTube's canonical is the long watch form.
+   *
+   * Nothing is learned by that rewrite. It only hands back a longer link than the one pasted, on the
+   * one screen whose whole job is handing back a tidy one.
+   */
+  const { ctx: c } = ctx()
+  const j = await (await handle(prep('/Jky5ZXI0axc'), envWith(fakeResolver().binding), c, deps())).json()
+  assert.equal(j.ok, true)
+  assert.equal(j.url, 'https://mbedfx.app/Jky5ZXI0axc', 'the pasted shape survives')
+  assert.equal(j.canonical, 'https://www.youtube.com/watch?v=Jky5ZXI0axc',
+    'while `canonical` still reports the platform form, which is what it is for')
+})
+
+test('/_prep STILL UNFURLS A LINK THAT NAMES NO POST UNTIL IT IS RESOLVED', async () => {
+  /**
+   * The other half, and the reason the rewrite exists at all. A share code or a shortlink is an opaque
+   * token — the page cannot know which post it addresses, so being handed the permalink is the entire
+   * point of asking. The fix must not turn that off, which is why the test is "did resolving CHANGE
+   * which post this addresses" rather than "is this the canonical spelling".
+   */
+  const { ctx: c } = ctx()
+  const d2 = deps({ resolveShortlink: async () => shortResolved })
+  const j = await (await handle(prep('/t/ZTAxTF9aD'), envWith(fakeResolver().binding), c, d2)).json()
+  assert.equal(j.ok, true)
+  assert.ok(!j.url.includes('/t/'), `the opaque code is replaced, got ${j.url}`)
+  assert.match(j.url, /7650584217042144526/, 'with the real post it resolved to')
+})

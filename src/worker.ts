@@ -2843,6 +2843,11 @@ export async function handle(req: Request, env: Env, ctx: ExecutionContext, d: D
       } catch {
         return Response.json({ ok: false, reason: 'unparseable' }, { status: 400 })
       }
+      /**
+       * WHAT WAS ACTUALLY PASTED, captured before any resolution reassigns `inner`. It is what lets
+       * this endpoint tell "I learned something" from "I merely re-spelled what you gave me".
+       */
+      const pasted = inner
       // A share code names no post until a hop resolves it, so the page gets the REAL permalink
       // rather than the opaque token it pasted — the "unfurl to the full thing" half of the ask.
       if (inner.kind === 'metashare') {
@@ -2965,13 +2970,36 @@ export async function handle(req: Request, env: Env, ctx: ExecutionContext, d: D
             .catch(() => undefined),
         )
       }
+      /**
+       * DO NOT RE-SPELL A LINK THAT WAS ALREADY RIGHT.
+       *
+       * Reported 2026-08-03: pasting youtu.be/{id} came back as /watch?v={id}. The page converts that
+       * short form to a bare /{id} correctly on its own, and this endpoint then overwrote it — because
+       * the url was rebuilt from the PLATFORM'S canonical every time, which for YouTube is the long
+       * watch form. Nothing was learned by that rewrite; it only made the link longer than the one the
+       * reader pasted, on the one screen whose entire job is handing back a tidy link.
+       *
+       * The rewrite exists for a real case and is kept for it: a share code or a shortlink names no
+       * post until a hop resolves it, so the page must be handed the permalink rather than the opaque
+       * token. The test is therefore not "is this canonical" but "did resolving CHANGE which post this
+       * addresses" — and when it did not, whatever was pasted comes back untouched.
+       *
+       * `shown === inner.canonical` is part of that test rather than an afterthought: the Facebook
+       * branch above deliberately rewrites `shown` while leaving `ref` alone, so comparing refs on
+       * their own would silently undo that unfurl.
+       */
+      const target = new URL(r.target, origin)
+      const alreadyRight = shown === inner.canonical
+        && pasted.kind === 'post'
+        && refKey(pasted.ref) === refKey(ref)
+      const shownUrl = alreadyRight ? target : new URL(shown)
       return Response.json({
         ok: true,
-        url: `${origin}${new URL(shown).pathname}${new URL(shown).search}`,
-        canonical: shown,
-        platform: ref.p,
-        warming: warms,
-      })
+        url: `${origin}${shownUrl.pathname}${shownUrl.search}`,
+      canonical: shown,
+      platform: ref.p,
+      warming: warms,
+    })
     }
 
     case 'card': {
