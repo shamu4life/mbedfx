@@ -118,10 +118,12 @@
   // would induce the Worker to fetch itself through the edge. The two lists are coupled and nothing
   // enforces it but this comment and the test that pins them together.
   "routes": [
+    // TESTING IS A WORKERS BUILDS PREVIEW NOW, not a staging custom domain. Every branch build
+    // gets its own *-mbedfx.<account>.workers.dev url, which costs no DNS, no route and no second
+    // set of certificates, and cannot be mistaken for a production host by someone reading a link.
+    // The two staging.* custom domains that used to sit here were retired 2026-08-03.
     { "pattern": "mbedfx.app", "custom_domain": true },
-    { "pattern": "staging.mbedfx.app", "custom_domain": true },
-    { "pattern": "megapenispoopenfarten.sex", "custom_domain": true },
-    { "pattern": "staging.megapenispoopenfarten.sex", "custom_domain": true }
+    { "pattern": "megapenispoopenfarten.sex", "custom_domain": true }
   ],
   "assets": {
     "directory": "./public",

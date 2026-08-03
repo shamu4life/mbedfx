@@ -219,14 +219,25 @@ test('THE DOMAIN YOU ARRIVED ON IS THE ONE IT HANDS BACK', () => {
   assert.equal(defaultHost('megapenispoopenfarten.sex').family, 'megapenispoopenfarten.sex')
 })
 
-test('STAGING KEEPS ITS PREFIX — a test environment that hands out production links is worthless', () => {
-  const s = defaultHost('staging.megapenispoopenfarten.sex')
-  assert.equal(s.host, 'staging.megapenispoopenfarten.sex', 'links stay in the environment under test')
-  assert.equal(s.prefix, 'staging.', 'and a toggle click keeps it there')
-  assert.equal(s.family, 'megapenispoopenfarten.sex', 'while the pressed button names the family')
-  // Switching family on staging must stay on staging.
-  assert.equal(s.prefix + 'mbedfx.app', 'staging.mbedfx.app')
-  assert.equal(defaultHost('staging.mbedfx.app').host, 'staging.mbedfx.app')
+test('A PREVIEW DEPLOYMENT EMITS ITS OWN LINKS — a test environment handing out production links is worthless', () => {
+  /**
+   * REWRITTEN 2026-08-03. This pinned the same rule for staging.mbedfx.app, which is retired: testing
+   * moved to Workers Builds previews, where every branch gets its own *-mbedfx.<account>.workers.dev.
+   *
+   * The RULE is unchanged and is the reason this test exists at all — being handed production links
+   * while testing a branch means checking the live worker while believing you checked your change.
+   * Only the hostname shape it applies to has moved.
+   */
+  const p = defaultHost('abc123-mbedfx.redevit.workers.dev')
+  assert.equal(p.host, 'abc123-mbedfx.redevit.workers.dev', 'links stay in the build under test')
+  assert.equal(p.preview, true, 'and it knows it is one')
+  // The pressed toggle button still needs a sane answer; a preview belongs to no public family, so
+  // the default one reads as pressed rather than neither.
+  assert.equal(p.family, 'mbedfx.app')
+
+  // staging.* is no longer special: it is simply not us any more, so it falls back like any stranger.
+  assert.equal(defaultHost('staging.mbedfx.app').host, 'mbedfx.app',
+    'a retired hostname must not keep emitting links to itself')
 })
 
 test('AN UNRECOGNISED HOST FALLS BACK — never emit links to a host that is not us', () => {

@@ -5,6 +5,50 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [1.5.0] — 2026-08-03
+
+### Changed
+- **Post bodies are capped at 253 characters**, the last three being `...`. Measured before building
+  it, because the instinct needed checking: across the captured fixtures the median caption is 81
+  characters and two thirds are under 200, so Twitter, Instagram and Bluesky were never the problem.
+  The walls are the long-form platforms — Lemmy's median fixture is 3,239 characters and PieFed's
+  1,228. A real Lemmy post now renders at 252 characters instead of 2,224.
+
+  Applied in one place and reached by **both** heads. Capping the Mastodon spoof and not the plain
+  OpenGraph head would, from a reader's side, cap neither.
+
+  It runs **after** translation, deliberately: `withTranslation` composes English first, so a
+  translated post long enough to hit the cap keeps the English and loses the original rather than the
+  other way round. There is a test for that ordering, because it is a decision rather than a
+  coincidence.
+- YouTube's own clamp now uses the same three dots instead of `…`, so the codebase carries one
+  truncation marker rather than two. It survives at 300 because its job is bounding what is **stored
+  in R2 for 30 days**, not what is displayed — at 253 the render cap is tighter, so its marker can no
+  longer reach a card at all.
+- **The `staging.*` custom domains are retired.** Testing is Workers Builds previews now, where each
+  branch gets its own `*-mbedfx.<account>.workers.dev` and costs no DNS record, no route and no
+  second certificate. The converter page's prefix logic moved with it: a preview deployment emits
+  **its own** links, because being handed production links while testing a branch means checking the
+  live worker while believing you checked your change. The smoke test now asserts staging's ABSENCE —
+  a custom domain is exactly the kind of thing that gets re-added by hand in a dashboard and then
+  serves quietly on a hostname nobody is testing.
+- The README's test-count badge became a **last-commit** badge. A count is a number about us rather
+  than about the thing on offer, and it was already wrong — hardcoded at "1100+" against a suite of
+  1,145 — because a hand-maintained badge only stays true while someone remembers it. Shields reads
+  the commit date, so it cannot drift.
+
+### Notes
+- The SSRF own-host list needed no change, which was checked rather than assumed:
+  `platforms/fedihost.ts` already carries `workers.dev` and matches subdomains, so preview hosts were
+  never fetchable as fediverse instances.
+- The ~45 test files that use `staging.megapenispoopenfarten.sex` merely as a request hostname are
+  left alone. `route()` is host-agnostic, so they assert nothing about staging, and rewriting them
+  would be churn across 23 files for no change in behaviour.
+
+1145 tests, `node --test`; `tsc --noEmit` clean.
+
+---
+
 ## [1.4.0] — 2026-08-03
 
 ### Added

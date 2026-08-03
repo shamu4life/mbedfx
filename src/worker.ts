@@ -1930,7 +1930,12 @@ function ytDescription(v: unknown): string | undefined {
   // whatever the uploader typed.
   const first = v.replace(/\r\n/g, '\n').split(/\n\s*\n/)[0].trim()
   if (!first) return undefined
-  return first.length > YT_DESC_MAX ? `${first.slice(0, YT_DESC_MAX - 1).trimEnd()}…` : first
+  // THE SAME THREE DOTS render/text.ts uses, so the codebase carries ONE truncation marker rather
+  // than two a reader would have to tell apart. Note this one can no longer reach a card: DESC_MAX
+  // (253) is tighter than YT_DESC_MAX (300), so anything clamped here is re-clamped at render. It
+  // survives because its job is bounding what is STORED IN R2 FOR 30 DAYS, not what is displayed —
+  // so matching the marker is about consistency in the stored value, not about anything a reader sees.
+  return first.length > YT_DESC_MAX ? `${first.slice(0, YT_DESC_MAX - 3).trimEnd()}...` : first
 }
 /**
  * The content assertion for a stored/returned yt meta record. It is the SAME validator the value is

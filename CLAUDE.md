@@ -9,7 +9,7 @@ the author, the caption, the counts, and a video that plays inline.
 **UI:** `public/index.html`, hand-written vanilla JS and CSS, one file
 **Tests:** `node --test`, no test framework, no network
 **Deploy:** Cloudflare Workers Builds on merge to `main` — **merging is the deploy**
-**Version:** 1.4.0
+**Version:** 1.5.0
 
 ---
 

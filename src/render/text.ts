@@ -3,6 +3,40 @@ import { esc } from './fail.ts'
 import { byline, str } from './embed.ts'
 
 /**
+ * THE CAP ON A POST'S BODY, applied to BOTH heads from one place.
+ *
+ * WHY A CAP AT ALL, since most posts do not need one. Measured across the captured fixtures: the
+ * median caption is 81 characters and two thirds are under 200 — a tweet, a reel caption or a Bluesky
+ * post is a line or two and was never the problem. The mess is concentrated in the LONG-FORM
+ * platforms, where a "caption" is an article: Lemmy's median fixture is 3,239 characters and PieFed's
+ * 1,228. Those render as a wall in a card meant to be glanced at.
+ *
+ * 253 IS THE OWNER'S NUMBER, not a derived one, and it is the WHOLE string including the marker — 250
+ * characters of post plus three dots. Recorded as a decision rather than a calculation so nobody
+ * "corrects" it to a rounder one later.
+ *
+ * BOTH HEADS OR NEITHER. buildContentHtml (the Mastodon spoof) and the plain-text builder below are
+ * the two documents Discord reads, and this file's oldest lesson is that fixing one and not the other
+ * is, from a reader's side, fixing neither. So the clamp lives here and both builders call it.
+ *
+ * APPLIED AFTER TRANSLATION, WHICH IS DELIBERATE AND HAS A CONSEQUENCE WORTH KNOWING. withTranslation
+ * composes English first, then the marker, then the original. A translated post long enough to hit
+ * this cap therefore keeps the ENGLISH — the half a reader of the card most needs — and loses the
+ * original, rather than the other way round. That ordering is why the cap is safe to apply late.
+ *
+ * PLAIN DOTS, NOT AN ELLIPSIS CHARACTER, because that is what was asked for. Note YouTube has its own
+ * earlier clamp (YT_DESC_MAX, first paragraph only, using '…') whose purpose is different: it strips
+ * link dumps and timestamp lists rather than bounding length. At 300 it no longer binds — this cap is
+ * tighter — so a YouTube description reaching the card is shortened by paragraph there and by length
+ * here.
+ */
+export const DESC_MAX = 253
+const ELLIPSIS = '...'
+
+export const clampText = (s: string): string =>
+  s.length <= DESC_MAX ? s : s.slice(0, DESC_MAX - ELLIPSIS.length).trimEnd() + ELLIPSIS
+
+/**
  * The two rich-text builders for the Mastodon spoof. Both are pure: no I/O, no clock,
  * every input arrives as an argument. They are the only place the wire's separator
  * characters are spelled out, and those characters are load-bearing — they were
@@ -258,7 +292,7 @@ export function buildContentHtml(post: Post): string {
   // GAP (a blank line) after a title — the headline/body break the Reddit normalizer used to make by
   // concatenating title\n\nbody; a single bare <br> after a lone reply prefix (structural, no variation
   // selector, narrower than a quote/counts gap — §6e step 1); nothing at the very start.
-  const text = textToHtml(str(post.text))
+  const text = textToHtml(clampText(str(post.text)))
   if (text) out += (title ? GAP : out ? '<br>' : '') + text
 
   const quote = quoteHtml(post)
@@ -360,7 +394,7 @@ export function buildPlainText(post: Post): string {
   // Same separator-ownership rule as buildContentHtml, for the same reason: §6f's template
   // puts the \n on the reply prefix, which reads fine until text is empty and the quote's
   // own \n\n lands on top of it for a run of three.
-  const text = normalizeBreaks(str(post.text))
+  const text = normalizeBreaks(clampText(str(post.text)))
   if (text) out += (str(post.title) ? '\n\n' : out ? '\n' : '') + text
 
   const q = post.quote

@@ -467,7 +467,7 @@ footer .fine { font-size: 12px; opacity: .8; }
          hardcoded because this page is a static asset with no template step — and pinned to
          package.json by a test, because a version number that silently disagrees with the release is
          worse than none at all. -->
-    <div class="server">mbedfx <span class="ver" id="ver">v1.4.0</span></div>
+    <div class="server">mbedfx <span class="ver" id="ver">v1.5.0</span></div>
     <div class="cat">Start here</div>
     <a href="#convert"><b>#</b> convert</a>
     <a href="#sites"><b>#</b> sites</a>
@@ -669,20 +669,27 @@ footer .fine { font-size: 12px; opacity: .8; }
  * this the toggle always started on mbedfx.app, so visiting the original domain and copying a link
  * silently switched you to the other one. Whichever door you came in is the one you meant.
  *
- * STAGING KEEPS ITS PREFIX. Testing on staging.mbedfx.app and being handed production links is the
- * kind of thing that makes a staging environment worthless, so the subdomain rides along and the
- * toggle switches the FAMILY under it. Anything we do not recognise (localhost, a file:// preview,
- * a future hostname) falls back to mbedfx.app rather than emitting links to a host that is not us.
+ * A PREVIEW DEPLOYMENT EMITS ITS OWN LINKS. Being handed production links while testing a change is
+ * what makes a test environment worthless — you would be checking the live worker and believing you
+ * had checked your branch. This used to be spelled for staging.mbedfx.app; staging was retired and
+ * Workers Builds previews (*-mbedfx.<account>.workers.dev) took over, so the same rule is applied to
+ * those instead. The `prefix` field survives as '' so the domain toggle needs no special case.
  *
- * Returns { host, prefix }: `host` is what to emit now, `prefix` is what a toggle click must keep.
+ * Anything unrecognised (localhost, a file:// open, a future hostname) still falls back to mbedfx.app
+ * rather than emitting links to a host that is not us.
+ *
+ * Returns { host, prefix, family }: `host` is what to emit now, `family` is which toggle button
+ * should read as pressed, `prefix` is what a toggle click must preserve.
  */
 function mbedfxDefaultHost(hostname) {
   var served = String(hostname == null ? '' : hostname).toLowerCase().replace(/\.$/, '');
-  var staging = served.lastIndexOf('staging.', 0) === 0;
-  var family = staging ? served.slice(8) : served;
-  var known = family === 'mbedfx.app' || family === 'megapenispoopenfarten.sex';
+  // A Workers preview. Emitted as-is so a link pasted from it reaches the build under test.
+  if (/(^|\.)workers\.dev$/.test(served)) {
+    return { host: served, prefix: '', family: 'mbedfx.app', preview: true };
+  }
+  var known = served === 'mbedfx.app' || served === 'megapenispoopenfarten.sex';
   return known
-    ? { host: served, prefix: staging ? 'staging.' : '', family: family }
+    ? { host: served, prefix: '', family: served }
     : { host: 'mbedfx.app', prefix: '', family: 'mbedfx.app' };
 }
 
@@ -710,8 +717,10 @@ function mbedfxConvert(input, host) {
   var no = function (why) { return { ok: false, kind: 'unsupported', why: why }; };
 
   // Already one of ours (or a bare path): pass the path straight through.
+  // A preview host counts as ours too, or pasting a link copied FROM a preview back INTO it would
+  // be read as an unsupported site rather than re-pointed. x.invalid is the tests' own stand-in.
   if (h === 'mbedfx.app' || h === 'megapenispoopenfarten.sex' ||
-      h === 'staging.mbedfx.app' || h === 'staging.megapenispoopenfarten.sex' || h === 'x.invalid') {
+      /(^|\.)workers\.dev$/.test(h) || h === 'x.invalid') {
     return out(path === '/' ? '/' : path + (u.searchParams.get('v') ? '?v=' + u.searchParams.get('v') : ''), null,
       'Already an mbedfx link. Re-pointed at the selected domain.');
   }
@@ -820,8 +829,8 @@ function mbedfxConvert(input, host) {
 (function () {
   var $ = function (id) { return document.getElementById(id); };
   var input = $('url'), out = $('out'), result = $('result'), note = $('note'), copy = $('copy');
-  // The domain you arrived on leads — see mbedfxDefaultHost. `prefix` carries a staging subdomain
-  // across a toggle click so testing on staging never hands out production links.
+  // The domain you arrived on leads — see mbedfxDefaultHost, which also keeps a Workers preview
+  // deployment emitting its own links rather than production ones.
   var origin = mbedfxDefaultHost(location.hostname);
   var host = origin.host;
   /**
@@ -829,8 +838,8 @@ function mbedfxConvert(input, host) {
    *
    * Prefixed onto the WHOLE host rather than swapped into it, so it composes with the domain toggle
    * without either control needing to know about the other. One consequence worth knowing: a
-   * wildcard DNS record covers exactly ONE label, so `d.staging.…` would need a record of its own —
-   * the production hosts are covered, staging is not.
+   * wildcard DNS record covers exactly ONE label, and a Workers preview host has no wildcard at all,
+   * so the d. form resolves on the two production domains and nowhere else.
    */
   var mediaOnly = false;
   function sendHost() { return mediaOnly ? 'd.' + host : host; }
