@@ -320,6 +320,7 @@ h2.head { font-size: 20px; color: var(--head); margin: 0 0 6px; font-weight: 700
     font-size: 12px; color: var(--faint); cursor: pointer; user-select: none;
   }
   .mediaonly input { accent-color: var(--blurple); margin: 0; cursor: pointer; }
+  .mediaonly-pv .body { color: var(--faint); font-size: 13px; }
   .mediaonly:hover { color: var(--text); }
 
   /* The chip says which site we read the link as, on EVERY conversion — the owner asked for it to be
@@ -845,6 +846,28 @@ function mbedfxConvert(input, host) {
   function sendHost() { return mediaOnly ? 'd.' + host : host; }
 
   /**
+   * RE-POINT A WORKER-SUPPLIED URL AT THE HOST THE READER CHOSE.
+   *
+   * /_prep answers with a url built from the REQUEST'S origin — the host serving this page — because
+   * the worker has no idea which domain button is pressed or whether media-only is on. So a link that
+   * unfurls (a share code, a shortlink) came back on the wrong host and overwrote a correct one.
+   *
+   * That was reported as media-only "intermittently not working when changing links": the d. was
+   * right until /_prep answered and then quietly reverted. The same line was ALSO discarding the
+   * domain toggle, which nobody had noticed because losing a whole `d.` is visible and losing a swap
+   * between two domains is not.
+   */
+  function onChosenHost(u) {
+    try {
+      var x = new URL(u);
+      x.hostname = sendHost();
+      return x.toString();
+    } catch (e) {
+      return u;                       // not a url we can rewrite; better the original than nothing
+    }
+  }
+
+  /**
    * Brand marks, inline. Source: simple-icons 16.27.1 (icon data CC0; the marks themselves remain
    * their owners' trademarks and are used here only to identify which sites are supported).
    * Inlined rather than fetched so the page makes zero third-party requests — see the note up top.
@@ -1110,8 +1133,11 @@ function mbedfxConvert(input, host) {
         if (!j.ok) return;
         // Only speak up when there is something to say: a resolved share code changes the link under
         // the reader's cursor, and a warming mux explains a wait they would otherwise not understand.
-        if (j.url && j.url !== url) {
-          result.textContent = j.url;
+        // onChosenHost, not j.url: the worker builds it from the request origin and cannot know
+        // which domain is selected or whether media-only is on. See onChosenHost.
+        var unfurled = onChosenHost(j.url);
+        if (unfurled && unfurled !== url) {
+          result.textContent = unfurled;
           note.className = 'msgline';
           /**
            * A CHIP, AND THE PLATFORM'S NAME — this line used to print `j.platform` raw inside <b>, so
@@ -1324,14 +1350,30 @@ function mbedfxConvert(input, host) {
    * a preview that confidently disagrees with what gets sent. It says what will actually happen and
    * keeps the link row, which is what the reader came for.
    */
-  function mediaNote() {
-    clearTimeout(cardTimer);
-    cardSeq++;                       // any card already in flight must not land on top of this
+  function drawMediaOnly(sent, j) {
     cardUp = false; outClass(true);
-    preview.innerHTML = '<div class="pv"><div class="body">'
-      + 'No card. Discord downloads the file and attaches it.'
-      + '</div></div>';
+    /**
+     * A VIDEO IS DRAWN FROM ITS POSTER for the same reason drawCard does it: `url` is the mp4 and an
+     * <img> pointed at one fails silently. An image uses `url`, because for it the bytes ARE the
+     * picture.
+     */
+    var m = (j && j.ok && (j.media || [])[0]) || null;
+    var still = m ? (m.kind === 'video' ? m.poster : (m.poster || m.url)) : '';
+    var line = j && j.ok
+      ? 'Discord attaches this file. No card, no caption.'
+      : (j && j.gate ? j.gate : 'Nothing to attach. This link has no media.');
+    preview.innerHTML = '<div class="sentrow"><span class="sent" id="sentline"></span>'
+      + '<button type="button" id="copy2">Copy</button></div>'
+      + '<div class="pv mediaonly-pv">'
+      + (still
+          ? '<div class="shots n1"><span class="shot"><img src="' + esc2(still) + '" alt="" loading="lazy">'
+            + (m.kind === 'video' ? '<span class="play"></span>' : '') + '</span></div>'
+          : '')
+      + '<div class="body">' + esc2(line) + '</div>'
+      + '</div>';
     preview.className = 'preview show';
+    cardUp = true; outClass(true);
+    syncSent();
   }
 
   function card(url, isRetry) {
@@ -1343,6 +1385,9 @@ function mbedfxConvert(input, host) {
       // sequence check a slow early card can land on top of the one the reader is looking at.
       .then(function (j) {
         if (seq !== cardSeq) return;
+        // Media-only needs the SAME answer — it is where the media urls come from — just drawn as the
+        // file rather than as a card. Skipping the fetch is what left the page previewing nothing.
+        if (mediaOnly) { drawMediaOnly(url, j); return; }
         drawCard(url, j);
         if (!isRetry && j && j.pending) {
           cardTimer = setTimeout(function () {
@@ -1362,9 +1407,8 @@ function mbedfxConvert(input, host) {
     prepTimer = setTimeout(function () { prep(r.url); }, 600);
     // Later than prep, and deliberately: prep may REPLACE the url (a share code unfurls), and drawing
     // the card for a url that is about to change wastes a render and shows the wrong one first.
-    // A d. link has no card to fetch, and asking for one would spend a request to draw something
-    // that must not be shown anyway.
-    if (mediaOnly) { mediaNote(); return; }
+    // Media-only fetches the SAME card payload; only the drawing differs. It used to return here
+    // without scheduling anything, which is why the page previewed nothing at all.
     cardTimer = setTimeout(function () { card(result.textContent || r.url); }, 900);
   }
 
@@ -1477,9 +1521,10 @@ function mbedfxConvert(input, host) {
     mediaOnlyBox.addEventListener('change', function () {
       mediaOnly = mediaOnlyBox.checked;
       render();
-      // render() only rewrites the link; the PREVIEW has to change kind, in both directions.
-      if (mediaOnly) mediaNote();
-      else { hidePreview(); schedulePrep(); }
+      // render() only rewrites the link. The preview has to be REDRAWN in the other kind, and the
+      // card payload is the same either way, so both directions just re-run the normal path.
+      hidePreview();
+      schedulePrep();
     });
   }
 

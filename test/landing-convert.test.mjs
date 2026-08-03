@@ -680,18 +680,43 @@ test('THE MEDIA-ONLY TOGGLE EMITS A d. LINK, and composes with the domain toggle
     'no conversion bypasses sendHost()')
 })
 
-test('MEDIA-ONLY DRAWS NO CARD, because a d. link does not unfurl', () => {
+test('MEDIA-ONLY PREVIEWS THE FILE — no Discord card, but not nothing either', () => {
   /**
-   * The correctness trap in this feature. A d. link makes Discord fetch the url and attach the file;
-   * there is no embed. Leaving the mock card on screen would be the largest disagreement between
-   * preview and reality this page could ship — and "a preview that re-implements the renderer drifts
-   * from it" is the rule that already produced the stat-order and abbreviation fixes here.
+   * REWRITTEN 2026-08-03, after the owner reported the first version "doesn't preview anything which
+   * is antithetical to the purpose of previewing on the site". They were right, and the reasoning
+   * behind the mistake is worth keeping because half of it still holds.
+   *
+   * A d. link does NOT unfurl — Discord fetches the url and attaches the file — so drawing the mock
+   * Discord card would be a lie, and that part stands. The wrong conclusion was that the honest
+   * alternative is a sentence. The honest preview of "Discord attaches this file" is THE FILE, which
+   * is also the thing someone opened the page to check.
+   *
+   * So: still no card chrome (no byline, no stats, no colour bar), but the media itself is shown.
    */
-  assert.match(HTML, /function mediaNote\(\)/, 'there is a distinct media-only preview state')
-  assert.match(HTML, /No card\. Discord downloads the file and attaches it\./,
-    'and it says what will actually happen')
-  assert.match(HTML, /if \(mediaOnly\) \{ mediaNote\(\); return; \}/,
-    'the card fetch is skipped entirely rather than fetched and hidden')
+  assert.match(HTML, /function drawMediaOnly\(/, 'a distinct media-only drawing exists')
+  assert.match(HTML, /Discord attaches this file\. No card, no caption\./,
+    'and it says what will happen alongside the file')
+  // The SAME card payload feeds it — that is where the media urls come from. Skipping the fetch is
+  // exactly what left the page previewing nothing.
+  assert.match(HTML, /if \(mediaOnly\) \{ drawMediaOnly\(url, j\); return; \}/,
+    'the card payload is fetched and re-drawn, not skipped')
+  assert.ok(!/function mediaNote\(\)/.test(HTML), 'the text-only state is gone')
+})
+
+test('A WORKER-SUPPLIED URL IS RE-POINTED AT THE CHOSEN HOST', () => {
+  /**
+   * Reported as media-only "intermittently not working when changing links". /_prep answers with a
+   * url the WORKER built from the request's origin — the host serving the page — so it knows nothing
+   * about the domain toggle or media-only. When a share code unfurled, that answer overwrote a
+   * correct link and the d. silently vanished.
+   *
+   * PRE-EXISTING AND WIDER than media-only: the same line discarded the domain toggle too, which went
+   * unnoticed because losing a whole `d.` is visible where losing a swap between two domains is not.
+   */
+  assert.match(HTML, /function onChosenHost\(u\)/, 'there is one place that re-points such a url')
+  assert.match(HTML, /x\.hostname = sendHost\(\)/, 'and it uses the host the reader actually chose')
+  assert.ok(!/result\.textContent = j\.url;/.test(HTML),
+    'the raw worker url is never written straight to the result row')
 })
 
 test('THE PAGE STILL CARRIES NO VISIBLE EM DASH AND NO SECOND PERSON', () => {

@@ -7,6 +7,21 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [1.5.0] — 2026-08-03
 
+### Fixed
+- **Media-only intermittently lost its `d.`**, reported as "it seems to intermittently not work when
+  changing links". `/_prep` answers with a url the WORKER built from the request's origin — the host
+  serving the page — so it knows nothing about the domain toggle or media-only. When a share code
+  unfurled, that answer overwrote a correct link and the `d.` silently reverted.
+
+  **Pre-existing and wider than media-only**: the same line discarded the domain toggle too. Nobody
+  had noticed, because losing a whole `d.` is visible where losing a swap between two domains is not.
+  Both are fixed by re-pointing whatever `/_prep` returns at the host the reader actually chose.
+- **Media-only previewed nothing**, reported as "antithetical to the purpose of previewing on the
+  site", which is right. Half the original reasoning still holds — a `d.` link does not unfurl, so
+  drawing the mock Discord card would be a lie — but the conclusion did not: the honest preview of
+  "Discord attaches this file" is THE FILE. It now shows the media itself, with no card chrome, and
+  fetches the same payload as before rather than skipping the request.
+
 ### Changed
 - **Post bodies are capped at 253 characters**, the last three being `...`. Measured before building
   it, because the instinct needed checking: across the captured fixtures the median caption is 81
