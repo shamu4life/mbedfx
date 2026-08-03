@@ -468,7 +468,7 @@ footer .fine { font-size: 12px; opacity: .8; }
          hardcoded because this page is a static asset with no template step — and pinned to
          package.json by a test, because a version number that silently disagrees with the release is
          worse than none at all. -->
-    <div class="server">mbedfx <span class="ver" id="ver">v1.5.0</span></div>
+    <div class="server">mbedfx <span class="ver" id="ver">v1.6.0</span></div>
     <div class="cat">Start here</div>
     <a href="#convert"><b>#</b> convert</a>
     <a href="#sites"><b>#</b> sites</a>
@@ -605,7 +605,7 @@ footer .fine { font-size: 12px; opacity: .8; }
           <div class="embed wide" style="--c:var(--blurple)">
             <div class="t">🎬 Video came back as a still</div>
             <div class="d">Carousels with video flatten to the cover. Instagram reels using
-              major-label audio arrive with no video at all. Anything over 20 minutes or 300 MB
+              major-label audio arrive with no video at all. Anything over 25 minutes or 375 MB
               isn't remuxed.</div>
           </div>
           <div class="embed wide" style="--c:var(--faint)">
@@ -1231,6 +1231,8 @@ function mbedfxConvert(input, host) {
         + '<div class="pv"><div class="body">' + esc2(j && j.gate ? j.gate : 'No preview. This link doesn’t resolve to a post.') + '</div></div>';
       preview.className = 'preview show';
       syncSent();
+      // A card that could not be drawn has no media to link to either.
+      syncMediaOnlyAvailability(j);
       return;
     }
     /**
@@ -1267,6 +1269,8 @@ function mbedfxConvert(input, host) {
     preview.className = 'preview show';
     // Fill the first line from the result field — see syncSent for why it is derived and not passed.
     syncSent();
+    // The media-only toggle tracks whatever is on screen: a post with nothing to serve disables it.
+    syncMediaOnlyAvailability(j);
   }
 
   /**
@@ -1350,6 +1354,35 @@ function mbedfxConvert(input, host) {
    * a preview that confidently disagrees with what gets sent. It says what will actually happen and
    * keeps the link row, which is what the reader came for.
    */
+  /**
+   * TURN THE TOGGLE OFF FOR A POST WITH NOTHING TO SERVE.
+   *
+   * A d. link to a text post can only 404, so offering the option there is offering a broken link. The
+   * page already knows — the card payload lists the media — so this was the page failing to use a fact
+   * it was holding.
+   *
+   * DISABLED, NOT HIDDEN. A control that vanishes reads as a bug and gives the reader nothing to act
+   * on; a disabled one with a reason explains itself. If it was already ON when such a link is pasted,
+   * it is switched OFF too, because leaving it on would keep emitting a d. link that cannot work.
+   */
+  function syncMediaOnlyAvailability(j) {
+    var box = $('mediaOnly');
+    if (!box) return;
+    var has = !!(j && j.ok && (j.media || []).length);
+    var lab = box.parentNode;
+    box.disabled = !has;
+    if (lab && lab.setAttribute) {
+      lab.setAttribute('title', has ? 'Link straight to the file' : 'This post has no media to link to');
+      lab.style.opacity = has ? '' : '.5';
+      lab.style.cursor = has ? '' : 'not-allowed';
+    }
+    if (!has && box.checked) {
+      box.checked = false;
+      mediaOnly = false;
+      render();
+    }
+  }
+
   function drawMediaOnly(sent, j) {
     cardUp = false; outClass(true);
     /**
@@ -1374,6 +1407,7 @@ function mbedfxConvert(input, host) {
     preview.className = 'preview show';
     cardUp = true; outClass(true);
     syncSent();
+    syncMediaOnlyAvailability(j);
   }
 
   function card(url, isRetry) {

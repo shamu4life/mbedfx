@@ -366,3 +366,43 @@ test('A JUNK DESCRIPTION IS NO DESCRIPTION — the date still lands', async () =
       `${JSON.stringify(description)} must not cost the date`)
   }
 })
+
+test('A VIDEO OVER THE MUX CEILING IS NEVER DISPATCHED, and says why on the card', async () => {
+  /**
+   * Reported on /Jky5ZXI0axc — "still just pulling up as a frozen image". The still was CORRECT: that
+   * video is 1431s, and worker.ts already cites that exact id as the measurement case for the degrade.
+   * Three things AROUND it were wrong.
+   *
+   * The ceiling is now 1500s (25 minutes, owner's call). Past it, a video must:
+   *   - dispatch NO mux, because the container refuses it and the duration is already known;
+   *   - say so on the card — "when a post can't be shown, the card says why" is a promise the README
+   *     makes, and a silent thumbnail is exactly the blank rectangle it promises not to be;
+   *   - and be cacheable, because "too long" is permanent rather than pending.
+   *
+   * Before this, the reported video cost 5.2s on the HTML seam and 9.1s on the activity seam — then
+   * 5.1s again on a SECOND view, because a degraded card is deliberately not response-cached.
+   */
+  const { seen, binding } = fakeResolver({
+    meta: () => Response.json({ timestamp: TS_RICK, duration: 1600 }),
+  })
+  const ref = ytRef('tooLong0001')
+  const res = await handle(req(activity(ref)), envWith(binding), ctx, deps(vouchedPost(ref)))
+  const content = await contentOf(res)
+
+  assert.match(content, /Too long to play here/, 'the card says why it is a picture')
+  assert.equal(seen.mux, 0, 'and no mux was dispatched for a video the container would refuse')
+})
+
+test('A VIDEO INSIDE THE CEILING IS UNTOUCHED — the guard must not swallow ordinary videos', async () => {
+  // The other half. 1500s is the line; anything under behaves exactly as before, note-free. A guard
+  // that quietly widened would turn every long-ish video into a still, which is the reported defect
+  // with a different cause.
+  const { binding } = fakeResolver({
+    meta: () => Response.json({ timestamp: TS_RICK, duration: 1400 }),
+  })
+  const ref = ytRef('okLength001')
+  const res = await handle(req(activity(ref)), envWith(binding), ctx, deps(vouchedPost(ref)))
+  const content = await contentOf(res)
+
+  assert.ok(!/Too long to play here/.test(content), 'no note on a video that can play')
+})

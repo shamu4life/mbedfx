@@ -181,7 +181,7 @@ Know what you're getting:
 
 - **No uptime guarantee.** It's a Cloudflare Worker on a hobby budget. It'll probably be fine.
 - **Some posts can't be fixed.** An age-gated Instagram post needs an account, and nothing clever at the edge changes that.
-- **Videos over 20 minutes come out as thumbnails.** Muxing one inside a request deadline isn't realistic.
+- **Videos over 25 minutes come out as thumbnails.** Muxing one inside a request deadline isn't realistic.
 - **It leans on undocumented endpoints.** Platforms change them without warning. When one goes you get a card saying it broke, not a wrong one.
 - **Translation is machine translation.** It gets things wrong; the original's right underneath.
 
@@ -214,6 +214,7 @@ Everything below has a working default, which is why a fresh deploy needs none o
 | `TRANSLATE_GOOGLE` | Set to `off` to stop using Google's endpoint and fall back to Workers AI alone. |
 | `RESOLVER_SECRET` | Shared secret the video container requires on every call. |
 | `REDDIT_CLIENT_ID` / `REDDIT_CLIENT_SECRET` | Reddit OAuth, if you have credentials. |
+| `CREDENTIAL_KEY` / `CREDENTIAL_BUNDLE` | **Declared, read by nothing yet.** Age-gated posts need a logged-in account, and the injection point for one is a real tested function that currently returns null — so those posts get an honest 🔞 card rather than a broken one. Setting these changes nothing today; they exist so the secrets can be in place before the account pool is built. |
 
 Set with `npx wrangler secret put <NAME>`.
 

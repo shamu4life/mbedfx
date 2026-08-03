@@ -37,7 +37,8 @@ import { metaPlatformOf, resolveMetaShare, stripMetaTracking } from './platforms
 import { normalizeReddit } from './platforms/reddit/normalize.ts'
 import { fetchYouTube, ytPageUrl } from './platforms/youtube/fetch.ts'
 import {
-  normalizeYouTube, uploadDateFrom, withAgeNote, withCounts, withDescription, withUploadDate,
+  normalizeYouTube, uploadDateFrom, withAgeNote, withCounts, withDescription, withLengthNote,
+  withUploadDate,
   youtubeVouched,
 } from './platforms/youtube/normalize.ts'
 import {
@@ -1060,7 +1061,11 @@ const RESOLVER_SLOTS = 4
 // _meta_page began returning view_count/like_count/comment_count, so the STORED SHAPE changed again.
 // A warm g7 record has no counts, and a missing count is indistinguishable from a post that genuinely
 // has none — so the card would quietly show nothing for up to 30 days rather than visibly failing.
-const RESOLVER_GENERATION = 'g8'
+// g8 -> g9, 2026-08-03. _meta_page's dict is unchanged; the STORED SHAPE gained `duration`, which the
+// worker now reads to skip a mux the container would refuse. A warm g8 record has no duration, so a
+// 25-minute video would keep paying a full deadline to be told no — the exact cost this bump exists to
+// stop. Same reasoning as g7 and g8: the generation is the one documented invalidation switch.
+const RESOLVER_GENERATION = 'g9'
 /** `slotKey` is the POST (refKey), never the operation — see RESOLVER_SLOTS for the 74% measurement. */
 function resolverStub(resolver: NonNullable<Env['MEDIA_RESOLVER']>, slotKey: string) {
   let h = 2166136261
@@ -1223,6 +1228,24 @@ async function settleMux(
   let degraded = false
   const media = await Promise.all(own.map(async (m, i) => {
     if (!m?.remux?.page) return m
+    /**
+     * A VIDEO OVER THE CEILING IS NEVER MUXED, AND ITS CARD IS CACHEABLE.
+     *
+     * The container refuses these with its own match filter, so dispatching one spends a full deadline
+     * to be told something already known — the duration is in the meta record, kept 30 days. Measured
+     * on the reported video before this existed: 5.2s on the HTML seam, 9.1s on the activity seam, and
+     * 5.1s again on the SECOND view, because a degraded card is not response-cached.
+     *
+     * `degraded` is deliberately NOT set here. That flag means "incomplete, something is still coming,
+     * do not pin this" — true of an ordinary slow mux, false of this, where the answer is final and
+     * will be identical in thirty days. Setting it would re-pay the cost forever for an outcome that
+     * cannot change.
+     */
+    if (typeof m.duration === 'number' && m.duration > MUX_MAX_SECONDS) {
+      return m.poster
+        ? { ...m, kind: 'image' as const, url: m.poster, w: m.posterW ?? m.w, h: m.posterH ?? m.h }
+        : m
+    }
     const key = `mux/${refKey(post.ref)}/${i}`
     // The mux runs to completion regardless of who wins this race — waitUntil keeps it alive past the
     // response, so a slow video is ready for the next render rather than being restarted from scratch.
@@ -1895,8 +1918,20 @@ const YT_META_TTL_MS = 30 * 86_400_000
  * g6 carry no such field and are still perfectly good dates; requiring it would throw away a
  * 30-day cache for a cosmetic marker. Absent simply means "not known to be gated".
  */
+/**
+ * THE WORKER'S COPY OF container/server.py's MAX_SECONDS, and the two MUST be kept equal.
+ *
+ * It is duplicated rather than derived because the container is reached over a binding, not imported —
+ * there is no build step that could share a constant. The cost of them disagreeing is asymmetric and
+ * worth knowing: too LOW here and a video that would mux fine is refused a mux it never attempts; too
+ * HIGH here and the old behaviour returns, a full deadline burned to be told no.
+ */
+const MUX_MAX_SECONDS = 1500
+
 type YouTubeMeta = {
   timestamp: number
+  /** Seconds, from the container's dict. Absent on a record written before 2026-08-03 (g8 -> g9). */
+  duration?: number
   ageLimit?: number
   description?: string
   /** Counts, each ABSENT rather than zero when the platform withholds it — see ytCount. */
@@ -2027,8 +2062,11 @@ async function resolveYouTubeMeta(ref: Extract<PostRef, { p: 'yt' }>, env: Env):
     const views = ytCount(j.view_count)
     const likes = ytCount(j.like_count)
     const replies = ytCount(j.comment_count)
+    const duration = typeof j.duration === 'number' && Number.isFinite(j.duration) && j.duration > 0
+      ? j.duration : undefined
     return {
       timestamp: j.timestamp as number,
+      ...(duration === undefined ? {} : { duration }),
       ...(ageLimit === undefined ? {} : { ageLimit }),
       ...(description === undefined ? {} : { description }),
       ...(views === undefined ? {} : { views }),
@@ -2760,7 +2798,16 @@ export async function handle(req: Request, env: Env, ctx: ExecutionContext, d: D
             withTranslation(
               withAgeNote(
                 withCounts(
-                  withDescription(withUploadDate(settledApi.post, meta?.timestamp), meta?.description),
+                  withDescription(
+                    // BOTH SEAMS OR NEITHER. This is the document Discord reads for a post WITH media,
+                    // which is every video — so a length note applied only to the plain head would be,
+                    // from a reader's side, applied nowhere.
+                    withLengthNote(
+                      withUploadDate(settledApi.post, meta?.timestamp),
+                      meta?.duration, MUX_MAX_SECONDS,
+                    ),
+                    meta?.description,
+                  ),
                   meta,
                 ),
                 meta?.ageLimit,
@@ -3092,7 +3139,8 @@ export async function handle(req: Request, env: Env, ctx: ExecutionContext, d: D
           ?? await readCachedMeta<YouTubeMeta>(post.ref, env, YT_META_TTL_MS, ytMetaValid)
         if (warm) {
           post = withAgeNote(
-            withCounts(withDescription(withUploadDate(post, warm.timestamp), warm.description), warm),
+            withCounts(withDescription(withLengthNote(withUploadDate(post, warm.timestamp),
+              warm.duration, MUX_MAX_SECONDS), warm.description), warm),
             warm.ageLimit,
           )
         }
