@@ -5,6 +5,60 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [1.8.0] — 2026-08-03
+
+### Added
+- **Account pools for age-gated posts, staged and — for two of the three platforms — wired.** Age
+  gates are the one failure class this project cannot degrade its way out of: Twitter's
+  TweetTombstone, Instagram's `failure_reason:MA`, and a YouTube video reporting `age_limit:18` with
+  `formats: 0` are all unreachable credential-free, measured on both egresses. The honest cards those
+  produce are the correct answer *without* accounts, not a bug in the fetchers.
+
+  Three secrets, one per platform, each a JSON array so the pool size is data rather than code and a
+  third account needs no deploy: `X_ACCOUNTS`, `IG_ACCOUNTS`, `YT_ACCOUNTS`. One account is picked at
+  random per request, because round-robin needs state the edge does not share between isolates and
+  picking the first puts the whole load on one account, which is the fastest way to get it flagged.
+
+- **A cookie path into the container**, which is what makes Instagram and YouTube actually work rather
+  than merely configurable. Their gates are beaten inside yt-dlp, not in the Worker, and the container
+  protocol had no field for a credential and no `--cookies` anywhere in its argv — so before this,
+  filling those secrets would have done nothing at all. `{page}` calls now accept a `cookies` string,
+  written to a 0600 Netscape jar for the length of one call and unlinked afterwards even when yt-dlp
+  raises or times out. A leaked jar is a live session sitting on disk for the life of the container.
+
+### Changed
+- **`CREDENTIAL_KEY` + `CREDENTIAL_BUNDLE` are replaced by the three per-platform secrets.** The
+  AES-256-GCM bundle was copied from FxEmbed, and it answers a threat we do not have: FxEmbed
+  self-hosts, where the bundle sits on a disk somebody else may read. A Worker secret is encrypted at
+  rest, unreadable from the dashboard and absent from the repo, so a second layer bought no
+  attacker-resistance while costing a key stored in the same place as the thing it protects — and a
+  bespoke encrypt step on every rotation, which is the step most likely to be skipped.
+
+- **`RESOLVER_GENERATION` g9 → g10.** Cookies change what the container returns for a gated id, and
+  every warm meta record *and* the negative cache that suppresses re-dispatch for a failing id were
+  produced without one. Without the bump, an age-gated video that failed before the pool existed would
+  stay negatively cached and never be retried once it was filled.
+
+### Fixed
+- **`credentialSeamArmed` was exported and never called from anywhere.** It was written for exactly
+  the right reason — "a variable that looks live and is inert is worse than one that does not exist" —
+  and then made nothing visible at all. Replaced by a counted outcome, `pool_unused`, emitted in the
+  arm that would have spent the credential. On `x` it is expected and marks the staging gap, since the
+  Worker-side GraphQL call is still a later phase. On `ig`/`yt` it is a real signal that the accounts
+  need rotating.
+
+### Notes
+- **Filling `X_ACCOUNTS` still changes nothing today.** Twitter's gate is beaten in the Worker by a
+  `TweetResultByRestId` call that is deliberately not built here; `fetchWithCredentials` remains a
+  real, tested seam returning null. The secret can be put in place ahead of that work, and
+  `pool_unused` is how the gap stays visible rather than being rediscovered.
+- The Instagram counter is weaker than the YouTube one and says so where it is emitted: `IG_ACCOUNTS`
+  currently rides only the container path, while the `MA` gate is read off the Worker's own page fetch,
+  which carries no jar. A rising `ig` count means the credential is not reaching the request that needs
+  it, not necessarily that the accounts are dead.
+
+---
+
 ## [1.7.0] — 2026-08-03
 
 ### Added

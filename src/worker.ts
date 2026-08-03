@@ -10,6 +10,7 @@ import { statParts } from './render/text.ts'
 import { proxyableVideoUrl, serveDirectVideo } from './mediaproxy.ts'
 import { refKey } from './refkey.ts'
 import { count, type Env, type GateReason } from './analytics.ts'
+import { cookiesFor, poolSetButUnused, twitterAccounts, type CredentialPlatform } from './credentials.ts'
 import {
   cacheUrl, deserializePost, postCacheKey, respCacheKey, shortPostCacheKey, shortRespCacheKey,
   serializePost, POST_TTL, RESP_TTL, MEDIA_MAX_AGE,
@@ -331,6 +332,23 @@ export async function liveFetchPost(
         const age = instagramAgeGate(full)
         if (age) {
           count(env, 'ig', age, client)
+          /**
+           * THE POOL IS SET AND THE WALL HELD — and on Instagram that is worth a second point because
+           * it is the ONLY evidence available about whether the accounts are alive.
+           *
+           * WHAT IS AND IS NOT TRUE HERE, stated plainly so nobody reads more into the number than it
+           * carries. IG_ACCOUNTS is spent in the CONTAINER (the copyright-remux mux), which is a page
+           * this arm never reaches: `failure_reason":"MA"` is read off Instagram's own answer to the
+           * WORKER's page fetch, and that fetch carries no jar. So a filled pool does not beat this
+           * gate today, and a rising count is not proof the accounts are logged out — it is proof that
+           * somebody with accounts configured is still being walled, which is the signal that says
+           * "the credential is not reaching the request that needs it".
+           *
+           * Kept a counter rather than a comment for the reason the predicate it replaces failed: an
+           * inert credential that is documented is still rediscovered from a card, while one that is
+           * counted shows up next to the age_restricted rate it is supposed to move.
+           */
+          if (poolSetButUnused(env, 'ig')) count(env, 'ig', 'pool_unused', client)
           if (report) report.reason = age
           return null
         }
@@ -468,7 +486,34 @@ export async function liveFetchPost(
         // age_restricted / private ALSO ride out on `report` (a distinct signal from the counter): a
         // null tells the route the fetch failed, and this tells it WHICH gate to render. assert_fail
         // is left unreported — it renders as the generic failure, like every deleted post.
-        if ((got.reason === 'age_restricted' || got.reason === 'private') && report) report.reason = got.reason
+        if (got.reason === 'age_restricted' || got.reason === 'private') {
+          if (report) report.reason = got.reason
+          /**
+           * THE POOL IS SET AND THE WALL HELD — expected on THIS platform, and counted so that is a
+           * number rather than a memory.
+           *
+           * X_ACCOUNTS can be filled today; the Worker-side GraphQL call that would spend it is a
+           * later phase, so fetchWithCredentials returns null and these posts stay honest 🔞 / 🔒
+           * cards. That is deliberate staging, and the failure mode it creates is somebody filling a
+           * secret, seeing nothing change, and having no way to tell "the accounts are dead" from
+           * "the code does not read them yet". This counter is that way.
+           *
+           * BOTH GATES, not only the age one: fetchTwitter escalates to the seam for a `private`
+           * TweetUnavailable as well (see its fallback-order docstring), so both are arms that WOULD
+           * have spent a credential. Counting only one would under-report the staging gap by exactly
+           * the posts a filled pool is most likely to fix first.
+           *
+           * NOT a replacement for the `count(env, 'x', got.reason, client)` above — a second, distinct
+           * point. Folding them would blunt the age_restricted rate, which is the alert that matters
+           * when a pool is NOT set.
+           *
+           * `twitterAccounts`, not the generic pool predicate the other two platforms use, and the
+           * difference is real: Twitter's path needs auth_token AND ct0 together, so an entry carrying
+           * only a cookie jar is not an account this arm could ever have spent. Counting it would
+           * report a staging gap where the honest answer is "that secret is the wrong shape".
+           */
+          if (twitterAccounts(env).length > 0) count(env, 'x', 'pool_unused', client)
+        }
         return null
       }
       /**
@@ -525,6 +570,28 @@ export async function liveFetchPost(
         readCachedMeta<YouTubeMeta>(ref, env, YT_META_TTL_MS, ytMetaValid),
       ])
       if (!got.ok) count(env, 'yt', 'assert_fail', client)
+      /**
+       * THE JAR WAS SENT AND THE GATE HELD — the one arm where `pool_unused` is a REAL fault signal
+       * rather than a staging note.
+       *
+       * `ageLimit` on this record came out of the container's `-J`, and since g10 that call carries the
+       * YT_ACCOUNTS jar. So a positive threshold on a record read back WITH a pool configured means the
+       * logged-in extract still saw an age wall: the accounts are signed out, rate-limited, or flagged,
+       * and the jar needs rotating. That is a maintenance action nobody can take from a card, which is
+       * why it is a number.
+       *
+       * WHY THIS SITE AND NOT resolveYouTubeMeta, where the call actually happens: `count` takes a
+       * client class, and the container call has no request to classify. Here the gate is observed at
+       * the same place `assert_fail` is, once per post-cache miss rather than once per request — so it
+       * is bounded the same way every other counter on this path is.
+       *
+       * THE RECORD IS TRUSTED TO BE POST-JAR because the generation bump above retired every pre-cookie
+       * one. Without that bump this counter would fire for 30 days on answers no credential could have
+       * changed, which is the same staleness the bump exists to stop.
+       */
+      if (typeof warm?.ageLimit === 'number' && warm.ageLimit > 0 && poolSetButUnused(env, 'yt')) {
+        count(env, 'yt', 'pool_unused', client)
+      }
       // THE WARM DATE IS OVERLAID WHETHER OR NOT OEMBED ANSWERED. `got.ok && warm` was the first
       // spelling and it threw away a date this worker was already holding: an oembed miss makes the
       // post UNVOUCHED, youtubeMeta then declines to fill the date on the activity route (the vouch is
@@ -981,7 +1048,7 @@ async function serveMuxed(
     // within ~2s of one paste, and three concurrent downloads of one video is the bandwidth that
     // decides whether the card gets a player. The slot key is the POST, so this call and the meta
     // call for the same ref land on one already-booted instance.
-    const head = await muxOnce(env, key, source, refKey(ref))
+    const head = await muxOnce(env, key, source, refKey(ref), jarPlatform(ref))
     if (!head) return notReady()
     return await r2Range(cache, key, head.size, req.headers.get('range'))
   } catch (err) {
@@ -1065,7 +1132,21 @@ const RESOLVER_SLOTS = 4
 // worker now reads to skip a mux the container would refuse. A warm g8 record has no duration, so a
 // 25-minute video would keep paying a full deadline to be told no — the exact cost this bump exists to
 // stop. Same reasoning as g7 and g8: the generation is the one documented invalidation switch.
-const RESOLVER_GENERATION = 'g9'
+// g9 -> g10, 2026-08-03. THE FIRST BUMP THAT IS ABOUT THE INPUT RATHER THAN THE OUTPUT, and it is the
+// whole point of the change rather than housekeeping beside it. container/server.py now accepts a
+// `cookies` jar and the Worker sends one for yt (and ig on the mux), so the SAME id can answer
+// differently than it did an hour ago — an age-gated video that returned `age_limit: 18, formats: 0`
+// cookie-free resolves once a pool is filled. Every warm record and every negative-cache note was
+// produced WITHOUT a jar, and both would otherwise outlive the thing that made them true:
+//   - a g9 meta record says "gated" for up to YT_META_TTL_MS (30 days), so the card would keep the 🔞
+//     note and keep refusing to play a video the credential now reaches, on every colo, unfixable by
+//     re-pasting;
+//   - and the negative cache ("a failing id is not a free container trigger") would refuse the retry
+//     that would have discovered the difference.
+// Retiring the instances is the smaller half here — filling a secret must not require also knowing
+// that a stale answer has to be waited out. Same rule as g7/g8: the generation is the ONE documented
+// invalidation switch, and this is the change it exists for.
+const RESOLVER_GENERATION = 'g10'
 /** `slotKey` is the POST (refKey), never the operation — see RESOLVER_SLOTS for the 74% measurement. */
 function resolverStub(resolver: NonNullable<Env['MEDIA_RESOLVER']>, slotKey: string) {
   let h = 2166136261
@@ -1077,12 +1158,52 @@ function resolverStub(resolver: NonNullable<Env['MEDIA_RESOLVER']>, slotKey: str
 }
 
 /**
+ * WHICH POOL A REF'S CONTAINER CALL MAY SPEND — an ALLOWLIST, and the four omissions are the point
+ * rather than an oversight.
+ *
+ * Only `ig` and `yt` have a gate that is beaten INSIDE yt-dlp, so only they have any use for a jar in
+ * the container. Facebook, Dailymotion, Streamable and Imgur reach the same endpoint and must never be
+ * handed one: a session shipped to a subprocess that cannot spend it buys nothing and widens where it
+ * can leak (an argv, a temp file, a crash dump) for every one of those platforms. Twitter is absent for
+ * a second, independent reason — its gate is beaten in the WORKER, so `cookiesFor` refuses `'x'` outright
+ * (see credentials.ts); listing it here would be a silent no-op that reads as a live path.
+ *
+ * DERIVED FROM THE REF, never from the slot key. The slot key is a refKey STRING, and recovering a
+ * platform by parsing it would put the credential decision behind a string match that no type checker
+ * can keep in step with the PostRef union — exactly the failure `parseRefKey` already documents.
+ */
+const jarPlatform = (ref: PostRef): CredentialPlatform | null =>
+  ref.p === 'ig' ? 'ig' : ref.p === 'yt' ? 'yt' : null
+
+/**
+ * PUT THE COOKIE JAR ON A CONTAINER BODY — the ONE place in the Worker a credential crosses the wire.
+ *
+ * THE KEY IS OMITTED, never sent as `cookies: null`. container/server.py treats a non-string as "no
+ * jar" either way, so this is not about the container understanding us; it is about the request body
+ * being the thing that gets logged, echoed into an error, or captured in a test fixture. A body with no
+ * `cookies` key cannot leak a field that is not there, and "absent" is unambiguous where a null is a
+ * value somebody may later decide to render.
+ *
+ * ONLY THE {page} FORM, because that is the only one that can use it: `_mux_tracks` (the {video} path)
+ * takes no jar at all, so attaching one to a direct-CDN remux would send a session somewhere it is
+ * provably ignored. Same argument as the platform allowlist above, one level down.
+ */
+function withCookieJar<T extends object>(body: T, env: Env, platform: CredentialPlatform | null): T {
+  if (!platform) return body
+  const cookies = cookiesFor(env, platform)
+  return cookies ? { ...body, cookies } : body
+}
+
+/**
  * Get a muxed MP4 into R2 and return its head — the shared half of serveMuxed and prewarmMux. Returns the
  * existing object when it is already there (so a mux happens at most once), else calls the container and
  * stores the result. Null on any no (no bindings, no source, a container error, an empty body).
+ *
+ * `platform` is threaded in EXPLICITLY rather than recovered from `slotKey` — see jarPlatform. It is the
+ * only input that decides whether a credential is sent, so it is passed as a value the compiler checks.
  */
 async function ensureMuxed(
-  env: Env, key: string, source: Media['remux'], slotKey: string,
+  env: Env, key: string, source: Media['remux'], slotKey: string, platform: CredentialPlatform | null,
 ): Promise<{ size: number } | null> {
   const { MEDIA_RESOLVER: resolver, MEDIA_CACHE: cache } = env
   if (!resolver || !cache || !source) return null
@@ -1090,8 +1211,9 @@ async function ensureMuxed(
   if (existing) return existing
   const headers: Record<string, string> = { 'content-type': 'application/json' }
   if (env.RESOLVER_SECRET) headers['x-resolver-secret'] = env.RESOLVER_SECRET
+  const body = source.page ? withCookieJar(source, env, platform) : source
   const muxed = await resolverStub(resolver, slotKey).fetch('http://media-resolver/resolve', {
-    method: 'POST', body: JSON.stringify(source), headers,
+    method: 'POST', body: JSON.stringify(body), headers,
   })
   if (!muxed.ok || !muxed.body) {
     // SERVER-SIDE ONLY (wrangler tail), never the client: a non-200 here is invisible otherwise — the
@@ -1132,10 +1254,12 @@ const muxInflight = new Map<string, Promise<{ size: number } | null>>()
  * it together. It bounds the amplification, it does not serialize the work.
  */
 const SPECULATIVE_MUX_CAP = 2
-function muxOnce(env: Env, key: string, source: Media['remux'], slotKey: string): Promise<{ size: number } | null> {
+function muxOnce(
+  env: Env, key: string, source: Media['remux'], slotKey: string, platform: CredentialPlatform | null,
+): Promise<{ size: number } | null> {
   const running = muxInflight.get(key)
   if (running) return running
-  const p = ensureMuxed(env, key, source, slotKey).finally(() => muxInflight.delete(key))
+  const p = ensureMuxed(env, key, source, slotKey, platform).finally(() => muxInflight.delete(key))
   muxInflight.set(key, p)
   return p
 }
@@ -1320,7 +1444,7 @@ async function settleMux(
     const key = `mux/${refKey(post.ref)}/${i}`
     // The mux runs to completion regardless of who wins this race — waitUntil keeps it alive past the
     // response, so a slow video is ready for the next render rather than being restarted from scratch.
-    const work = muxOnce(env, key, m.remux, refKey(post.ref)).catch(() => null)
+    const work = muxOnce(env, key, m.remux, refKey(post.ref), jarPlatform(post.ref)).catch(() => null)
     ctx.waitUntil(work)
     // deadline(), not a bare Promise.race: an uncleared timer stays armed for the full budget even
     // when the container answers instantly, holding the isolate open for nothing. deadline's own
@@ -1427,6 +1551,11 @@ async function resolveFacebookMeta(ref: Extract<PostRef, { p: 'fb' }>, env: Env)
       // The slot is the POST, not `meta/{ref}`: this call and the video mux for the same ref must land
       // on ONE container instance, or a Facebook post pays two cold boots back to back (see
       // RESOLVER_SLOTS).
+      //
+      // NO COOKIE JAR, deliberately, and it is written here because this call is a copy of YouTube's
+      // that DOES carry one. Facebook has no pool (there is no FB_ACCOUNTS secret and nothing asked
+      // for one), so sending anything would mean picking some other platform's session — see
+      // jarPlatform for why an unusable credential on the wire is a cost with no benefit.
       const r = await resolverStub(resolver, refKey(ref)).fetch('http://media-resolver/resolve', {
         method: 'POST', body: JSON.stringify({ page: fbPageUrl(ref), meta: true }), headers,
       })
@@ -1864,6 +1993,9 @@ async function resolveYtdlpMeta(page: string, slot: string, env: Env): Promise<Y
   try {
     const headers: Record<string, string> = { 'content-type': 'application/json' }
     if (env.RESOLVER_SECRET) headers['x-resolver-secret'] = env.RESOLVER_SECRET
+    // NO COOKIE JAR — this one call serves dm, st AND im, none of which gate anything behind a
+    // login, so there is no pool to spend and nothing a session would unlock. Stated rather than
+    // left to inference, because the shape is identical to YouTube's call, which does carry one.
     const r = await resolverStub(resolver, slot).fetch('http://media-resolver/resolve', {
       method: 'POST', body: JSON.stringify({ page, meta: true }), headers,
     })
@@ -2069,8 +2201,12 @@ async function resolveYouTubeMeta(ref: Extract<PostRef, { p: 'yt' }>, env: Env):
   try {
     const headers: Record<string, string> = { 'content-type': 'application/json' }
     if (env.RESOLVER_SECRET) headers['x-resolver-secret'] = env.RESOLVER_SECRET
+    // THE JAR RIDES THE META CALL AS WELL AS THE MUX, and it is not redundant: an age-gated video
+    // answers this `-J` with `age_limit: 18` and `formats: 0` (measured on G0sORVBL4kM, 2026-07-30),
+    // so cookie-free the record we PERSIST for 30 days says "gated" whatever the mux later manages.
+    // No pool set -> no `cookies` key at all, and this is byte-for-byte the call it has always been.
     const r = await resolverStub(resolver, refKey(ref)).fetch('http://media-resolver/resolve', {
-      method: 'POST', body: JSON.stringify({ page: ytPageUrl(ref), meta: true }), headers,
+      method: 'POST', body: JSON.stringify(withCookieJar({ page: ytPageUrl(ref), meta: true }, env, 'yt')), headers,
     })
     if (!r.ok) {
       // SERVER-SIDE ONLY (wrangler tail), ref-only like ensureMuxed — and NO analytics counter: yt's
@@ -2590,7 +2726,10 @@ async function renderPostRoute(
    * pretends to survive in one place and not the other.
    */
   if (pre && muxInflight.size < SPECULATIVE_MUX_CAP && await d.cache.match(cacheUrl(postCacheKey(ref)))) {
-    ctx.waitUntil(muxOnce(env, `mux/${refKey(ref)}/${pre.index}`, pre.source, refKey(ref)).catch(() => null))
+    ctx.waitUntil(
+      muxOnce(env, `mux/${refKey(ref)}/${pre.index}`, pre.source, refKey(ref), jarPlatform(ref))
+        .catch(() => null),
+    )
   }
 
   const { post, failReason } = await getPost(ref, d, env, client, ctx)

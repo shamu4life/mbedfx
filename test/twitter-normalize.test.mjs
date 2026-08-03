@@ -372,13 +372,22 @@ const withFetch = (fn, body) => async () => {
   try { return await body() } finally { globalThis.fetch = real }
 }
 
-test('the credential seam is EMPTY — returns null with no accounts', async () => {
-  // THE SEAM IS A TESTED BOUNDARY, NOT A TODO. Shipped empty (no CREDENTIAL_KEY, no bundled accounts)
-  // it returns null, and that null is exactly what turns an age-gated tweet into an honest
-  // age_restricted failure instead of a half-built credential system. A later phase fills it to return
-  // { source:'guest', data } — the same shape fetchGuest returns — and these gated posts become
-  // ordinary successes with zero rearchitecting.
-  assert.equal(await fetchWithCredentials({ p: 'x', id: '1' }, {}), null)
+test('the credential seam is EMPTY EVEN WITH A POPULATED X_ACCOUNTS POOL', async () => {
+  // THE SEAM IS A TESTED BOUNDARY, NOT A TODO. It returns null, and that null is exactly what turns an
+  // age-gated tweet into an honest age_restricted failure instead of a half-built credential system. A
+  // later phase fills it to return { source:'guest', data } — the same shape fetchGuest returns — and
+  // these gated posts become ordinary successes with zero rearchitecting.
+  //
+  // REWRITTEN 2026-08-03 because the surface it described no longer exists: the secrets were
+  // CREDENTIAL_KEY + an AES-256-GCM CREDENTIAL_BUNDLE, and are now one plaintext X_ACCOUNTS pool (a
+  // Worker secret is already encrypted at rest, so the second layer bought no attacker-resistance and
+  // cost a key stored beside the thing it protects). The BEHAVIOUR under test is unchanged and the
+  // stronger case is now assertable: a pool that is READABLE still yields null, so "empty seam" means
+  // the CALL is unbuilt rather than the accounts being missing. That is the state an operator who has
+  // filled the secret is in, and worker.ts counts it as `pool_unused`.
+  assert.equal(await fetchWithCredentials({ p: 'x', id: '1' }, {}), null, 'no pool')
+  const env = { X_ACCOUNTS: JSON.stringify([{ label: 'x1', auth_token: 'AUTH-FIXTURE', ct0: 'CT0-FIXTURE' }]) }
+  assert.equal(await fetchWithCredentials({ p: 'x', id: '1' }, env), null, 'and a readable pool, still null')
 })
 
 // ── gated-post scheme: the syndication tombstone is EMPTY {} — it cannot tell age from private. The

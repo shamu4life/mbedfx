@@ -433,26 +433,43 @@ export type TwitterFetch =
 
 /**
  * THE CREDENTIAL SEAM. Age-gated posts (TweetTombstone) are unreachable credential-free — measured on
- * both paths, both egresses (recon 2026-07-19). FxEmbed surmounts them with a pool of real,
- * AES-256-GCM-encrypted logged-in accounts decrypted with CREDENTIAL_KEY and picked at random per
- * request (src/providers/twitter/proxy/credentials.ts). We ship that seam EMPTY: no CREDENTIAL_KEY, no
- * accounts, so this returns null and the tweet becomes an honest age_restricted failure.
+ * both paths, both egresses (recon 2026-07-19). FxEmbed surmounts them with a pool of real logged-in
+ * accounts, picked at random per request (src/providers/twitter/proxy/credentials.ts). This function is
+ * where ours would be spent, and it STILL RETURNS NULL, so the tweet becomes an honest age_restricted
+ * card rather than a broken one.
+ *
+ * THE POOL EXISTS NOW; THE CALL THAT SPENDS IT DOES NOT. `X_ACCOUNTS` is a Worker secret holding a JSON
+ * array of accounts, read through `twitterAccounts()` in src/credentials.ts — which filters to the
+ * entries carrying BOTH `auth_token` and `ct0`, because that pair is what a logged-in
+ * TweetResultByRestId call needs and a bare cookie jar is not an account this path can use. Setting the
+ * secret today changes nothing here, deliberately, and worker.ts COUNTS that (`pool_unused` in the
+ * Twitter gate arm) so a filled secret with no effect is a number rather than a mystery.
+ *
+ * WHY PLAINTEXT RATHER THAN THE ENCRYPTED BUNDLE THIS COMMENT USED TO DESCRIBE. An earlier phase copied
+ * FxEmbed's shape — `CREDENTIAL_KEY` + an AES-256-GCM `CREDENTIAL_BUNDLE` decrypted per request. That
+ * design answers a threat FxEmbed has and we do not: it self-hosts, where the bundle sits on a disk
+ * somebody else may read. A Cloudflare Worker secret is encrypted at rest, unreadable back from the
+ * dashboard, and absent from the repo, so a second layer buys no attacker-resistance while costing a
+ * key stored in the same place as the thing it protects — plus a bespoke encrypt step on every
+ * rotation, which is the step most likely to be skipped. Both variables are gone; the pool is read
+ * straight out of the secret.
  *
  * THIS IS THE INJECTION POINT, and it is deliberately a real, tested function rather than a TODO: a
- * later phase fills it (decrypt the bundle, getRandomTwitterAccount, fetch TweetResultByRestId with the
- * account's auth) and returns { source:'guest', data } — the SAME shape fetchGuest's ok result carries,
- * so fromGuest normalizes it with no further change. Filling it turns these exact posts into ordinary
- * successes with zero rearchitecting (spec, the X-platform credential section). Do NOT half-build a
- * credential system here now.
+ * later phase fills it (pick from `twitterAccounts(env)`, fetch TweetResultByRestId with that account's
+ * auth_token + ct0) and returns { source:'guest', data } — the SAME shape fetchGuest's ok result
+ * carries, so fromGuest normalizes it with no further change. Filling it turns these exact posts into
+ * ordinary successes with zero rearchitecting. Do NOT half-build a credential system here now: a
+ * half-built one returns SOMETHING, and something wrong from a logged-in request is how a pool gets
+ * flagged.
  *
- * `_ref`/`_env` are the signature a filled seam needs (which tweet, and the secret-store binding that
- * holds CREDENTIAL_KEY + the bundle); unused while empty, prefixed so tsc does not flag them.
+ * `_ref`/`_env` are the signature a filled seam needs (which tweet, and the env that carries
+ * X_ACCOUNTS); unused while empty, prefixed so tsc does not flag them.
  */
 export async function fetchWithCredentials(
   _ref: Extract<PostRef, { p: 'x' }>,
   _env: Env,
 ): Promise<{ source: 'guest'; data: unknown } | null> {
-  return null // empty seam: no accounts bundled this phase
+  return null // empty seam: the pool is readable, the logged-in GraphQL call is a later phase
 }
 
 /**
