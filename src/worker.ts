@@ -2493,6 +2493,62 @@ async function renderPostRoute(
   return res
 }
 
+/**
+ * THE DIRECT-MEDIA HOST — `d.` in front of any serving domain, answering with the POST'S BYTES
+ * instead of a card. fxTikTok's `d.` subdomain is the convention being followed.
+ *
+ * THE HOST CHECK LIVES HERE AND NOT IN route(), AND THAT IS THE WHOLE POINT OF THE PLACEMENT.
+ * route() is host-agnostic — it reads url.pathname and url.searchParams and nothing else, a property
+ * its own comments state and verify by grep — and that is load-bearing rather than tidy: it is why
+ * /dm/{id}, /st/{id} and /im/{id} forcing can exist at all, because dai.ly, streamable.com and
+ * imgur.com all collapse onto one undecidable bare /{id}. A host-sensitive route() would make the
+ * routing table depend on which domain a link was pasted under, and every one of those decisions
+ * would then need re-measuring per host. So the ROUTE is decided host-blind, and only the RESPONSE
+ * SHAPE is chosen here, after it. A test pins that separation.
+ *
+ * `d.` IS A PREFIX TEST, NOT A DOMAIN LIST, so it works on every serving domain — including the ones
+ * this file does not know about, which is the same reason `origin` is always the request's own rather
+ * than a constant. It is anchored so a host merely CONTAINING "d." cannot match.
+ */
+const DIRECT_MEDIA_HOST = /^d\.[^.]+\./i
+
+/**
+ * Resolve the post and hand back its bytes. A 302 to this post's own /_media/ url rather than a
+ * proxy of its own: that route already owns byte-range serving, the R2 mux cache, the container
+ * dispatch and the degrade rules, and a second path to the same bytes is a second place for those to
+ * disagree. The redirect stays on the `d.` host, so a reader who lands there stays there.
+ *
+ * NO HUMAN/BOT SPLIT, deliberately, and it is the one place in this file without one. Everywhere else
+ * a human is redirected to the original post because a card is for a crawler; here the bytes ARE the
+ * product and a person pasting a d. link wants the file, not the post they already had.
+ */
+async function serveDirectMedia(
+  ref: PostRef, d: Deps, env: Env, ctx: ExecutionContext, client: ClientClass, origin: string,
+): Promise<Response> {
+  const got = await getPost(ref, d, env, client, ctx)
+  if (!got.post) {
+    count(env, ref.p, 'fetch_fail', client)
+    // PLAIN TEXT, NEVER A CARD. This host promises bytes; answering a failure with an HTML embed
+    // would hand a media player a document, and `curl -O` a page of markup named like a video.
+    return new Response('no media: this post could not be read\n', {
+      status: 404, headers: { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' },
+    })
+  }
+  const list = mediaOf(got.post)
+  const i = list.findIndex(m => usable(m))
+  if (i < 0) {
+    count(env, ref.p, 'media_miss', client)
+    return new Response('no media: this post has nothing to serve\n', {
+      status: 404, headers: { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' },
+    })
+  }
+  count(env, ref.p, 'media_hit', client)
+  // bytesIndex, not the bare position: a degraded still lives in the poster slot, and addressing it
+  // by its array index hits the VIDEO entry, which answers 503. The renderers all mint through this
+  // for the same reason.
+  return redirect(mediaUrl(origin, got.post, bytesIndex(list[i], i)))
+}
+
 export async function handle(req: Request, env: Env, ctx: ExecutionContext, d: Deps): Promise<Response> {
   const url = new URL(req.url)
 
@@ -3104,6 +3160,11 @@ export async function handle(req: Request, env: Env, ctx: ExecutionContext, d: D
     }
 
     case 'post': {
+      // The d. host answers with the bytes rather than a card, for humans and crawlers alike — see
+      // serveDirectMedia. Checked BEFORE the human split, which is the split it deliberately lacks.
+      if (DIRECT_MEDIA_HOST.test(url.hostname)) {
+        return serveDirectMedia(r.ref, d, env, ctx, client, origin)
+      }
       // Humans never cost us an upstream fetch: the router already knows canonical. The bot half —
       // cache-check, fetch, render, cache — is renderPostRoute, shared with the reddit share route so
       // a fetch_fail gets the distinct 🔞/🔒 or generic card identically whichever url shape was pasted.

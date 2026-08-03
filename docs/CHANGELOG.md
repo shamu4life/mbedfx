@@ -5,6 +5,41 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [1.3.0] — 2026-08-02
+
+### Added
+- **A `d.` host that answers with the media instead of a card**, following fxTikTok's convention.
+  `d.megapenispoopenfarten.sex/jack/status/20` redirects to that post's own `/_media/` url — the route
+  that already owns byte-range serving, the R2 mux cache, the container dispatch and the degrade
+  rules. A second path to the same bytes would be a second place for those to disagree, so there
+  isn't one.
+
+  It is the one route with **no human/bot split**. Everywhere else a person is redirected to the
+  original post, because a card is for a crawler; here the bytes are the product and someone pasting
+  a `d.` link wants the file, not the post they already had.
+
+  A post with nothing to serve answers a plain-text 404, never an HTML card — answering a failure
+  with an embed hands a media player a document, and `curl -O` a page of markup saved under a video's
+  name.
+
+### Notes
+- **The host check lives in dispatch, not in `route()`, and that placement is the design.** `route()`
+  reads pathname and query and nothing else — a property it states and verifies by grep — and that is
+  load-bearing rather than tidy: it is why `/dm/`, `/st/` and `/im/` forcing can exist at all, since
+  `dai.ly`, `streamable.com` and `imgur.com` all collapse onto one undecidable bare `/{id}`. A
+  host-sensitive router would make every one of those decisions need re-measuring per domain. So the
+  route is decided host-blind and only the response SHAPE is chosen afterwards, with a test asserting
+  five paths route identically under `d.` and under the apex.
+- The prefix is anchored, so a host merely *containing* `d.` keeps rendering cards. A substring test
+  would have quietly turned an ordinary domain into a file server.
+- **`d.` works on `megapenispoopenfarten.sex` immediately** — that zone has a wildcard record which
+  already reaches this Worker. `d.mbedfx.app` has no DNS record yet and will not resolve until one is
+  added.
+
+1138 tests, `node --test`; `tsc --noEmit` clean.
+
+---
+
 ## [1.2.1] — 2026-08-02
 
 ### Fixed
