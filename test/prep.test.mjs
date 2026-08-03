@@ -594,3 +594,55 @@ test('ONLY A d. PREFIX COUNTS — a host merely containing "d." is the ordinary 
     assert.match(res.headers.get('content-type') || '', /text\/html/, `${host} is HTML`)
   }
 })
+
+test('THE d. HOST WORKS ON A SHARE LINK TOO, not only a pasted permalink', async () => {
+  /**
+   * Reported 2026-08-03: d.megapenispoopenfarten.sex/r/linuxmemes/s/VRg1iSFn4k "does nothing
+   * different from the version without d.". Exactly right, and the reason was that the host check
+   * was wired into the `post` route only. A Reddit /r/{sub}/s/{code} is a DIFFERENT route kind — it
+   * resolves a share token to a permalink first — as are Meta /share/ codes and every shortlink, so
+   * three of the four ways to reach a post ignored the host entirely.
+   *
+   * The check now lives in renderPostRoute, where all of them converge once a ref is known, so a
+   * future route that resolves to a post inherits it rather than having to remember.
+   */
+  const { ctx: c } = ctx()
+  const resolved = { ref: { p: 'rd', kind: 'comments', id: 'abc123' }, canonical: 'https://www.reddit.com/r/linuxmemes/comments/abc123/x/' }
+  const res = await handle(
+    dReq('/r/linuxmemes/s/VRg1iSFn4k'),
+    envWith(fakeResolver().binding), c,
+    deps({ resolveRedditShare: async () => resolved }),
+  )
+  assert.equal(res.status, 302, 'a share link on d. serves bytes, not a card')
+  assert.match(res.headers.get('location'), /\/_media\//)
+})
+
+test('A HUMAN ON d. GETS THE FILE FROM A SHARE LINK, not a bounce to the original post', async () => {
+  /**
+   * The half that is easy to miss. Every post-yielding route bounces a PERSON to the original post
+   * before rendering, because a card is for a crawler. On a d. host that would send someone who asked
+   * for the file to the post they already had — defeating the feature for its most likely audience.
+   */
+  const { ctx: c } = ctx()
+  const resolved = { ref: { p: 'rd', kind: 'comments', id: 'abc123' }, canonical: 'https://www.reddit.com/r/linuxmemes/comments/abc123/x/' }
+  const human = new Request('https://d.mbedfx.app/r/linuxmemes/s/VRg1iSFn4k', {
+    headers: { 'user-agent': 'Mozilla/5.0 (Macintosh) AppleWebKit/537.36 Chrome/126 Safari/537.36' },
+  })
+  const res = await handle(human, envWith(fakeResolver().binding), c, deps({ resolveRedditShare: async () => resolved }))
+  assert.equal(res.status, 302)
+  assert.match(res.headers.get('location'), /\/_media\//,
+    'the redirect is to our own bytes, not out to reddit.com')
+})
+
+test('THE APEX IS UNCHANGED BY ALL OF THAT — a share link still renders a card', async () => {
+  // The guard is "human AND NOT a direct host", so ordinary hosts must keep bouncing people to the
+  // post and rendering cards for crawlers exactly as before.
+  const { ctx: c } = ctx()
+  const resolved = { ref: { p: 'rd', kind: 'comments', id: 'abc123' }, canonical: 'https://www.reddit.com/r/linuxmemes/comments/abc123/x/' }
+  const bot = new Request('https://mbedfx.app/r/linuxmemes/s/VRg1iSFn4k', {
+    headers: { 'user-agent': 'Mozilla/5.0 (compatible; Discordbot/2.0; +https://discordapp.com)' },
+  })
+  const res = await handle(bot, envWith(fakeResolver().binding), c, deps({ resolveRedditShare: async () => resolved }))
+  assert.equal(res.status, 200)
+  assert.match(res.headers.get('content-type') || '', /text\/html/, 'still a card on the apex')
+})

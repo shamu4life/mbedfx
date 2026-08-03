@@ -8,6 +8,17 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ## [1.5.0] — 2026-08-03
 
 ### Fixed
+- **`d.` did nothing on a share link.** Reported on
+  `d.megapenispoopenfarten.sex/r/linuxmemes/s/VRg1iSFn4k`, which behaved identically to the version
+  without it. The host check had been wired into the pasted-permalink route only — a Reddit
+  `/r/{sub}/s/{code}`, a Meta `/share/` code and every shortlink are *different route kinds*, so three
+  of the four ways to reach a post ignored the host entirely. The check moved into the one function
+  they all converge on, so a future route that resolves to a post inherits it rather than having to
+  remember.
+
+  The half that was easy to miss: every one of those routes bounces a **person** to the original post
+  before rendering, because a card is for a crawler. On a `d.` host that sent someone who asked for
+  the file to the post they already had. Those redirects are now guarded too.
 - **Media-only intermittently lost its `d.`**, reported as "it seems to intermittently not work when
   changing links". `/_prep` answers with a url the WORKER built from the request's origin — the host
   serving the page — so it knows nothing about the domain toggle or media-only. When a share code

@@ -2399,6 +2399,17 @@ async function withTranslated(
 async function renderPostRoute(
   ref: PostRef, canonical: string, d: Deps, env: Env, ctx: ExecutionContext, client: ClientClass, origin: string,
 ): Promise<Response> {
+  /**
+   * THE d. HOST SHORT-CIRCUITS HERE, so it covers every route rather than the one it was first wired
+   * into. Reported on a Reddit /r/{sub}/s/{code} share link, which "does nothing different from the
+   * version without d." — true, because that is a different route kind from a pasted permalink, as
+   * are Meta /share/ codes and every shortlink. All of them converge on THIS function once their ref
+   * is known, so checking here covers the set, and covers any future route that joins it without
+   * anyone having to remember.
+   *
+   * The host comes off `origin`, which is already the request's own rather than a constant.
+   */
+  if (isDirectMediaOrigin(origin)) return serveDirectMedia(ref, d, env, ctx, client, origin)
   const rkey = cacheUrl(respCacheKey(ref, client, origin))
   const cached = await d.cache.match(rkey)
   if (cached) return cached
@@ -2518,6 +2529,19 @@ async function renderPostRoute(
 const DIRECT_MEDIA_HOST = /^d\.[^.]+\./i
 
 /**
+ * The same test, asked of an ORIGIN rather than a hostname, because that is what the render path has
+ * to hand. Spelled once so the two callers cannot drift, and total: an unparseable origin is simply
+ * not a direct-media host.
+ */
+function isDirectMediaOrigin(origin: string): boolean {
+  try {
+    return DIRECT_MEDIA_HOST.test(new URL(origin).hostname)
+  } catch {
+    return false
+  }
+}
+
+/**
  * Resolve the post and hand back its bytes. A 302 to this post's own /_media/ url rather than a
  * proxy of its own: that route already owns byte-range serving, the R2 mux cache, the container
  * dispatch and the degrade rules, and a second path to the same bytes is a second place for those to
@@ -2561,6 +2585,10 @@ export async function handle(req: Request, env: Env, ctx: ExecutionContext, d: D
   // would make staging embeds point Discord's media proxy at the live prod worker.
   const origin = url.origin
   const client = classify(req.headers.get('user-agent'))
+  // Computed once and consulted by every post-yielding arm: on a d. host a HUMAN wants the bytes too,
+  // so the usual "bounce a person to the original post" must not fire. renderPostRoute makes the
+  // same check for the render half.
+  const direct = DIRECT_MEDIA_HOST.test(url.hostname)
   const r = route(url)
 
   switch (r.kind) {
@@ -3165,15 +3193,10 @@ export async function handle(req: Request, env: Env, ctx: ExecutionContext, d: D
     }
 
     case 'post': {
-      // The d. host answers with the bytes rather than a card, for humans and crawlers alike — see
-      // serveDirectMedia. Checked BEFORE the human split, which is the split it deliberately lacks.
-      if (DIRECT_MEDIA_HOST.test(url.hostname)) {
-        return serveDirectMedia(r.ref, d, env, ctx, client, origin)
-      }
       // Humans never cost us an upstream fetch: the router already knows canonical. The bot half —
       // cache-check, fetch, render, cache — is renderPostRoute, shared with the reddit share route so
       // a fetch_fail gets the distinct 🔞/🔒 or generic card identically whichever url shape was pasted.
-      if (client === 'human') return redirect(r.canonical)
+      if (!direct && client === 'human') return redirect(r.canonical)
       return renderPostRoute(r.ref, r.canonical, d, env, ctx, client, origin)
     }
 
@@ -3188,7 +3211,7 @@ export async function handle(req: Request, env: Env, ctx: ExecutionContext, d: D
        * Reddit's /s/ is unambiguous, so there is never a chooser here. `withResolver`-style media
        * degradation is inherited for free by routing through getPost inside renderPostRoute.
        */
-      if (client === 'human') return redirect(r.canonical)
+      if (!direct && client === 'human') return redirect(r.canonical)
       // The resolve runs OUTSIDE loadPost's try/catch (unlike the shortlink route), so a throwing
       // resolver is caught HERE — a blocked redirect must degrade to the generic card, never 500 a
       // public path. liveResolveRedditShare already guards its own fetch, so this is defence in depth.
@@ -3245,7 +3268,7 @@ export async function handle(req: Request, env: Env, ctx: ExecutionContext, d: D
          *
          * `r.canonical` is the fallback only when nothing resolved, and it is OUR url, not Meta's.
          */
-        if (client === 'human') return redirect(loc ? stripMetaTracking(loc) : r.canonical)
+        if (!direct && client === 'human') return redirect(loc ? stripMetaTracking(loc) : r.canonical)
         /**
          * NAME THE PLATFORM ONLY IF THE HOP TOLD US — this used to hardcode 'th'.
          *
@@ -3283,7 +3306,7 @@ export async function handle(req: Request, env: Env, ctx: ExecutionContext, d: D
       }
       // inner.canonical is rebuilt from ref fields by router.ts, so every share parameter the
       // redirect carried — share_url, rdid, xmt, slof — is already gone.
-      if (client === 'human') return redirect(inner.canonical)
+      if (!direct && client === 'human') return redirect(inner.canonical)
       return renderPostRoute(inner.ref, inner.canonical, d, env, ctx, client, origin)
     }
 
@@ -3314,7 +3337,7 @@ export async function handle(req: Request, env: Env, ctx: ExecutionContext, d: D
        * click (Discord unfurls before anyone clicks). A miss falls back to the old behaviour rather
        * than failing — a human must always land somewhere.
        */
-      if (client === 'human') {
+      if (!direct && client === 'human') {
         const cached = await d.cache.match(cacheUrl(shortRespCacheKey(r.p, r.code, 'other-bot', origin)))
         let clean: string | null = null
         if (cached) {
