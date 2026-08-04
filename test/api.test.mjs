@@ -229,14 +229,26 @@ test('EVERY ANSWER ABOUT A POST IS 200, INCLUDING THE GATES — and a malformed 
   /**
    * `unparseable` IS NARROWER THAN IT SOUNDS, and that is worth pinning rather than discovering.
    * describeTarget parses with `new URL(target, origin)` — WITH A BASE — so anything that looks like a
-   * path resolves against our own origin instead of throwing. `:::not-a-url` becomes the path
-   * `/:::not-a-url` and answers notfound, which is the honest answer: it is a url we do not route, not
-   * a url we could not read. Only a string that fails URL parsing outright lands here.
+   * path resolves against our own origin instead of throwing. And what it becomes is NOT notfound,
+   * which is what this comment said until 2026-08-04 with nothing asserting it: `:::not-a-url` is ONE
+   * path segment, one unrecognised segment is the ambiguity chooser's own shape, so it answers
+   * `ambiguous` at 200 with candidates x/ig. Only a string that fails URL parsing outright lands here.
    */
   const junk = await handle(new Request(`${ORIGIN}/_api/v1?url=${encodeURIComponent('http://[')}`),
     envWith(), ctx, depsFor(null))
   assert.equal(junk.status, 400)
   assert.equal((await junk.json()).error.code, 'unparseable')
+
+  // THE OTHER SIDE OF THAT RULE, and the reason the comment above was wrong for as long as it was:
+  // a string that merely does not name a post is neither `unparseable` nor `notfound`. Pinned now,
+  // because an unasserted sentence in a test file is how the wrong one got copied into the docs.
+  const notAUrl = await handle(new Request(`${ORIGIN}/_api/v1?url=${encodeURIComponent(':::not-a-url')}`),
+    envWith(), ctx, depsFor(null))
+  assert.equal(notAUrl.status, 200)
+  const notAUrlBody = await notAUrl.json()
+  assert.equal(notAUrlBody.error.code, 'ambiguous')
+  assert.deepEqual(notAUrlBody.error.candidates, ['x', 'ig'],
+    'candidates live INSIDE error, beside the code — not at the top level')
 
   // The other side of that base-resolution, and it is a FEATURE rather than an accident: a caller who
   // passes a bare path — or one of our own converted links — gets the post rather than a lecture.

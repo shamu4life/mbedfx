@@ -75,6 +75,23 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
     a zone rule the repository cannot see. It now says plainly that there is no rate limiting in the
     source, and that a self-hoster gets none.
 
+  A second review, of the DOCUMENTATION rather than the code, caught four more:
+  - **`platform` and `canonical` were absent, not null**, on the three request-level errors, because
+    those call sites pass no extras while the failure arm passes both. One envelope, two shapes, and
+    the reference described only one of them. Fixed in the code so the documented shape is the true
+    one.
+  - **Two error rows described behaviour the router does not have.** A string that merely does not
+    name a post is neither `unparseable` nor `notfound`: one unrecognised path segment is the
+    ambiguity chooser's own shape, so it answers `ambiguous`. The same false sentence was sitting
+    unasserted in a test comment, which is how it got copied into the reference; it is now pinned.
+  - **`/_api/v2` does not answer in the API's vocabulary at all.** It is an unrouted path, so it is
+    HTTP 404 `text/plain`, not a JSON `notfound`. A client assuming every reply is JSON fails parsing
+    rather than reading a code, and the reference now says so.
+  - **The field table had no types**, and `media[].width`/`height` had no row at all. It now gives
+    type, nullability and always-present for every key, plus the seventeen platform codes with the
+    site each one means, a section on non-JSON responses, and the actual request budget so nobody
+    sets a five-second client timeout on a path that can legitimately take longer.
+
 ### Fixed
 - **`/_card` published media urls that could address the wrong bytes.** It computed them as
   `mediaOf(post).filter(usable).map((m, i) => …)`, so the index was a position in the FILTERED list —

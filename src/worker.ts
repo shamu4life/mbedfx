@@ -2843,7 +2843,16 @@ const apiHeaders = (cacheControl: string) => ({
  * staleness at the edge instead, one layer up, where nothing in this worker can invalidate it.
  */
 const apiError = (status: number, code: string, message: string, extra: Record<string, unknown> = {}) =>
-  Response.json({ ok: false, error: { code, message, ...extra } }, { status, headers: apiHeaders('no-store') })
+  // `platform` and `canonical` ARE ALWAYS PRESENT, as nulls when unknown — corrected 2026-08-04. They
+  // used to be omitted entirely on the three request-level errors, because those call sites pass no
+  // `extra`, while the failure arm below passed them explicitly. So the same envelope had two shapes
+  // and the documentation described only one of them. A consumer in a typed language reads an absent
+  // key and a null key differently, and this is a published contract; `...extra` stays LAST so the
+  // arm that computed real values still wins.
+  Response.json(
+    { ok: false, error: { code, message, platform: null, canonical: null, ...extra } },
+    { status, headers: apiHeaders('no-store') },
+  )
 
 /**
  * THE PUBLISHED FAILURE VOCABULARY, which is deliberately SMALLER than the internal one.
