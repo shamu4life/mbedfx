@@ -12,9 +12,6 @@ later edits within a day of being asked for)
 **Tests:** `node --test`, no test framework, no network
 **Deploy:** Cloudflare Workers Builds on merge to `main` — **merging is the deploy**
 **Version:** 1.9.0
-**Version:** 1.9.0
-**Version:** 1.9.0
-**Version:** 1.9.0
 
 ---
 

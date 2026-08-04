@@ -5,9 +5,24 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
-## [1.8.1] — 2026-08-03
+## [1.9.0] — 2026-08-04
 
-### Fixed
+The five workstreams below shipped as one release rather than five, because merging them
+back-to-back would have raced five Workers Builds deploys against each other and the older commit
+can win. They are kept as separate sections because they are separate pieces of work, but only
+1.9.0 ever existed as a version.
+
+**Minor, not patch:** the public JSON API is new surface area. Everything else here is a fix or a
+document.
+
+**Two things do not take effect on merge.** The YouTube date fix is inert until the container image
+is rebuilt and redeployed, because the Worker half cannot read a field the container does not send.
+And the age-gate pools do nothing until secrets are actually filled — the change here is that
+filling them will now work, not that they are filled.
+
+### Age-gate account pools: filling one now takes effect
+
+#### Fixed
 - **Filling an account pool now takes effect, instead of being hidden by a month-old answer.** 1.8.0
   bumped `RESOLVER_GENERATION` to g10 so that no cached gate verdict predated the cookie code. That
   retired the records written before the *deploy* — and could not touch the ones written after it and
@@ -36,9 +51,9 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   `credentialSeamArmed` that no longer exists, while a later paragraph in the same comment correctly
   narrowed the claim to `X_ACCOUNTS`. It is the text an operator reads to decide whether filling a
   secret is worth the exposure of a throwaway account, and it was telling them no.
-## [1.8.2] — 2026-08-03
+### Operator metrics, and Workers Logs turned off
 
-### Added
+#### Added
 - **`docs/METRICS.md` — the read path for the 49 counters this project has been writing and never
   reading.** The dimension map (`blob1` platform, `blob2` outcome, `blob3` client class, `double1`
   always 1), what every counter means and which other counter it is only meaningful next to, eight
@@ -81,15 +96,15 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   afterwards. `wrangler tail` covers live debugging, the dashboard charts are a separate product and
   unaffected, and Analytics Engine — everything this document is about — is untouched.
 
-### Fixed
+#### Fixed
 - **This guide claimed a safety net that does not exist.** `CLAUDE.md` said adding a `PostRef` kind
   is caught by "a sweep test that fails until you do". The refkey round-trip tests are hand-written
   lists (`test/refkey.test.mjs:176`) and derive nothing from the union, so a forgotten kind is still
   silent — which is exactly the `fb:group:…` defect the paragraph is about. The `Route` kind sweep in
   `test/prep.test.mjs:791` *is* derived and does fail loudly; the guide now tells them apart.
-## [1.9.0] — 2026-08-03
+### A public JSON API
 
-### Added
+#### Added
 - **A public JSON API — `GET /_api/v1?url=<the post url>`.** The most conspicuous omission in the
   comparison table: two rivals publish one and FxEmbed ships OpenAPI specs. No key, no signup, CORS
   open, and it answers for every site the cards cover, including short links and share codes, because
@@ -174,7 +189,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
     site each one means, a section on non-JSON responses, and the actual request budget so nobody
     sets a five-second client timeout on a path that can legitimately take longer.
 
-### Fixed
+#### Fixed
 - **`/_card` published media urls that could address the wrong bytes.** It computed them as
   `mediaOf(post).filter(usable).map((m, i) => …)`, so the index was a position in the FILTERED list —
   while `/_media/` resolves an index against the UNFILTERED one (`pickMedia` reads `mediaList(post)`,
@@ -188,9 +203,9 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   gets to quietly correct. Both surfaces now pair each entry with its unfiltered position, and the
   test drives the real `/_media/` route rather than asserting an index, because the index is not the
   promise: "this url serves those bytes" is.
-## [1.9.1] - 2026-08-04
+### The YouTube upload date that arrives as `upload_date`
 
-### Fixed
+#### Fixed
 - **YouTube cards showed the 1970 epoch on a cold paste, intermittently, and the retry that would
   have healed them was refused.** Reported as "occasionally, when cold" - and confirmed by the owner
   that a warm view of the same link is correct, which is what narrowed it.
@@ -229,7 +244,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   cost of never asking for the date again would make the degraded answer the one that sticks, which
   is the rule this project already holds elsewhere.
 
-### Notes
+#### Notes
 - **No `RESOLVER_GENERATION` bump, and the exception is deliberate.** A bump exists to retire records
   that are *wrong*. The broken case wrote **nothing**, so there is nothing stale to retire, and every
   record already in R2 carries a numeric `timestamp` and stays correct. Bumping would discard 30 days
@@ -245,9 +260,9 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   authenticated client set, and the client carrying the timezone microformat may not be in it - which
   would mean filling `YT_ACCOUNTS` makes this *more* likely, not less. Measured residentially only,
   never from the container's own egress, so it is written down rather than acted on.
-## [1.9.2] - 2026-08-04
+### Self-hosting off Cloudflare is not blocked
 
-### Added
+#### Added
 - **`docs/SELF-HOSTING.md`, and a correction: running this off Cloudflare is not blocked.** The
   README said "❌ Workers only" and an earlier internal assessment said it was not achievable. Both
   were wrong, and the evidence was already in the repo: the whole test suite (1185 tests) runs in
