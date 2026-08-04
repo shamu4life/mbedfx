@@ -290,6 +290,18 @@ def _meta_page(page: str, jar=None) -> dict:
         "uploader": d.get("uploader"), "uploader_id": d.get("uploader_id"),
         "uploader_url": d.get("uploader_url"), "description": d.get("description"),
         "width": w, "height": h, "duration": d.get("duration"), "timestamp": d.get("timestamp"),
+        # upload_date IS THE DATE THAT SURVIVES WHEN timestamp DOES NOT, and forwarding only the
+        # latter was a live defect rather than an omission. yt-dlp builds `timestamp` solely from a
+        # timezone-bearing microformat, and several of its YouTube player clients do not carry one --
+        # so the dict comes back complete (title, description, counts, duration, age_limit) with
+        # `timestamp: None` and `upload_date: '20091025'` sitting right beside it. The Worker requires
+        # a numeric timestamp to accept a record at all, so it threw the WHOLE dict away, cached
+        # nothing, and then read its own rejection as evidence the video was gone. Which client
+        # answers varies per request, which is why the symptom was intermittent.
+        #
+        # YYYYMMDD, a plain string, no timezone. The Worker normalises it to UTC midnight and prefers
+        # `timestamp` whenever it has one -- see uploadDateFrom.
+        "upload_date": d.get("upload_date"),
         # age_limit LETS THE CARD SAY WHY IT CANNOT PLAY. yt-dlp reports 18 for an age-restricted
         # video even when it can fetch no formats for it, so this is the one signal that separates
         # "gated" from "extraction broke" -- which look identical to the Worker otherwise.

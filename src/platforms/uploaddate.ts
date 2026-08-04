@@ -53,7 +53,28 @@ export function uploadDateFrom(value: unknown, now: number = Date.now()): Date |
     if (!Number.isFinite(value)) return null
     ms = value * 1000
   } else if (typeof value === 'string') {
-    ms = Date.parse(value)
+    /**
+     * `YYYYMMDD` IS A THIRD SHAPE, and it is yt-dlp's `upload_date` — the field that survives when
+     * `timestamp` does not. Added 2026-08-04 because its absence was a live defect, not a tidiness
+     * gap: yt-dlp sources `timestamp` only from a timezone-bearing microformat, several of its
+     * YouTube player clients do not carry one, and on those responses the dict comes back complete
+     * except that `timestamp` is null. `Date.parse('20091025')` is NaN, so a perfectly good date was
+     * being read as no date at all.
+     *
+     * NORMALISED TO EXPLICIT UTC MIDNIGHT rather than handed to Date.parse as-is. `Date.parse` on a
+     * bare `YYYY-MM-DD` is defined as UTC, but on `YYYY-MM-DDT00:00:00` without a zone it is LOCAL —
+     * one character apart, and the difference is a day's error for anyone west of Greenwich. Spelled
+     * out so a later edit cannot introduce that by tidying the string.
+     *
+     * DAY PRECISION IS THE HONEST LIMIT of this shape, and it is enough: `upload_date` carries no
+     * time of day, so this is midnight UTC and not the real upload instant. Every surface that shows
+     * it renders a date rather than a clock time, so nothing displays a wrong hour — but a consumer
+     * sorting two same-day uploads gets an arbitrary order, which is why `timestamp` is still
+     * PREFERRED wherever it exists and this is only the fallback.
+     */
+    ms = /^\d{8}$/.test(value)
+      ? Date.parse(`${value.slice(0, 4)}-${value.slice(4, 6)}-${value.slice(6, 8)}T00:00:00Z`)
+      : Date.parse(value)
   } else {
     return null
   }

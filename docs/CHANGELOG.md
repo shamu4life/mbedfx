@@ -5,6 +5,64 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [1.9.1] - 2026-08-04
+
+### Fixed
+- **YouTube cards showed the 1970 epoch on a cold paste, intermittently, and the retry that would
+  have healed them was refused.** Reported as "occasionally, when cold" - and confirmed by the owner
+  that a warm view of the same link is correct, which is what narrowed it.
+
+  yt-dlp builds `timestamp` **only** from a timezone-bearing microformat, and several of its YouTube
+  player clients do not carry one. On those responses the `-J` dict comes back complete - title,
+  description, counts, duration, `age_limit` - with `timestamp: null` and `upload_date: '20091025'`
+  sitting right beside it. `container/server.py` forwarded `timestamp` and never `upload_date`, and
+  the Worker required a numeric `timestamp` to accept a record at all, so it discarded the **whole**
+  dict. Not just the date: the description, the counts and the age flag went with it, because one
+  validator gated the entire record. Which client answers varies per request, which is exactly why
+  the same video was fine on one paste and epoch on the next.
+
+  Then it compounded. Nothing was written to R2, so there was no record to self-heal from. And
+  `metaAttempt` reads a resolved null as *"the extract's own verdict - the page is gone, blocked or
+  unextractable"* and negatively cached the id for `META_FAIL_TTL_MS` (60s per isolate) - so our own
+  validator's rejection was filed as evidence about the **video**, and the one thing that could have
+  fixed the card was refused for a minute. That is precisely the split the docstring four lines above
+  it says the code exists to prevent.
+
+  Three changes, in the order they break the chain:
+  - `container/server.py` forwards `upload_date` alongside `timestamp`.
+  - `uploadDateFrom` learns yt-dlp's compact `YYYYMMDD` shape, normalised to explicit **UTC**
+    midnight. `Date.parse('20091025')` is `NaN`, and `Date.parse` on `YYYY-MM-DDT00:00:00` without a
+    zone is *local* - one character from a whole day's error west of Greenwich, so the zone is
+    spelled out and asserted.
+  - An answer with no usable date in **either** field is now **thrown**, not returned, so
+    `metaAttempt`'s rejection arm - which deliberately does not mark, and says so - is the one that
+    runs. The next view gets to ask again.
+
+  `timestamp` is still preferred wherever it exists: it carries a time of day, while `upload_date` is
+  a bare day. Nothing renders a clock time, so no card shows a wrong hour - but the record is stored
+  for 30 days and a consumer may sort on it, so the more precise source wins.
+
+  **A dateless answer is still not cached.** Keeping the description and counts for 30 days at the
+  cost of never asking for the date again would make the degraded answer the one that sticks, which
+  is the rule this project already holds elsewhere.
+
+### Notes
+- **No `RESOLVER_GENERATION` bump, and the exception is deliberate.** A bump exists to retire records
+  that are *wrong*. The broken case wrote **nothing**, so there is nothing stale to retire, and every
+  record already in R2 carries a numeric `timestamp` and stays correct. Bumping would discard 30 days
+  of good dates, descriptions and counts to fix records that do not exist.
+- **This needs the container image rebuilt and redeployed to take effect.** The Worker half is inert
+  until `_meta_page` actually sends `upload_date`; a pooled instance keeps the image it booted with
+  until it recycles.
+- **There is still no counter for this failure.** With Workers Logs off it is visible under
+  `wrangler tail` and nowhere else. A counted outcome is the follow-up, deliberately not bundled here
+  because adding an `Outcome2` member is not test-enforced and wants its own change alongside
+  `docs/METRICS.md`.
+- **Unverified, and it matters for fill-day:** with a cookie jar present, yt-dlp switches to its
+  authenticated client set, and the client carrying the timezone microformat may not be in it - which
+  would mean filling `YT_ACCOUNTS` makes this *more* likely, not less. Measured residentially only,
+  never from the container's own egress, so it is written down rather than acted on.
+
 ## [1.8.0] — 2026-08-03
 
 ### Added
