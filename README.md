@@ -114,7 +114,7 @@ and it buys nothing on Twitter or TikTok, where the platform already serves one.
 | Card says *why* a post is missing | ✅ private / age / deleted | ? | ? | age only | ❌ redirects | one generic card |
 | Public JSON API | ❌ | ✅ OpenAPI | ✅ documented | ❌ | ❌ | undocumented |
 | Self-host off Cloudflare | ❌ Workers only | ❌ Workers | ✅ Docker · systemd · Lambda | Docker, undocumented | ✅ Docker · K8s | ✅ Docker |
-| Operator metrics | ❌ | ? | ? | ✅ Prometheus | pprof | pprof |
+| Operator metrics | [documented queries](docs/METRICS.md), no scrape endpoint | ? | ? | ✅ Prometheus | pprof | pprof |
 
 
 ## Features

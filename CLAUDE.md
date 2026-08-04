@@ -11,7 +11,7 @@ em dashes and no second person (owner's call; asserted by a test, because both w
 later edits within a day of being asked for)
 **Tests:** `node --test`, no test framework, no network
 **Deploy:** Cloudflare Workers Builds on merge to `main` — **merging is the deploy**
-**Version:** 1.8.0
+**Version:** 1.8.2
 
 ---
 
@@ -68,8 +68,15 @@ shipped `property=` for the entire life of the feature and every card was uncolo
 are emitted now, from one value.
 
 **`parseRefKey` is an allowlist, and forgetting a kind is silent.** `fb:group:…` was unparseable for
-weeks — every group-post image 404'd at `/_media/` and nothing failed loudly. Adding a `PostRef`
-kind means adding it here too, and there is a sweep test that fails until you do.
+weeks — every group-post image 404'd at `/_media/` and nothing failed loudly. Adding a `PostRef` kind
+means adding it here too.
+
+**And nothing catches you if you forget — this guide used to claim otherwise.** The round-trip tests
+in `test/refkey.test.mjs` are **hand-enumerated lists** (`['watch','reel','share','group','post']` at
+`:176`), so a new kind is not covered until somebody adds it to both places, which is the same
+oversight twice. Contrast `test/prep.test.mjs:791`, which parses the `Route` union out of
+`src/types.ts` and genuinely fails on an unlisted kind — that is what a sweep looks like, and the
+refkey ones are not it. Until one is written, treat the allowlist as unguarded.
 
 **Cache keys must capture what PRODUCED the answer, not just the question.** The translation cache
 was keyed on the post text; changing the model then could not invalidate a stale answer. Hence
@@ -144,7 +151,7 @@ and the degrade paths matter more here than they would in a single-platform fixe
 | No public JSON API | Two rivals publish one; FxEmbed ships OpenAPI specs. The most conspicuous omission. |
 | No realistic self-hosting | Three rivals hand you a container. We document `wrangler dev`. |
 | No profile embeds | vxTwitter renders bare profiles. Our router has no profile route kind at all. |
-| No operator metrics | fxTikTok documents Prometheus scraping. We have counters and no way to read them. |
+| No operator metrics | Half closed. `docs/METRICS.md` documents the Analytics Engine SQL read path; there is deliberately no scrape endpoint, because an in-Worker one would need an account-scoped API token at the edge and `pool_unused` publishes whether the account pools are loaded. fxTikTok still has a `/metrics` and we do not. |
 | No card screenshots in the README | Four of the five show the card their project produces. We show a designed banner. |
 
 **Do not assume the converter page is unique.** InstaFix Revived ships one too. What is actually
