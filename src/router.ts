@@ -1283,6 +1283,35 @@ export function route(url: URL): Route {
     return target ? { kind: 'card', target } : { kind: 'notfound' }
   }
 
+  /**
+   * /_api/v1?url={the whole original url} — the public JSON API.
+   *
+   * THE VERSION IS IN THE PATH, not a header and not a query parameter, because it has to be visible
+   * in a url somebody pastes into a bug report. `/_api/v2` deliberately falls through to notfound
+   * rather than being silently served as v1: a consumer that asks for a version we do not have should
+   * be told, not quietly handed a different contract.
+   *
+   * THE PARAMETER IS `url`, NOT `p`. /_prep and /_card take `p` because the page hands them a PATH on
+   * our own origin — they are internal endpoints for a page that has already done the swap. This one
+   * takes the whole original url including its host, because an API consumer has a link, not a path,
+   * and making them strip the scheme and host first would be a transformation they could get wrong.
+   *
+   * THE HOST IN THAT URL IS STILL IGNORED, and that is not an oversight — see the api arm in
+   * worker.ts. route() is host-agnostic by design; using the supplied host to break a `/gallery/abc`
+   * tie would make this function's answer depend on an attacker-controlled string, and the fediverse
+   * branch turns a hostname into a fetch. The value here is opaque and is re-routed through this very
+   * function, which is the same boundary every other url crosses.
+   *
+   * A MISSING `url` IS STILL kind:'api', with a null target, rather than falling through to
+   * notfound. The two answers a caller needs to tell apart are "you asked wrongly" and "this url has
+   * no post", and notfound is the second — it renders the same 404 a typo in any path gets. Carrying
+   * the null keeps the API's own arm the one place that decides what a bad REQUEST looks like, and it
+   * costs one nullable field instead of a second Route kind and a second entry in every sweep.
+   */
+  if (raw.length === 2 && raw[0] === '_api' && raw[1] === 'v1') {
+    return { kind: 'api', target: url.searchParams.get('url') }
+  }
+
   // /_media/{encodeURIComponent(refKey)}/{index} — TWO encode layers, TWO decode layers.
   //
   // refKey() percent-encodes each component before joining with ':'. The renderer

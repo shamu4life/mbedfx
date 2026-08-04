@@ -87,6 +87,107 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   lists (`test/refkey.test.mjs:176`) and derive nothing from the union, so a forgotten kind is still
   silent — which is exactly the `fb:group:…` defect the paragraph is about. The `Route` kind sweep in
   `test/prep.test.mjs:791` *is* derived and does fail loudly; the guide now tells them apart.
+## [1.9.0] — 2026-08-03
+
+### Added
+- **A public JSON API — `GET /_api/v1?url=<the post url>`.** The most conspicuous omission in the
+  comparison table: two rivals publish one and FxEmbed ships OpenAPI specs. No key, no signup, CORS
+  open, and it answers for every site the cards cover, including short links and share codes, because
+  it is the same code path a pasted link takes. Documented in `docs/API.md`.
+
+  **It shares its pipeline with `/_card` rather than re-spelling it.** Fetching, waiting for the mux,
+  waiting for the translation and applying the per-platform overlays now live in one function,
+  `describeTarget`, and the two arms differ only in how they serialise the result. This project's most
+  repeated defect is teaching one surface something its twin did not learn — the translation applied
+  to the og head and not the Mastodon spoof, the YouTube date warmed by the activity route so every
+  preview showed 1970, the quote block the card drew and the preview did not. A third surface that
+  re-spelled the pipeline would have reproduced that on its first day, and a published contract is the
+  worst place to find a new instance.
+
+  Decisions worth recording, since a contract is hard to walk back:
+  - **Every answer about a post is HTTP 200, including the gates.** Rule 1 of this project pointed
+    outward: our own upstreams answer 200 with a login wall and 500 with a good JSON error, so telling
+    a consumer to branch on our status would be asking them to do the thing we refuse to. `ok` and
+    `error.code` are the contract. The 4xx answers are all about the request itself - 400 for a
+    missing or unreadable `url`, 405 for a write verb - and never about the post.
+  - **The host in `url` is ignored, so an ambiguous path stays ambiguous.** Supplying the full url
+    looks like free disambiguation for `/gallery/abc`, and it is not free: it would make the answer
+    depend on a caller-controlled string on a service where a hostname is also a thing we fetch. The
+    answer names its `candidates` and the caller re-asks with a two-letter prefix.
+  - **An unknown upload date is `null`, not the epoch.** `/_card` serialises `new Date(0)` faithfully
+    because the page draws a note beside it; an API consumer would sort by a plausible timestamp and
+    silently file every date-less post at the beginning of time.
+  - **A count that is zero, `NaN`, `null` or a string is omitted, not published.** Counts come out of
+    the post cache, which validates three fields and not these; and upstreams use `0` both for a
+    genuinely uninteracted post and for a count the platform withholds. An absent key says "we do not
+    know", which is the only thing that can honestly be said.
+  - **Failures and incomplete answers are never cached.** A private account goes public and an age
+    gate lifts; `loadPost` already refuses to cache a null Post so the next view heals, and a max-age
+    on the envelope would reintroduce that staleness at an edge this Worker cannot invalidate.
+  - **`color`, `stats` and `byline` are deliberately absent.** They are the card's answers - a stripe
+    colour, a pre-rendered stat line, a pre-assembled author line - and a consumer drawing its own
+    presentation wants the facts underneath them.
+
+  An adversarial review before merge caught six things, and each is fixed here rather than shipped:
+  - **The fediverse form was undocumented, and four of the seventeen sites did not work as written.**
+    For Mastodon, Misskey, Lemmy and PeerTube the instance host is part of the post's identity and
+    lives in the PATH, so `?url=https://lemmy.world/post/123456` answers notfound while
+    `?url=/lemmy.world/post/123456` returns the post. The claim "all seventeen sites" was false, and
+    the one paragraph a fediverse user would have read said the opposite of what to do.
+  - **A CORS preflight ran the whole pipeline and then failed.** `OPTIONS` fell through to the fetch,
+    the mux wait and the container call, and answered without `access-control-allow-methods` - so the
+    preflight failed, the real GET never fired, and the request had been bought for nothing. Any
+    consumer sending a custom header is preflighted. `OPTIONS` is now answered in place, and write
+    verbs get a 405 before anything is spent.
+  - **`media[].still` was added**, because `muxing` covers only the video that is still coming. One
+    past the conversion ceiling answers `muxing: false` on a cacheable 200 carrying a plain `image`,
+    and the only trace a video existed was an English sentence inside `text` - a card's answer, and
+    not something a contract should ask anyone to parse.
+  - **`text`, `width`, `height` and `quote.text` were published unguarded** while `title`, `author`
+    and `counts` beside them were defended, which is what made it an oversight. A cached record
+    holding `text: {...}` or `w: '800'` was published verbatim under keys the docs type as a string
+    and a number, on a cacheable 200.
+  - **The ambiguity escape hatch pointed at a path that does not resolve.** The message said to
+    re-ask as `/im/gallery/abc`, and Imgur ids are five characters or more, so a caller following it
+    verbatim got the same dead end twice. `candidates` is also now documented as sites the path could
+    belong to rather than as a promise that every prefix resolves.
+  - **Two claims in `docs/API.md` were wrong about our own behaviour**, and are corrected: byte-range
+    support is real for converted video out of R2 and not for the images, avatars, posters and
+    already-progressive video we 302 to the platform's CDN; and the rate-limiting paragraph asserted
+    a zone rule the repository cannot see. It now says plainly that there is no rate limiting in the
+    source, and that a self-hoster gets none.
+
+  A second review, of the DOCUMENTATION rather than the code, caught four more:
+  - **`platform` and `canonical` were absent, not null**, on the three request-level errors, because
+    those call sites pass no extras while the failure arm passes both. One envelope, two shapes, and
+    the reference described only one of them. Fixed in the code so the documented shape is the true
+    one.
+  - **Two error rows described behaviour the router does not have.** A string that merely does not
+    name a post is neither `unparseable` nor `notfound`: one unrecognised path segment is the
+    ambiguity chooser's own shape, so it answers `ambiguous`. The same false sentence was sitting
+    unasserted in a test comment, which is how it got copied into the reference; it is now pinned.
+  - **`/_api/v2` does not answer in the API's vocabulary at all.** It is an unrouted path, so it is
+    HTTP 404 `text/plain`, not a JSON `notfound`. A client assuming every reply is JSON fails parsing
+    rather than reading a code, and the reference now says so.
+  - **The field table had no types**, and `media[].width`/`height` had no row at all. It now gives
+    type, nullability and always-present for every key, plus the seventeen platform codes with the
+    site each one means, a section on non-JSON responses, and the actual request budget so nobody
+    sets a five-second client timeout on a path that can legitimately take longer.
+
+### Fixed
+- **`/_card` published media urls that could address the wrong bytes.** It computed them as
+  `mediaOf(post).filter(usable).map((m, i) => …)`, so the index was a position in the FILTERED list —
+  while `/_media/` resolves an index against the UNFILTERED one (`pickMedia` reads `mediaList(post)`,
+  and the media route's own `findIndex(usable)` returns an unfiltered position). The two agree only
+  while every entry is usable, which is nearly always, so this was latent rather than visible. Put one
+  unusable entry in front of a usable one and every url after it is off by one: the payload describes
+  entry N and the bytes at that index belong to entry N+1, or 404 past the end.
+
+  Found while building the API on the card's shape, and fixed rather than documented because the API
+  publishes those urls as a contract — an off-by-one in a contract is not something a later release
+  gets to quietly correct. Both surfaces now pair each entry with its unfiltered position, and the
+  test drives the real `/_media/` route rather than asserting an index, because the index is not the
+  promise: "this url serves those bytes" is.
 
 ## [1.8.0] — 2026-08-03
 

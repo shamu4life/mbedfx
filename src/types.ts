@@ -395,6 +395,16 @@ export type Route =
   | { kind: 'prep'; target: string }
   // /_card?p={path} — describe the card Discord will draw, for the fixer page's preview.
   | { kind: 'card'; target: string }
+  /**
+   * /_api/v1?url={the whole original url} — the public JSON API.
+   *
+   * `target` IS NULLABLE HERE AND NOWHERE ELSE IN THIS UNION, deliberately: a request with no `url`
+   * parameter is a malformed REQUEST, and the one thing this endpoint must not do is answer it the
+   * same way it answers "that url has no post". Every other internal route falls through to notfound
+   * for a missing target because the page that calls them never omits it; a public endpoint is asked
+   * wrongly all the time, and telling the caller so is most of what makes it usable.
+   */
+  | { kind: 'api'; target: string | null }
   | { kind: 'post'; ref: PostRef; canonical: string }
   /**
    * A short code that NAMES no post yet. Deliberately not a 'post' with a ref: a short code is
