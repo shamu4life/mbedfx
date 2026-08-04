@@ -14,6 +14,7 @@ later edits within a day of being asked for)
 **Version:** 1.9.0
 **Version:** 1.9.0
 **Version:** 1.9.0
+**Version:** 1.9.0
 
 ---
 
@@ -153,6 +154,8 @@ and the degrade paths matter more here than they would in a single-platform fixe
 |---|---|
 | No public JSON API | Closed. `/_api/v1?url=…` is documented in `docs/API.md`; no OpenAPI spec yet, which is what FxEmbed still has and we do not. It shares `describeTarget` with `/_card`, so it is a fourth surface that cannot drift from the other three. |
 | No realistic self-hosting | Three rivals hand you a container. We document `wrangler dev`. |
+| No public JSON API | Two rivals publish one; FxEmbed ships OpenAPI specs. The most conspicuous omission. |
+| No realistic self-hosting | Reframed. There are NO known blockers — the suite runs in stock Node against `src/worker.ts`, `handle()` is already an adapter entry point, six of eight bindings are hand-written interfaces rather than Cloudflare types, and `container/` has no Cloudflare surface at all. What is missing is an adapter and somebody running it; the real unknown is EGRESS IP, not a binding. Plan in `docs/SELF-HOSTING.md`. |
 | No profile embeds | vxTwitter renders bare profiles. Our router has no profile route kind at all. |
 | No operator metrics | Half closed. `docs/METRICS.md` documents the Analytics Engine SQL read path; there is deliberately no scrape endpoint, because an in-Worker one would need an account-scoped API token at the edge and `pool_unused` publishes whether the account pools are loaded. fxTikTok still has a `/metrics` and we do not. |
 | No card screenshots in the README | Four of the five show the card their project produces. We show a designed banner. |
