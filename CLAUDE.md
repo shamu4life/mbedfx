@@ -11,7 +11,7 @@ em dashes and no second person (owner's call; asserted by a test, because both w
 later edits within a day of being asked for)
 **Tests:** `node --test`, no test framework, no network
 **Deploy:** Cloudflare Workers Builds on merge to `main` — **merging is the deploy**
-**Version:** 1.8.0
+**Version:** 1.9.0
 
 ---
 
@@ -53,6 +53,7 @@ offline in ~20s. Keep judgement in the pure half.
 | `src/translate.ts` | detection, translation, the marker |
 | `container/server.py` | the `yt-dlp` + `ffmpeg` resolver |
 | `public/index.html` | the converter page |
+| `docs/API.md` | the published `/_api/v1` contract — read before changing anything it names |
 
 ---
 
@@ -141,7 +142,7 @@ and the degrade paths matter more here than they would in a single-platform fixe
 
 | Gap | Where it stands |
 |---|---|
-| No public JSON API | Two rivals publish one; FxEmbed ships OpenAPI specs. The most conspicuous omission. |
+| No public JSON API | Closed. `/_api/v1?url=…` is documented in `docs/API.md`; no OpenAPI spec yet, which is what FxEmbed still has and we do not. It shares `describeTarget` with `/_card`, so it is a fourth surface that cannot drift from the other three. |
 | No realistic self-hosting | Three rivals hand you a container. We document `wrangler dev`. |
 | No profile embeds | vxTwitter renders bare profiles. Our router has no profile route kind at all. |
 | No operator metrics | fxTikTok documents Prometheus scraping. We have counters and no way to read them. |

@@ -817,7 +817,10 @@ test('EVERY INDIRECT POST-YIELDING ROUTE KIND IS UNWRAPPED — the sweep that st
     .map(m => ({ kind: m[1], fields: m[2] }))
 
   const ALL_KINDS = [
-    'activity', 'ambiguous', 'badid', 'card', 'media', 'metashare', 'notfound',
+    // 'api' added 2026-08-03 with /_api/v1. It can NEVER yield a post through a network hop: like
+    // 'card' and 'prep' it carries an opaque target that it re-routes through route() itself, and the
+    // route that comes back is what unwrapToPost is then handed. Listing it here is the whole change.
+    'activity', 'ambiguous', 'api', 'badid', 'card', 'media', 'metashare', 'notfound',
     'oembed', 'post', 'prep', 'redditshare', 'shortlink', 'site',
   ]
   assert.deepEqual(arms.map(a => a.kind).sort(), ALL_KINDS,
