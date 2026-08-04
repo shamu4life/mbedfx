@@ -2229,6 +2229,47 @@ const ytMetaUsable = (env: Env) => (j: unknown): boolean => {
 }
 
 /**
+ * THE UPLOAD INSTANT OUT OF THE CONTAINER'S RAW DICT, in epoch seconds, from EITHER field.
+ *
+ * THE DEFECT THIS CLOSES, found 2026-08-04 from the report "YouTube links still show the epoch
+ * occasionally when cold". yt-dlp builds `timestamp` ONLY from a timezone-bearing microformat, and
+ * several of its YouTube player clients do not carry one. On those responses the dict is otherwise
+ * complete — title, description, counts, duration, age_limit — with `timestamp: null` and
+ * `upload_date: '20091025'` sitting beside it. Which client answers varies per request, which is
+ * exactly why the symptom was intermittent on the same video.
+ *
+ * `timestamp` IS STILL PREFERRED. It carries a time of day; `upload_date` is a bare date and becomes
+ * UTC midnight. Nothing renders a clock time so nothing displays wrong, but the stored record is what
+ * a future consumer sorts by, so the more precise source wins whenever it exists.
+ *
+ * NOTE THE ASYMMETRY WITH ytMetaValid, which is deliberate and not an oversight: that one validates a
+ * STORED record, which by construction always carries a numeric `timestamp` because this function is
+ * what produced it. This one validates the WIRE dict, where the date arrives in two shapes.
+ */
+function ytDateSeconds(j: Record<string, unknown>): number | null {
+  if (typeof j.timestamp === 'number' && uploadDateFrom(j.timestamp) !== null) return j.timestamp
+  const fromDay = uploadDateFrom(j.upload_date)
+  return fromDay ? Math.floor(fromDay.getTime() / 1000) : null
+}
+
+/**
+ * THE CONTAINER ANSWERED AND WE COULD NOT USE IT — thrown rather than returned, and the difference
+ * decides whether the retry that would fix the card is allowed to happen.
+ *
+ * metaAttempt reads a resolved `null` as "the extract's own verdict — the page is gone, blocked or
+ * unextractable" and negatively caches the id for META_FAIL_TTL_MS. That is right for a real negative
+ * and wrong for this one: a dict we rejected because OUR validator wanted a field is evidence about
+ * US, not about the video. Read as a verdict it blocked re-dispatch for a minute per isolate — so the
+ * one thing that could have healed the card was refused, on the strength of our own rejection.
+ *
+ * metaAttempt's rejection arm already says exactly this in its own words ("it threw, or it was
+ * cancelled. That is evidence about US, not about the id, so it must NOT mark"), so this throw is
+ * that existing vocabulary rather than a new mechanism. Nothing is written either way — there is no
+ * record to write — so the only thing the throw changes is that the next view gets to ask again.
+ */
+class MetaUnusable extends Error {}
+
+/**
  * HOW LONG THE ACTIVITY CALLBACK WILL WAIT for a cold date extract, and the ONE real trade in this
  * change. Read this before changing it.
  *
@@ -2298,7 +2339,26 @@ async function resolveYouTubeMeta(ref: Extract<PostRef, { p: 'yt' }>, env: Env):
       return null
     }
     const j = await r.json() as Record<string, unknown>
-    if (!ytMetaValid(j)) return null
+    const seconds = ytDateSeconds(j)
+    if (seconds === null) {
+      /**
+       * THE EXTRACT SUCCEEDED AND CARRIED NO USABLE DATE IN EITHER FIELD. Rare once `upload_date` is
+       * forwarded — yt-dlp keeps it when `timestamp` fails — so reaching here means something changed
+       * upstream, which is exactly when somebody needs to be told.
+       *
+       * NOT CACHED, deliberately. A record with no date would keep its description and counts for 30
+       * days at the cost of never asking for the date again, and this project's rule is that a
+       * degraded answer must not be the one that sticks. Thrown rather than returned so the negative
+       * cache does not treat our own rejection as the video's verdict — see MetaUnusable.
+       *
+       * SERVER-SIDE ONLY, matching the `!r.ok` line below. There is no counter for it yet and that is
+       * a known gap: with Workers Logs off this is visible under `wrangler tail` and nowhere else, so
+       * a counted outcome is the follow-up.
+       */
+      console.error('yt meta had no usable date', refKey(ref),
+        `timestamp=${String(j.timestamp)} upload_date=${String(j.upload_date)}`)
+      throw new MetaUnusable('no usable upload date')
+    }
     // age_limit rides along when the container reports one. Narrowed to a finite number rather than
     // passed through: this value is STORED FOR 30 DAYS, and a junk field read back from R2 would
     // reach the renderer long after the response that produced it is gone.
@@ -2316,7 +2376,9 @@ async function resolveYouTubeMeta(ref: Extract<PostRef, { p: 'yt' }>, env: Env):
     const duration = typeof j.duration === 'number' && Number.isFinite(j.duration) && j.duration > 0
       ? j.duration : undefined
     return {
-      timestamp: j.timestamp as number,
+      // `seconds`, not `j.timestamp` — the two differ on exactly the responses this fix is about, and
+      // reading the raw field here would re-introduce the bug one line below where it was fixed.
+      timestamp: seconds,
       ...(duration === undefined ? {} : { duration }),
       ...(ageLimit === undefined ? {} : { ageLimit }),
       // ONLY WHEN TRUE, never `jarred: false`. Absent already means "not known to be logged in", which
@@ -2329,7 +2391,13 @@ async function resolveYouTubeMeta(ref: Extract<PostRef, { p: 'yt' }>, env: Env):
       ...(likes === undefined ? {} : { likes }),
       ...(replies === undefined ? {} : { replies }),
     }
-  } catch {
+  } catch (err) {
+    // MetaUnusable MUST NOT BE SWALLOWED HERE. This catch exists to turn a network or JSON failure
+    // into "no answer"; folding our own deliberate rejection into that same null would hand it to
+    // metaAttempt as the extract's verdict and negatively cache the id for a minute — which is the
+    // amplifier this change exists to remove. Re-thrown so the rejection arm, which does not mark,
+    // is the one that runs.
+    if (err instanceof MetaUnusable) throw err
     return null
   }
 }

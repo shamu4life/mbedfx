@@ -332,3 +332,31 @@ test('withCounts IS TOTAL and returns the SAME reference when idle', () => {
   }
   assert.equal(withCounts(null, { likes: 1 }), null, 'a null post must not throw')
 })
+
+test('uploadDateFrom READS yt-dlp\'s COMPACT YYYYMMDD, at UTC midnight', () => {
+  /**
+   * THE THIRD SHAPE, added 2026-08-04. yt-dlp's `upload_date` is a bare `'20091025'`, and
+   * `Date.parse('20091025')` is NaN — so a perfectly good date read as no date at all, on every
+   * response where `timestamp` was absent.
+   *
+   * UTC IS THE ASSERTION, not an implementation detail. `Date.parse` on a bare `YYYY-MM-DD` is
+   * defined as UTC while `YYYY-MM-DDT00:00:00` without a zone is LOCAL — one character apart, and the
+   * difference is a whole day's error for anyone west of Greenwich. This test fails on a machine in
+   * any timezone if that ever gets "tidied".
+   */
+  assert.equal(uploadDateFrom('20091025')?.toISOString(), '2009-10-25T00:00:00.000Z')
+  assert.equal(uploadDateFrom('20050214')?.toISOString(), '2005-02-14T00:00:00.000Z', 'the floor day itself')
+
+  // The existing shapes are untouched — this is an addition, not a replacement.
+  assert.equal(uploadDateFrom(1256453853)?.toISOString(), '2009-10-25T06:57:33.000Z', 'epoch seconds')
+  assert.equal(uploadDateFrom('2009-10-25T06:57:33Z')?.toISOString(), '2009-10-25T06:57:33.000Z', 'ISO')
+
+  // And the guards still hold. An 8-digit string that is not a date must not become one.
+  assert.equal(uploadDateFrom('20091345'), null, 'month 13 is not a date')
+  assert.equal(uploadDateFrom('00000000'), null, 'and neither is this')
+  assert.equal(uploadDateFrom('19991231'), null, 'below the 2005 floor — before any of these sites existed')
+  assert.equal(uploadDateFrom('12345678'), null)
+  // A NUMBER of eight digits is still epoch SECONDS (1975), not a packed date — the two shapes must
+  // not blur into each other. Rejected by the floor, as it always was.
+  assert.equal(uploadDateFrom(20091025), null)
+})

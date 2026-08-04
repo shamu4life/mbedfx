@@ -4,6 +4,7 @@ import { handle, metaCacheKey } from '../src/worker.ts'
 import { refKey } from '../src/refkey.ts'
 import { encodeStatusId } from '../src/statusid.ts'
 import { normalizeYouTube } from '../src/platforms/youtube/normalize.ts'
+import { readFileSync } from 'node:fs'
 
 /**
  * THE YOUTUBE UPLOAD DATE, driven through the real dispatcher with mocked bindings — no container, no
@@ -405,4 +406,88 @@ test('A VIDEO INSIDE THE CEILING IS UNTOUCHED — the guard must not swallow ord
   const content = await contentOf(res)
 
   assert.ok(!/Too long to play here/.test(content), 'no note on a video that can play')
+})
+
+// ── The date that arrives as `upload_date` instead of `timestamp` (2026-08-04).
+
+test('A DICT WITH NO timestamp BUT AN upload_date STILL DATES THE CARD', async () => {
+  /**
+   * THE REPORTED DEFECT: "YouTube links still show the epoch occasionally when cold."
+   *
+   * yt-dlp builds `timestamp` ONLY from a timezone-bearing microformat, and several of its YouTube
+   * player clients do not carry one. On those responses the dict comes back complete — title,
+   * description, counts, duration, age_limit — with `timestamp: null` and `upload_date: '20091025'`
+   * right beside it. The container forwarded only `timestamp`, and the worker required a numeric one
+   * to accept a record at all, so the WHOLE dict was discarded: no date, no description, no counts,
+   * and nothing written to R2 to heal from. Which client answers varies per request, which is exactly
+   * why the same video was fine on one paste and epoch on the next.
+   *
+   * Asserted on `created_at` from the activity callback, because that is the field Discord actually
+   * draws the date from — the plain OG head emits no date tag at all.
+   */
+  const ref = ytRef('upldate0001')
+  const { seen, binding } = fakeResolver({
+    meta: () => Response.json({ title: 'a video', timestamp: null, upload_date: '20091025' }),
+  })
+  const res = await handle(req(activity(ref)), envWith(binding), ctx, deps(vouchedPost(ref)))
+  assert.equal(seen.meta, 1, 'the container was asked')
+  assert.equal(await createdAt(res), '2009-10-25T00:00:00.000Z',
+    'UTC midnight of the upload day — day precision is what upload_date carries, and it is not the epoch')
+})
+
+test('timestamp WINS OVER upload_date when the dict carries both', async () => {
+  /**
+   * `upload_date` is a bare day, so it becomes midnight UTC; `timestamp` carries the real instant.
+   * Nothing renders a clock time today, so this is not about what a card shows — it is about what
+   * gets PERSISTED for 30 days and sorted on later. Preferring the coarser field because it happened
+   * to be read first is the kind of thing that is invisible until somebody sorts two same-day uploads.
+   */
+  const ref = ytRef('upldate0002')
+  const { binding } = fakeResolver({
+    meta: () => Response.json({ title: 'a video', timestamp: TS_RICK, upload_date: '20200101' }),
+  })
+  const res = await handle(req(activity(ref)), envWith(binding), ctx, deps(vouchedPost(ref)))
+  assert.equal(await createdAt(res), ISO_RICK, 'the precise instant, not midnight of the other day')
+})
+
+test('AN ANSWER WITH NO USABLE DATE DOES NOT NEGATIVELY CACHE THE VIDEO — our rejection is not its verdict', async () => {
+  /**
+   * THE AMPLIFIER, and the reason the defect above was durable rather than a one-view blip.
+   *
+   * metaAttempt reads a resolved null as "the extract's own verdict — the page is gone, blocked or
+   * unextractable" and marks the id failed for META_FAIL_TTL_MS (60s per isolate). A dict rejected
+   * because OUR validator wanted a field is not that: it is evidence about us. Read as a verdict, it
+   * refused the one thing that could have healed the card — asking again — for a minute.
+   *
+   * So the unusable answer is THROWN, and metaAttempt's rejection arm (which deliberately does not
+   * mark, and says so) is the one that runs. Pinned by dispatching TWICE and requiring the second
+   * call to happen: before this, the second was refused and the card stayed epoch.
+   */
+  const ref = ytRef('upldate0003')
+  const { seen, binding } = fakeResolver({
+    // No timestamp and no upload_date: the residual case, after the fix above removes the common one.
+    meta: () => Response.json({ title: 'a video' }),
+  })
+  const env = envWith(binding)
+
+  const first = await handle(req(activity(ref)), env, ctx, deps(vouchedPost(ref)))
+  assert.equal(await createdAt(first), '1970-01-01T00:00:00.000Z', 'no date anywhere, so no date is honest')
+  assert.equal(seen.meta, 1)
+
+  const second = await handle(req(activity(ref)), env, ctx, deps(vouchedPost(ref)))
+  assert.equal(seen.meta, 2,
+    'the retry is ALLOWED — a rejection of ours must not spend the video\'s 60-second negative cache')
+  await second.json()
+})
+
+test('THE CONTAINER FORWARDS upload_date — the worker cannot fall back to a field it is never sent', () => {
+  /**
+   * The Node half of this fix is unreachable without the Python half, and the two live in different
+   * languages in different processes, so nothing else fails when they drift. Same instrument, and the
+   * same reason, as the argv-splice pin in ytdlp-tier.test.mjs: a grep is a poor test and a much
+   * better tripwire than the nothing that was there before.
+   */
+  const py = readFileSync(new URL('../container/server.py', import.meta.url), 'utf8')
+  assert.match(py, /"upload_date":\s*d\.get\("upload_date"\)/,
+    '_meta_page must forward upload_date alongside timestamp')
 })
