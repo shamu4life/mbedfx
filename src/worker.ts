@@ -1169,6 +1169,21 @@ const RESOLVER_SLOTS = 4
 // that will never set a secret), an absent `jarred` on an older record reads as "not logged in", which
 // is exactly what it was, and a gated record that DID carry a jar is kept. Rotating a dead pool is the
 // case this does not cover, and that one still wants a bump.
+// STILL g10 IN 1.9.0 EVEN THOUGH container/server.py's OUTPUT DICT CHANGED, and the rule at the top
+// of this log says to bump whenever container/ changes behaviour. Written down because a reader who
+// finds an unbumped generation next to a container change is right to assume it was forgotten.
+//
+// The rule exists for two things, and this change needs neither. It retires STALE RECORDS — and there
+// are none, because the defect being fixed (`timestamp: null`) made the worker write nothing at all,
+// and every record already in R2 carries a valid timestamp that stays correct. And it retires WARM
+// INSTANCES still running the old image, which Cloudflare's own gradual container rollout now does on
+// deploy anyway; the window is minutes, and a call landing on an old instance during it costs one
+// wasted container call that is not cached and heals on the next view.
+//
+// The cost of bumping is real and one-directional: it discards up to 30 days of good dates,
+// descriptions and counts across yt, fb, dm, st and im to shorten a few minutes of ambiguity. If a
+// future container change persists a WRONG value rather than no value, that trade flips and it must
+// bump — the test is what a stale record would say, not whether container/ was touched.
 const RESOLVER_GENERATION = 'g10'
 /** `slotKey` is the POST (refKey), never the operation — see RESOLVER_SLOTS for the 74% measurement. */
 function resolverStub(resolver: NonNullable<Env['MEDIA_RESOLVER']>, slotKey: string) {

@@ -260,6 +260,33 @@ filling them will now work, not that they are filled.
   authenticated client set, and the client carrying the timezone microformat may not be in it - which
   would mean filling `YT_ACCOUNTS` makes this *more* likely, not less. Measured residentially only,
   never from the container's own egress, so it is written down rather than acted on.
+### Pre-flight findings, settled before the merge rather than after
+
+- **Merging rebuilds the container image. There is no manual step.** `wrangler.jsonc` points `image`
+  at `./container/Dockerfile`, and Workers Builds' deploy command is `npx wrangler deploy`, which
+  builds and pushes it — confirmed by reading this repo's own build logs, which show
+  `Building image fxeverything-mediaresolver`, a registry push and `Modified application`.
+  `container/README.md` said to run `wrangler deploy` yourself, which CLAUDE.md forbids and which
+  would overwrite whatever the build shipped; it is corrected, and now also records that a **preview**
+  build runs `wrangler versions upload` and does **not** build the image, so a container change is
+  untested by the preview and lands only on merge.
+
+- **`RESOLVER_GENERATION` deliberately stays `g10`** even though `container/server.py`'s output dict
+  changed, which is contrary to the rule at the top of its own log. The reasoning is written into the
+  code so an unbumped generation next to a container change does not read as an oversight: there are
+  no stale records to retire, because the defect made the Worker write *nothing*; warm instances are
+  replaced by the deploy's own gradual rollout; and bumping would discard up to 30 days of good dates,
+  descriptions and counts to shorten a few minutes of ambiguity. The test is what a stale record would
+  *say*, not whether `container/` was touched.
+
+- **A cookie jar does NOT make the epoch bug worse — but a Premium account would.** The earlier
+  warning is refuted at yt-dlp's source: `web_safari`, the only client carrying the timezone-bearing
+  microformat, sits in the same position of both the anonymous and the ordinary logged-in client
+  lists. Premium is the exception — it selects a set that drops `web_safari` entirely, which would
+  turn an intermittent missing date into a permanent one. `docs/CREDENTIALS.md` now says never to use
+  one, and also that an **expired** jar is worse than no jar, because yt-dlp decides "logged in" from
+  cookie presence rather than validity.
+
 ### Self-hosting off Cloudflare is not blocked
 
 #### Added

@@ -66,6 +66,22 @@ from being rotated out from under you by ordinary browsing in your main profile.
 For YouTube specifically: do not keep using that account in a browser afterwards. YouTube rotates
 cookies, and a session used in two places tends to invalidate the older one.
 
+**Never a YouTube Premium account.** This is the one account property that actively breaks something.
+yt-dlp picks which player clients to try based on what the cookies say, and a Premium session selects
+a set that **drops `web_safari`** — which is the only client that carries the timezone-bearing
+microformat the upload date is parsed from. Verified against yt-dlp 2026.07.04's own source, not
+inferred. A Premium jar would turn the intermittent missing-date bug into a permanent one, on every
+YouTube video, and it would look exactly like the extract being broken.
+
+An ordinary free throwaway is fine: `web_safari` sits in the same position of both the anonymous and
+the ordinary logged-in client lists, so a normal jar does not change the date supply at all.
+
+**A dead jar is worse than no jar.** yt-dlp decides "am I logged in" from the *presence* of cookies,
+not from whether they still work — so an expired jar still selects the logged-in client set, where
+one of the clients requires auth and simply fails. You lose format coverage you would have had with
+no credential at all. That is what `pool_unused` is for: watch it after filling, and rotate rather
+than leaving a stale jar in place.
+
 ---
 
 ## Building the JSON
