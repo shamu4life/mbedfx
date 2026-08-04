@@ -98,7 +98,8 @@ Short links resolve too — `youtu.be`, `dai.ly`, `redd.it`, `tiktok.com/t/…`,
 ## How it compares
 
 Checked 2026-08-01 against each project's docs, source and live service. **?** means we could not
-establish it either way — not that the answer is no.
+establish it either way — not that the answer is no. The rivals' columns are as of that date; our
+own column is kept current, and a change to it re-dates nobody else's.
 
 These are all good projects, and two things the table cannot show are worth saying plainly. FxEmbed's
 depth on Twitter far exceeds ours on any single site. And our own remux is a workaround, not a
@@ -113,7 +114,7 @@ and it buys nothing on Twitter or TikTok, where the platform already serves one.
 | Caption translation | ✅ automatic | opt-in `/en` | opt-in `/en`, undocumented | ❌ | ❌ | ❌ |
 | Card says *why* a post is missing | ✅ private / age / deleted | ? | ? | age only | ❌ redirects | one generic card |
 | Public JSON API | ❌ | ✅ OpenAPI | ✅ documented | ❌ | ❌ | undocumented |
-| Self-host off Cloudflare | ❌ Workers only | ❌ Workers | ✅ Docker · systemd · Lambda | Docker, undocumented | ✅ Docker · K8s | ✅ Docker |
+| Self-host off Cloudflare | [no blockers, no adapter yet](docs/SELF-HOSTING.md) | ❌ Workers | ✅ Docker · systemd · Lambda | Docker, undocumented | ✅ Docker · K8s | ✅ Docker |
 | Operator metrics | ❌ | ? | ? | ✅ Prometheus | pprof | pprof |
 
 

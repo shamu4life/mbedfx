@@ -11,7 +11,7 @@ em dashes and no second person (owner's call; asserted by a test, because both w
 later edits within a day of being asked for)
 **Tests:** `node --test`, no test framework, no network
 **Deploy:** Cloudflare Workers Builds on merge to `main` — **merging is the deploy**
-**Version:** 1.8.0
+**Version:** 1.9.2
 
 ---
 
@@ -142,7 +142,7 @@ and the degrade paths matter more here than they would in a single-platform fixe
 | Gap | Where it stands |
 |---|---|
 | No public JSON API | Two rivals publish one; FxEmbed ships OpenAPI specs. The most conspicuous omission. |
-| No realistic self-hosting | Three rivals hand you a container. We document `wrangler dev`. |
+| No realistic self-hosting | Reframed. There are NO known blockers — the suite runs in stock Node against `src/worker.ts`, `handle()` is already an adapter entry point, six of eight bindings are hand-written interfaces rather than Cloudflare types, and `container/` has no Cloudflare surface at all. What is missing is an adapter and somebody running it; the real unknown is EGRESS IP, not a binding. Plan in `docs/SELF-HOSTING.md`. |
 | No profile embeds | vxTwitter renders bare profiles. Our router has no profile route kind at all. |
 | No operator metrics | fxTikTok documents Prometheus scraping. We have counters and no way to read them. |
 | No card screenshots in the README | Four of the five show the card their project produces. We show a designed banner. |

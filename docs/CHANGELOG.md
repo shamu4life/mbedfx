@@ -5,6 +5,31 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [1.9.2] - 2026-08-04
+
+### Added
+- **`docs/SELF-HOSTING.md`, and a correction: running this off Cloudflare is not blocked.** The
+  README said "❌ Workers only" and an earlier internal assessment said it was not achievable. Both
+  were wrong, and the evidence was already in the repo: the whole test suite (1185 tests) runs in
+  stock Node importing `src/worker.ts` directly, `handle(req, env, ctx, deps)` is already an adapter
+  entry point, six of the eight Cloudflare surfaces are hand-written structural interfaces in `Env`
+  rather than Cloudflare types, and `container/` is a stock Python HTTP server with no Cloudflare API
+  surface in it at all. What is missing is an adapter and somebody running one.
+
+  **No code ships here.** The doc states what is true today, what replaces each binding and what
+  degrades without it, and phases the work. It also names two things that must change before a
+  self-hosted instance is exposed, which nobody had written down: your own hostname is not in
+  `OWN_HOSTS`, and the Worker half leans on Cloudflare's egress in a way that matters more elsewhere.
+
+  **The caveat that decides it is egress IP, not a binding.** Several fetchers were measured
+  specifically against Cloudflare's egress, and Instagram, Facebook, Threads and Reddit answer
+  datacenter addresses differently. Nobody has measured them from anywhere else, so "self-host and get
+  the same cards" is unproven and the doc says so rather than implying it.
+
+  The README row now reads "no blockers, no adapter yet" and links the doc. The comparison table's
+  measurement date is qualified: our own column is kept current, and changing it re-dates nobody
+  else's.
+
 ## [1.8.0] — 2026-08-03
 
 ### Added
