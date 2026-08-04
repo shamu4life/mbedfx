@@ -37,6 +37,19 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   rather than smoothed over: whether any row is sampled, whether the old dataset still holds rows,
   the default row limit, identifier quoting, and write-to-query visibility lag.
 
+- **Workers Logs are off, and the privacy claim in the code is true again.** `observability` was
+  enabled, so Cloudflare persisted an invocation log per request for seven days carrying the whole
+  request url — which on this Worker is the post somebody pasted — with the client IP, user agent and
+  geolocation beside it. `src/analytics.ts` meanwhile says "no URLs, no post IDs, no IPs, no verbatim
+  user agents… we have nothing to leak", and cites TwitFix dying over a public log of processed urls.
+  The function was scrupulous and the deployment underneath it was not. The comment now records that
+  the two are one decision.
+
+  What it costs is written down rather than glossed: the four `console.error` calls still run and
+  nothing stores them, so a failure that happens while nobody is tailing cannot be reconstructed
+  afterwards. `wrangler tail` covers live debugging, the dashboard charts are a separate product and
+  unaffected, and Analytics Engine — everything this document is about — is untouched.
+
 ### Fixed
 - **This guide claimed a safety net that does not exist.** `CLAUDE.md` said adding a `PostRef` kind
   is caught by "a sweep test that fails until you do". The refkey round-trip tests are hand-written

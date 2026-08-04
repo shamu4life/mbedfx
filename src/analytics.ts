@@ -200,6 +200,17 @@ export interface Env {
  * The historically demonstrated way a fixer dies is not lawyers — it is logging.
  * TwitFix shut down in 2022 over a public log of processed URLs and the harassment
  * that followed, with zero legal contact. We have nothing to leak.
+ *
+ * AND THAT CLAIM WAS NOT TRUE UNTIL 2026-08-04, which is worth recording rather than
+ * quietly fixing. This function was scrupulous and the platform underneath it was not:
+ * `observability` was enabled in wrangler.jsonc, so Cloudflare persisted an invocation
+ * log per request for seven days carrying the whole request url — on this Worker, the
+ * post somebody pasted — with the client IP, the user agent and the geolocation beside
+ * it. Everything above was true of OUR analytics and false of the deployment.
+ *
+ * Workers Logs is off now. If it is ever turned back on, this comment stops being true
+ * again, so treat the two as one decision: the honest version of "we have nothing to
+ * leak" is "nothing here writes one, AND nothing under us is storing one either".
  */
 export function count(env: Env, platform: Platform | 'none', outcome: Outcome2, client: ClientClass): void {
   env.AE?.writeDataPoint({ blobs: [platform, outcome, client], doubles: [1] })

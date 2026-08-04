@@ -1,7 +1,7 @@
 # Reading the counters
 
-mbedfx writes 49 counters into a Cloudflare Analytics Engine dataset and has never had a way to read
-them back. This is that way.
+mbedfx writes counters into a Cloudflare Analytics Engine dataset from 50 call sites, and has never
+had a way to read them back. This is that way.
 
 It is a **cookbook, not an endpoint**, and that is a decision rather than a shortcut — see
 [Why there is no `/_metrics`](#why-there-is-no-_metrics) at the bottom. Everything here runs from your
@@ -11,6 +11,62 @@ laptop or a cron box against Cloudflare's SQL API.
 (fetched 2026-08-03; those pages read "Last updated Apr 23, 2026") and from this repo's source. None
 has been run against the live account. The first person to run them should correct whatever is wrong
 here rather than assume it was verified.
+
+---
+
+## What Cloudflare actually gives you to look at
+
+Cloudflare does not have one "monitoring" screen. It has several separate products that sit near each other in the dashboard but are switched on, billed and retained independently. Turning one off does not touch the others, and most of the confusion here comes from assuming it does.
+
+Two distinctions carry the whole picture.
+
+**Aggregate versus per-request.** Some surfaces count things (a chart of requests per hour, a table of counters). Others keep a record of individual requests, which necessarily means keeping what those requests were. The privacy question and the debugging question live on opposite sides of that line.
+
+**Stored versus streamed.** Some surfaces write a record to Cloudflare that you can come back to tomorrow. Others show you events as they happen and keep nothing. A streamed surface cannot leak later, because there is nothing there later.
+
+With that, the seven surfaces:
+
+- **Workers Logs** — stored, per-request. Cloudflare writes one "invocation log" per request plus every `console.log`/`console.error` the code emitted, indexes them, and lets you query them in the dashboard for 7 days. This is the only surface controlled by `observability.enabled` in `wrangler.jsonc`, and it is the one being turned off. Measured against this account on 2026-08-04, the stored records carry the full request URL including query string, the client IP (`cf-connecting-ip`), the verbatim user agent, the referer, and Cloudflare's geolocation block (city, latitude/longitude, ASN, timezone).
+- **Real-time logs / `wrangler tail`** — streamed, per-request. The same events, shown live in a terminal or the dashboard's Live tab, stored nowhere. This is what the four `console.error` calls in `worker.ts` were written for; their comments already say "SERVER-SIDE ONLY (wrangler tail)".
+- **Workers Metrics** — stored, aggregate. The request / error / CPU / wall-time charts on the Worker's dashboard page. No per-request detail, three months of history, no configuration, no price. This is the surface that answers "is it up and is it erroring", and it is entirely separate from logs.
+- **Analytics Engine** — stored, aggregate, ours. The `mbedfx_counters` dataset that `src/analytics.ts` writes counters into. Its own product, its own config key, its own read API. Three months of retention. Nothing about it is affected by the observability setting.
+- **Workers Logpush** — export. Ships the same trace events off Cloudflare to R2, S3 or a log vendor. Off; its own flag.
+- **Tail Workers** — export with code in front of it. A second Worker that receives the telemetry stream and can filter or transform it before anything is stored. Off; its own config key.
+- **Workers Traces** — stored, per-request, beta. Spans showing where time went inside one request. Off; needs its own `observability.traces.enabled`, which `observability.enabled` does not imply.
+
+**On for this Worker today:** Workers Logs (`wrangler.jsonc:27`), Workers Metrics (automatic), Analytics Engine writes (`wrangler.jsonc:161`). Real-time logs is always available and needs no setting. Logpush, Tail Workers and Traces are all off.
+
+**Where to click:** everything except Analytics Engine starts at **Cloudflare dashboard → Workers & Pages → Overview → mbedfx**. Metrics are on that page. Workers Logs is the **Observability** tab. Real-time logs is **Logs → Live**. Analytics Engine has no dashboard page at all; it is read over an HTTP SQL API with an account token, which is what `docs/METRICS.md` is a cookbook for.
+
+### Workers Logs are off here, on purpose
+
+`wrangler.jsonc` sets `observability: { enabled: false }`, and it is a privacy boundary rather than a
+debugging preference. With it on, Cloudflare persists one invocation log per request for seven days,
+and those records carry the whole request url. On this Worker the url **is** the post somebody
+pasted, alongside their IP, user agent and geolocation. That is exactly what `src/analytics.ts`
+refuses to put in a counter, and its reason (TwitFix died over a public log of processed urls) does
+not stop applying because the log belongs to Cloudflare rather than to us.
+
+What that costs, and what it does not:
+
+| | |
+|---|---|
+| **Lost** | Searching *after the fact* for a request that already failed. The four `console.error` calls still run; nothing stores them. |
+| **Kept** | `npx wrangler tail mbedfx` for live debugging. Reproduce the problem with a tail running. |
+| **Kept** | The dashboard traffic / error-rate / CPU charts. Separate product, separate pipeline, unaffected. |
+| **Kept** | Everything in this document. Analytics Engine is a different product with its own key, its own write API and its own retention. |
+
+One honest gap: **Cloudflare's docs never state whether `wrangler tail` works with observability
+disabled.** The real-time logs page says it "does not store Workers Logs", and the config field is
+defined in terms of *persisting*, which reads as two independent consumers of the same trace-event
+stream — but that is an inference, not a quoted guarantee. Settle it in thirty seconds after the next
+deploy: run `npx wrangler tail mbedfx` and load a card. If lines appear, it is answered.
+
+The middle position that was not taken, recorded so the choice is legible rather than to reopen it:
+`observability.logs.invocation_logs = false` drops the record carrying the url, IP and user agent
+while keeping `console` output stored and searchable. Full off is stricter, and needs no trust in
+Cloudflare's field selection staying where it is.
+
 
 ---
 
