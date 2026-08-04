@@ -36,6 +36,57 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   `credentialSeamArmed` that no longer exists, while a later paragraph in the same comment correctly
   narrowed the claim to `X_ACCOUNTS`. It is the text an operator reads to decide whether filling a
   secret is worth the exposure of a throwaway account, and it was telling them no.
+## [1.8.2] — 2026-08-03
+
+### Added
+- **`docs/METRICS.md` — the read path for the 49 counters this project has been writing and never
+  reading.** The dimension map (`blob1` platform, `blob2` outcome, `blob3` client class, `double1`
+  always 1), what every counter means and which other counter it is only meaningful next to, eight
+  Analytics Engine SQL recipes, and the Grafana pointer.
+
+  Three traps are documented first, because each returns a *number* rather than an error:
+  `COUNT()` counts stored rows and not events, so every query uses `SUM(_sample_interval)` — and
+  because read-time sampling responds to query cost, a naive count under-reports *more the further
+  back you look*, which reads exactly like a traffic decline. The dataset was renamed on 2026-08-01
+  and a rename does not migrate rows, so it currently holds about two days and every seven-day
+  example returns a partial window that looks like a collapse. And the counters deliberately stack —
+  `fetch_fail` is a superset, so a total across outcomes is not a request count.
+
+  Also written down: `media_hit`/`media_miss` carry two different meanings under one name (the
+  `/_media/` route and the `d.` host), and `translated`/`translate_fallback` are hardcoded to client
+  `discord` while also being emitted from the converter preview, so those rows are actively
+  mislabelled and must never be split by client. Neither is fixable from a query.
+
+  **No `/_metrics` endpoint, deliberately.** The `AE` binding is write-only; reading goes through the
+  account-level SQL API, so an in-Worker route would have to hold an account-scoped Cloudflare API
+  token on the public edge to serve data an operator can already get from a laptop. And a public one
+  would publish `pool_unused`, which is a live readout of whether the age-gate account pools are
+  loaded and still passing — a feedback signal for the enforcement teams the pools exist to get past.
+  The README row says "documented queries, no scrape endpoint" rather than claiming Prometheus.
+
+  Nothing in the file has been run against the live account, and it says so. The unknowns are listed
+  rather than smoothed over: whether any row is sampled, whether the old dataset still holds rows,
+  the default row limit, identifier quoting, and write-to-query visibility lag.
+
+- **Workers Logs are off, and the privacy claim in the code is true again.** `observability` was
+  enabled, so Cloudflare persisted an invocation log per request for seven days carrying the whole
+  request url — which on this Worker is the post somebody pasted — with the client IP, user agent and
+  geolocation beside it. `src/analytics.ts` meanwhile says "no URLs, no post IDs, no IPs, no verbatim
+  user agents… we have nothing to leak", and cites TwitFix dying over a public log of processed urls.
+  The function was scrupulous and the deployment underneath it was not. The comment now records that
+  the two are one decision.
+
+  What it costs is written down rather than glossed: the four `console.error` calls still run and
+  nothing stores them, so a failure that happens while nobody is tailing cannot be reconstructed
+  afterwards. `wrangler tail` covers live debugging, the dashboard charts are a separate product and
+  unaffected, and Analytics Engine — everything this document is about — is untouched.
+
+### Fixed
+- **This guide claimed a safety net that does not exist.** `CLAUDE.md` said adding a `PostRef` kind
+  is caught by "a sweep test that fails until you do". The refkey round-trip tests are hand-written
+  lists (`test/refkey.test.mjs:176`) and derive nothing from the union, so a forgotten kind is still
+  silent — which is exactly the `fb:group:…` defect the paragraph is about. The `Route` kind sweep in
+  `test/prep.test.mjs:791` *is* derived and does fail loudly; the guide now tells them apart.
 
 ## [1.8.0] — 2026-08-03
 

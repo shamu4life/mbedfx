@@ -24,7 +24,24 @@
   // import src/worker.ts directly, which never imports @cloudflare/containers (see src/index.ts).
   "main": "src/index.ts",
   "compatibility_date": "2026-07-01",
-  "observability": { "enabled": true },
+  // WORKERS LOGS ARE OFF ON PURPOSE, and this is a privacy boundary rather than a debugging
+  // preference. With it on, Cloudflare persisted one invocation log per request for seven days, and
+  // those records carry `event.request.url` - the WHOLE url, query string included, which on this
+  // Worker IS the post somebody pasted - plus the client IP, the user agent, the referer and the
+  // geolocation block. That is the exact thing src/analytics.ts refuses to put in a counter, and the
+  // reason it gives (TwitFix died over a public log of processed urls) does not stop applying because
+  // the log is Cloudflare's rather than ours.
+  //
+  // WHAT IT COSTS, stated so nobody turns it back on without knowing what they are buying: the four
+  // console.error calls in src/worker.ts still run, but nothing STORES them, so a mux failure that
+  // happens while nobody is tailing is no longer reconstructable afterwards. Live debugging is
+  // `npx wrangler tail mbedfx`; trends are the Analytics Engine counters in docs/METRICS.md; traffic,
+  // error rate and CPU are the dashboard metrics, which are a separate product and unaffected.
+  //
+  // THE KEY STAYS, SPELLED false, rather than the block being deleted. The field "Defaults to `true`
+  // for all new Workers", so an absent block is not a reliable off - the same reason preview_urls is
+  // spelled out below rather than left to a default.
+  "observability": { "enabled": false },
   "workers_dev": false,
   // PREVIEW URLS, kept on. <version>-mbedfx.<subdomain>.workers.dev is where a branch build is checked
   // now that the staging custom domains are retired.
