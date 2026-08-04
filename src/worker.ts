@@ -10,7 +10,7 @@ import { statParts } from './render/text.ts'
 import { proxyableVideoUrl, serveDirectVideo } from './mediaproxy.ts'
 import { refKey } from './refkey.ts'
 import { count, type Env, type GateReason } from './analytics.ts'
-import { cookiesFor, poolSetButUnused, twitterAccounts, type CredentialPlatform } from './credentials.ts'
+import { cookiesFor, jarAvailable, poolSetButUnused, twitterAccounts, type CredentialPlatform } from './credentials.ts'
 import {
   cacheUrl, deserializePost, postCacheKey, respCacheKey, shortPostCacheKey, shortRespCacheKey,
   serializePost, POST_TTL, RESP_TTL, MEDIA_MAX_AGE,
@@ -567,7 +567,7 @@ export async function liveFetchPost(
       // carrying a date.
       const [got, warm] = await Promise.all([
         fetchYouTube(ref),
-        readCachedMeta<YouTubeMeta>(ref, env, YT_META_TTL_MS, ytMetaValid),
+        readCachedMeta<YouTubeMeta>(ref, env, YT_META_TTL_MS, ytMetaUsable(env)),
       ])
       if (!got.ok) count(env, 'yt', 'assert_fail', client)
       /**
@@ -575,19 +575,28 @@ export async function liveFetchPost(
        * rather than a staging note.
        *
        * `ageLimit` on this record came out of the container's `-J`, and since g10 that call carries the
-       * YT_ACCOUNTS jar. So a positive threshold on a record read back WITH a pool configured means the
-       * logged-in extract still saw an age wall: the accounts are signed out, rate-limited, or flagged,
-       * and the jar needs rotating. That is a maintenance action nobody can take from a card, which is
-       * why it is a number.
+       * YT_ACCOUNTS jar when there is one to carry. So a positive threshold on a record read back WITH a
+       * pool configured means the logged-in extract still saw an age wall: the accounts are signed out,
+       * rate-limited, or flagged, and the jar needs rotating. That is a maintenance action nobody can
+       * take from a card, which is why it is a number.
        *
        * WHY THIS SITE AND NOT resolveYouTubeMeta, where the call actually happens: `count` takes a
        * client class, and the container call has no request to classify. Here the gate is observed at
        * the same place `assert_fail` is, once per post-cache miss rather than once per request — so it
        * is bounded the same way every other counter on this path is.
        *
-       * THE RECORD IS TRUSTED TO BE POST-JAR because the generation bump above retired every pre-cookie
-       * one. Without that bump this counter would fire for 30 days on answers no credential could have
-       * changed, which is the same staleness the bump exists to stop.
+       * THE RECORD IS TRUSTED TO BE POST-JAR, and the generation bump above is only HALF of why —
+       * corrected 2026-08-03, because the earlier half-answer here was wrong in the direction that costs
+       * an operator the most. g10 retired every record written before the cookie code shipped. It could
+       * not retire the ones written AFTER that deploy and BEFORE a secret was filled, which are g10
+       * records produced by a jar-capable build with no jar to send. Read literally, this line would
+       * therefore fire on exactly those on the day a pool is first filled — telling an operator their
+       * brand-new accounts are dead, on the strength of an answer that was never asked with a credential,
+       * and sending them to rotate throwaways that were fine. What actually makes the record trustworthy
+       * is `ytMetaUsable`, which refuses a gated record that carries no `jarred` flag while a jar is
+       * available: by the time `warm` exists here with a positive `ageLimit` and a pool set, the jar WAS
+       * spent and the wall held. Keep those two facts together — this counter's meaning is that
+       * predicate's, and weakening one silently changes the other.
        */
       if (typeof warm?.ageLimit === 'number' && warm.ageLimit > 0 && poolSetButUnused(env, 'yt')) {
         count(env, 'yt', 'pool_unused', client)
@@ -1146,6 +1155,20 @@ const RESOLVER_SLOTS = 4
 // Retiring the instances is the smaller half here — filling a secret must not require also knowing
 // that a stale answer has to be waited out. Same rule as g7/g8: the generation is the ONE documented
 // invalidation switch, and this is the change it exists for.
+//
+// STILL g10 AFTER 2026-08-03's `jarred` FIELD, and the exception is deliberate enough to be written
+// down, because every previous stored-shape change in this log bumped. g10 fixed the records written
+// before the cookie CODE; it left a hole it could not reach — the records written after that deploy and
+// before an operator fills YT_ACCOUNTS. Those ARE g10 records, so no g11 retires them either, and the
+// gap is not a moment but every day until fill-day. Bumping on fill-day was the obvious answer and is
+// the wrong one twice over: it makes an operator's `wrangler secret put` depend on somebody merging a
+// deploy the same day, and it throws away 30 days of perfectly good dates, descriptions and counts for
+// every ungated video to correct the gated few. So the invalidation is CONDITIONAL instead, carried in
+// the record itself — see the `jarred` field and ytMetaUsable. The properties that make that safe: a
+// deployment with no pool invalidates NOTHING (so this change is free to merge, and free for every fork
+// that will never set a secret), an absent `jarred` on an older record reads as "not logged in", which
+// is exactly what it was, and a gated record that DID carry a jar is kept. Rotating a dead pool is the
+// case this does not cover, and that one still wants a bump.
 const RESOLVER_GENERATION = 'g10'
 /** `slotKey` is the POST (refKey), never the operation — see RESOLVER_SLOTS for the 74% measurement. */
 function resolverStub(resolver: NonNullable<Env['MEDIA_RESOLVER']>, slotKey: string) {
@@ -2098,6 +2121,17 @@ type YouTubeMeta = {
   /** Seconds, from the container's dict. Absent on a record written before 2026-08-03 (g8 -> g9). */
   duration?: number
   ageLimit?: number
+  /**
+   * WAS THE EXTRACT THAT PRODUCED THIS RECORD LOGGED IN? Present only when true; absent means "no jar
+   * was sent, or this record predates the field", and those are deliberately the same answer — both
+   * mean the gate verdict on it is not one a credential has been tried against.
+   *
+   * It exists because `ageLimit` is the ONE field here whose correct value depends on the CALLER and
+   * not on the video, and the record outlives the deployment that produced it by up to 30 days. See
+   * ytMetaUsable for what is done with it, and the g10 note in the generation log for why this is not
+   * itself a generation bump.
+   */
+  jarred?: true
   description?: string
   /** Counts, each ABSENT rather than zero when the platform withholds it — see ytCount. */
   views?: number
@@ -2154,6 +2188,47 @@ const ytMetaValid = (j: unknown): boolean =>
   uploadDateFrom((j as YouTubeMeta).timestamp) !== null
 
 /**
+ * THE SAME SHAPE CHECK, PLUS "COULD THIS ANSWER HAVE CHANGED SINCE IT WAS WRITTEN" — and it is the
+ * READ side of the credential feature rather than a second validator.
+ *
+ * THE DEFECT, and it is the one a generation bump could not reach. g10 retired every record written
+ * before the cookie CODE shipped. It cannot retire the records written after that deploy and before an
+ * operator fills YT_ACCOUNTS, because those are g10 records — written by a jar-capable build that had
+ * no jar to send. Every age-gated video viewed in that window persists `ageLimit: 18` for
+ * YT_META_TTL_MS (30 days), on every colo. Filling the secret would then heal nothing: `youtubeMeta`
+ * returns a warm record UNCONDITIONALLY before it will consider a container call, `ytMetaValid`
+ * deliberately does not test `ageLimit`, and re-pasting reads the same record. The operator's own
+ * `pool_unused` counter would meanwhile report the fresh accounts as dead, sending them to rotate
+ * throwaways that were never the problem. That window is not an edge case — it is every day between
+ * the g10 deploy and fill-day.
+ *
+ * SO THE GATE VERDICT IS TIED TO WHAT PRODUCED IT, which is the rule this project already states about
+ * cache keys, applied one level in: a record is invalidated only when it SAYS GATED, was produced
+ * WITHOUT a jar, and a jar is available NOW. All three, because each drops a cost the others do not:
+ *   - ungated records (the overwhelming majority) are never touched, so ordinary traffic is unaffected;
+ *   - with NO pool configured — every fork, every self-host, this repo until an operator fills a
+ *     secret — nothing is invalidated at all, so merging this costs zero cache churn;
+ *   - and a record written WITH a jar is trusted even though it says gated, because that is a measured
+ *     answer ("logged in, still walled") rather than an unanswered question. Re-extracting those would
+ *     spend a container call per gated video per cold view, forever, to re-learn the same thing.
+ *
+ * WHY A PREDICATE FACTORY rather than a check at each call site: `readCachedMeta` takes the validator,
+ * and there are THREE reads of this record — the platform arm that builds the Post (so every renderer
+ * and the post cache see it), `youtubeMeta` on the activity route, and the converter preview's own
+ * fallback read. Putting the rule in the validator is what makes all three agree; a check bolted onto
+ * one of them is exactly how this codebase got a head fixed and its twin left broken.
+ *
+ * ROTATING A DEAD POOL still needs the generation bump — a `jarred` record that says gated is trusted,
+ * and swapping in working accounts does not make it untrue-looking. That is the documented rotation
+ * path and it is unchanged by this.
+ */
+const ytMetaUsable = (env: Env) => (j: unknown): boolean => {
+  if (!ytMetaValid(j)) return false
+  const m = j as YouTubeMeta
+  return !(typeof m.ageLimit === 'number' && m.ageLimit > 0 && !m.jarred && jarAvailable(env, 'yt'))
+}
+
+/**
  * HOW LONG THE ACTIVITY CALLBACK WILL WAIT for a cold date extract, and the ONE real trade in this
  * change. Read this before changing it.
  *
@@ -2205,8 +2280,15 @@ async function resolveYouTubeMeta(ref: Extract<PostRef, { p: 'yt' }>, env: Env):
     // answers this `-J` with `age_limit: 18` and `formats: 0` (measured on G0sORVBL4kM, 2026-07-30),
     // so cookie-free the record we PERSIST for 30 days says "gated" whatever the mux later manages.
     // No pool set -> no `cookies` key at all, and this is byte-for-byte the call it has always been.
+    // ASKED OF THE BODY, not of the pool, and that is the point: `withCookieJar` is the one place a
+    // credential crosses the wire and it picks from the pool at RANDOM, so "is a pool set" is not the
+    // same question as "did THIS call carry a jar". Reading it back off the body keeps the record's
+    // provenance honest without a second copy of the picking logic — and without a second place a
+    // cookie could be handled. See ytMetaUsable for what the flag is for.
+    const body = withCookieJar({ page: ytPageUrl(ref), meta: true }, env, 'yt')
+    const jarred = 'cookies' in body
     const r = await resolverStub(resolver, refKey(ref)).fetch('http://media-resolver/resolve', {
-      method: 'POST', body: JSON.stringify(withCookieJar({ page: ytPageUrl(ref), meta: true }, env, 'yt')), headers,
+      method: 'POST', body: JSON.stringify(body), headers,
     })
     if (!r.ok) {
       // SERVER-SIDE ONLY (wrangler tail), ref-only like ensureMuxed — and NO analytics counter: yt's
@@ -2237,6 +2319,11 @@ async function resolveYouTubeMeta(ref: Extract<PostRef, { p: 'yt' }>, env: Env):
       timestamp: j.timestamp as number,
       ...(duration === undefined ? {} : { duration }),
       ...(ageLimit === undefined ? {} : { ageLimit }),
+      // ONLY WHEN TRUE, never `jarred: false`. Absent already means "not known to be logged in", which
+      // is the same thing a pre-2026-08-03 record means, so storing the negative would put a field in
+      // R2 for 30 days to say what its absence says — and would make the two spellings of one state
+      // something every reader has to tell apart.
+      ...(jarred ? { jarred: true as const } : {}),
       ...(description === undefined ? {} : { description }),
       ...(views === undefined ? {} : { views }),
       ...(likes === undefined ? {} : { likes }),
@@ -2278,7 +2365,7 @@ async function youtubeMeta(
   // age flag too — so there is nothing further to overlay. Widening it to also test the note would
   // dispatch a container call on every ordinary video, which is what this gate exists to prevent.
   if (post?.createdAt instanceof Date && post.createdAt.getTime() !== 0) return null
-  const warm = await readCachedMeta<YouTubeMeta>(ref, env, YT_META_TTL_MS, ytMetaValid)
+  const warm = await readCachedMeta<YouTubeMeta>(ref, env, YT_META_TTL_MS, ytMetaUsable(env))
   if (warm) return warm
   if (!youtubeVouched(post) || !metaDispatchable(metaCacheKey(ref))) return null
   const work = metaAttempt(ref, env, META_FAIL_TTL_MS, () => resolveYouTubeMeta(ref, env))
@@ -3327,7 +3414,7 @@ export async function handle(req: Request, env: Env, ctx: ExecutionContext, d: D
       let post = withTranslation(settled.post, xlate.translated, xlate.source)
       if (post.ref.p === 'yt') {
         const warm = await youtubeMeta(post.ref, post, env, ctx)
-          ?? await readCachedMeta<YouTubeMeta>(post.ref, env, YT_META_TTL_MS, ytMetaValid)
+          ?? await readCachedMeta<YouTubeMeta>(post.ref, env, YT_META_TTL_MS, ytMetaUsable(env))
         if (warm) {
           post = withAgeNote(
             withCounts(withDescription(withLengthNote(withUploadDate(post, warm.timestamp),

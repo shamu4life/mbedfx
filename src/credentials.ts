@@ -146,6 +146,27 @@ export const twitterAccounts = (env: CredentialEnv): Account[] =>
   accountPool(env, 'x').filter(a => !!a.auth_token && !!a.ct0)
 
 /**
+ * COULD A CONTAINER CALL FOR THIS PLATFORM CARRY A JAR RIGHT NOW?
+ *
+ * Not "is the secret set" — `accountPool` is already total, so an unparseable secret is an empty pool
+ * and answers false here, which is what the caller means. And not `cookiesFor(...) !== null` either:
+ * that PICKS one at random, so on a mixed pool it answers differently call to call, and the one caller
+ * (the yt meta cache's staleness test in worker.ts) needs a stable answer to a question about the
+ * DEPLOYMENT rather than about one request.
+ *
+ * `'x'` can never be true. Twitter's gate is beaten in the Worker, and `cookiesFor` refuses it outright;
+ * a pool of Twitter sessions is not a jar this can send, however many `cookies` fields somebody puts in it.
+ *
+ * A MIXED POOL (one account with a jar, one with only a session pair) answers true while an individual
+ * call may still pick the jar-less entry. That converges rather than looping — the picked-jar-less call
+ * writes an unjarred record, which is invalidated once and re-extracted, bounded by the negative cache
+ * the same way every other meta miss is — and the alternative, asking per request, would make a cached
+ * record's validity depend on a coin flip.
+ */
+export const jarAvailable = (env: CredentialEnv, platform: CredentialPlatform): boolean =>
+  platform !== 'x' && accountPool(env, platform).some(a => !!a.cookies)
+
+/**
  * IS A POOL SET BUT UNUSABLE BY THE CODE THAT WOULD USE IT?
  *
  * The predicate this replaces (`credentialSeamArmed`) was written for exactly the right reason —

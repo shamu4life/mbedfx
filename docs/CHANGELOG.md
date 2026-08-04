@@ -5,6 +5,38 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [1.8.1] — 2026-08-03
+
+### Fixed
+- **Filling an account pool now takes effect, instead of being hidden by a month-old answer.** 1.8.0
+  bumped `RESOLVER_GENERATION` to g10 so that no cached gate verdict predated the cookie code. That
+  retired the records written before the *deploy* — and could not touch the ones written after it and
+  before an operator fills `YT_ACCOUNTS`, because those are g10 records too: a jar-capable build with
+  no jar to send. Every age-gated video viewed in that window persisted `age_limit: 18` for 30 days.
+
+  Since no pool has ever been filled, that window was *every* record. Filling the secret would have
+  healed none of them: the warm record is returned before a container call is considered, the record's
+  validity test deliberately ignores `ageLimit`, and re-pasting reads the same record — on every colo,
+  for up to a month. The card would have kept its 🔞 note on videos the credential now reaches.
+
+  A meta record now carries whether the extract that produced it was logged in, and a gated record
+  that was *not* is refused as soon as a jar is available, so the next view re-extracts it. The
+  invalidation is conditional rather than a second generation bump, which matters three ways: a
+  deployment with no pool invalidates nothing (so this is free to merge and free for every fork),
+  ungated records are never touched, and filling a secret no longer has to be timed against a deploy.
+
+- **`pool_unused` no longer reports working accounts as dead on the day they are added.** The YouTube
+  arm counted a positive `ageLimit` on any record while a pool was set, on the stated grounds that the
+  g10 bump made every readable record post-jar. Given the above, that was false for exactly the
+  records an operator would meet on fill-day — so the first thing a correctly-configured pool did was
+  tell its owner to rotate it. The counter now means what it says: the jar was spent and the wall held.
+
+- **The `Env` comment describing these bindings said they were inert.** It claimed all three secrets
+  were "READ BY NOTHING YET" and that setting them "CHANGES NOTHING TODAY", and pointed at a
+  `credentialSeamArmed` that no longer exists, while a later paragraph in the same comment correctly
+  narrowed the claim to `X_ACCOUNTS`. It is the text an operator reads to decide whether filling a
+  secret is worth the exposure of a throwaway account, and it was telling them no.
+
 ## [1.8.0] — 2026-08-03
 
 ### Added
