@@ -39,7 +39,7 @@ https://mbedfx.app/jack/status/20
 
 ### Forcing a site
 
-Some paths belong to more than one site. `/gallery/abc` could be Reddit, Instagram or Imgur, and the domain that would have told them apart is gone. A two-letter code in front settles it:
+Some paths belong to more than one site, and the domain that would have told them apart is gone. A two-letter code in front settles it:
 
 ```
 https://mbedfx.app/im/gallery/YcAQlkx     Imgur
@@ -48,7 +48,7 @@ https://mbedfx.app/x/status/20            Twitter
 
 `x` `tt` `ig` `th` `rd` `bs` `yt` `fb` `tw` `pn` `dm` `st` `im` `ms` `mk` `lm` `pt`, in the order of the table below.
 
-You shouldn't need it often. The converter page names the site it read a link as, offers a one-click fix, and gives a chooser for an ambiguous path. If you ever have to force one, [file a bug](../../issues/new/choose) with the link.
+You shouldn't need it often. The converter page names the site it read a link as, offers a one-click fix, and gives a chooser for an ambiguous path. If you ever have to force one, [file a bug](../../issues/new/choose) with the link. [docs/API.md](docs/API.md#ambiguous) has which sites claim which path shape.
 
 ### Just the media
 
@@ -58,9 +58,7 @@ Put `d.` in front of the domain and you get the file itself — the video or ima
 https://d.megapenispoopenfarten.sex/jack/status/20
 ```
 
-The converter page has a **media only** checkbox next to the domain buttons, so either domain works either way.
-
-A `d.` url has no card to render, so people and crawlers get the same bytes. With nothing to serve, it answers a plain-text 404, because an HTML page would leave a downloader holding a file full of markup.
+The converter page has a **media only** checkbox next to the domain buttons, so either domain works either way. A `d.` url renders no card, and people and crawlers get the same bytes. [docs/API.md](docs/API.md#the-d-host) has what it answers with nothing to serve.
 
 ## Supported sites
 
@@ -84,7 +82,7 @@ A `d.` url has no card to render, so people and crawlers get the same bytes. Wit
 | <img src="https://www.google.com/s2/favicons?domain=lemmy.world&sz=32" width="16" height="16" alt="" /> | Lemmy | any instance |
 | <img src="https://www.google.com/s2/favicons?domain=joinpeertube.org&sz=32" width="16" height="16" alt="" /> | PeerTube | any instance |
 
-Short links resolve too: `youtu.be`, `tiktok.com/t/…`, Reddit's `/s/…` links and Meta's `/share/…` codes. A bare `dai.ly` or `redd.it` code names no site on its own, so the converter page rewrites those. The [site](https://mbedfx.app) lists every path shape mbedfx accepts.
+A bare `dai.ly` or `redd.it` code names no site on its own, so the converter page rewrites those. The short links that resolve as pasted are in [docs/API.md](docs/API.md#the-hosts-column). The [site](https://mbedfx.app) lists every path shape mbedfx accepts.
 
 ## How it compares
 
@@ -105,14 +103,9 @@ FxEmbed goes deeper on Twitter than mbedfx goes on any single site. And the remu
 
 ## Features
 
-<details>
-<summary><strong>Inline video</strong></summary>
+A companion container remuxes the stream into one progressive faststart MP4, cached in R2 and served with `accept-ranges: bytes` for Discord's player to seek on. A cold video draws its cover image on the first view and plays on the next, and that first card is never response-cached. [container/README.md](container/README.md) has the resolver and its ceilings.
 
-A companion container runs `yt-dlp` and `ffmpeg`, remuxes the stream to a progressive MP4, and caches it in R2. The Worker serves it with `Accept-Ranges: bytes`, which is what Discord's player seeks on.
-
-A mux takes longer than a card is allowed to take, so the first view of a cold video draws the cover image and the next one plays it. That first card is never response-cached, because a cached cover would outlive the video it stood in for.
-
-</details>
+A post that can't be read gets a card naming the reason: 🔒 private or friends-only, 🔞 age-restricted, or deleted and never existed. Where the platform gives no reason the card lists the likely ones and picks none. A path two sites both claim is never guessed either: a bot gets an `Ambiguous link` card naming the candidate hosts, and a person gets an HTTP 300 "Which site did you mean?" page listing each candidate as a link (`src/render/chooser.ts`). [docs/API.md](docs/API.md#failures) has every code by name.
 
 <details>
 <summary><strong>Translation</strong></summary>
@@ -133,20 +126,6 @@ The cache is keyed on the caption text, so a post going around a lot is translat
 </details>
 
 <details>
-<summary><strong>When it can't show the post</strong></summary>
-
-| | |
-|---|---|
-| Private or friends-only | 🔒 |
-| Age-restricted | 🔞 |
-| Deleted, or never existed | says so |
-| A path two sites both use | lists the candidates to pick from |
-
-Where the platform gives no reason, the card says the post couldn't be loaded and lists the likely reasons instead of picking one.
-
-</details>
-
-<details>
 <summary><strong>Tracking junk gets dropped</strong></summary>
 
 `igsh`, `_t`, `si`, `utm_*` and Meta's share tokens are stripped before anything is handed onward. Meta mints a fresh share code on every share, which makes a pasted link traceable back to whoever shared it, so those get cut down to the part that names the post.
@@ -155,17 +134,13 @@ Where the platform gives no reason, the card says the post couldn't be loaded an
 
 ## JSON API
 
-The API serves the same data the card is built from, for anything you're building that isn't Discord. No key, no signup, and CORS is open.
+`/_api/v1?url=<the post url>` serves the post data the cards are drawn from, as JSON. No key, no signup, and CORS is open to any origin.
 
 ```sh
 curl -s 'https://mbedfx.app/_api/v1?url=https%3A%2F%2Fx.com%2Fjack%2Fstatus%2F20' | jq
 ```
 
-It answers for every site the cards cover, plus share codes and short links whose path carries its own shape, and runs the same code path a pasted link takes. A bare `dai.ly` or `redd.it` code answers `ambiguous`, since that path shape is also an X or Instagram profile. Media urls come back pointing at mbedfx and not at the platform's CDN, which keeps them from expiring out from under you.
-
-Mastodon, Misskey, Lemmy and PeerTube need the instance in the path (`?url=/lemmy.world/post/123456`), for the same reason their converted links do. Routing ignores the host, and for those four the host is part of the post's identity.
-
-Branch on `ok` and `error.code`, never on the HTTP status. Every answer about a post is a `200`, including "this one is age-restricted". **[docs/API.md](docs/API.md)** covers the rest: what `muxing` and `pending` mean, and why a date can be `null`.
+Branch on `ok` and `error.code`, never on the HTTP status. Every answer about a post is a `200`, including "this one is age-restricted". **[docs/API.md](docs/API.md)** is the contract: the field table, the fediverse instance-in-path form, which short links answer `ambiguous`, what `muxing` and `pending` mean, why `createdAt` can be `null`, and how long a request is allowed to take.
 
 ## Caveats
 
@@ -178,8 +153,8 @@ Branch on `ok` and `error.code`, never on the HTTP status. Every answer about a 
 ## Privacy
 
 - The page sets no cookies, needs no account, and carries no analytics.
-- The Worker keeps counters: which platform was asked for, whether it worked, and whether the caller looked like Discord, Telegram, another bot or a person. None of it carries a url, an id or an address.
-- R2 holds remuxed video, the metadata the container read back (title, uploader, description, poster, timestamp, counts), and translations. Video and metadata are keyed by the post, translations by a hash of the text. All three expire after 60 days and can be regenerated from the platform.
+- The Worker keeps counters: a platform code, an outcome, and whether the caller looked like Discord, Telegram, another bot or a person. No url, post id, IP or verbatim user agent goes into one ([docs/METRICS.md](docs/METRICS.md)).
+- R2 holds remuxed video, the metadata the container read back (title, uploader, description, poster, timestamp, counts), and translations. Video and metadata are keyed by the post, translations by a hash of the text. **All three expire after 60 days** and can be regenerated from the platform.
 - Cards cache for about 15 minutes, so a just-deleted post can linger briefly.
 - The Worker fetches from its own egress. A reader's IP and user agent stop there and never reach the platform.
 
@@ -195,21 +170,21 @@ Anything else using the name is not mbedfx.
 
 ### Optional configuration
 
-Everything below has a working default, and you need none of it for a fresh deploy.
+Every setting below has a working default, and a fresh deploy needs none of them.
 
-| Setting | What it does |
-|---|---|
-| `IMGUR_CLIENT_ID` | Imgur's API needs a client id. Without one, mbedfx falls back to the id yt-dlp publishes. That works, but the bucket is shared with every other tool using that id, and a free one of your own avoids the competition. |
-| `IG_GRAPHQL_DOC_ID` | Pins Instagram's shortcode GraphQL query, which Meta rotates. When the pinned id dies, the older recoveries carry the card and the `copyright_gql` counter drops to zero. Re-pinning it is a config change and needs no release. |
-| `TRANSLATE_GOOGLE` | Set to `off` to stop using Google's endpoint and fall back to Workers AI alone. |
-| `RESOLVER_SECRET` | Shared secret the video container requires on every call. |
-| `REDDIT_CLIENT_ID` / `REDDIT_CLIENT_SECRET` | Reddit OAuth, if you have credentials. |
-| `YT_ACCOUNTS` / `IG_ACCOUNTS` | A JSON array of accounts, each `{"label": "...", "cookies": "<the contents of a Netscape cookies.txt>"}`. Age-gated and login-walled videos are unreachable without one. The jar is written to a private temp file inside the container for the length of one call and deleted afterwards, and it's never logged, cached or put on a card. A malformed value is read as no accounts. A typo there costs the gated posts and leaves everything else working. |
-| `X_ACCOUNTS` | The same array shape, but each entry is `{"label": "...", "auth_token": "...", "ct0": "..."}`, because Twitter's wall is beaten by a logged-in API call and not inside the downloader. Setting it changes **nothing** today. The call that spends it is not built yet, and gated tweets keep getting an accurate 🔞 card. The `pool_unused` counter reports when a configured pool goes unspent, which separates a deliberately idle pool from a broken one. |
+`RESOLVER_SECRET` · `IMGUR_CLIENT_ID` · `IG_GRAPHQL_DOC_ID` · `TRANSLATE_GOOGLE` · `REDDIT_CLIENT_ID` / `REDDIT_CLIENT_SECRET` · `YT_ACCOUNTS` · `IG_ACCOUNTS` · `X_ACCOUNTS`
+
+`IMGUR_CLIENT_ID` falls back to the id yt-dlp publishes. That id works, and its bucket is shared with every other tool using it; a free one of your own avoids the competition.
+
+`IG_GRAPHQL_DOC_ID` pins Instagram's shortcode GraphQL query, which Meta rotates. When the pinned id dies, the older recoveries carry the card and the `copyright_gql` counter drops to zero. **Re-pinning it is a config change and needs no release.**
+
+`REDDIT_CLIENT_ID` / `REDDIT_CLIENT_SECRET` turn on Reddit's OAuth fallback. Both must be set for it to run at all (`src/platforms/reddit/fetch.ts:128`), and it runs only after the credential-free embed read comes back empty.
+
+`TRANSLATE_GOOGLE=off` leaves Workers AI serving translation on its own.
 
 Set them with `npx wrangler secret put <NAME>`.
 
-**[docs/CREDENTIALS.md](docs/CREDENTIALS.md)** covers the three `*_ACCOUNTS` pools: how to export a cookies.txt without invalidating it, how to turn one into JSON, what is and isn't wired up yet, and why the local files are gitignored. `accounts.example.json` shows the finished shape with invented values.
+**[docs/CREDENTIALS.md](docs/CREDENTIALS.md)** covers the three `*_ACCOUNTS` pools, which turn an age-gate card into an ordinary one: the JSON each takes, how to export a `cookies.txt` without invalidating it, what `X_ACCOUNTS` does and doesn't do today, what a malformed value costs, why the local files are gitignored, and `accounts.example.json`'s finished shape. **[docs/SELF-HOSTING.md](docs/SELF-HOSTING.md#what-replaces-each-binding-and-what-degrades-without-it)** has what degrades without each binding; `RESOLVER_SECRET` is in [container/README.md](container/README.md#deploying-it).
 
 ## Contributing
 
@@ -230,42 +205,15 @@ For a post with media it follows the `<link rel="alternate" type="application/ac
 
 </details>
 
-<details>
-<summary><strong>Project structure</strong></summary>
+`src/router.ts` turns a url into a `Route` from the path and the query, never the host. `src/refkey.ts` is the security boundary for what crosses the wire and back. Every `src/platforms/<site>/` splits `fetch.ts`, which does I/O, from `normalize.ts`, which is pure and tested against captured fixtures. `src/render/` draws the two heads, the Mastodon spoof and the failure cards. `src/translate.ts` holds detection, translation and the marker. `container/` is the `yt-dlp` + `ffmpeg` resolver, optional, and video falls back to a cover image without it. `public/index.html` is the converter page, one file, no framework. `test/` runs on `node --test` and touches no network.
 
-| Path | |
-|---|---|
-| `src/router.ts` | url → `Route`. Reads the path and query, never the host |
-| `src/refkey.ts` | the security boundary for what crosses the wire and back |
-| `src/platforms/*/` | `fetch.ts` does I/O, `normalize.ts` is pure, and that split is what lets the suite run against captured fixtures |
-| `src/render/` | the two heads, the Mastodon spoof, failure cards |
-| `src/translate.ts` | detection, translation, the marker |
-| `container/` | the `yt-dlp` + `ffmpeg` resolver |
-| `public/index.html` | the converter page, one file, no framework |
-| `test/` | 1207 tests, `node --test`, no network |
-
-</details>
-
-<details>
-<summary><strong>Running it</strong></summary>
-
-```bash
-npm install
-npm test              # 1207 tests, no network
-npx wrangler dev      # local worker
-```
-
-Don't deploy by hand. Cloudflare Workers Builds watches `main`, so merging is the deploy. `npm run deploy` refuses on purpose, because a hand deploy overwrites whatever the build shipped and the dashboard goes on showing a healthy Worker while the pipeline is broken. That has happened here once already.
-
-The container is optional. Without it, video falls back to a cover image and nothing else changes. [container/README.md](container/README.md) covers what it answers and how it ships.
-
-</details>
+[CONTRIBUTING.md](.github/CONTRIBUTING.md) has the commands, the test count and why `npm run deploy` refuses on purpose. [docs/SELF-HOSTING.md](docs/SELF-HOSTING.md) walks `handle()` at `src/worker.ts:3358`, the eight Cloudflare surfaces behind it and `container/server.py`, with line numbers.
 
 ## Credits
 
 Built by [**Claude**](https://claude.com/claude-code) (Anthropic), directed by [@shamu4life](https://github.com/shamu4life).
 
-After [fxtwitter](https://github.com/FixTweet/FxTwitter), [vxtwitter](https://github.com/dylanpdx/BetterTwitFix), [InstaFix](https://github.com/Wikidepia/InstaFix) and the rest of the embed-fixer lineage, which share the idea here and none of the code. Icons from [Simple Icons](https://simpleicons.org), video from [yt-dlp](https://github.com/yt-dlp/yt-dlp) and [FFmpeg](https://ffmpeg.org). Full notices in [NOTICE.md](NOTICE.md).
+After [fxtwitter](https://github.com/FixTweet/FxTwitter), [vxtwitter](https://github.com/dylanpdx/BetterTwitFix), [InstaFix](https://github.com/Wikidepia/InstaFix) and the rest of the embed-fixer lineage, which share the idea here and, apart from the Twitter GraphQL feature-flag table recorded in [NOTICE.md](NOTICE.md), none of the code. Icons from [Simple Icons](https://simpleicons.org), video from [yt-dlp](https://github.com/yt-dlp/yt-dlp) and [FFmpeg](https://ffmpeg.org). Full notices in [NOTICE.md](NOTICE.md).
 
 ## Trademarks
 

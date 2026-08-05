@@ -3134,9 +3134,9 @@ function toApiPost(post: Post, origin: string) {
     },
     counts: apiCounts(post),
     media: usableWithIndex(post).map(({ m, i }) => ({
-      // TWO KINDS, NOT THE INTERNAL FOUR. A consumer needs to know whether to draw an <img> or a
-      // <video>; 'gif' is a video everywhere it matters and publishing it would invite a third branch
-      // that does nothing. Same collapse the card makes.
+      // TWO KINDS, NOT THE INTERNAL THREE ('image'|'video'|'gif', types.ts:229; said FOUR until 2026-08-05).
+      // A consumer needs to know whether to draw an <img> or a <video>; 'gif' is a video everywhere it matters
+      // and publishing it would invite a third branch that does nothing. Same collapse the card makes.
       kind: m.kind === 'video' || m.kind === 'gif' ? 'video' : 'image',
       // bytesIndex, never the bare position: a settleMux degraded still lives in the POSTER slot, and
       // addressing it by its array index hits the video entry, which answers 503.
