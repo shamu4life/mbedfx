@@ -98,7 +98,8 @@ Short links resolve too — `youtu.be`, `dai.ly`, `redd.it`, `tiktok.com/t/…`,
 ## How it compares
 
 Checked 2026-08-01 against each project's docs, source and live service. **?** means we could not
-establish it either way — not that the answer is no.
+establish it either way — not that the answer is no. The rivals' columns are as of that date; our
+own column is kept current, and a change to it re-dates nobody else's.
 
 These are all good projects, and two things the table cannot show are worth saying plainly. FxEmbed's
 depth on Twitter far exceeds ours on any single site. And our own remux is a workaround, not a
@@ -112,9 +113,9 @@ and it buys nothing on Twitter or TikTok, where the platform already serves one.
 | How video reaches Discord | own remux | platform MP4 | CDN redirect | CDN redirect | CDN redirect | streamed |
 | Caption translation | ✅ automatic | opt-in `/en` | opt-in `/en`, undocumented | ❌ | ❌ | ❌ |
 | Card says *why* a post is missing | ✅ private / age / deleted | ? | ? | age only | ❌ redirects | one generic card |
-| Public JSON API | ❌ | ✅ OpenAPI | ✅ documented | ❌ | ❌ | undocumented |
-| Self-host off Cloudflare | ❌ Workers only | ❌ Workers | ✅ Docker · systemd · Lambda | Docker, undocumented | ✅ Docker · K8s | ✅ Docker |
-| Operator metrics | ❌ | ? | ? | ✅ Prometheus | pprof | pprof |
+| Public JSON API | [✅ documented](docs/API.md) | ✅ OpenAPI | ✅ documented | ❌ | ❌ | undocumented |
+| Self-host off Cloudflare | [no blockers, no adapter yet](docs/SELF-HOSTING.md) | ❌ Workers | ✅ Docker · systemd · Lambda | Docker, undocumented | ✅ Docker · K8s | ✅ Docker |
+| Operator metrics | [documented queries](docs/METRICS.md), no scrape endpoint | ? | ? | ✅ Prometheus | pprof | pprof |
 
 
 ## Features
@@ -174,6 +175,26 @@ Nothing here guesses. When a platform won't say what happened, that's what the c
 
 </details>
 
+
+## JSON API
+
+Everything the card knows, as data, for anything that isn't Discord. No key, no signup, CORS open.
+
+```sh
+curl -s 'https://mbedfx.app/_api/v1?url=https%3A%2F%2Fx.com%2Fjack%2Fstatus%2F20' | jq
+```
+
+It answers for every site the cards cover, including short links and share codes, because it's the
+same code path a pasted link takes. Media urls come back pointing at us rather than at the platform's
+CDN, so they don't expire out from under you.
+
+Mastodon, Misskey, Lemmy and PeerTube need the instance in the path — `?url=/lemmy.world/post/123456`
+— for the same reason their converted links do: the host is part of the post's identity, and routing
+here ignores hosts.
+
+Branch on `ok` and `error.code`, never on the HTTP status — every answer about a post is a `200`,
+including "this one is age-restricted". Full reference, including what `muxing` and `pending` mean and
+why a date can be `null`: **[docs/API.md](docs/API.md)**.
 
 ## Caveats
 

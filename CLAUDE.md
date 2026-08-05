@@ -11,7 +11,7 @@ em dashes and no second person (owner's call; asserted by a test, because both w
 later edits within a day of being asked for)
 **Tests:** `node --test`, no test framework, no network
 **Deploy:** Cloudflare Workers Builds on merge to `main` — **merging is the deploy**
-**Version:** 1.8.0
+**Version:** 1.9.0
 
 ---
 
@@ -53,6 +53,7 @@ offline in ~20s. Keep judgement in the pure half.
 | `src/translate.ts` | detection, translation, the marker |
 | `container/server.py` | the `yt-dlp` + `ffmpeg` resolver |
 | `public/index.html` | the converter page |
+| `docs/API.md` | the published `/_api/v1` contract — read before changing anything it names |
 
 ---
 
@@ -68,8 +69,15 @@ shipped `property=` for the entire life of the feature and every card was uncolo
 are emitted now, from one value.
 
 **`parseRefKey` is an allowlist, and forgetting a kind is silent.** `fb:group:…` was unparseable for
-weeks — every group-post image 404'd at `/_media/` and nothing failed loudly. Adding a `PostRef`
-kind means adding it here too, and there is a sweep test that fails until you do.
+weeks — every group-post image 404'd at `/_media/` and nothing failed loudly. Adding a `PostRef` kind
+means adding it here too.
+
+**And nothing catches you if you forget — this guide used to claim otherwise.** The round-trip tests
+in `test/refkey.test.mjs` are **hand-enumerated lists** (`['watch','reel','share','group','post']` at
+`:176`), so a new kind is not covered until somebody adds it to both places, which is the same
+oversight twice. Contrast `test/prep.test.mjs:791`, which parses the `Route` union out of
+`src/types.ts` and genuinely fails on an unlisted kind — that is what a sweep looks like, and the
+refkey ones are not it. Until one is written, treat the allowlist as unguarded.
 
 **Cache keys must capture what PRODUCED the answer, not just the question.** The translation cache
 was keyed on the post text; changing the model then could not invalidate a stale answer. Hence
@@ -141,10 +149,12 @@ and the degrade paths matter more here than they would in a single-platform fixe
 
 | Gap | Where it stands |
 |---|---|
-| No public JSON API | Two rivals publish one; FxEmbed ships OpenAPI specs. The most conspicuous omission. |
+| No public JSON API | Closed. `/_api/v1?url=…` is documented in `docs/API.md`; no OpenAPI spec yet, which is what FxEmbed still has and we do not. It shares `describeTarget` with `/_card`, so it is a fourth surface that cannot drift from the other three. |
 | No realistic self-hosting | Three rivals hand you a container. We document `wrangler dev`. |
+| No public JSON API | Two rivals publish one; FxEmbed ships OpenAPI specs. The most conspicuous omission. |
+| No realistic self-hosting | Reframed. There are NO known blockers — the suite runs in stock Node against `src/worker.ts`, `handle()` is already an adapter entry point, six of eight bindings are hand-written interfaces rather than Cloudflare types, and `container/` has no Cloudflare surface at all. What is missing is an adapter and somebody running it; the real unknown is EGRESS IP, not a binding. Plan in `docs/SELF-HOSTING.md`. |
 | No profile embeds | vxTwitter renders bare profiles. Our router has no profile route kind at all. |
-| No operator metrics | fxTikTok documents Prometheus scraping. We have counters and no way to read them. |
+| No operator metrics | Half closed. `docs/METRICS.md` documents the Analytics Engine SQL read path; there is deliberately no scrape endpoint, because an in-Worker one would need an account-scoped API token at the edge and `pool_unused` publishes whether the account pools are loaded. fxTikTok still has a `/metrics` and we do not. |
 | No card screenshots in the README | Four of the five show the card their project produces. We show a designed banner. |
 
 **Do not assume the converter page is unique.** InstaFix Revived ships one too. What is actually

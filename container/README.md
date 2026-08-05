@@ -68,24 +68,45 @@ burn a container slot.
 
 ## Deploying it
 
-Everything is already wired in the repo — the `@cloudflare/containers` dependency, `src/container.ts`
+**MERGING TO `main` IS THE DEPLOY, AND IT BUILDS THIS IMAGE. Do not run `wrangler deploy` by hand.**
+
+This section used to give a two-command manual deploy, which contradicted the project's hard rule
+that Cloudflare Workers Builds is the only deployer — and a hand deploy overwrites whatever the build
+shipped while prod goes on looking healthy. Corrected 2026-08-04 after reading an actual build log.
+
+`wrangler.jsonc` points `image` at `./container/Dockerfile` rather than at a registry tag, and
+Cloudflare's own docs say that when `image` is a Dockerfile path, `wrangler deploy` builds it and
+pushes it to Cloudflare's registry. Workers Builds' deploy command **is** `npx wrangler deploy`. So
+the build log for a merge to `main` shows the whole job — measured on this repo's own builds:
+
+```
+Executing user deploy command: npx wrangler deploy
+ - fxeverything-mediaresolver (/opt/buildhome/repo/container/Dockerfile)
+Building image fxeverything-mediaresolver:…
+Image does not exist remotely, pushing: registry.cloudflare.com/…
+digest: sha256:…
+├ EDIT fxeverything-mediaresolver
+SUCCESS  Modified application fxeverything-mediaresolver
+```
+
+Nothing is needed on your machine: no Docker, no login, no dashboard step. **If a change to this
+directory did not take effect, read the build log for `Building image` and `Modified application`
+before suspecting anything else** — their absence means the image did not ship.
+
+Note the asymmetry: a **preview** build (any branch that is not `main`) runs
+`npx wrangler versions upload` instead, which does **not** build the image. A container change is
+therefore untested by the preview build and lands only on merge.
+
+Running instances are replaced by a gradual rollout rather than instantly, so allow a few minutes
+after the build finishes before judging whether a container change worked.
+
+**Everything else is already wired**: the `@cloudflare/containers` dependency, `src/container.ts`
 (the `MediaResolver` DO class), the deploy entry `src/index.ts`, the R2 bucket `mbedfx-media`, and
-the `wrangler.jsonc` `containers` / `durable_objects` / `migrations` / `r2_buckets` config. Two commands:
+the `wrangler.jsonc` `containers` / `durable_objects` / `migrations` / `r2_buckets` config.
 
-1. **Start Docker Desktop** — `wrangler deploy` builds the amd64 image locally, so it needs a running
-   Docker-compatible engine. Official Docker Desktop is the tested one:
-   ```sh
-   brew install --cask docker   # then launch Docker Desktop and wait for it to say "running"
-   ```
-2. **Deploy:**
-   ```sh
-   npx wrangler deploy
-   ```
-   The first deploy builds + pushes the image to Cloudflare's own registry and provisions the container
-   — allow a few minutes for it to come up before it serves requests.
-
-**No Docker at all?** `npx wrangler deploy --containers-rollout=none` deploys the Worker without touching
-the container (the DASH/HLS videos keep showing their cover still — safe, just no playback).
+**Running it outside Cloudflare** — the one case where you do build it yourself, because `server.py`
+is a plain HTTP server with no Cloudflare surface in it. See `docs/SELF-HOSTING.md`; set
+`RESOLVER_SECRET` or you have published an unauthenticated fetch-anything remuxer.
 
 Once the container is live, the Worker's `/_media/` route automatically serves muxed video for posts that
 carry a `remux` source; without it (or before it finishes provisioning) those videos render the cover

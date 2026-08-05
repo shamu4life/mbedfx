@@ -1,4 +1,4 @@
-import type { ClientClass, Media, Post, PostRef, Route } from './types.ts'
+import type { ClientClass, Media, Platform, Post, PostRef, Route } from './types.ts'
 import { classify } from './classify.ts'
 import { route } from './router.ts'
 import { render } from './render/index.ts'
@@ -10,7 +10,7 @@ import { statParts } from './render/text.ts'
 import { proxyableVideoUrl, serveDirectVideo } from './mediaproxy.ts'
 import { refKey } from './refkey.ts'
 import { count, type Env, type GateReason } from './analytics.ts'
-import { cookiesFor, poolSetButUnused, twitterAccounts, type CredentialPlatform } from './credentials.ts'
+import { cookiesFor, jarAvailable, poolSetButUnused, twitterAccounts, type CredentialPlatform } from './credentials.ts'
 import {
   cacheUrl, deserializePost, postCacheKey, respCacheKey, shortPostCacheKey, shortRespCacheKey,
   serializePost, POST_TTL, RESP_TTL, MEDIA_MAX_AGE,
@@ -567,7 +567,7 @@ export async function liveFetchPost(
       // carrying a date.
       const [got, warm] = await Promise.all([
         fetchYouTube(ref),
-        readCachedMeta<YouTubeMeta>(ref, env, YT_META_TTL_MS, ytMetaValid),
+        readCachedMeta<YouTubeMeta>(ref, env, YT_META_TTL_MS, ytMetaUsable(env)),
       ])
       if (!got.ok) count(env, 'yt', 'assert_fail', client)
       /**
@@ -575,19 +575,28 @@ export async function liveFetchPost(
        * rather than a staging note.
        *
        * `ageLimit` on this record came out of the container's `-J`, and since g10 that call carries the
-       * YT_ACCOUNTS jar. So a positive threshold on a record read back WITH a pool configured means the
-       * logged-in extract still saw an age wall: the accounts are signed out, rate-limited, or flagged,
-       * and the jar needs rotating. That is a maintenance action nobody can take from a card, which is
-       * why it is a number.
+       * YT_ACCOUNTS jar when there is one to carry. So a positive threshold on a record read back WITH a
+       * pool configured means the logged-in extract still saw an age wall: the accounts are signed out,
+       * rate-limited, or flagged, and the jar needs rotating. That is a maintenance action nobody can
+       * take from a card, which is why it is a number.
        *
        * WHY THIS SITE AND NOT resolveYouTubeMeta, where the call actually happens: `count` takes a
        * client class, and the container call has no request to classify. Here the gate is observed at
        * the same place `assert_fail` is, once per post-cache miss rather than once per request — so it
        * is bounded the same way every other counter on this path is.
        *
-       * THE RECORD IS TRUSTED TO BE POST-JAR because the generation bump above retired every pre-cookie
-       * one. Without that bump this counter would fire for 30 days on answers no credential could have
-       * changed, which is the same staleness the bump exists to stop.
+       * THE RECORD IS TRUSTED TO BE POST-JAR, and the generation bump above is only HALF of why —
+       * corrected 2026-08-03, because the earlier half-answer here was wrong in the direction that costs
+       * an operator the most. g10 retired every record written before the cookie code shipped. It could
+       * not retire the ones written AFTER that deploy and BEFORE a secret was filled, which are g10
+       * records produced by a jar-capable build with no jar to send. Read literally, this line would
+       * therefore fire on exactly those on the day a pool is first filled — telling an operator their
+       * brand-new accounts are dead, on the strength of an answer that was never asked with a credential,
+       * and sending them to rotate throwaways that were fine. What actually makes the record trustworthy
+       * is `ytMetaUsable`, which refuses a gated record that carries no `jarred` flag while a jar is
+       * available: by the time `warm` exists here with a positive `ageLimit` and a pool set, the jar WAS
+       * spent and the wall held. Keep those two facts together — this counter's meaning is that
+       * predicate's, and weakening one silently changes the other.
        */
       if (typeof warm?.ageLimit === 'number' && warm.ageLimit > 0 && poolSetButUnused(env, 'yt')) {
         count(env, 'yt', 'pool_unused', client)
@@ -1146,6 +1155,35 @@ const RESOLVER_SLOTS = 4
 // Retiring the instances is the smaller half here — filling a secret must not require also knowing
 // that a stale answer has to be waited out. Same rule as g7/g8: the generation is the ONE documented
 // invalidation switch, and this is the change it exists for.
+//
+// STILL g10 AFTER 2026-08-03's `jarred` FIELD, and the exception is deliberate enough to be written
+// down, because every previous stored-shape change in this log bumped. g10 fixed the records written
+// before the cookie CODE; it left a hole it could not reach — the records written after that deploy and
+// before an operator fills YT_ACCOUNTS. Those ARE g10 records, so no g11 retires them either, and the
+// gap is not a moment but every day until fill-day. Bumping on fill-day was the obvious answer and is
+// the wrong one twice over: it makes an operator's `wrangler secret put` depend on somebody merging a
+// deploy the same day, and it throws away 30 days of perfectly good dates, descriptions and counts for
+// every ungated video to correct the gated few. So the invalidation is CONDITIONAL instead, carried in
+// the record itself — see the `jarred` field and ytMetaUsable. The properties that make that safe: a
+// deployment with no pool invalidates NOTHING (so this change is free to merge, and free for every fork
+// that will never set a secret), an absent `jarred` on an older record reads as "not logged in", which
+// is exactly what it was, and a gated record that DID carry a jar is kept. Rotating a dead pool is the
+// case this does not cover, and that one still wants a bump.
+// STILL g10 IN 1.9.0 EVEN THOUGH container/server.py's OUTPUT DICT CHANGED, and the rule at the top
+// of this log says to bump whenever container/ changes behaviour. Written down because a reader who
+// finds an unbumped generation next to a container change is right to assume it was forgotten.
+//
+// The rule exists for two things, and this change needs neither. It retires STALE RECORDS — and there
+// are none, because the defect being fixed (`timestamp: null`) made the worker write nothing at all,
+// and every record already in R2 carries a valid timestamp that stays correct. And it retires WARM
+// INSTANCES still running the old image, which Cloudflare's own gradual container rollout now does on
+// deploy anyway; the window is minutes, and a call landing on an old instance during it costs one
+// wasted container call that is not cached and heals on the next view.
+//
+// The cost of bumping is real and one-directional: it discards up to 30 days of good dates,
+// descriptions and counts across yt, fb, dm, st and im to shorten a few minutes of ambiguity. If a
+// future container change persists a WRONG value rather than no value, that trade flips and it must
+// bump — the test is what a stale record would say, not whether container/ was touched.
 const RESOLVER_GENERATION = 'g10'
 /** `slotKey` is the POST (refKey), never the operation — see RESOLVER_SLOTS for the 74% measurement. */
 function resolverStub(resolver: NonNullable<Env['MEDIA_RESOLVER']>, slotKey: string) {
@@ -2098,6 +2136,17 @@ type YouTubeMeta = {
   /** Seconds, from the container's dict. Absent on a record written before 2026-08-03 (g8 -> g9). */
   duration?: number
   ageLimit?: number
+  /**
+   * WAS THE EXTRACT THAT PRODUCED THIS RECORD LOGGED IN? Present only when true; absent means "no jar
+   * was sent, or this record predates the field", and those are deliberately the same answer — both
+   * mean the gate verdict on it is not one a credential has been tried against.
+   *
+   * It exists because `ageLimit` is the ONE field here whose correct value depends on the CALLER and
+   * not on the video, and the record outlives the deployment that produced it by up to 30 days. See
+   * ytMetaUsable for what is done with it, and the g10 note in the generation log for why this is not
+   * itself a generation bump.
+   */
+  jarred?: true
   description?: string
   /** Counts, each ABSENT rather than zero when the platform withholds it — see ytCount. */
   views?: number
@@ -2154,6 +2203,88 @@ const ytMetaValid = (j: unknown): boolean =>
   uploadDateFrom((j as YouTubeMeta).timestamp) !== null
 
 /**
+ * THE SAME SHAPE CHECK, PLUS "COULD THIS ANSWER HAVE CHANGED SINCE IT WAS WRITTEN" — and it is the
+ * READ side of the credential feature rather than a second validator.
+ *
+ * THE DEFECT, and it is the one a generation bump could not reach. g10 retired every record written
+ * before the cookie CODE shipped. It cannot retire the records written after that deploy and before an
+ * operator fills YT_ACCOUNTS, because those are g10 records — written by a jar-capable build that had
+ * no jar to send. Every age-gated video viewed in that window persists `ageLimit: 18` for
+ * YT_META_TTL_MS (30 days), on every colo. Filling the secret would then heal nothing: `youtubeMeta`
+ * returns a warm record UNCONDITIONALLY before it will consider a container call, `ytMetaValid`
+ * deliberately does not test `ageLimit`, and re-pasting reads the same record. The operator's own
+ * `pool_unused` counter would meanwhile report the fresh accounts as dead, sending them to rotate
+ * throwaways that were never the problem. That window is not an edge case — it is every day between
+ * the g10 deploy and fill-day.
+ *
+ * SO THE GATE VERDICT IS TIED TO WHAT PRODUCED IT, which is the rule this project already states about
+ * cache keys, applied one level in: a record is invalidated only when it SAYS GATED, was produced
+ * WITHOUT a jar, and a jar is available NOW. All three, because each drops a cost the others do not:
+ *   - ungated records (the overwhelming majority) are never touched, so ordinary traffic is unaffected;
+ *   - with NO pool configured — every fork, every self-host, this repo until an operator fills a
+ *     secret — nothing is invalidated at all, so merging this costs zero cache churn;
+ *   - and a record written WITH a jar is trusted even though it says gated, because that is a measured
+ *     answer ("logged in, still walled") rather than an unanswered question. Re-extracting those would
+ *     spend a container call per gated video per cold view, forever, to re-learn the same thing.
+ *
+ * WHY A PREDICATE FACTORY rather than a check at each call site: `readCachedMeta` takes the validator,
+ * and there are THREE reads of this record — the platform arm that builds the Post (so every renderer
+ * and the post cache see it), `youtubeMeta` on the activity route, and the converter preview's own
+ * fallback read. Putting the rule in the validator is what makes all three agree; a check bolted onto
+ * one of them is exactly how this codebase got a head fixed and its twin left broken.
+ *
+ * ROTATING A DEAD POOL still needs the generation bump — a `jarred` record that says gated is trusted,
+ * and swapping in working accounts does not make it untrue-looking. That is the documented rotation
+ * path and it is unchanged by this.
+ */
+const ytMetaUsable = (env: Env) => (j: unknown): boolean => {
+  if (!ytMetaValid(j)) return false
+  const m = j as YouTubeMeta
+  return !(typeof m.ageLimit === 'number' && m.ageLimit > 0 && !m.jarred && jarAvailable(env, 'yt'))
+}
+
+/**
+ * THE UPLOAD INSTANT OUT OF THE CONTAINER'S RAW DICT, in epoch seconds, from EITHER field.
+ *
+ * THE DEFECT THIS CLOSES, found 2026-08-04 from the report "YouTube links still show the epoch
+ * occasionally when cold". yt-dlp builds `timestamp` ONLY from a timezone-bearing microformat, and
+ * several of its YouTube player clients do not carry one. On those responses the dict is otherwise
+ * complete — title, description, counts, duration, age_limit — with `timestamp: null` and
+ * `upload_date: '20091025'` sitting beside it. Which client answers varies per request, which is
+ * exactly why the symptom was intermittent on the same video.
+ *
+ * `timestamp` IS STILL PREFERRED. It carries a time of day; `upload_date` is a bare date and becomes
+ * UTC midnight. Nothing renders a clock time so nothing displays wrong, but the stored record is what
+ * a future consumer sorts by, so the more precise source wins whenever it exists.
+ *
+ * NOTE THE ASYMMETRY WITH ytMetaValid, which is deliberate and not an oversight: that one validates a
+ * STORED record, which by construction always carries a numeric `timestamp` because this function is
+ * what produced it. This one validates the WIRE dict, where the date arrives in two shapes.
+ */
+function ytDateSeconds(j: Record<string, unknown>): number | null {
+  if (typeof j.timestamp === 'number' && uploadDateFrom(j.timestamp) !== null) return j.timestamp
+  const fromDay = uploadDateFrom(j.upload_date)
+  return fromDay ? Math.floor(fromDay.getTime() / 1000) : null
+}
+
+/**
+ * THE CONTAINER ANSWERED AND WE COULD NOT USE IT — thrown rather than returned, and the difference
+ * decides whether the retry that would fix the card is allowed to happen.
+ *
+ * metaAttempt reads a resolved `null` as "the extract's own verdict — the page is gone, blocked or
+ * unextractable" and negatively caches the id for META_FAIL_TTL_MS. That is right for a real negative
+ * and wrong for this one: a dict we rejected because OUR validator wanted a field is evidence about
+ * US, not about the video. Read as a verdict it blocked re-dispatch for a minute per isolate — so the
+ * one thing that could have healed the card was refused, on the strength of our own rejection.
+ *
+ * metaAttempt's rejection arm already says exactly this in its own words ("it threw, or it was
+ * cancelled. That is evidence about US, not about the id, so it must NOT mark"), so this throw is
+ * that existing vocabulary rather than a new mechanism. Nothing is written either way — there is no
+ * record to write — so the only thing the throw changes is that the next view gets to ask again.
+ */
+class MetaUnusable extends Error {}
+
+/**
  * HOW LONG THE ACTIVITY CALLBACK WILL WAIT for a cold date extract, and the ONE real trade in this
  * change. Read this before changing it.
  *
@@ -2205,8 +2336,15 @@ async function resolveYouTubeMeta(ref: Extract<PostRef, { p: 'yt' }>, env: Env):
     // answers this `-J` with `age_limit: 18` and `formats: 0` (measured on G0sORVBL4kM, 2026-07-30),
     // so cookie-free the record we PERSIST for 30 days says "gated" whatever the mux later manages.
     // No pool set -> no `cookies` key at all, and this is byte-for-byte the call it has always been.
+    // ASKED OF THE BODY, not of the pool, and that is the point: `withCookieJar` is the one place a
+    // credential crosses the wire and it picks from the pool at RANDOM, so "is a pool set" is not the
+    // same question as "did THIS call carry a jar". Reading it back off the body keeps the record's
+    // provenance honest without a second copy of the picking logic — and without a second place a
+    // cookie could be handled. See ytMetaUsable for what the flag is for.
+    const body = withCookieJar({ page: ytPageUrl(ref), meta: true }, env, 'yt')
+    const jarred = 'cookies' in body
     const r = await resolverStub(resolver, refKey(ref)).fetch('http://media-resolver/resolve', {
-      method: 'POST', body: JSON.stringify(withCookieJar({ page: ytPageUrl(ref), meta: true }, env, 'yt')), headers,
+      method: 'POST', body: JSON.stringify(body), headers,
     })
     if (!r.ok) {
       // SERVER-SIDE ONLY (wrangler tail), ref-only like ensureMuxed — and NO analytics counter: yt's
@@ -2216,7 +2354,26 @@ async function resolveYouTubeMeta(ref: Extract<PostRef, { p: 'yt' }>, env: Env):
       return null
     }
     const j = await r.json() as Record<string, unknown>
-    if (!ytMetaValid(j)) return null
+    const seconds = ytDateSeconds(j)
+    if (seconds === null) {
+      /**
+       * THE EXTRACT SUCCEEDED AND CARRIED NO USABLE DATE IN EITHER FIELD. Rare once `upload_date` is
+       * forwarded — yt-dlp keeps it when `timestamp` fails — so reaching here means something changed
+       * upstream, which is exactly when somebody needs to be told.
+       *
+       * NOT CACHED, deliberately. A record with no date would keep its description and counts for 30
+       * days at the cost of never asking for the date again, and this project's rule is that a
+       * degraded answer must not be the one that sticks. Thrown rather than returned so the negative
+       * cache does not treat our own rejection as the video's verdict — see MetaUnusable.
+       *
+       * SERVER-SIDE ONLY, matching the `!r.ok` line below. There is no counter for it yet and that is
+       * a known gap: with Workers Logs off this is visible under `wrangler tail` and nowhere else, so
+       * a counted outcome is the follow-up.
+       */
+      console.error('yt meta had no usable date', refKey(ref),
+        `timestamp=${String(j.timestamp)} upload_date=${String(j.upload_date)}`)
+      throw new MetaUnusable('no usable upload date')
+    }
     // age_limit rides along when the container reports one. Narrowed to a finite number rather than
     // passed through: this value is STORED FOR 30 DAYS, and a junk field read back from R2 would
     // reach the renderer long after the response that produced it is gone.
@@ -2234,15 +2391,28 @@ async function resolveYouTubeMeta(ref: Extract<PostRef, { p: 'yt' }>, env: Env):
     const duration = typeof j.duration === 'number' && Number.isFinite(j.duration) && j.duration > 0
       ? j.duration : undefined
     return {
-      timestamp: j.timestamp as number,
+      // `seconds`, not `j.timestamp` — the two differ on exactly the responses this fix is about, and
+      // reading the raw field here would re-introduce the bug one line below where it was fixed.
+      timestamp: seconds,
       ...(duration === undefined ? {} : { duration }),
       ...(ageLimit === undefined ? {} : { ageLimit }),
+      // ONLY WHEN TRUE, never `jarred: false`. Absent already means "not known to be logged in", which
+      // is the same thing a pre-2026-08-03 record means, so storing the negative would put a field in
+      // R2 for 30 days to say what its absence says — and would make the two spellings of one state
+      // something every reader has to tell apart.
+      ...(jarred ? { jarred: true as const } : {}),
       ...(description === undefined ? {} : { description }),
       ...(views === undefined ? {} : { views }),
       ...(likes === undefined ? {} : { likes }),
       ...(replies === undefined ? {} : { replies }),
     }
-  } catch {
+  } catch (err) {
+    // MetaUnusable MUST NOT BE SWALLOWED HERE. This catch exists to turn a network or JSON failure
+    // into "no answer"; folding our own deliberate rejection into that same null would hand it to
+    // metaAttempt as the extract's verdict and negatively cache the id for a minute — which is the
+    // amplifier this change exists to remove. Re-thrown so the rejection arm, which does not mark,
+    // is the one that runs.
+    if (err instanceof MetaUnusable) throw err
     return null
   }
 }
@@ -2278,7 +2448,7 @@ async function youtubeMeta(
   // age flag too — so there is nothing further to overlay. Widening it to also test the note would
   // dispatch a container call on every ordinary video, which is what this gate exists to prevent.
   if (post?.createdAt instanceof Date && post.createdAt.getTime() !== 0) return null
-  const warm = await readCachedMeta<YouTubeMeta>(ref, env, YT_META_TTL_MS, ytMetaValid)
+  const warm = await readCachedMeta<YouTubeMeta>(ref, env, YT_META_TTL_MS, ytMetaUsable(env))
   if (warm) return warm
   if (!youtubeVouched(post) || !metaDispatchable(metaCacheKey(ref))) return null
   const work = metaAttempt(ref, env, META_FAIL_TTL_MS, () => resolveYouTubeMeta(ref, env))
@@ -2683,6 +2853,321 @@ async function unwrapToPost(inner: Route, d: Deps, env: Env, client: ClientClass
   }
 
   return inner
+}
+
+/**
+ * A TARGET URL, FETCHED AND FULLY SETTLED — the shared half of `/_card` and `/_api/v1`.
+ *
+ * IT IS ONE FUNCTION BECAUSE THE ALTERNATIVE IS THIS PROJECT'S MOST REPEATED DEFECT. Everything below
+ * used to live inline in the card arm, and every line of it was added the same way: something was
+ * applied on one surface and not its twin, and the difference was invisible until somebody put two
+ * screenshots side by side. The YouTube epoch (warmed by the activity route alone, so the preview
+ * showed 1970 forever), the translation applied to the og head and not the Mastodon spoof, the quote
+ * block drawn by the card and missing from the preview. A second surface that re-spells this pipeline
+ * would reproduce that class on its first day, and — being a published contract rather than a
+ * picture — would then be stuck with it.
+ *
+ * So there is exactly one place a target becomes a settled Post, and the two callers differ only in
+ * how they SERIALISE it. When something is fixed here, both surfaces get it or neither does.
+ *
+ * `null` means the target could not be parsed as a url at all. That is the caller's to answer,
+ * because it is the one failure that is a bad REQUEST rather than a post that cannot be shown, and
+ * the two surfaces answer it with different status codes.
+ */
+type Described =
+  | { ok: false; reason: string; gate?: 'age' | 'private'; candidates?: Platform[]; platform?: Platform; canonical?: string }
+  | { ok: true; post: Post; muxing: boolean; pending: boolean; platform: Platform; canonical: string }
+
+async function describeTarget(
+  target: string, d: Deps, env: Env, ctx: ExecutionContext, client: ClientClass, origin: string,
+): Promise<Described | null> {
+  // TAKEN FIRST, so every budget below is a deadline on the WHOLE response rather than an amount
+  // added after each step — the same discipline renderPostRoute uses, and the one the 4000ms
+  // META_WAIT_API_MS bug is a monument to.
+  const started = Date.now()
+  let inner: Route
+  try {
+    inner = route(new URL(target, origin))
+  } catch {
+    return null
+  }
+  // A share code names no post until a hop resolves it — the same unfurl /_prep does, so both
+  // surfaces follow the link the caller is actually about to hand somebody.
+  inner = await unwrapToPost(inner, d, env, client)
+
+  if (inner.kind !== 'post') {
+    // THE CANDIDATES RIDE ALONG even though the card ignores them. An ambiguous path is the one
+    // not-a-post answer a caller can DO something about — /_prep already expands it into a chooser —
+    // and computing it here rather than in one serialiser is what keeps the other from having to
+    // re-derive it later and get the list subtly different.
+    return inner.kind === 'ambiguous'
+      ? { ok: false, reason: 'ambiguous', candidates: inner.candidates }
+      : { ok: false, reason: inner.kind }
+  }
+
+  const got = await getPost(inner.ref, d, env, client, ctx)
+  if (!got.post) {
+    // renderGate is the ONE place the fetcher's gate vocabulary becomes render's, so a wall says the
+    // same thing on the card, in the preview and in the API. `undefined` in, `undefined` out, and
+    // JSON.stringify omits the key entirely — a generic failure never claims to be a gate.
+    return {
+      ok: false, reason: 'fetch_fail', gate: renderGate(got.failReason),
+      platform: inner.ref.p, canonical: inner.canonical,
+    }
+  }
+
+  /**
+   * THE MUX AND THE TRANSLATION RACE CONCURRENTLY, ON THE PREVIEW'S OWN CEILING. Running them
+   * SERIALLY was the whole of "translations don't really show up reliably on the preview": a cold mux
+   * does not return early, it spends whatever budget it is given (6-9s measured), so
+   * `CARD_DEADLINE_MS - elapsed` went negative and the translation fell to its 300ms floor. Google is
+   * measured at 217-798ms, so a 300ms race wins SOMETIMES — which is why the symptom was "unreliable"
+   * rather than "broken". The activity route never had this because it uses Promise.all.
+   *
+   * CARD_DEADLINE_MS rather than HTML_DEADLINE_MS: that one is a ceiling on a BOT response, shaped by
+   * how long a crawler holds a connection. Both callers here are a client waiting on an answer about
+   * a card the activity route renders on MUX_WAIT_API_MS, and giving the description a smaller budget
+   * than the thing it describes guarantees they disagree.
+   */
+  const [settled, xlate] = await Promise.all([
+    settleMux(got.post, env, ctx, Math.max(MUX_WAIT_FLOOR_MS, CARD_DEADLINE_MS - (Date.now() - started))),
+    // The ORIGINAL post, not the settled one: the mux replaces media urls and never touches `text`,
+    // so there is nothing to wait for. Same ordering the activity arm uses.
+    withTranslated(
+      got.post, env, ctx,
+      Math.max(XLATE_WAIT_FLOOR_MS, Math.min(XLATE_MAX_WAIT_MS, CARD_DEADLINE_MS - (Date.now() - started))),
+    ),
+  ])
+
+  // The translation was raced against the ORIGINAL post, so it is composed onto the SETTLED one here —
+  // `xlate.post` carries the pre-mux media and using it would undo the mux.
+  let post = withTranslation(settled.post, xlate.translated, xlate.source)
+  /**
+   * THE META WARM, AND IT IS NOT OPTIONAL ON EITHER SURFACE. The record is filled by the ACTIVITY
+   * route — that is, by Discord unfurling the link — so it is cold for exactly the links somebody is
+   * about to ask about and has not sent yet. Skipping it here reports createdAt 1970, no duration, no
+   * counts and no age note on every fresh YouTube link, which is the bug that was reported as "it
+   * ALWAYS says no upload date".
+   *
+   * It adds no container call: the caller is about to paste this into Discord, which dispatches the
+   * identical `yt-dlp -J`. It moves the one that was already coming a few seconds earlier, behind
+   * youtubeMeta's own bounds (the vouch, the negative cache, SPECULATIVE_META_CAP, metaOnce).
+   *
+   * The cache read is KEPT as the fallback: youtubeMeta returns null early when the post already
+   * carries a real date, and there is still a record worth overlaying for the description, the counts
+   * and the age note — so dropping it would trade a missing date for missing counts.
+   */
+  if (post.ref.p === 'yt') {
+    const warm = await youtubeMeta(post.ref, post, env, ctx)
+      // ytMetaUsable(env), NOT the bare validator. This read moved into describeTarget when /_card and
+      // /_api/v1 were given one pipeline, and it moved carrying the spelling it had before the
+      // pool-aware validator existed — so on this branch the two changes met and the third seam
+      // silently went back to trusting a pre-jar gate verdict. The sweep test is what caught it,
+      // which is the entire reason that test greps for a fourth spelling rather than testing three.
+      ?? await readCachedMeta<YouTubeMeta>(post.ref, env, YT_META_TTL_MS, ytMetaUsable(env))
+    if (warm) {
+      post = withAgeNote(
+        withCounts(withDescription(withLengthNote(withUploadDate(post, warm.timestamp),
+          warm.duration, MUX_MAX_SECONDS), warm.description), warm),
+        warm.ageLimit,
+      )
+    }
+  }
+  return {
+    ok: true, post, muxing: settled.degraded === true, pending: xlate.pending === true,
+    platform: post.ref.p, canonical: post.canonical,
+  }
+}
+
+/**
+ * EVERY USABLE MEDIA ENTRY, PAIRED WITH ITS POSITION IN THE UNFILTERED ARRAY.
+ *
+ * THE BUG THIS EXISTS TO STOP, found 2026-08-03 while building the API on top of the card's shape.
+ * The card was written `mediaOf(post).filter(usable).map((m, i) => …bytesIndex(m, i))`, so `i` was a
+ * position in the FILTERED list — while `/_media/` resolves an index against the UNFILTERED one
+ * (`pickMedia` reads `mediaList(post)`, and the media route's own `list.findIndex(usable)` returns an
+ * unfiltered position). The two agree only while every entry is usable. Put one unusable entry in
+ * front of a usable one and every url after it is off by one: the card advertises entry N and the
+ * bytes at that index are entry N+1's, or a 404 past the end.
+ *
+ * It survived because the filter almost never removes anything — `usable` drops entries with no url,
+ * which normalizers rarely emit — so this is a latent off-by-one rather than a visible one. It is
+ * fixed rather than documented because the API PUBLISHES these urls as a contract, and an off-by-one
+ * in a contract is not something a later release gets to quietly correct.
+ */
+const usableWithIndex = (post: Post): Array<{ m: Media; i: number }> =>
+  mediaOf(post).map((m, i) => ({ m, i })).filter(({ m }) => usable(m))
+
+/**
+ * The headers every /_api/v1 answer carries. CORS is open because a public read-only API that a page
+ * cannot call from script is most of an API missing — there is no cookie, no session and no
+ * credential anywhere on this path, so there is nothing for an origin check to protect. `nosniff`
+ * because this endpoint returns caller-influenced strings and must never be sniffed into anything but
+ * JSON.
+ */
+const apiHeaders = (cacheControl: string) => ({
+  'access-control-allow-origin': '*',
+  'x-content-type-options': 'nosniff',
+  'cache-control': cacheControl,
+})
+
+/**
+ * A FAILURE ENVELOPE, AND IT IS NEVER CACHED — not even the "this post is private" ones, which look
+ * permanent and are not. `loadPost` deliberately never caches a null Post so a post that goes public
+ * self-heals on the next view; putting a max-age on the envelope here would reintroduce exactly that
+ * staleness at the edge instead, one layer up, where nothing in this worker can invalidate it.
+ */
+const apiError = (status: number, code: string, message: string, extra: Record<string, unknown> = {}) =>
+  // `platform` and `canonical` ARE ALWAYS PRESENT, as nulls when unknown — corrected 2026-08-04. They
+  // used to be omitted entirely on the three request-level errors, because those call sites pass no
+  // `extra`, while the failure arm below passed them explicitly. So the same envelope had two shapes
+  // and the documentation described only one of them. A consumer in a typed language reads an absent
+  // key and a null key differently, and this is a published contract; `...extra` stays LAST so the
+  // arm that computed real values still wins.
+  Response.json(
+    { ok: false, error: { code, message, platform: null, canonical: null, ...extra } },
+    { status, headers: apiHeaders('no-store') },
+  )
+
+/**
+ * THE PUBLISHED FAILURE VOCABULARY, which is deliberately SMALLER than the internal one.
+ *
+ * /_card returns the raw route kind, and it can: the only consumer is a page in this repo. Publishing
+ * those strings would make 'oembed', 'metashare' and 'redditshare' — names for internal plumbing that
+ * exists because of how Discord's callbacks work — into a contract, and then renaming any of them
+ * would be a breaking change to somebody else's code. So the ones a caller can act on are named and
+ * the rest collapse into `not_a_post`, which is the only fact they share and the only one that
+ * survives a refactor.
+ *
+ * The gates keep their own codes because "this post is age-restricted" and "this post is private" are
+ * the answers this project exists to give instead of a blank rectangle. Flattening them into a
+ * generic failure here would undercut the one row of the comparison table we lead on.
+ */
+function apiFailure(f: { reason: string; gate?: 'age' | 'private' }): { code: string; message: string } {
+  if (f.reason === 'fetch_fail') {
+    if (f.gate === 'age') return { code: 'age_restricted', message: 'That post is age-restricted, so it cannot be read without an account.' }
+    if (f.gate === 'private') return { code: 'private', message: 'That post is private or login-walled, so it cannot be read.' }
+    return { code: 'fetch_fail', message: 'That post could not be loaded. It may be deleted, or the platform may not have answered.' }
+  }
+  if (f.reason === 'ambiguous') {
+    // THE EXAMPLE HAS TO BE A PATH THAT ACTUALLY RESOLVES. It was `/im/gallery/abc`, which is itself
+    // notfound — Imgur ids are five characters or more — so a caller who followed the message
+    // verbatim got the same dead end twice and reasonably concluded the prefix does not work.
+    return { code: 'ambiguous', message: 'That path belongs to more than one site. Re-ask with a two-letter site prefix, e.g. /im/gallery/YcAQlkx.' }
+  }
+  if (f.reason === 'notfound') return { code: 'notfound', message: 'That url does not name a post on any site this service reads.' }
+  if (f.reason === 'badid') return { code: 'bad_id', message: 'That url is the right shape for a post, but the id in it is not valid for that site.' }
+  return { code: 'not_a_post', message: 'That url resolves to something other than a post.' }
+}
+
+/**
+ * COUNTS, FILTERED THE SAME WAY THE CARD FILTERS THEM — and the filter is not defensiveness.
+ *
+ * `post.counts` comes out of the POST CACHE, and `deserializePost` validates the ref, the canonical
+ * and the date and nothing else. So by the time a value reaches here it can legitimately be `null`, a
+ * string, or `NaN`, and `counts: post.counts || {}` publishes whatever that is. statParts has carried
+ * this exact `typeof + isFinite + > 0` guard since the day a card nearly rendered "❤️ NaN".
+ *
+ * ZERO IS OMITTED RATHER THAN PUBLISHED AS 0, which is the one part that is a judgement rather than a
+ * safety check. Upstreams report zero for two different things — a genuinely uninteracted post, and a
+ * count the platform WITHHOLDS (a hidden like count, a video with comments switched off) — and
+ * nothing distinguishes them by the time they get here. `ytCount` already refuses to guess for the
+ * same reason. An absent key says "we do not know"; a published `0` would say "we know, and it is
+ * none", which is the plausible-value-in-a-hole this project's fourth rule forbids.
+ */
+const API_COUNTS = ['likes', 'reposts', 'replies', 'views'] as const
+function apiCounts(post: Post): Record<string, number> {
+  const out: Record<string, number> = {}
+  for (const key of API_COUNTS) {
+    const n = post.counts?.[key]
+    if (typeof n === 'number' && Number.isFinite(n) && n > 0) out[key] = Math.floor(n)
+  }
+  return out
+}
+
+/** A dimension, or null. Same reason as apiCounts: a cached record can hold a string or an object. */
+const num = (v: unknown): number | null =>
+  typeof v === 'number' && Number.isFinite(v) ? v : null
+
+/** An author, defensively — same reason as apiCounts: this came out of a cache, not a normalizer. */
+const apiAuthor = (a: Post['author'] | undefined) => ({
+  name: str(a?.name) || null,
+  handle: str(a?.handle) || null,
+  url: str(a?.url) || null,
+})
+
+/**
+ * THE PUBLISHED SHAPE. Every url in it is ours — `/_media/{refKey}/{i}` — never the upstream CDN's,
+ * which is the same rule the renderers follow and for the same two reasons: an upstream media url is
+ * frequently signed and short-lived, so publishing one hands out a link that dies, and several of
+ * them are referer- or IP-locked and would not load for the caller anyway.
+ */
+function toApiPost(post: Post, origin: string) {
+  return {
+    platform: post.ref.p,
+    canonical: post.canonical,
+    /**
+     * THE EPOCH IS NOT A DATE, IT IS A HOLE, and this is the one place the API deliberately answers
+     * differently from the card. A Post with no known upload date carries `new Date(0)`, and /_card
+     * serialises that as "1970-01-01T00:00:00.000Z" because the page draws a "⚠ no upload date" note
+     * beside it and a reader can see what happened. An API consumer sees a plausible timestamp and
+     * sorts by it. So `null` — the same refusal to fill a hole with something that looks like an
+     * answer that the cards make in words.
+     */
+    createdAt: post.createdAt instanceof Date && post.createdAt.getTime() !== 0
+      ? post.createdAt.toISOString()
+      : null,
+    title: str(post.title) || null,
+    /**
+     * `str()` ON THE TEXT TOO, and it was missing while `title` right beside it had it — which is what
+     * made it an oversight rather than a decision. Same argument as apiCounts: this came out of the
+     * POST CACHE, `deserializePost` validates ref/canonical/createdAt and nothing else, so `text` can
+     * be an object or a number by the time it reaches here. Published unguarded it becomes
+     * `"text": {"evil":1}` at HTTP 200 with a fifteen-minute max-age, and every consumer doing
+     * `post.text.length` breaks on a payload we told them was a string.
+     */
+    text: str(post.text) || '',
+    sensitive: !!post.sensitive,
+    author: {
+      ...apiAuthor(post.author),
+      avatar: str(post.author?.avatar) ? mediaUrl(origin, post, 'avatar') : null,
+    },
+    counts: apiCounts(post),
+    media: usableWithIndex(post).map(({ m, i }) => ({
+      // TWO KINDS, NOT THE INTERNAL FOUR. A consumer needs to know whether to draw an <img> or a
+      // <video>; 'gif' is a video everywhere it matters and publishing it would invite a third branch
+      // that does nothing. Same collapse the card makes.
+      kind: m.kind === 'video' || m.kind === 'gif' ? 'video' : 'image',
+      // bytesIndex, never the bare position: a settleMux degraded still lives in the POSTER slot, and
+      // addressing it by its array index hits the video entry, which answers 503.
+      url: mediaUrl(origin, post, bytesIndex(m, i)),
+      // ONLY when the entry actually carries one. pickMedia has no fallback from the poster slot to
+      // the bytes, so an unconditional poster url would advertise a guaranteed 404.
+      poster: str(m.poster) ? mediaUrl(origin, post, { poster: i }) : null,
+      // NUMBERS OR null, never whatever the cache held. `w: '800'` survives deserializePost and would
+      // be published as a string under a key the docs type as a number.
+      width: num(m.posterW ?? m.w),
+      height: num(m.posterH ?? m.h),
+      /**
+       * THIS PICTURE IS STANDING IN FOR A VIDEO — the one thing a consumer cannot otherwise work out.
+       *
+       * settleMux rewrites an unfinished OR an over-ceiling video into its poster still, `kind:'image'`,
+       * and the payload is then indistinguishable from a post that only ever had a picture. `muxing`
+       * covers the first case and clears on its own. It does NOT cover the second: a video past
+       * MUX_MAX_SECONDS answers `muxing:false` on a cacheable 200, and the only trace that a video
+       * exists at all is an English sentence prepended to `text`. That is a card's answer, and a
+       * consumer parsing prose to find it is a consumer we have failed.
+       */
+      still: !!m.posterOnly,
+    })),
+    // Depth is capped at 1 by the normalizers (post.quote.quote is always undefined), so this cannot
+    // recurse. The quote's own media is NOT published in v1: its entries live at indices AFTER the
+    // outer post's in `mediaList`, and getting that arithmetic wrong publishes urls that resolve to
+    // the wrong bytes. Additive later; wrong now would be permanent.
+    quote: post.quote?.author
+      ? { canonical: str(post.quote.canonical) || null, text: str(post.quote.text) || '', author: apiAuthor(post.quote.author) }
+      : null,
+  }
 }
 
 async function renderPostRoute(
@@ -3231,112 +3716,24 @@ export async function handle(req: Request, env: Env, ctx: ExecutionContext, d: D
        * IT GRANTS NO NEW REACHABILITY, the same argument /_prep makes: every effect is what a
        * Discordbot GET of this url already produces, behind the same caches and the same container
        * bounds. It buys the page a picture, not permission.
+       *
+       * THE PIPELINE MOVED OUT, 2026-08-03, and nothing about the answer changed. It is describeTarget
+       * now, shared with /_api/v1 — see that function for why it is one function rather than two.
        */
-      const started = Date.now()
-      let inner: Route
-      try {
-        inner = route(new URL(r.target, origin))
-      } catch {
-        return Response.json({ ok: false, reason: 'unparseable' }, { status: 400 })
+      const described = await describeTarget(r.target, d, env, ctx, client, origin)
+      if (!described) return Response.json({ ok: false, reason: 'unparseable' }, { status: 400 })
+      if (!described.ok) {
+        // The page shows the same 🔞/🔒 wording Discord would, rather than inventing its own. `gate`
+        // is undefined on every non-gate failure and JSON.stringify omits it, which is the shape this
+        // endpoint has always returned — the candidates describeTarget also computes are deliberately
+        // NOT emitted here, because the page has its own chooser and /_prep is what feeds it.
+        return described.reason === 'fetch_fail'
+          ? Response.json({ ok: false, reason: 'fetch_fail', gate: described.gate })
+          : Response.json({ ok: false, reason: described.reason })
       }
-      // A share code names no post until a hop resolves it — the same unfurl /_prep does, so the
-      // preview follows the link the page is actually about to hand somebody.
-      inner = await unwrapToPost(inner, d, env, client)
-
-      if (inner.kind !== 'post') return Response.json({ ok: false, reason: inner.kind })
-
-      const got = await getPost(inner.ref, d, env, client, ctx)
-      if (!got.post) {
-        // The page shows the same 🔞/🔒 wording Discord would, rather than inventing its own.
-        return Response.json({ ok: false, reason: 'fetch_fail', gate: renderGate(got.failReason) })
-      }
-      /**
-       * THE MUX AND THE TRANSLATION RACE CONCURRENTLY, ON THE PREVIEW'S OWN CEILING. Both halves of
-       * that sentence were wrong here, and together they are the whole of "translations don't really
-       * show up super reliably on the preview site".
-       *
-       * SERIAL WAS THE BIGGER HALF. settleMux was awaited FIRST, with the same
-       * `HTML_DEADLINE_MS - elapsed` expression the translation then re-evaluated. A cold mux does not
-       * return early — it races muxOnce against a timer and spends whatever budget it is given, and a
-       * cold mux is 6-9s measured. So on any post carrying remux media the mux consumed the entire
-       * 5s, `5000 - elapsed` went negative, and the translation fell to its 300ms floor. The activity
-       * route never had this because it runs the two in Promise.all.
-       *
-       * 300ms IS NOT ZERO, WHICH IS WHY THE SYMPTOM WAS "UNRELIABLE" RATHER THAN "BROKEN". Google is
-       * measured at 217-798ms (see translate.ts) and translateBest tries it first, so a 300ms race
-       * against that distribution wins sometimes. Same link, two answers, depending on where in the
-       * spread the call landed — which is exactly what was reported.
-       *
-       * IT ALSO STOPS BORROWING DISCORD'S CLOCK. HTML_DEADLINE_MS is a ceiling on a BOT response,
-       * shaped by how long a crawler will hold a connection. /_card is an XHR from a person who has
-       * just pasted a link and is watching a spinner, and the card it is predicting is rendered by
-       * the activity route on MUX_WAIT_API_MS. Giving the preview a smaller budget than the thing it
-       * previews guarantees they disagree — the preview's one job is to not do that.
-       *
-       * SCOPE, so this is not over-claimed: only posts with remux media (yt, fb, dm, st, im, and the
-       * HLS paths) ever hit it. For an image or text post settleMux short-circuits and the
-       * translation always had its full slice.
-       */
-      const [settled, xlate] = await Promise.all([
-        settleMux(got.post, env, ctx, Math.max(MUX_WAIT_FLOOR_MS, CARD_DEADLINE_MS - (Date.now() - started))),
-        // The ORIGINAL post, not the settled one: the mux replaces media urls and never touches
-        // `text`, so there is nothing to wait for. This is the same ordering the activity arm uses.
-        withTranslated(
-          got.post, env, ctx,
-          Math.max(XLATE_WAIT_FLOOR_MS, Math.min(XLATE_MAX_WAIT_MS, CARD_DEADLINE_MS - (Date.now() - started))),
-        ),
-      ])
-      /**
-       * THE SAME OVERLAYS THE ACTIVITY CALLBACK APPLIES, because a preview that disagrees with the
-       * card is worse than no preview.
-       *
-       * This endpoint applied none of them, and it lied for it. The Post it describes comes out of the
-       * post cache (POST_TTL 900s), so a video whose meta record warmed AFTER that Post was frozen kept
-       * reporting createdAt 1970 for a quarter of an hour while R2 held the right answer — which is
-       * exactly what the bug report was filed against, and what sent the first investigation at the
-       * date pipeline instead of at a stale cache.
-       *
-       * IT WARMS THE META, and used to refuse to. The old rule here was "a cache read, NEVER a
-       * container call" — the preview read R2 and took whatever was already there, on the reasoning
-       * that warming is the activity route's job and a preview endpoint should not be able to
-       * dispatch container work.
-       *
-       * That reasoning had a hole, and it is the whole of the reported bug. The meta record is warmed
-       * BY THE ACTIVITY ROUTE — that is, by Discord unfurling the link. So the record is cold for
-       * exactly the links a person is most likely to preview: ones they have not sent yet. Every
-       * paste of a fresh YouTube link previewed with createdAt 1970, drew "⚠ no upload date", and
-       * then rendered correctly the moment it was pasted into Discord. Reported as "the website
-       * seems to ALWAYS say no upload date", which is precisely right: on this page every view is a
-       * first view, so the self-healing that hid this everywhere else never fires here.
-       *
-       * The cost objection does not survive being stated plainly. The visitor previewing this link
-       * is about to paste it into Discord, which dispatches that identical `yt-dlp -J`. Warming here
-       * does not ADD a container call; it moves the one that was already coming a few seconds
-       * earlier. youtubeMeta carries its own bounds — the vouch check, the negative cache,
-       * SPECULATIVE_META_CAP and metaOnce — so the abuse surface is the activity route's, already
-       * reachable by anyone who can GET /watch?v=.
-       *
-       * The cache read is KEPT as the fallback. youtubeMeta returns null early when the post already
-       * carries a real date, and in that case there is still a record worth overlaying for the
-       * description, the counts and the age note — so dropping the read would have quietly traded a
-       * missing date for missing counts.
-       */
-      // The translation was raced against the ORIGINAL post, so it is composed onto the SETTLED one
-      // here — `xlate.post` carries the pre-mux media and using it would undo the mux. Same two-step
-      // the activity arm does at the toMastodonStatus call.
-      let post = withTranslation(settled.post, xlate.translated, xlate.source)
-      if (post.ref.p === 'yt') {
-        const warm = await youtubeMeta(post.ref, post, env, ctx)
-          ?? await readCachedMeta<YouTubeMeta>(post.ref, env, YT_META_TTL_MS, ytMetaValid)
-        if (warm) {
-          post = withAgeNote(
-            withCounts(withDescription(withLengthNote(withUploadDate(post, warm.timestamp),
-              warm.duration, MUX_MAX_SECONDS), warm.description), warm),
-            warm.ageLimit,
-          )
-        }
-      }
-      const own = mediaOf(post).filter(usable)
+      const post = described.post
+      // PAIRED WITH ITS UNFILTERED POSITION — see usableWithIndex for the off-by-one this replaced.
+      const own = usableWithIndex(post)
       return Response.json({
         ok: true,
         /**
@@ -3352,7 +3749,7 @@ export async function handle(req: Request, env: Env, ctx: ExecutionContext, d: D
          * single re-fetch a couple of seconds later hits the warm path for free rather than paying a
          * second inference. The page does exactly that and then stops.
          */
-        pending: xlate.pending === true,
+        pending: described.pending,
         /**
          * A VIDEO IS STILL BEING MUXED, and this is the only way the page can know.
          *
@@ -3369,7 +3766,7 @@ export async function handle(req: Request, env: Env, ctx: ExecutionContext, d: D
          * and ffmpeg run inside the container and the Worker sees a Durable Object that has either
          * finished or not. A truthful indeterminate spinner beats a fake percentage.
          */
-        muxing: settled.degraded === true,
+        muxing: described.muxing,
         canonical: post.canonical,
         platform: post.ref.p,
         author: {
@@ -3421,7 +3818,7 @@ export async function handle(req: Request, env: Env, ctx: ExecutionContext, d: D
           : null,
         sensitive: !!post.sensitive,
         createdAt: post.createdAt instanceof Date ? post.createdAt.toISOString() : null,
-        media: own.map((m, i) => ({
+        media: own.map(({ m, i }) => ({
           kind: m.kind === 'video' || m.kind === 'gif' ? 'video' : 'image',
           url: mediaUrl(origin, post, bytesIndex(m, i)),
           /**
@@ -3453,6 +3850,94 @@ export async function handle(req: Request, env: Env, ctx: ExecutionContext, d: D
          */
         color: themeColor(post),
       })
+    }
+
+    case 'api': {
+      /**
+       * THE PUBLIC JSON API — the post this url names, as data, for anything that is not Discord.
+       *
+       * IT IS A CONTRACT, AND THAT IS THE ONLY THING THAT MAKES IT DIFFERENT from /_card. The preview
+       * describes a card for one page we also write, so a field can be renamed the same afternoon it
+       * is regretted. Everything below is a promise to somebody whose code we will never see, so the
+       * rule applied throughout is: publish what is stable, withhold what is incidental, and prefer
+       * omitting a value to inventing one. `color`, `stats` and `byline` are all deliberately absent —
+       * they are the CARD's answers (a stripe colour, a pre-rendered stat line, a pre-assembled author
+       * line), and a consumer building its own presentation wants the facts underneath them.
+       *
+       * EVERY ANSWER ABOUT A POST IS HTTP 200, including the gates. Rule 1 of this project pointed
+       * outward: our own upstreams answer 200 with a login wall and 500 with a JSON error, which is
+       * why nothing here asserts on status — so it would be incoherent to then make a consumer branch
+       * on ours. `ok` and `error.code` are the contract. The non-200s are all about the REQUEST — 400
+       * for a missing or unreadable `url`, 405 for a write verb — and never about the post.
+       *
+       * THE HOST IN `url` IS IGNORED, and the tie it could break is left unbroken. `/gallery/abc` is
+       * Reddit, Instagram or Imgur, and this endpoint is handed a full url that says which — so it
+       * looks like free disambiguation. It is not free: it would make the answer depend on a string
+       * the caller controls, on a service where a hostname is a thing we FETCH (the fediverse arm
+       * turns one into a request, and refkey.ts is explicit that Cloudflare is not relied on to block
+       * private addresses). An ambiguous path answers `ambiguous` with the candidate list, and the
+       * caller re-asks with a two-letter prefix — the same escape hatch the site documents.
+       */
+      /**
+       * THE METHOD IS CHECKED BEFORE ANYTHING IS SPENT, and a preflight is answered rather than run.
+       *
+       * Both halves were wrong when this shipped for review. `OPTIONS /_api/v1?url=…` fell straight
+       * through to the pipeline: a browser's CORS preflight paid for a full upstream fetch, a mux wait
+       * and a `yt-dlp -J`, and then answered without `access-control-allow-methods` — so the preflight
+       * FAILED, the real GET never fired, and we had bought the whole request for a call the browser
+       * then threw away. Any consumer sending a custom header (which is what makes a request
+       * preflighted) hit that, which is most of the ones a documented CORS-open API invites.
+       *
+       * POST/PUT/DELETE were likewise served the entire pipeline. This endpoint reads; a write verb is
+       * a caller mistake and answering it cheaply is both correcter and cheaper.
+       */
+      if (req.method === 'OPTIONS') {
+        return new Response(null, {
+          status: 204,
+          headers: {
+            ...apiHeaders('no-store'),
+            'access-control-allow-methods': 'GET, HEAD, OPTIONS',
+            'access-control-allow-headers': '*',
+            'access-control-max-age': '86400',
+          },
+        })
+      }
+      if (req.method !== 'GET' && req.method !== 'HEAD') {
+        return apiError(405, 'method_not_allowed', 'This endpoint reads. Use GET.')
+      }
+      if (!r.target) {
+        return apiError(400, 'no_url', 'Pass the post url as the `url` query parameter.')
+      }
+      const described = await describeTarget(r.target, d, env, ctx, client, origin)
+      if (!described) {
+        return apiError(400, 'unparseable', 'That `url` could not be parsed as a url.')
+      }
+      if (!described.ok) {
+        const { code, message } = apiFailure(described)
+        return apiError(200, code, message, {
+          platform: described.platform ?? null,
+          canonical: described.canonical ?? null,
+          ...(described.candidates ? { candidates: described.candidates } : {}),
+        })
+      }
+      /**
+       * AN INCOMPLETE ANSWER IS NEVER CACHED, and both flags below are that. A video still muxing is
+       * serving its poster still, and a translation that lost its race is serving the original — cache
+       * either and the correct answer never arrives, which is the rule renderPostRoute already follows
+       * for exactly these two. A consumer that sees `muxing` or `pending` true can ask again in a few
+       * seconds and get the finished answer for free: both are still running in waitUntil and will
+       * have written by then.
+       */
+      const complete = !described.muxing && !described.pending
+      return Response.json(
+        {
+          ok: true,
+          muxing: described.muxing,
+          pending: described.pending,
+          post: toApiPost(described.post, origin),
+        },
+        { headers: apiHeaders(complete ? `public, max-age=${RESP_TTL}` : 'no-store') },
+      )
     }
 
     case 'post': {

@@ -136,19 +136,28 @@ export interface Env {
    */
   IG_GRAPHQL_DOC_ID?: string
   /**
-   * THE CREDENTIAL SEAM'S BINDINGS. Declared so they can be set now; READ BY NOTHING YET, and that is
-   * stated here rather than discovered later.
+   * THE CREDENTIAL SEAM'S BINDINGS — and TWO OF THE THREE ARE LIVE. Corrected 2026-08-03: this comment
+   * said "READ BY NOTHING YET" and "SETTING THESE CHANGES NOTHING TODAY" for all three, and pointed at a
+   * `credentialSeamArmed` that no longer exists, while the paragraph below it correctly narrowed the
+   * claim to X_ACCOUNTS. Both halves could not be true. It matters more than an ordinary stale comment
+   * because this is the text an operator reads to decide whether filling a secret is worth the ToS
+   * exposure of a throwaway account — it was telling them no.
    *
-   * Age-gated posts are unreachable credential-free — measured on both paths and both egresses. The
-   * injection point is a real, tested function (fetchWithCredentials in platforms/twitter/fetch.ts)
-   * that returns null, so those posts become an honest age_restricted card instead of a broken one.
-   * What it needs is an account pool, and that is a credential-management decision and a ToS
-   * conversation rather than a coding task, which is why the seam shipped empty.
+   * Age-gated posts are unreachable credential-free — measured on both paths and both egresses.
+   *   IG_ACCOUNTS and YT_ACCOUNTS ARE SPENT TODAY, inside the container: the jar rides both the mux and
+   *   the `-J` meta call, and a filled YT pool turns an `age_limit: 18` video with `formats: 0` into an
+   *   ordinary card. See withCookieJar and jarPlatform in worker.ts for the two-name allowlist that
+   *   decides which container calls may carry one, and container/server.py's _CookieJar for what
+   *   happens to it there.
+   *   X_ACCOUNTS IS NOT. Twitter's gate is beaten in the WORKER, and the injection point is a real,
+   *   tested function (fetchWithCredentials in platforms/twitter/fetch.ts) that returns null. Those
+   *   posts become an honest age_restricted card instead of a broken one, which is the correct answer
+   *   without accounts rather than a bug in the fetcher.
    *
-   * SETTING THESE CHANGES NOTHING TODAY. They are here so the secrets can be put in place ahead of the
-   * work, not because the work is done — a variable that looks live and is inert is worse than one
-   * that does not exist, so `credentialSeamArmed` below exists purely to make the difference visible
-   * in analytics rather than leaving it to memory.
+   * ONE THING A FILLED POOL DOES NOT DO, and it is the question this comment gets asked: Instagram's
+   * `failure_reason:MA` gate is read off the WORKER'S OWN page fetch, which carries no jar. So a filled
+   * IG pool changes what the container can download and NOT whether a gated Instagram post is detected
+   * as gated. `ig`/`pool_unused` climbing is that, not dead accounts.
    *
    * ONE SECRET PER PLATFORM, each a JSON array of accounts, one picked at random per request so no
    * single account carries the whole load. Read only through src/credentials.ts, which is total: a
@@ -200,6 +209,17 @@ export interface Env {
  * The historically demonstrated way a fixer dies is not lawyers — it is logging.
  * TwitFix shut down in 2022 over a public log of processed URLs and the harassment
  * that followed, with zero legal contact. We have nothing to leak.
+ *
+ * AND THAT CLAIM WAS NOT TRUE UNTIL 2026-08-04, which is worth recording rather than
+ * quietly fixing. This function was scrupulous and the platform underneath it was not:
+ * `observability` was enabled in wrangler.jsonc, so Cloudflare persisted an invocation
+ * log per request for seven days carrying the whole request url — on this Worker, the
+ * post somebody pasted — with the client IP, the user agent and the geolocation beside
+ * it. Everything above was true of OUR analytics and false of the deployment.
+ *
+ * Workers Logs is off now. If it is ever turned back on, this comment stops being true
+ * again, so treat the two as one decision: the honest version of "we have nothing to
+ * leak" is "nothing here writes one, AND nothing under us is storing one either".
  */
 export function count(env: Env, platform: Platform | 'none', outcome: Outcome2, client: ClientClass): void {
   env.AE?.writeDataPoint({ blobs: [platform, outcome, client], doubles: [1] })

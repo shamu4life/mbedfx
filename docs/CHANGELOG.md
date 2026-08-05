@@ -5,6 +5,313 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [1.9.0] — 2026-08-04
+
+The five workstreams below shipped as one release rather than five, because merging them
+back-to-back would have raced five Workers Builds deploys against each other and the older commit
+can win. They are kept as separate sections because they are separate pieces of work, but only
+1.9.0 ever existed as a version.
+
+**Minor, not patch:** the public JSON API is new surface area. Everything else here is a fix or a
+document.
+
+**Two things do not take effect on merge.** The YouTube date fix is inert until the container image
+is rebuilt and redeployed, because the Worker half cannot read a field the container does not send.
+And the age-gate pools do nothing until secrets are actually filled — the change here is that
+filling them will now work, not that they are filled.
+
+### Age-gate account pools: filling one now takes effect
+
+#### Fixed
+- **Filling an account pool now takes effect, instead of being hidden by a month-old answer.** 1.8.0
+  bumped `RESOLVER_GENERATION` to g10 so that no cached gate verdict predated the cookie code. That
+  retired the records written before the *deploy* — and could not touch the ones written after it and
+  before an operator fills `YT_ACCOUNTS`, because those are g10 records too: a jar-capable build with
+  no jar to send. Every age-gated video viewed in that window persisted `age_limit: 18` for 30 days.
+
+  Since no pool has ever been filled, that window was *every* record. Filling the secret would have
+  healed none of them: the warm record is returned before a container call is considered, the record's
+  validity test deliberately ignores `ageLimit`, and re-pasting reads the same record — on every colo,
+  for up to a month. The card would have kept its 🔞 note on videos the credential now reaches.
+
+  A meta record now carries whether the extract that produced it was logged in, and a gated record
+  that was *not* is refused as soon as a jar is available, so the next view re-extracts it. The
+  invalidation is conditional rather than a second generation bump, which matters three ways: a
+  deployment with no pool invalidates nothing (so this is free to merge and free for every fork),
+  ungated records are never touched, and filling a secret no longer has to be timed against a deploy.
+
+- **`pool_unused` no longer reports working accounts as dead on the day they are added.** The YouTube
+  arm counted a positive `ageLimit` on any record while a pool was set, on the stated grounds that the
+  g10 bump made every readable record post-jar. Given the above, that was false for exactly the
+  records an operator would meet on fill-day — so the first thing a correctly-configured pool did was
+  tell its owner to rotate it. The counter now means what it says: the jar was spent and the wall held.
+
+- **The `Env` comment describing these bindings said they were inert.** It claimed all three secrets
+  were "READ BY NOTHING YET" and that setting them "CHANGES NOTHING TODAY", and pointed at a
+  `credentialSeamArmed` that no longer exists, while a later paragraph in the same comment correctly
+  narrowed the claim to `X_ACCOUNTS`. It is the text an operator reads to decide whether filling a
+  secret is worth the exposure of a throwaway account, and it was telling them no.
+### Operator metrics, and Workers Logs turned off
+
+#### Added
+- **`docs/METRICS.md` — the read path for the 49 counters this project has been writing and never
+  reading.** The dimension map (`blob1` platform, `blob2` outcome, `blob3` client class, `double1`
+  always 1), what every counter means and which other counter it is only meaningful next to, eight
+  Analytics Engine SQL recipes, and the Grafana pointer.
+
+  Three traps are documented first, because each returns a *number* rather than an error:
+  `COUNT()` counts stored rows and not events, so every query uses `SUM(_sample_interval)` — and
+  because read-time sampling responds to query cost, a naive count under-reports *more the further
+  back you look*, which reads exactly like a traffic decline. The dataset was renamed on 2026-08-01
+  and a rename does not migrate rows, so it currently holds about two days and every seven-day
+  example returns a partial window that looks like a collapse. And the counters deliberately stack —
+  `fetch_fail` is a superset, so a total across outcomes is not a request count.
+
+  Also written down: `media_hit`/`media_miss` carry two different meanings under one name (the
+  `/_media/` route and the `d.` host), and `translated`/`translate_fallback` are hardcoded to client
+  `discord` while also being emitted from the converter preview, so those rows are actively
+  mislabelled and must never be split by client. Neither is fixable from a query.
+
+  **No `/_metrics` endpoint, deliberately.** The `AE` binding is write-only; reading goes through the
+  account-level SQL API, so an in-Worker route would have to hold an account-scoped Cloudflare API
+  token on the public edge to serve data an operator can already get from a laptop. And a public one
+  would publish `pool_unused`, which is a live readout of whether the age-gate account pools are
+  loaded and still passing — a feedback signal for the enforcement teams the pools exist to get past.
+  The README row says "documented queries, no scrape endpoint" rather than claiming Prometheus.
+
+  Nothing in the file has been run against the live account, and it says so. The unknowns are listed
+  rather than smoothed over: whether any row is sampled, whether the old dataset still holds rows,
+  the default row limit, identifier quoting, and write-to-query visibility lag.
+
+- **Workers Logs are off, and the privacy claim in the code is true again.** `observability` was
+  enabled, so Cloudflare persisted an invocation log per request for seven days carrying the whole
+  request url — which on this Worker is the post somebody pasted — with the client IP, user agent and
+  geolocation beside it. `src/analytics.ts` meanwhile says "no URLs, no post IDs, no IPs, no verbatim
+  user agents… we have nothing to leak", and cites TwitFix dying over a public log of processed urls.
+  The function was scrupulous and the deployment underneath it was not. The comment now records that
+  the two are one decision.
+
+  What it costs is written down rather than glossed: the four `console.error` calls still run and
+  nothing stores them, so a failure that happens while nobody is tailing cannot be reconstructed
+  afterwards. `wrangler tail` covers live debugging, the dashboard charts are a separate product and
+  unaffected, and Analytics Engine — everything this document is about — is untouched.
+
+#### Fixed
+- **This guide claimed a safety net that does not exist.** `CLAUDE.md` said adding a `PostRef` kind
+  is caught by "a sweep test that fails until you do". The refkey round-trip tests are hand-written
+  lists (`test/refkey.test.mjs:176`) and derive nothing from the union, so a forgotten kind is still
+  silent — which is exactly the `fb:group:…` defect the paragraph is about. The `Route` kind sweep in
+  `test/prep.test.mjs:791` *is* derived and does fail loudly; the guide now tells them apart.
+### A public JSON API
+
+#### Added
+- **A public JSON API — `GET /_api/v1?url=<the post url>`.** The most conspicuous omission in the
+  comparison table: two rivals publish one and FxEmbed ships OpenAPI specs. No key, no signup, CORS
+  open, and it answers for every site the cards cover, including short links and share codes, because
+  it is the same code path a pasted link takes. Documented in `docs/API.md`.
+
+  **It shares its pipeline with `/_card` rather than re-spelling it.** Fetching, waiting for the mux,
+  waiting for the translation and applying the per-platform overlays now live in one function,
+  `describeTarget`, and the two arms differ only in how they serialise the result. This project's most
+  repeated defect is teaching one surface something its twin did not learn — the translation applied
+  to the og head and not the Mastodon spoof, the YouTube date warmed by the activity route so every
+  preview showed 1970, the quote block the card drew and the preview did not. A third surface that
+  re-spelled the pipeline would have reproduced that on its first day, and a published contract is the
+  worst place to find a new instance.
+
+  Decisions worth recording, since a contract is hard to walk back:
+  - **Every answer about a post is HTTP 200, including the gates.** Rule 1 of this project pointed
+    outward: our own upstreams answer 200 with a login wall and 500 with a good JSON error, so telling
+    a consumer to branch on our status would be asking them to do the thing we refuse to. `ok` and
+    `error.code` are the contract. The 4xx answers are all about the request itself - 400 for a
+    missing or unreadable `url`, 405 for a write verb - and never about the post.
+  - **The host in `url` is ignored, so an ambiguous path stays ambiguous.** Supplying the full url
+    looks like free disambiguation for `/gallery/abc`, and it is not free: it would make the answer
+    depend on a caller-controlled string on a service where a hostname is also a thing we fetch. The
+    answer names its `candidates` and the caller re-asks with a two-letter prefix.
+  - **An unknown upload date is `null`, not the epoch.** `/_card` serialises `new Date(0)` faithfully
+    because the page draws a note beside it; an API consumer would sort by a plausible timestamp and
+    silently file every date-less post at the beginning of time.
+  - **A count that is zero, `NaN`, `null` or a string is omitted, not published.** Counts come out of
+    the post cache, which validates three fields and not these; and upstreams use `0` both for a
+    genuinely uninteracted post and for a count the platform withholds. An absent key says "we do not
+    know", which is the only thing that can honestly be said.
+  - **Failures and incomplete answers are never cached.** A private account goes public and an age
+    gate lifts; `loadPost` already refuses to cache a null Post so the next view heals, and a max-age
+    on the envelope would reintroduce that staleness at an edge this Worker cannot invalidate.
+  - **`color`, `stats` and `byline` are deliberately absent.** They are the card's answers - a stripe
+    colour, a pre-rendered stat line, a pre-assembled author line - and a consumer drawing its own
+    presentation wants the facts underneath them.
+
+  An adversarial review before merge caught six things, and each is fixed here rather than shipped:
+  - **The fediverse form was undocumented, and four of the seventeen sites did not work as written.**
+    For Mastodon, Misskey, Lemmy and PeerTube the instance host is part of the post's identity and
+    lives in the PATH, so `?url=https://lemmy.world/post/123456` answers notfound while
+    `?url=/lemmy.world/post/123456` returns the post. The claim "all seventeen sites" was false, and
+    the one paragraph a fediverse user would have read said the opposite of what to do.
+  - **A CORS preflight ran the whole pipeline and then failed.** `OPTIONS` fell through to the fetch,
+    the mux wait and the container call, and answered without `access-control-allow-methods` - so the
+    preflight failed, the real GET never fired, and the request had been bought for nothing. Any
+    consumer sending a custom header is preflighted. `OPTIONS` is now answered in place, and write
+    verbs get a 405 before anything is spent.
+  - **`media[].still` was added**, because `muxing` covers only the video that is still coming. One
+    past the conversion ceiling answers `muxing: false` on a cacheable 200 carrying a plain `image`,
+    and the only trace a video existed was an English sentence inside `text` - a card's answer, and
+    not something a contract should ask anyone to parse.
+  - **`text`, `width`, `height` and `quote.text` were published unguarded** while `title`, `author`
+    and `counts` beside them were defended, which is what made it an oversight. A cached record
+    holding `text: {...}` or `w: '800'` was published verbatim under keys the docs type as a string
+    and a number, on a cacheable 200.
+  - **The ambiguity escape hatch pointed at a path that does not resolve.** The message said to
+    re-ask as `/im/gallery/abc`, and Imgur ids are five characters or more, so a caller following it
+    verbatim got the same dead end twice. `candidates` is also now documented as sites the path could
+    belong to rather than as a promise that every prefix resolves.
+  - **Two claims in `docs/API.md` were wrong about our own behaviour**, and are corrected: byte-range
+    support is real for converted video out of R2 and not for the images, avatars, posters and
+    already-progressive video we 302 to the platform's CDN; and the rate-limiting paragraph asserted
+    a zone rule the repository cannot see. It now says plainly that there is no rate limiting in the
+    source, and that a self-hoster gets none.
+
+  A second review, of the DOCUMENTATION rather than the code, caught four more:
+  - **`platform` and `canonical` were absent, not null**, on the three request-level errors, because
+    those call sites pass no extras while the failure arm passes both. One envelope, two shapes, and
+    the reference described only one of them. Fixed in the code so the documented shape is the true
+    one.
+  - **Two error rows described behaviour the router does not have.** A string that merely does not
+    name a post is neither `unparseable` nor `notfound`: one unrecognised path segment is the
+    ambiguity chooser's own shape, so it answers `ambiguous`. The same false sentence was sitting
+    unasserted in a test comment, which is how it got copied into the reference; it is now pinned.
+  - **`/_api/v2` does not answer in the API's vocabulary at all.** It is an unrouted path, so it is
+    HTTP 404 `text/plain`, not a JSON `notfound`. A client assuming every reply is JSON fails parsing
+    rather than reading a code, and the reference now says so.
+  - **The field table had no types**, and `media[].width`/`height` had no row at all. It now gives
+    type, nullability and always-present for every key, plus the seventeen platform codes with the
+    site each one means, a section on non-JSON responses, and the actual request budget so nobody
+    sets a five-second client timeout on a path that can legitimately take longer.
+
+#### Fixed
+- **`/_card` published media urls that could address the wrong bytes.** It computed them as
+  `mediaOf(post).filter(usable).map((m, i) => …)`, so the index was a position in the FILTERED list —
+  while `/_media/` resolves an index against the UNFILTERED one (`pickMedia` reads `mediaList(post)`,
+  and the media route's own `findIndex(usable)` returns an unfiltered position). The two agree only
+  while every entry is usable, which is nearly always, so this was latent rather than visible. Put one
+  unusable entry in front of a usable one and every url after it is off by one: the payload describes
+  entry N and the bytes at that index belong to entry N+1, or 404 past the end.
+
+  Found while building the API on the card's shape, and fixed rather than documented because the API
+  publishes those urls as a contract — an off-by-one in a contract is not something a later release
+  gets to quietly correct. Both surfaces now pair each entry with its unfiltered position, and the
+  test drives the real `/_media/` route rather than asserting an index, because the index is not the
+  promise: "this url serves those bytes" is.
+### The YouTube upload date that arrives as `upload_date`
+
+#### Fixed
+- **YouTube cards showed the 1970 epoch on a cold paste, intermittently, and the retry that would
+  have healed them was refused.** Reported as "occasionally, when cold" - and confirmed by the owner
+  that a warm view of the same link is correct, which is what narrowed it.
+
+  yt-dlp builds `timestamp` **only** from a timezone-bearing microformat, and several of its YouTube
+  player clients do not carry one. On those responses the `-J` dict comes back complete - title,
+  description, counts, duration, `age_limit` - with `timestamp: null` and `upload_date: '20091025'`
+  sitting right beside it. `container/server.py` forwarded `timestamp` and never `upload_date`, and
+  the Worker required a numeric `timestamp` to accept a record at all, so it discarded the **whole**
+  dict. Not just the date: the description, the counts and the age flag went with it, because one
+  validator gated the entire record. Which client answers varies per request, which is exactly why
+  the same video was fine on one paste and epoch on the next.
+
+  Then it compounded. Nothing was written to R2, so there was no record to self-heal from. And
+  `metaAttempt` reads a resolved null as *"the extract's own verdict - the page is gone, blocked or
+  unextractable"* and negatively cached the id for `META_FAIL_TTL_MS` (60s per isolate) - so our own
+  validator's rejection was filed as evidence about the **video**, and the one thing that could have
+  fixed the card was refused for a minute. That is precisely the split the docstring four lines above
+  it says the code exists to prevent.
+
+  Three changes, in the order they break the chain:
+  - `container/server.py` forwards `upload_date` alongside `timestamp`.
+  - `uploadDateFrom` learns yt-dlp's compact `YYYYMMDD` shape, normalised to explicit **UTC**
+    midnight. `Date.parse('20091025')` is `NaN`, and `Date.parse` on `YYYY-MM-DDT00:00:00` without a
+    zone is *local* - one character from a whole day's error west of Greenwich, so the zone is
+    spelled out and asserted.
+  - An answer with no usable date in **either** field is now **thrown**, not returned, so
+    `metaAttempt`'s rejection arm - which deliberately does not mark, and says so - is the one that
+    runs. The next view gets to ask again.
+
+  `timestamp` is still preferred wherever it exists: it carries a time of day, while `upload_date` is
+  a bare day. Nothing renders a clock time, so no card shows a wrong hour - but the record is stored
+  for 30 days and a consumer may sort on it, so the more precise source wins.
+
+  **A dateless answer is still not cached.** Keeping the description and counts for 30 days at the
+  cost of never asking for the date again would make the degraded answer the one that sticks, which
+  is the rule this project already holds elsewhere.
+
+#### Notes
+- **No `RESOLVER_GENERATION` bump, and the exception is deliberate.** A bump exists to retire records
+  that are *wrong*. The broken case wrote **nothing**, so there is nothing stale to retire, and every
+  record already in R2 carries a numeric `timestamp` and stays correct. Bumping would discard 30 days
+  of good dates, descriptions and counts to fix records that do not exist.
+- **This needs the container image rebuilt and redeployed to take effect.** The Worker half is inert
+  until `_meta_page` actually sends `upload_date`; a pooled instance keeps the image it booted with
+  until it recycles.
+- **There is still no counter for this failure.** With Workers Logs off it is visible under
+  `wrangler tail` and nowhere else. A counted outcome is the follow-up, deliberately not bundled here
+  because adding an `Outcome2` member is not test-enforced and wants its own change alongside
+  `docs/METRICS.md`.
+- **Unverified, and it matters for fill-day:** with a cookie jar present, yt-dlp switches to its
+  authenticated client set, and the client carrying the timezone microformat may not be in it - which
+  would mean filling `YT_ACCOUNTS` makes this *more* likely, not less. Measured residentially only,
+  never from the container's own egress, so it is written down rather than acted on.
+### Pre-flight findings, settled before the merge rather than after
+
+- **Merging rebuilds the container image. There is no manual step.** `wrangler.jsonc` points `image`
+  at `./container/Dockerfile`, and Workers Builds' deploy command is `npx wrangler deploy`, which
+  builds and pushes it — confirmed by reading this repo's own build logs, which show
+  `Building image fxeverything-mediaresolver`, a registry push and `Modified application`.
+  `container/README.md` said to run `wrangler deploy` yourself, which CLAUDE.md forbids and which
+  would overwrite whatever the build shipped; it is corrected, and now also records that a **preview**
+  build runs `wrangler versions upload` and does **not** build the image, so a container change is
+  untested by the preview and lands only on merge.
+
+- **`RESOLVER_GENERATION` deliberately stays `g10`** even though `container/server.py`'s output dict
+  changed, which is contrary to the rule at the top of its own log. The reasoning is written into the
+  code so an unbumped generation next to a container change does not read as an oversight: there are
+  no stale records to retire, because the defect made the Worker write *nothing*; warm instances are
+  replaced by the deploy's own gradual rollout; and bumping would discard up to 30 days of good dates,
+  descriptions and counts to shorten a few minutes of ambiguity. The test is what a stale record would
+  *say*, not whether `container/` was touched.
+
+- **A cookie jar does NOT make the epoch bug worse — but a Premium account would.** The earlier
+  warning is refuted at yt-dlp's source: `web_safari`, the only client carrying the timezone-bearing
+  microformat, sits in the same position of both the anonymous and the ordinary logged-in client
+  lists. Premium is the exception — it selects a set that drops `web_safari` entirely, which would
+  turn an intermittent missing date into a permanent one. `docs/CREDENTIALS.md` now says never to use
+  one, and also that an **expired** jar is worse than no jar, because yt-dlp decides "logged in" from
+  cookie presence rather than validity.
+
+### Self-hosting off Cloudflare is not blocked
+
+#### Added
+- **`docs/SELF-HOSTING.md`, and a correction: running this off Cloudflare is not blocked.** The
+  README said "❌ Workers only" and an earlier internal assessment said it was not achievable. Both
+  were wrong, and the evidence was already in the repo: the whole test suite (1185 tests) runs in
+  stock Node importing `src/worker.ts` directly, `handle(req, env, ctx, deps)` is already an adapter
+  entry point, six of the eight Cloudflare surfaces are hand-written structural interfaces in `Env`
+  rather than Cloudflare types, and `container/` is a stock Python HTTP server with no Cloudflare API
+  surface in it at all. What is missing is an adapter and somebody running one.
+
+  **No code ships here.** The doc states what is true today, what replaces each binding and what
+  degrades without it, and phases the work. It also names two things that must change before a
+  self-hosted instance is exposed, which nobody had written down: your own hostname is not in
+  `OWN_HOSTS`, and the Worker half leans on Cloudflare's egress in a way that matters more elsewhere.
+
+  **The caveat that decides it is egress IP, not a binding.** Several fetchers were measured
+  specifically against Cloudflare's egress, and Instagram, Facebook, Threads and Reddit answer
+  datacenter addresses differently. Nobody has measured them from anywhere else, so "self-host and get
+  the same cards" is unproven and the doc says so rather than implying it.
+
+  The README row now reads "no blockers, no adapter yet" and links the doc. The comparison table's
+  measurement date is qualified: our own column is kept current, and changing it re-dates nobody
+  else's.
+
 ## [1.8.0] — 2026-08-03
 
 ### Added

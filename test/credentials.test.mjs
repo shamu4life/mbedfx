@@ -339,6 +339,120 @@ test('THE YOUTUBE META CALL CARRIES THE JAR TOO — the record it writes lives f
   assert.equal(metaBodies[0].page, `https://www.youtube.com/watch?v=${ref.id}`)
 })
 
+// ── Fill-day: a gate verdict reached WITHOUT a jar must not outlive the day a jar arrives.
+
+test('A GATED RECORD WRITTEN WITH NO JAR IS REFUSED once a pool is filled, and kept when there is none', async () => {
+  /**
+   * THE HOLE g10 COULD NOT REACH, found 2026-08-03. The generation bump retired every record written
+   * before the cookie CODE shipped. The records written AFTER that deploy and BEFORE an operator fills
+   * YT_ACCOUNTS are g10 records too — a jar-capable build with no jar to send — so no bump retires them,
+   * and that window is every day until fill-day rather than a moment. Each one persists `ageLimit: 18`
+   * for 30 days, on every colo. Filling the secret would heal none of them: the warm record is returned
+   * before any container call is considered, ytMetaValid deliberately does not test `ageLimit`, and
+   * re-pasting reads the same record. The operator would see no change, then see `pool_unused` and be
+   * told by docs/CREDENTIALS.md that their brand-new accounts are dead.
+   *
+   * THE THIRD CASE IS WHAT KEEPS THIS FROM BEING A GENERATION BUMP IN DISGUISE. A record that DID carry
+   * a jar and still says gated is a measured answer — "logged in, still walled" — and re-extracting it
+   * would spend a container call per gated video per cold view, forever, to re-learn one fact.
+   *
+   * Asserted through the REAL platform arm, on the Post it builds, because that read is the one every
+   * renderer and the post cache see — a record refused there is a post with no date rather than a card
+   * with a wrong note.
+   */
+  const dated = async (id, record, secrets) => {
+    const ref = { p: 'yt', id }
+    const env = countingEnv(secrets, {
+      MEDIA_CACHE: fakeR2([[metaCacheKey(ref), JSON.stringify(record)]]),
+    })
+    const post = await offline(
+      { title: 't', author_name: 'a', author_url: 'https://www.youtube.com/@a' },
+      () => import('../src/worker.ts').then(m => m.liveFetchPost(ref, env, 'discord')))
+    return post.createdAt.getTime()
+  }
+  const YT = { YT_ACCOUNTS: pool({ label: 'yt1', cookies: COOKIE }) }
+  const GATED = { timestamp: 1256453853, ageLimit: 18 }
+
+  assert.equal(await dated('FILLday0001', GATED, YT), 0,
+    'a jar-free GATED record is refused once a pool exists — the post falls back to no date, and the '
+    + 'next activity callback re-extracts it WITH the jar')
+  assert.equal(await dated('FILLday0002', GATED, {}), 1256453853000,
+    'with NO pool configured nothing is invalidated — every fork and every deploy that will never set a '
+    + 'secret keeps its whole cache, which is what makes this free to merge')
+  assert.equal(await dated('FILLday0003', { ...GATED, jarred: true }, YT), 1256453853000,
+    'a record that CARRIED a jar and still said gated is a measured answer, not an unanswered question')
+  assert.equal(await dated('FILLday0004', { timestamp: 1256453853 }, YT), 1256453853000,
+    'an UNGATED record is never touched — ordinary traffic must not pay for this')
+})
+
+test('THE ACTIVITY ROUTE RE-EXTRACTS a jar-free gated record, and the fresh one records that it was jarred', async () => {
+  /**
+   * The other half of the test above: refusing the record is only useful if something then goes and
+   * asks again. youtubeMeta's warm read is what stood between a filled pool and a corrected card, so
+   * this asserts the container call actually happens — and that it carries the jar, since a re-extract
+   * that went out cookie-free would write the identical stale record and loop.
+   *
+   * `jarred` IS ASSERTED ON THE STORED OBJECT rather than on a return value, because the flag's whole
+   * job is to survive into R2 and be read back in 30 days by a different isolate. A field that is
+   * computed correctly and dropped at the JSON.stringify would pass every other check in this file.
+   */
+  const ref = { p: 'yt', id: 'FILLday0005' }
+  const { bodies, binding } = fakeResolver({ title: 't', timestamp: 1256453853, age_limit: 18 })
+  const r2 = fakeR2([
+    [`mux/${refKey(ref)}/0`, 'MP4'],
+    [metaCacheKey(ref), JSON.stringify({ timestamp: 1256453853, ageLimit: 18 })],
+  ])
+  const post = normalizeYouTube({
+    ok: true,
+    oembed: {
+      title: 'Rick Astley - Never Gonna Give You Up', author_name: 'Rick Astley',
+      author_url: 'https://www.youtube.com/@RickAstley',
+      thumbnail_url: `https://i.ytimg.com/vi/${ref.id}/hqdefault.jpg`,
+    },
+  }, ref)
+  await handle(
+    new Request(
+      `https://staging.megapenispoopenfarten.sex/users/anyone/statuses/${encodeStatusId(refKey(ref))}`,
+      { headers: { 'user-agent': DISCORD } }),
+    envWith(binding, r2, { YT_ACCOUNTS: pool({ label: 'yt1', cookies: COOKIE }) }), ctx,
+    {
+      cache: fakeCache(),
+      fetchPost: async () => post,
+      resolveShortlink: async () => ({ kind: 'unresolved' }),
+      resolveRedditShare: async () => null,
+    })
+  const metaBodies = bodies.filter(b => b.meta === true)
+  assert.equal(metaBodies.length, 1, 'the stale record did NOT satisfy the warm read — the extract ran')
+  assert.equal(metaBodies[0].cookies, COOKIE, 'and it went out logged in, or it would write the same record back')
+
+  const stored = await r2.get(metaCacheKey(ref)).then(o => o.json())
+  assert.equal(stored.jarred, true, 'the fresh record carries its provenance into R2')
+  assert.equal(stored.ageLimit, 18, 'and the gate verdict it measured WITH the jar is kept, not discarded')
+})
+
+test('ALL THREE READS OF THE YT META RECORD USE THE POOL-AWARE VALIDATOR — the sweep that stops one seam being fixed alone', () => {
+  /**
+   * THE DEFECT SHAPE THIS PROJECT REPEATS. A yt meta record is read in three places — the platform arm
+   * that builds the Post, youtubeMeta on the activity route, and the converter preview's own fallback —
+   * and the preview is the seam with no second chance, because /_card is fetched once per typing-settle
+   * and nobody re-pastes to heal it. Fixing the staleness at one read and not the others would leave a
+   * card that corrects itself in Discord and never corrects itself in the preview, which is exactly the
+   * pair of defects the YouTube epoch bug shipped.
+   *
+   * Written as a grep over the source rather than three behavioural tests because the property IS
+   * "there is no fourth spelling": a new read site added later has to opt IN to the bare validator
+   * deliberately, and this fails until it does. Same instrument, and the same reason, as the argv-splice
+   * pin in test/ytdlp-tier.test.mjs.
+   */
+  const src = readFileSync(new URL('../src/worker.ts', import.meta.url), 'utf8')
+  const reads = [...src.matchAll(/readCachedMeta<YouTubeMeta>\([^)]*\)/g)].map(m => m[0])
+  assert.ok(reads.length >= 3, `expected every yt meta read to be found, saw ${reads.length}`)
+  for (const read of reads) {
+    assert.match(read, /ytMetaUsable\(env\)/,
+      `a yt meta read is using a validator that cannot tell a pre-jar gate verdict from a measured one: ${read}`)
+  }
+})
+
 // ── The counter: `pool_unused` is emitted in the arm that would have spent a credential and could not.
 
 /**
@@ -399,27 +513,40 @@ test('TWITTER COUNTS pool_unused WHEN X_ACCOUNTS IS SET AND THE WALL STILL HELD'
 
 test('YOUTUBE COUNTS pool_unused WHEN THE JAR WAS SENT AND age_limit CAME BACK ANYWAY', async () => {
   /**
-   * THE ONE ARM WHERE THIS IS A REAL FAULT rather than a staging note. Since the generation bump every
-   * readable meta record was produced by a call that carried the YT_ACCOUNTS jar, so a positive
-   * `ageLimit` on one means the LOGGED-IN extract still saw a wall: the accounts are signed out,
+   * THE ONE ARM WHERE THIS IS A REAL FAULT rather than a staging note: a positive `ageLimit` on a
+   * readable record means the LOGGED-IN extract still saw a wall, so the accounts are signed out,
    * rate-limited or flagged. That is a rotation somebody has to perform, and it is invisible from the
    * card — which keeps rendering the honest 🔞 note either way.
+   *
+   * REWRITTEN 2026-08-03, and the seeded record is the change. This test used to seed
+   * `{timestamp, ageLimit}` with no provenance and assert the counter fired, on the strength of a
+   * docstring that said "since the generation bump every readable record was produced by a call that
+   * carried the jar". That was true of records written before the g10 DEPLOY and false of the ones
+   * written between that deploy and the day a secret is filled — which is most of them, since no pool
+   * has ever been filled. So the old shape of this test asserted the counter fires on exactly the
+   * records that prove nothing, i.e. it pinned the fill-day false alarm as correct behaviour: an
+   * operator fills a pool, sees `pool_unused` climb, reads docs/CREDENTIALS.md, and burns fresh
+   * throwaway accounts chasing a cache. The fourth case below is the one that was missing.
    */
-  const run = async (secrets, id, ageLimit) => {
+  const run = async (secrets, id, record) => {
     const ref = { p: 'yt', id }
     const env = countingEnv(secrets, {
-      MEDIA_CACHE: fakeR2([[metaCacheKey(ref), JSON.stringify({ timestamp: 1256453853, ageLimit })]]),
+      MEDIA_CACHE: fakeR2([[metaCacheKey(ref), JSON.stringify({ timestamp: 1256453853, ...record })]]),
     })
     await offline({ title: 't', author_name: 'a', author_url: 'https://www.youtube.com/@a' },
       () => import('../src/worker.ts').then(m => m.liveFetchPost(ref, env, 'discord')))
     return outcomes(env, 'yt')
   }
-  assert.ok((await run({ YT_ACCOUNTS: pool({ cookies: COOKIE }) }, 'JARyt000004', 18)).includes('pool_unused'),
-    'pool set + the gate held = the signal')
-  assert.ok(!(await run({}, 'JARyt000005', 18)).includes('pool_unused'),
+  const YT = { YT_ACCOUNTS: pool({ cookies: COOKIE }) }
+  assert.ok((await run(YT, 'JARyt000004', { ageLimit: 18, jarred: true })).includes('pool_unused'),
+    'the jar was spent and the wall held anyway = the signal')
+  assert.ok(!(await run({}, 'JARyt000005', { ageLimit: 18, jarred: true })).includes('pool_unused'),
     'no pool, no signal — an age-gated video with no accounts configured is expected, not a fault')
-  assert.ok(!(await run({ YT_ACCOUNTS: pool({ cookies: COOKIE }) }, 'JARyt000006', 0)).includes('pool_unused'),
+  assert.ok(!(await run(YT, 'JARyt000006', { ageLimit: 0, jarred: true })).includes('pool_unused'),
     'an UNGATED video must not count — the counter would drown in ordinary traffic')
+  assert.ok(!(await run(YT, 'JARyt000007', { ageLimit: 18 })).includes('pool_unused'),
+    'AND a gated record with no jar behind it must not count on fill-day: nothing has asked this '
+    + 'question with a credential yet, so reporting the accounts as dead would be a guess')
 })
 
 test('INSTAGRAM COUNTS pool_unused ON THE AGE WALL, and the counter says LESS than it looks like it says', async () => {

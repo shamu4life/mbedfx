@@ -66,6 +66,22 @@ from being rotated out from under you by ordinary browsing in your main profile.
 For YouTube specifically: do not keep using that account in a browser afterwards. YouTube rotates
 cookies, and a session used in two places tends to invalidate the older one.
 
+**Never a YouTube Premium account.** This is the one account property that actively breaks something.
+yt-dlp picks which player clients to try based on what the cookies say, and a Premium session selects
+a set that **drops `web_safari`** — which is the only client that carries the timezone-bearing
+microformat the upload date is parsed from. Verified against yt-dlp 2026.07.04's own source, not
+inferred. A Premium jar would turn the intermittent missing-date bug into a permanent one, on every
+YouTube video, and it would look exactly like the extract being broken.
+
+An ordinary free throwaway is fine: `web_safari` sits in the same position of both the anonymous and
+the ordinary logged-in client lists, so a normal jar does not change the date supply at all.
+
+**A dead jar is worse than no jar.** yt-dlp decides "am I logged in" from the *presence* of cookies,
+not from whether they still work — so an expired jar still selects the logged-in client set, where
+one of the clients requires auth and simply fails. You lose format coverage you would have had with
+no credential at all. That is what `pool_unused` is for: watch it after filling, and rotate rather
+than leaving a stale jar in place.
+
 ---
 
 ## Building the JSON
@@ -108,6 +124,17 @@ Secrets are per-Worker and encrypted at rest. They cannot be read back from the 
 which is the point, and also why there is no "check what I set" command. To confirm a pool is being
 read, watch the analytics counters rather than trying to print the value.
 
+**Nothing has to be deployed on the day you fill a pool**, and that took a fix rather than being free.
+A YouTube gate verdict is cached for 30 days, so every age-gated video anyone viewed before you filled
+the secret had a record saying "gated" — written by a build that could send a jar but had none to send.
+Those records now carry whether the extract that produced them was logged in, and a gated one that was
+not is refused as soon as a pool exists, so the next view re-extracts it with the jar. You do not have
+to wait out the TTL, ask for a cache flush, or time your `wrangler secret put` against a merge.
+
+The one case that is still a manual invalidation: **rotating a pool that has gone dead.** A record that
+was measured *with* a jar and still says gated is believed, because that is what it is — logged in and
+still walled. Swapping in working accounts does not make it look stale, so bump `RESOLVER_GENERATION`.
+
 ---
 
 ## When something is wrong
@@ -132,7 +159,14 @@ survivor.
 
 ## Rotating
 
-Replace the whole array and push again; there is no partial update. `label` exists so you can tell
-which account died without printing a token — it is the only field in here that is safe to log, and
-nothing else in the pool is ever written to a log line, an analytics blob, a cache key, an error
-body, or a card.
+Replace the whole array and push again; there is no partial update. Then bump `RESOLVER_GENERATION`,
+for the reason in "Pushing it" above — a gated verdict that a jar already measured is believed until
+the generation changes.
+
+`label` is for **you**, not for the code: it is the only field here safe to write down, so it is how
+you keep track of which throwaway is which between exports. Nothing reads it at runtime and no counter
+carries it, so it will not tell you which account died — the pool is not per-account observable, and
+adding that would mean putting an account identifier somewhere a log could reach. What you get instead
+is `pool_unused`, which says the jar was spent and the wall held without saying by whom. Everything
+else in the pool is never written to a log line, an analytics blob, a cache key, an error body, or a
+card.
