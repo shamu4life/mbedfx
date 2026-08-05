@@ -56,11 +56,19 @@ What that costs, and what it does not:
 | **Kept** | The dashboard traffic / error-rate / CPU charts. Separate product, separate pipeline, unaffected. |
 | **Kept** | Everything in this document. Analytics Engine is a different product with its own key, its own write API and its own retention. |
 
-One honest gap: **Cloudflare's docs never state whether `wrangler tail` works with observability
-disabled.** The real-time logs page says it "does not store Workers Logs", and the config field is
-defined in terms of *persisting*, which reads as two independent consumers of the same trace-event
-stream — but that is an inference, not a quoted guarantee. Settle it in thirty seconds after the next
-deploy: run `npx wrangler tail mbedfx` and load a card. If lines appear, it is answered.
+**`wrangler tail` does still work — measured, not inferred.** Cloudflare's docs never state it either
+way, which left this as an inference when the setting was first turned off. It was checked against
+the live Worker on 2026-08-05, with `observability: { enabled: false }` already deployed:
+`npx wrangler tail mbedfx --format json` alongside three uncacheable requests returned real trace
+records carrying `scriptName: mbedfx`, `outcome: ok` and the request url. So streaming and storage
+really are independent consumers of the same trace-event stream, and turning off persistence does not
+take live debugging with it.
+
+Two things that measurement does **not** cover, kept so nobody over-reads it. The `logs` array in
+those records was empty, because the requests did not hit a `console.error` path — so this proves the
+tail session delivers, not that your `console` output survives; a failing path is worth tailing once
+to confirm. And a **cached** response never invokes the Worker at all and therefore produces no
+record, which will look exactly like tail being broken. Use an uncacheable request when you test.
 
 The middle position that was not taken, recorded so the choice is legible rather than to reopen it:
 `observability.logs.invocation_logs = false` drops the record carrying the url, IP and user agent
