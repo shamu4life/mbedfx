@@ -3,9 +3,9 @@
 ## FxEmbed
 
 `src/platforms/twitter/fetch.ts` reproduces the GraphQL feature-flag table used by
-[FxEmbed](https://github.com/FixTweet/FxEmbed) (formerly FxTwitter). It's copied verbatim, not
-rewritten: Twitter 400s the request if a required flag is missing, so the set is whatever the
-endpoint accepts today.
+[FxEmbed](https://github.com/FixTweet/FxEmbed) (formerly FxTwitter). It's copied verbatim because
+Twitter 400s the request if a required flag is missing. The set is whatever the endpoint accepts
+today.
 
 FxEmbed is MIT licensed and its notice is retained here:
 
@@ -39,9 +39,8 @@ authorship, and carry no obligation.
 ## Simple Icons
 
 The brand marks in `public/index.html` are from [Simple Icons](https://simpleicons.org), released
-under **CC0 1.0** — attribution is not required, and is given anyway. The marks themselves remain the
-trademarks of their respective owners and are used nominatively, to identify the sites this project
-supports.
+under **CC0 1.0**. Attribution isn't required, and is given anyway. The marks remain the trademarks
+of their respective owners, used nominatively to identify the sites this project supports.
 
 ## yt-dlp and FFmpeg
 

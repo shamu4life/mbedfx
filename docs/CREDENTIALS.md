@@ -1,100 +1,106 @@
 # Account pools for age-gated posts
 
-Age gates are the one failure this project cannot degrade its way out of. Twitter's tombstone,
-Instagram's `failure_reason:"MA"`, and a YouTube video reporting `age_limit:18` with `formats: 0` are
-all unreachable without being logged in — measured on both a laptop and the Worker's own egress. The
-"this post is age-restricted" card is the **correct** answer without accounts, not a bug.
-
-Setting these turns those posts into ordinary cards. Nothing else changes.
+Three platforms hide a post behind an age gate, and only a logged-in session gets past. Twitter
+serves a tombstone, Instagram reports `failure_reason:"MA"`, and YouTube reports `age_limit:18` with
+`formats: 0`, measured from a laptop and from the Worker's own egress. Without accounts those posts
+get the "this post is age-restricted" card. That card is the correct answer without accounts, not a
+bug. Fill these secrets and they render as ordinary cards, and nothing else changes.
 
 ---
 
 ## Before anything else
 
-**Use throwaway accounts.** Never a personal or primary account. A pooled account gets used from a
-datacenter IP at whatever rate the service sees traffic, which is exactly the pattern that gets an
-account flagged, rate-limited, or locked. Assume any account you put here will eventually be lost.
+Any account in a pool will eventually be lost. It gets used from a datacenter IP at whatever rate the
+service sees traffic, which is what gets accounts flagged, rate-limited or locked. Use throwaways,
+never a personal or primary account.
 
-**A cookie jar is a bearer credential, not a config value.** Anyone holding the file is logged in as
-that account, from anywhere, until the session is revoked. It cannot be rotated by changing a
-password without noticing something is wrong first.
+A cookie jar is a bearer credential. Whoever has the file is logged in as that account, from
+anywhere, until the session is revoked. It cannot be rotated by changing a password without somebody
+noticing something is wrong first.
 
-**The files are gitignored, and that was added for this.** `cookies.txt`, `*cookies.txt`,
-`*.cookies`, `accounts.json`, `secrets.json` and friends are ignored at any depth. `.dev.vars`
-matched none of those names before, and the natural place to save a browser export is whatever
-directory the terminal is already in.
+Git ignores the local files. `cookies.txt`, `*cookies.txt`, `*.cookies`, `accounts.json`,
+`secrets.json` and friends are ignored at any depth. The patterns were added because `.dev.vars`
+matched none of those names, and a browser export lands in whatever directory the terminal is
+already in.
 
 ---
 
-## Which platforms actually use them
+## Which platforms use them
+
+Only two of the three do anything yet.
 
 | Secret | Used today | Where the gate is beaten |
 |---|---|---|
-| `YT_ACCOUNTS` | **Yes** | Inside yt-dlp, in the video container |
-| `IG_ACCOUNTS` | **Partly** — see below | Inside yt-dlp, in the video container |
-| `X_ACCOUNTS` | **No, not yet** | In the Worker, and that call is not built |
+| `YT_ACCOUNTS` | Yes | Inside yt-dlp, in the video container |
+| `IG_ACCOUNTS` | Partly (see below) | Inside yt-dlp, in the video container |
+| `X_ACCOUNTS` | No, not yet | In the Worker, and that call is not built |
 
-**`X_ACCOUNTS` can be filled today and will do nothing.** Twitter's gate needs a `TweetResultByRestId`
+`X_ACCOUNTS` can be filled today and will do nothing. Twitter's gate needs a `TweetResultByRestId`
 call that is deliberately unbuilt — a half-built login path is worse than none. The secret exists so
-it can be put in place ahead of that work. If you fill it and gated tweets still fail, that is
-expected, and it is counted as `pool_unused` rather than left as a mystery.
+it can be put in place ahead of that work. A gated tweet will still fail once the pool is filled, and
+each failure increments `pool_unused` for `x`, provided the entry carries both `auth_token` and
+`ct0`.
 
-**`IG_ACCOUNTS` only reaches the container path.** Instagram's `MA` gate is read off the Worker's own
-page fetch, which carries no cookie jar, so a filled Instagram pool helps the video-resolution path
-and not the gate detection. A rising `ig` `pool_unused` count means the credential is not reaching the
+`IG_ACCOUNTS` only reaches the container path. Instagram's `MA` gate is read off the Worker's own
+page fetch, which carries no cookie jar, so a filled pool helps video resolution and leaves the gate
+detection where it was. A rising `ig` `pool_unused` count means the credential isn't reaching the
 request that needs it.
 
 ---
 
 ## Getting a cookies.txt
 
-Use a browser extension that exports **Netscape format** — "Get cookies.txt LOCALLY" is the usual
-one. A JSON cookie export will not work.
+Use a browser extension that exports Netscape format. "Get cookies.txt LOCALLY" is the usual one. A
+JSON cookie export will not work.
 
-**Do it in a private window, and this part matters more than it looks:**
+Export from a private window:
 
-1. Open a **private / incognito** window.
+1. Open a private / incognito window.
 2. Log into the throwaway account.
-3. Open a new tab, then **close the tab you logged in on**.
+3. Open a new tab, then close the login tab.
 4. Export cookies for the site.
-5. **Close the private window without logging out.**
+5. Close the private window without logging out.
 
-Logging out invalidates the session you just exported, and you will have a file full of dead cookies
-that fails in a way that looks like the gate never lifted. A private window also keeps the session
-from being rotated out from under you by ordinary browsing in your main profile.
+Logging out at step 5 invalidates the session you just exported, and you will have a file full of
+dead cookies that fails exactly as if the gate had never lifted. A private window also keeps ordinary
+browsing in your main profile from rotating the session out from under you.
 
-For YouTube specifically: do not keep using that account in a browser afterwards. YouTube rotates
-cookies, and a session used in two places tends to invalidate the older one.
+Don't keep using a YouTube account in a browser after you export it. YouTube rotates cookies, and a
+session used in two places tends to invalidate the older one.
 
-**Never a YouTube Premium account.** This is the one account property that actively breaks something.
-yt-dlp picks which player clients to try based on what the cookies say, and a Premium session selects
-a set that **drops `web_safari`** — which is the only client that carries the timezone-bearing
-microformat the upload date is parsed from. Verified against yt-dlp 2026.07.04's own source, not
-inferred. A Premium jar would turn the intermittent missing-date bug into a permanent one, on every
-YouTube video, and it would look exactly like the extract being broken.
+### YouTube Premium accounts
 
-An ordinary free throwaway is fine: `web_safari` sits in the same position of both the anonymous and
-the ordinary logged-in client lists, so a normal jar does not change the date supply at all.
+Never use a Premium account. yt-dlp picks its player clients from the cookies, and a Premium session
+selects a set with no `web_safari` (checked against yt-dlp 2026.07.04's source). That's the only
+client carrying the timezone-bearing microformat the upload date is parsed from, so a Premium jar
+makes the intermittent missing-date bug permanent on every YouTube video, and it looks like the
+extract is broken.
 
-**A dead jar is worse than no jar.** yt-dlp decides "am I logged in" from the *presence* of cookies,
-not from whether they still work — so an expired jar still selects the logged-in client set, where
-one of the clients requires auth and simply fails. You lose format coverage you would have had with
-no credential at all. That is what `pool_unused` is for: watch it after filling, and rotate rather
-than leaving a stale jar in place.
+An ordinary free throwaway is fine. `web_safari` sits in the same position of both the anonymous and
+the ordinary logged-in client lists.
+
+### Dead jars
+
+yt-dlp decides whether it's logged in from the presence of cookies, not from whether they work. An
+expired jar still selects the logged-in client set, where one client requires auth and fails,
+leaving less format coverage than an anonymous extract. A dead jar is worse than no jar. Watch
+`pool_unused` after you fill a pool, and rotate a stale jar out.
 
 ---
 
 ## Building the JSON
 
-The secret is a JSON array. A cookies.txt is multi-line and tab-separated, so it **cannot be pasted
-into a JSON string by hand** — the newlines and tabs have to be escaped. Let `jq` do it:
+All three secrets are a JSON array of entries, and the commands below need `jq`.
+
+A cookies.txt is multi-line and tab-separated, so pasting one into a JSON string by hand means
+escaping every newline and tab. Let `jq` do it:
 
 ```sh
 jq -n --rawfile a alt1-cookies.txt --rawfile b alt2-cookies.txt \
   '[{label:"alt1",cookies:$a},{label:"alt2",cookies:$b}]' > accounts.json
 ```
 
-Check it looks right (this prints the labels only, never the cookies):
+This prints the labels and no cookie values:
 
 ```sh
 jq '[.[].label]' accounts.json
@@ -106,67 +112,70 @@ jq '[.[].label]' accounts.json
 
 ## Pushing it
 
+Push the array into the secret, then delete the local copy:
+
 ```sh
 npx wrangler secret put YT_ACCOUNTS < accounts.json
 rm accounts.json
 ```
 
-Same for `IG_ACCOUNTS`. For Twitter the entries are a session pair rather than a jar:
+`IG_ACCOUNTS` takes the same command. Twitter entries hold a session pair:
 
 ```json
 [ { "label": "alt1", "auth_token": "...", "ct0": "..." } ]
 ```
 
-**Delete the local files when you are done.** They are gitignored, not encrypted, and there is no
-reason to keep a live session on disk once Cloudflare has it.
+Delete your cookie exports too when you are done. Nothing encrypts them, and Cloudflare now holds
+the copy the Worker reads.
 
-Secrets are per-Worker and encrypted at rest. They cannot be read back from the dashboard or the CLI —
-which is the point, and also why there is no "check what I set" command. To confirm a pool is being
-read, watch the analytics counters rather than trying to print the value.
+Secrets are per-Worker and encrypted at rest, and cannot be read back from the dashboard or the CLI —
+which is the point, and why there is no command to check what you set. To confirm a pool is being
+read, watch the analytics counters. `docs/METRICS.md` has that query as recipe 3, "Are the account
+pools working".
 
-**Nothing has to be deployed on the day you fill a pool**, and that took a fix rather than being free.
-A YouTube gate verdict is cached for 30 days, so every age-gated video anyone viewed before you filled
-the secret had a record saying "gated" — written by a build that could send a jar but had none to send.
-Those records now carry whether the extract that produced them was logged in, and a gated one that was
-not is refused as soon as a pool exists, so the next view re-extracts it with the jar. You do not have
-to wait out the TTL, ask for a cache flush, or time your `wrangler secret put` against a merge.
+### Cached gate verdicts
 
-The one case that is still a manual invalidation: **rotating a pool that has gone dead.** A record that
-was measured *with* a jar and still says gated is believed, because that is what it is — logged in and
-still walled. Swapping in working accounts does not make it look stale, so bump `RESOLVER_GENERATION`.
+Filling a pool needs no deploy. You don't have to wait out a TTL, flush a cache, or time your
+`wrangler secret put` against a merge.
+
+A YouTube gate verdict is cached for 30 days, so every age-gated video viewed before the secret was
+filled left a record saying gated, written by a build with no jar to send. Those records now carry
+whether the extract was logged in, and once a pool exists the resolver refuses any gated record
+whose extract was not. The next view re-extracts that video with the jar.
+
+If you rotate a dead pool out, the cached verdicts don't move with it. A record measured with a jar
+that still says gated describes an extract that was logged in and walled anyway. Only a
+`RESOLVER_GENERATION` bump clears it.
 
 ---
 
 ## When something is wrong
 
-**A malformed secret is silently an empty pool.** `parseAccounts` never throws, deliberately: these
-are read on the path for ordinary posts too, and a stray comma must not take down a whole platform
-over a credential typo. The cost of that choice is that a bad paste looks identical to an unset
-secret. If filling a pool changes nothing, suspect the JSON first:
+`parseAccounts` never throws. A malformed secret becomes an empty pool and nothing reports an error.
+The function runs on the request path for ordinary posts too, and a stray comma in one credential
+must not take a whole platform down. If filling a pool changes nothing, check the JSON first:
 
 ```sh
 jq . accounts.json    # if this errors, so did the Worker, just quietly
 ```
 
-**An entry with no credential is dropped.** `{"label":"alt1"}` on its own is not an account. A pool of
-two where one entry is malformed is a pool of one, and it will work — just at twice the load on the
-survivor.
+An entry with no credential is dropped, so `{"label":"alt1"}` on its own is not an account, and a
+pool of two with one bad entry runs as a pool of one — it works, at twice the load on the survivor.
 
-**yt-dlp rejects a jar with no Netscape header**, so the container prepends
-`# Netscape HTTP Cookie File` if your export lacks it. You do not need to add it yourself.
+yt-dlp rejects a jar with no Netscape header. The container prepends `# Netscape HTTP Cookie File`
+when your export lacks it. You do not need to add it yourself.
 
 ---
 
 ## Rotating
 
-Replace the whole array and push again; there is no partial update. Then bump `RESOLVER_GENERATION`,
-for the reason in "Pushing it" above — a gated verdict that a jar already measured is believed until
-the generation changes.
+Replace the whole array and push it again. `wrangler secret put` has no partial update, so one dead
+account means re-pushing every entry. Then bump `RESOLVER_GENERATION`, for the reason under "Cached
+gate verdicts" above.
 
-`label` is for **you**, not for the code: it is the only field here safe to write down, so it is how
-you keep track of which throwaway is which between exports. Nothing reads it at runtime and no counter
-carries it, so it will not tell you which account died — the pool is not per-account observable, and
-adding that would mean putting an account identifier somewhere a log could reach. What you get instead
-is `pool_unused`, which says the jar was spent and the wall held without saying by whom. Everything
-else in the pool is never written to a log line, an analytics blob, a cache key, an error body, or a
-card.
+`label` is operator-facing, the only field here safe to write down, and it exists for telling one
+throwaway from another between exports. Nothing reads it at runtime and no counter carries it.
+
+None of the other fields is logged, sent to analytics, used in a cache key, or written into an error
+body or a card. `pool_unused` records that a jar was spent and the gate still held, and making it
+per-account would put an account identifier where a log could reach.

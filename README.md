@@ -12,64 +12,55 @@
 
 </div>
 
-<p align="center"><strong>Social links that embed properly.</strong> Paste a link, get one Discord can actually draw — 17 sites, no accounts, nothing to install.</p>
+<p align="center"><strong>Social links that embed properly.</strong> Paste a link, get one Discord can actually draw. 17 sites, no accounts, nothing to install.</p>
 
 ---
 
-Discord builds a link preview out of the page's `og:` tags. Most social sites either don't serve them or serve a login wall instead, so you get a grey rectangle with a domain in it.
+Discord builds a link preview from the page's `og:` tags. Most social sites don't serve them, or serve a login wall, and the preview comes out as a grey rectangle with a domain in it.
 
-Swap the site's domain for **mbedfx.app** and you get the card: author, caption, counts, and a video that plays inline. Same post, same link, it just works now.
+Swap the site's domain for **mbedfx.app** and the card appears: author, caption, counts, and a video that plays inline as a real MP4. Same post, same link. Captions that aren't in English get translated with the original kept underneath, and a post that can't be shown gets a card saying why.
 
-[fxtwitter](https://github.com/FxEmbed/FxEmbed), [vxtwitter](https://github.com/dylanpdx/BetterTwitFix) and [InstaFix](https://github.com/Wikidepia/InstaFix) got here first and are why anyone expects this to work at all. They go deep on one or two sites; mbedfx goes wide on seventeen, fetching each one itself rather than handing you off to somebody else's fixer. See [how it compares](#how-it-compares).
+[fxtwitter](https://github.com/FxEmbed/FxEmbed), [vxtwitter](https://github.com/dylanpdx/BetterTwitFix) and [InstaFix](https://github.com/Wikidepia/InstaFix) got here first and are why anyone expects this to work at all. They go deep on one or two sites; mbedfx covers seventeen and fetches each itself. See [how it compares](#how-it-compares).
 
 ---
-
-## Why
-
-- **One domain.** Seventeen sites, not a different fixer to remember per platform.
-- **Video actually plays.** A real MP4 with range support, so Discord's own player scrubs it.
-- **Foreign captions get translated,** with the original kept underneath.
-- **When a post can't be shown, the card says why.** Private, age-gated, deleted — not a blank rectangle.
 
 ## Get started
 
-Nothing to install. Take a link and swap the domain:
+Take a link and swap the domain:
 
 ```
 https://x.com/jack/status/20
 https://mbedfx.app/jack/status/20
 ```
 
-Or paste it into **<https://mbedfx.app>**, which does the swap and shows you the card before you send it.
+<https://mbedfx.app> does the same swap in the browser, unfurls share codes, and draws the finished card, stat line and thumbnail included, before you send it.
 
 > **<https://megapenispoopenfarten.sex>** runs the same worker. It's where this started, and links people already pasted still point at it.
 
 ### Forcing a site
 
-Some paths belong to more than one site. `/gallery/abc` could be Reddit, Instagram or Imgur, and once the domain is gone there's nothing left to tell them apart. Put a two-letter code first and it stops guessing:
+Some paths belong to more than one site. `/gallery/abc` could be Reddit, Instagram or Imgur, and the domain that would have told them apart is gone. A two-letter code in front settles it:
 
 ```
 https://mbedfx.app/im/gallery/YcAQlkx     Imgur
 https://mbedfx.app/x/status/20            Twitter
 ```
 
-`x` `tt` `ig` `th` `rd` `bs` `yt` `fb` `tw` `pn` `dm` `st` `im` `ms` `mk` `lm` `pt` — in the order of the table below.
+`x` `tt` `ig` `th` `rd` `bs` `yt` `fb` `tw` `pn` `dm` `st` `im` `ms` `mk` `lm` `pt`, in the order of the table below.
 
-**You shouldn't need this.** The converter page names the site it read your link as and lets you change it with a click, and an ambiguous path gets you a chooser rather than a wrong guess. If you had to force one by hand, something's wrong on our end — please [file a bug](../../issues/new/choose) with the link.
+You shouldn't need it often. The converter page names the site it read a link as, offers a one-click fix, and gives a chooser for an ambiguous path. If you ever have to force one, [file a bug](../../issues/new/choose) with the link.
 
 ### Just the media
 
-Put `d.` in front and you get the file itself instead of a card — the video or image, at its own URL, with byte-range support so it seeks and downloads properly.
+Put `d.` in front of the domain and you get the file itself — the video or image — at its own URL, with byte-range support so it seeks and downloads properly.
 
 ```
 https://d.megapenispoopenfarten.sex/jack/status/20
 ```
 
-The converter page has a **media only** checkbox that does the same thing, next to the domain buttons. It composes with them, so you can have either domain either way.
+The converter page has a **media only** checkbox next to the domain buttons, so either domain works either way.
 
-Handy for saving a clip, or for anywhere that wants a media URL rather than a link preview. It serves people and crawlers the same bytes — there's no card to render, so there's nothing to tell them apart for.
-
-A post with nothing to serve answers a plain-text 404 rather than an HTML page, so a downloader never ends up with a file full of markup.
+A `d.` url has no card to render, so people and crawlers get the same bytes. With nothing to serve, it answers a plain-text 404, because an HTML page would leave a downloader holding a file full of markup.
 
 ## Supported sites
 
@@ -93,18 +84,13 @@ A post with nothing to serve answers a plain-text 404 rather than an HTML page, 
 | <img src="https://www.google.com/s2/favicons?domain=lemmy.world&sz=32" width="16" height="16" alt="" /> | Lemmy | any instance |
 | <img src="https://www.google.com/s2/favicons?domain=joinpeertube.org&sz=32" width="16" height="16" alt="" /> | PeerTube | any instance |
 
-Short links resolve too — `youtu.be`, `dai.ly`, `redd.it`, `tiktok.com/t/…`, and Meta's `/share/…` codes. Every path shape it accepts is listed on the [site](https://mbedfx.app).
+Short links resolve too: `youtu.be`, `tiktok.com/t/…`, Reddit's `/s/…` links and Meta's `/share/…` codes. A bare `dai.ly` or `redd.it` code names no site on its own, so the converter page rewrites those. The [site](https://mbedfx.app) lists every path shape mbedfx accepts.
 
 ## How it compares
 
-Checked 2026-08-01 against each project's docs, source and live service. **?** means we could not
-establish it either way — not that the answer is no. The rivals' columns are as of that date; our
-own column is kept current, and a change to it re-dates nobody else's.
+Checked 2026-08-01 against each project's docs, source and live service. **?** marks a cell that couldn't be established either way. The rival columns are frozen at that date; the mbedfx column is kept current.
 
-These are all good projects, and two things the table cannot show are worth saying plainly. FxEmbed's
-depth on Twitter far exceeds ours on any single site. And our own remux is a workaround, not a
-feature to be proud of — it exists because most of our seventeen won't hand a bot a playable file,
-and it buys nothing on Twitter or TikTok, where the platform already serves one.
+FxEmbed goes deeper on Twitter than mbedfx goes on any single site. And the remux here is a workaround rather than a feature to be proud of: it exists because most of the seventeen won't hand a bot a playable file, and it buys nothing on Twitter or TikTok, where the platform already serves one.
 
 | | **mbedfx** | [FxEmbed](https://github.com/FxEmbed/FxEmbed) | [vxTwitter](https://github.com/dylanpdx/BetterTwitFix) | [fxTikTok](https://github.com/okdargy/fxTikTok) | [InstaFix](https://github.com/Wikidepia/InstaFix) | [InstaFix Revived](https://github.com/Bl0ck154/InstaFix-Revived) |
 |---|---|---|---|---|---|---|
@@ -117,15 +103,14 @@ and it buys nothing on Twitter or TikTok, where the platform already serves one.
 | Self-host off Cloudflare | [no blockers, no adapter yet](docs/SELF-HOSTING.md) | ❌ Workers | ✅ Docker · systemd · Lambda | Docker, undocumented | ✅ Docker · K8s | ✅ Docker |
 | Operator metrics | [documented queries](docs/METRICS.md), no scrape endpoint | ? | ? | ✅ Prometheus | pprof | pprof |
 
-
 ## Features
 
 <details>
 <summary><strong>Inline video</strong></summary>
 
-Most platforms won't hand a bot a playable file, so a companion container runs `yt-dlp` and `ffmpeg`, remuxes the stream to a progressive MP4, and caches it in R2. The worker serves it with `Accept-Ranges: bytes` so Discord's player can seek.
+A companion container runs `yt-dlp` and `ffmpeg`, remuxes the stream to a progressive MP4, and caches it in R2. The Worker serves it with `Accept-Ranges: bytes`, which is what Discord's player seeks on.
 
-The first view of a cold video shows the cover image while the mux finishes. Look again a moment later and it plays.
+A mux takes longer than a card is allowed to take, so the first view of a cold video draws the cover image and the next one plays it. That first card is never response-cached, because a cached cover would outlive the video it stood in for.
 
 </details>
 
@@ -141,9 +126,9 @@ Chinese cabbage is delicious, isn't it?
 白菜おいしいね
 ```
 
-Non-Latin scripts — Japanese, Korean, Chinese, Russian, Arabic, Thai, Greek, Hebrew, Hindi — are spotted from the characters. Latin-script languages like Spanish and Portuguese get asked about, because telling those apart from English by eye is how you end up captioning an English post as Portuguese.
+Non-Latin scripts (Japanese, Korean, Chinese, Russian, Arabic, Thai, Greek, Hebrew, Hindi) are spotted from the characters alone. Spanish, Portuguese and the other Latin-script languages have to be asked about, since guessing them by eye is how an English post ends up captioned as Portuguese.
 
-Translations are cached by content, so a post going around a lot only gets translated once.
+The cache is keyed on the caption text, so a post going around a lot is translated once.
 
 </details>
 
@@ -155,111 +140,93 @@ Translations are cached by content, so a post going around a lot only gets trans
 | Private or friends-only | 🔒 |
 | Age-restricted | 🔞 |
 | Deleted, or never existed | says so |
-| A path two sites both use | asks which one you meant |
+| A path two sites both use | lists the candidates to pick from |
 
-Nothing here guesses. When a platform won't say what happened, that's what the card says.
+Where the platform gives no reason, the card says the post couldn't be loaded and lists the likely reasons instead of picking one.
 
 </details>
 
 <details>
 <summary><strong>Tracking junk gets dropped</strong></summary>
 
-`igsh`, `_t`, `si`, `utm_*` and Meta's share tokens are stripped before anything is handed onward. Meta mints a share code per share, so the link you paste can point back at you — those get cleaned down to the bits that name the post.
+`igsh`, `_t`, `si`, `utm_*` and Meta's share tokens are stripped before anything is handed onward. Meta mints a fresh share code on every share, which makes a pasted link traceable back to whoever shared it, so those get cut down to the part that names the post.
 
 </details>
-
-<details>
-<summary><strong>The converter page</strong></summary>
-
-<https://mbedfx.app> rewrites the link in your browser, tells you which site it read it as (and lets you correct it), unfurls share codes, and draws the card — stat line, thumbnail and all — before you paste it anywhere.
-
-</details>
-
 
 ## JSON API
 
-Everything the card knows, as data, for anything that isn't Discord. No key, no signup, CORS open.
+The API serves the same data the card is built from, for anything you're building that isn't Discord. No key, no signup, and CORS is open.
 
 ```sh
 curl -s 'https://mbedfx.app/_api/v1?url=https%3A%2F%2Fx.com%2Fjack%2Fstatus%2F20' | jq
 ```
 
-It answers for every site the cards cover, including short links and share codes, because it's the
-same code path a pasted link takes. Media urls come back pointing at us rather than at the platform's
-CDN, so they don't expire out from under you.
+It answers for every site the cards cover, plus share codes and short links whose path carries its own shape, and runs the same code path a pasted link takes. A bare `dai.ly` or `redd.it` code answers `ambiguous`, since that path shape is also an X or Instagram profile. Media urls come back pointing at mbedfx and not at the platform's CDN, which keeps them from expiring out from under you.
 
-Mastodon, Misskey, Lemmy and PeerTube need the instance in the path — `?url=/lemmy.world/post/123456`
-— for the same reason their converted links do: the host is part of the post's identity, and routing
-here ignores hosts.
+Mastodon, Misskey, Lemmy and PeerTube need the instance in the path (`?url=/lemmy.world/post/123456`), for the same reason their converted links do. Routing ignores the host, and for those four the host is part of the post's identity.
 
-Branch on `ok` and `error.code`, never on the HTTP status — every answer about a post is a `200`,
-including "this one is age-restricted". Full reference, including what `muxing` and `pending` mean and
-why a date can be `null`: **[docs/API.md](docs/API.md)**.
+Branch on `ok` and `error.code`, never on the HTTP status. Every answer about a post is a `200`, including "this one is age-restricted". **[docs/API.md](docs/API.md)** covers the rest: what `muxing` and `pending` mean, and why a date can be `null`.
 
 ## Caveats
 
-Know what you're getting:
-
-- **No uptime guarantee.** It's a Cloudflare Worker on a hobby budget. It'll probably be fine.
-- **Some posts can't be fixed.** An age-gated Instagram post needs an account, and nothing clever at the edge changes that.
-- **Videos over 25 minutes come out as thumbnails.** Muxing one inside a request deadline isn't realistic.
-- **It leans on undocumented endpoints.** Platforms change them without warning. When one goes you get a card saying it broke, not a wrong one.
-- **Translation is machine translation.** It gets things wrong; the original's right underneath.
+- Every platform here is read through an endpoint nobody documents, and those change without warning. When one goes, the card says it broke rather than showing a wrong one.
+- An age-gated Instagram post needs an account to read, and nothing clever at the edge gets around that.
+- Videos over 25 minutes come out as thumbnails, because a mux that long doesn't fit inside a request deadline.
+- Translation is machine translation. It gets things wrong, and the original sits underneath it.
+- There is no uptime guarantee. This is a Cloudflare Worker on a hobby budget. It will probably be fine.
 
 ## Privacy
 
-- **No accounts, no cookies, no analytics on the page.** Nothing identifies who pasted a link.
-- **Counters only.** The worker records which platform was asked for and whether it worked. Not urls, not ids, not addresses.
-- **R2 holds three things:** remuxed video, keyed by the post; the metadata the resolver read back (title, uploader, description, poster, timestamp, counts), also keyed by the post; and translations, keyed by a hash of the text. Both expire after 60 days, and both are regenerable from the platform they came from.
-- **Cards cache for about 15 minutes**, which is why a post you just deleted can linger briefly.
-- **Nothing about you reaches the platform.** The worker fetches from its own egress; your IP and user agent stay with us.
+- The page sets no cookies, needs no account, and carries no analytics.
+- The Worker keeps counters: which platform was asked for, whether it worked, and whether the caller looked like Discord, Telegram, another bot or a person. None of it carries a url, an id or an address.
+- R2 holds remuxed video, the metadata the container read back (title, uploader, description, poster, timestamp, counts), and translations. Video and metadata are keyed by the post, translations by a hash of the text. All three expire after 60 days and can be regenerated from the platform.
+- Cards cache for about 15 minutes, so a just-deleted post can linger briefly.
+- The Worker fetches from its own egress. A reader's IP and user agent stop there and never reach the platform.
 
 ## Official domains
 
-Only these run mbedfx:
+Only these two hosts run mbedfx:
 
 `mbedfx.app` · `megapenispoopenfarten.sex`
 
-`d.` works on both: `d.mbedfx.app` and `d.megapenispoopenfarten.sex`. A wildcard DNS record covers exactly one label, so a deeper name like `d.staging.…` would need its own record.
+`d.` works on both, as `d.mbedfx.app` and `d.megapenispoopenfarten.sex`. A wildcard DNS record covers exactly one label, so a deeper name — `d.staging.mbedfx.app`, say — would need a record of its own.
 
-Anything else using the name isn't us.
+Anything else using the name is not mbedfx.
 
 ### Optional configuration
 
-Everything below has a working default, which is why a fresh deploy needs none of it.
+Everything below has a working default, and you need none of it for a fresh deploy.
 
 | Setting | What it does |
 |---|---|
-| `IMGUR_CLIENT_ID` | Imgur's API needs a client id. Without one we fall back to the id yt-dlp publishes — that works, but it's a shared bucket and you're competing with every other tool using it. A free id of your own avoids that. |
-| `IG_GRAPHQL_DOC_ID` | Pins Instagram's shortcode GraphQL query. Meta rotates it; when it dies, the older recoveries carry the card and the `copyright_gql` counter drops to zero. Re-pin without a release. |
+| `IMGUR_CLIENT_ID` | Imgur's API needs a client id. Without one, mbedfx falls back to the id yt-dlp publishes. That works, but the bucket is shared with every other tool using that id, and a free one of your own avoids the competition. |
+| `IG_GRAPHQL_DOC_ID` | Pins Instagram's shortcode GraphQL query, which Meta rotates. When the pinned id dies, the older recoveries carry the card and the `copyright_gql` counter drops to zero. Re-pinning it is a config change and needs no release. |
 | `TRANSLATE_GOOGLE` | Set to `off` to stop using Google's endpoint and fall back to Workers AI alone. |
 | `RESOLVER_SECRET` | Shared secret the video container requires on every call. |
 | `REDDIT_CLIENT_ID` / `REDDIT_CLIENT_SECRET` | Reddit OAuth, if you have credentials. |
-| `YT_ACCOUNTS` / `IG_ACCOUNTS` | A JSON array of accounts, each `{"label": "...", "cookies": "<the contents of a Netscape cookies.txt>"}`. Age-gated and login-walled videos are unreachable without one. The jar is written to a private temp file inside the video container for the length of one call and deleted afterwards; it is never logged, cached or put on a card. A malformed value is read as no accounts, so a typo costs the gated posts and nothing else. |
-| `X_ACCOUNTS` | The same array shape, but each entry is `{"label": "...", "auth_token": "...", "ct0": "..."}` — Twitter's wall is beaten by a logged-in API call rather than inside the downloader. **Setting it changes nothing today**: the call that spends it is not built yet, so gated tweets keep getting an honest 🔞 card. The `pool_unused` counter reports when a configured pool went unspent, so this is visible rather than mysterious. |
+| `YT_ACCOUNTS` / `IG_ACCOUNTS` | A JSON array of accounts, each `{"label": "...", "cookies": "<the contents of a Netscape cookies.txt>"}`. Age-gated and login-walled videos are unreachable without one. The jar is written to a private temp file inside the container for the length of one call and deleted afterwards, and it's never logged, cached or put on a card. A malformed value is read as no accounts. A typo there costs the gated posts and leaves everything else working. |
+| `X_ACCOUNTS` | The same array shape, but each entry is `{"label": "...", "auth_token": "...", "ct0": "..."}`, because Twitter's wall is beaten by a logged-in API call and not inside the downloader. Setting it changes **nothing** today. The call that spends it is not built yet, and gated tweets keep getting an accurate 🔞 card. The `pool_unused` counter reports when a configured pool goes unspent, which separates a deliberately idle pool from a broken one. |
 
-Set with `npx wrangler secret put <NAME>`.
+Set them with `npx wrangler secret put <NAME>`.
 
-The three `*_ACCOUNTS` pools have their own guide — how to export a cookies.txt without invalidating it, how to turn one into JSON, what is and isn't wired up yet, and why the local files are gitignored: **[docs/CREDENTIALS.md](docs/CREDENTIALS.md)**. `accounts.example.json` shows the finished shape with invented values.
+**[docs/CREDENTIALS.md](docs/CREDENTIALS.md)** covers the three `*_ACCOUNTS` pools: how to export a cookies.txt without invalidating it, how to turn one into JSON, what is and isn't wired up yet, and why the local files are gitignored. `accounts.example.json` shows the finished shape with invented values.
 
 ## Contributing
 
-Bug reports and feature requests are welcome — see [CONTRIBUTING.md](.github/CONTRIBUTING.md) and the [issue templates](../../issues/new/choose).
+File bugs and feature requests through the [issue templates](../../issues/new/choose). [CONTRIBUTING.md](.github/CONTRIBUTING.md) has what to run before a PR.
 
-One thing before a PR: if you change something based on what an upstream returned, say where you ran it from. A datacenter IP and your laptop get served different bytes. It's bitten this project before.
+If your PR rests on what an upstream returned, say where you ran it. A datacenter IP and a residential one are served different bytes, and more than one feature here worked from a laptop and did nothing in production.
 
 ## Security
 
-Please don't open a public issue for a security problem — [SECURITY.md](.github/SECURITY.md) has the private route.
+Don't open a public issue for a security problem. [SECURITY.md](.github/SECURITY.md) has the private route.
 
 ## How it works
 
 <details>
 <summary><strong>Discord reads two different documents</strong></summary>
 
-For a post with media it follows the `<link rel="alternate" type="application/activity+json">` tag and renders a Mastodon-shaped status. For a post without media it reads the plain OpenGraph head.
-
-Change one head and forget the other and half the posts never see the fix. Both heads, every time.
+For a post with media it follows the `<link rel="alternate" type="application/activity+json">` tag and renders a Mastodon-shaped status. For a post without media it reads the plain OpenGraph head. A fix applied to one head and not the other leaves half the posts unfixed.
 
 </details>
 
@@ -269,15 +236,13 @@ Change one head and forget the other and half the posts never see the fix. Both 
 | Path | |
 |---|---|
 | `src/router.ts` | url → `Route`. Reads the path and query, never the host |
-| `src/refkey.ts` | what crosses the wire and back — the security boundary |
-| `src/platforms/*/` | `fetch.ts` does I/O, `normalize.ts` is pure |
+| `src/refkey.ts` | the security boundary for what crosses the wire and back |
+| `src/platforms/*/` | `fetch.ts` does I/O, `normalize.ts` is pure, and that split is what lets the suite run against captured fixtures |
 | `src/render/` | the two heads, the Mastodon spoof, failure cards |
 | `src/translate.ts` | detection, translation, the marker |
 | `container/` | the `yt-dlp` + `ffmpeg` resolver |
-| `public/index.html` | the converter page — one file, no framework |
-| `test/` | 1117 tests, `node --test`, no network |
-
-Fetch is split from normalize so the suite can run against captured fixtures instead of live sites.
+| `public/index.html` | the converter page, one file, no framework |
+| `test/` | 1207 tests, `node --test`, no network |
 
 </details>
 
@@ -286,13 +251,13 @@ Fetch is split from normalize so the suite can run against captured fixtures ins
 
 ```bash
 npm install
-npm test              # 1117 tests, no network
+npm test              # 1207 tests, no network
 npx wrangler dev      # local worker
 ```
 
-Deploys aren't run by hand — Cloudflare Workers Builds watches `main`, so merging is the deploy. `npm run deploy` refuses on purpose: a hand deploy overwrites whatever the build shipped, and prod goes on looking healthy while the pipeline is broken. That's happened here once already.
+Don't deploy by hand. Cloudflare Workers Builds watches `main`, so merging is the deploy. `npm run deploy` refuses on purpose, because a hand deploy overwrites whatever the build shipped and the dashboard goes on showing a healthy Worker while the pipeline is broken. That has happened here once already.
 
-The container is optional. Without it, video falls back to a cover image and everything else is unchanged.
+The container is optional. Without it, video falls back to a cover image and nothing else changes. [container/README.md](container/README.md) covers what it answers and how it ships.
 
 </details>
 
@@ -300,12 +265,12 @@ The container is optional. Without it, video falls back to a cover image and eve
 
 Built by [**Claude**](https://claude.com/claude-code) (Anthropic), directed by [@shamu4life](https://github.com/shamu4life).
 
-After [fxtwitter](https://github.com/FixTweet/FxTwitter), [vxtwitter](https://github.com/dylanpdx/BetterTwitFix), [InstaFix](https://github.com/Wikidepia/InstaFix) and the rest of the embed-fixer lineage — different code, same idea. Icons from [Simple Icons](https://simpleicons.org), video from [yt-dlp](https://github.com/yt-dlp/yt-dlp) and [FFmpeg](https://ffmpeg.org). Full notices in [NOTICE.md](NOTICE.md).
+After [fxtwitter](https://github.com/FixTweet/FxTwitter), [vxtwitter](https://github.com/dylanpdx/BetterTwitFix), [InstaFix](https://github.com/Wikidepia/InstaFix) and the rest of the embed-fixer lineage, which share the idea here and none of the code. Icons from [Simple Icons](https://simpleicons.org), video from [yt-dlp](https://github.com/yt-dlp/yt-dlp) and [FFmpeg](https://ffmpeg.org). Full notices in [NOTICE.md](NOTICE.md).
 
 ## Trademarks
 
-Every platform named here is a trademark of its owner. mbedfx isn't affiliated with, endorsed by, or connected to any of them — the names and icons identify which site a link came from, and nothing more.
+Every platform named here is a trademark of its owner. mbedfx isn't affiliated with, endorsed by, or connected to any of them. The names and icons identify which site a link came from, and nothing more.
 
 ## License
 
-MIT. Do whatever you want. We're not your parents.
+MIT. The full text is in [LICENSE](LICENSE).
