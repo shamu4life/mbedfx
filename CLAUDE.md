@@ -119,7 +119,7 @@ here than in a single-platform fixer.
 |---|---|
 | No public JSON API | Closed. `/_api/v1?url=…` is documented in `docs/API.md` and shares `describeTarget` with `/_card`, so it cannot drift from the other three surfaces. Two rivals publish an API, FxEmbed ships OpenAPI specs, and there is no spec here yet, which is the most conspicuous omission left. |
 | No realistic self-hosting | Open, with no known blocker. The suite runs in stock Node against `src/worker.ts`, `handle()` is already an adapter entry point, six of the eight Cloudflare surfaces it touches need only an object literal, and `container/` has no Cloudflare surface at all. Three rivals hand over a container and this repo documents `wrangler dev`. What's missing is an adapter and somebody to run it. The unknown is egress IP. Plan in `docs/SELF-HOSTING.md`. |
-| No profile embeds | vxTwitter renders bare profiles. The router has no profile route kind at all. |
+| No profile embeds | vxTwitter renders bare profiles. The router has no profile route kind. |
 | No operator metrics | Half closed. `docs/METRICS.md` documents the Analytics Engine SQL read path. There is deliberately no scrape endpoint: an in-Worker one would need an account-scoped API token at the edge, and `pool_unused` publishes whether the account pools are loaded. fxTikTok has a `/metrics`; this Worker doesn't. |
 | No card screenshots in the README | Four of the five show the card their project produces. The README shows a designed banner. |
 
@@ -131,4 +131,4 @@ sent.
 
 This repo sits under a folder pinned to the `shamu4life` GitHub identity. Use `gh` for issues and
 PRs. Do not switch accounts or override `GH_TOKEN`. If the identity guard blocks something, surface
-it rather than routing around it yourself.
+it. Do not route around it.

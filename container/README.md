@@ -1,12 +1,12 @@
 # media-resolver — the mbedfx video remux/resolve container
 
-A small ffmpeg + yt-dlp service, and a self-hosted single-purpose Cobalt, so nobody else's uptime or
+A small ffmpeg + yt-dlp service, a single-purpose Cobalt run in-house so nobody else's uptime or
 extractor drift sits in the path. It turns a DASH/HLS video, or any yt-dlp-supported page, into one
 progressive faststart MP4 the Worker serves as `og:video`. Reddit, Bluesky and Instagram video goes
 through it, and best-effort so do YouTube, Vimeo, Dailymotion, Facebook and the ~1800 other sites
 yt-dlp knows. Those posts are cover stills without it.
 
-## Interface (the contract the Worker calls)
+## Interface
 
 `POST /resolve`, JSON body, reached over the Worker's container binding, never a public route.
 
@@ -67,7 +67,7 @@ The same string is the meta cache's generation, so a bump discards stored dates,
 counts across yt, fb, dm, st and im. The longest-lived is `YT_META_TTL_MS` at 30 days; fb, dm and im
 hold for 24h, st for 30 minutes. `src/worker.ts` writes down one exception: 1.9.0 changed the
 container's output dict and stayed on g10. The defect it fixed had stopped the Worker writing any
-record at all, leaving nothing stale to retire.
+record at all, and there was nothing stale to retire.
 
 ## The mux
 
@@ -110,7 +110,7 @@ digest: sha256:…
 SUCCESS  Modified application fxeverything-mediaresolver
 ```
 
-You need nothing on your machine: no Docker, no login, no dashboard step.
+None of it needs Docker, a registry login or a dashboard step on your machine.
 
 If a change here didn't take effect, check the build log for `Building image` and
 `Modified application`. If neither line is there, the image never shipped.
@@ -182,8 +182,8 @@ open `/_media/<refKey>/0`.
   the extract fails `rc=1, "extraction without a JS runtime has been deprecated"`), and the `{page}`
   skip-bug fix. The caller pre-creates `out` via `tempfile.mkstemp`, so yt-dlp saw a file already
   there and skipped ("already downloaded", exit 0, 0-byte file → "empty or oversized result").
-  `--force-overwrites` fixes it, and ffmpeg's `-y` already covered `_mux_tracks`. Facebook is a
-  separate story of Meta TLS/UA gating, untested here.
+  `--force-overwrites` fixes it, and ffmpeg's `-y` already covered `_mux_tracks`. Facebook is
+  untested here; Meta gates on TLS and UA.
 - yt-dlp ages fast, YouTube especially. Rebuilding the image pulls a newer `yt-dlp` and
   `yt-dlp-ejs`.
 - Some sites, Vimeo among them, fail `"attempting impersonation, but no impersonate target is

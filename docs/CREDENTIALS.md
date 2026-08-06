@@ -12,9 +12,9 @@ secret turns them into ordinary cards and changes nothing else.
 
 ## Throwaways only
 
-Every account in a pool is eventually lost. Use a throwaway, never a personal or primary one: a
+Every account in a pool is eventually lost. Use a throwaway, never a personal or primary one. A
 pooled jar is spent from Cloudflare's datacenter egress at whatever rate mbedfx sees traffic, and
-that pattern is what gets an account flagged, rate-limited or locked.
+that gets an account flagged, rate-limited or locked.
 
 The exported `cookies.txt` is the credential. Whoever holds the file is that account, from any IP,
 until the account's session is revoked, and revoking that session is the only thing that helps: a
@@ -45,10 +45,10 @@ gated tweet still fails once the secret is set, and each one increments `x`/`poo
 (`src/worker.ts:515`) through `twitterAccounts()` (`src/credentials.ts:146`), which keeps only
 entries holding both `auth_token` and `ct0`; a cookie jar alone counts nothing there.
 
-`instagramAgeGate` (`src/platforms/instagram/normalize.ts:643`) reads the `MA` verdict off the
-Worker's own page fetch, which carries no jar. A filled `IG_ACCOUNTS` reaches only the container
-mux, and gate detection stays where it was. A climbing `ig`/`pool_unused` (`src/worker.ts:351`) says
-the credential is not reaching the request that needs it.
+The `MA` verdict comes off the Worker's own page fetch, which carries no jar (`instagramAgeGate`,
+`src/platforms/instagram/normalize.ts:643`). A filled `IG_ACCOUNTS` reaches only the container mux,
+and gate detection stays where it was. If `ig`/`pool_unused` (`src/worker.ts:351`) climbs, the
+credential is not reaching it.
 
 ---
 
@@ -78,7 +78,7 @@ video, and the card reads as a broken extract. An ordinary free throwaway is fin
 in the same position of both the anonymous and the ordinary logged-in client lists. `9cab036` added
 this section on 2026-08-04, the first time this file mentioned upload dates at all; the warning it
 supersedes, that any cookie jar worsened the epoch bug, was never written here, and
-`docs/CHANGELOG.md:266` records its refutation at yt-dlp's source.
+`docs/CHANGELOG.md:249` records its refutation at yt-dlp's source.
 
 ### Dead jars
 
@@ -133,19 +133,20 @@ recipe "Are the account pools working", against the analytics counters.
 
 ### Cached gate verdicts
 
-Filling a pool needs no deploy, no TTL wait, no cache flush, and no timing of `wrangler secret put`
-against a merge. `YT_META_TTL_MS` is 30 days (`src/worker.ts:2118`), so every age-gated video viewed
-before fill-day left a record saying `ageLimit: 18`, written by a jar-capable build with no jar to
-send. Those are `g10` records too, the generation the running build still writes, so 1.8.0's bump to
-`g10` retired nothing here: `metaCacheKey` (`src/worker.ts:1657`) namespaces every record by
-generation, and a bump to `g11` would orphan these along with a month of good dates, descriptions
-and counts. `ytMetaUsable` (`src/worker.ts:2240`) refuses a gated record carrying no `jarred` flag
-while `jarAvailable(env, 'yt')` holds, and the next view re-extracts with the jar. That conditional
-shipped in 1.9.0 on 2026-08-04 (`docs/CHANGELOG.md:8`, `:42`) and adds no second bump. Without it,
-filling a secret heals none of those records, and `pool_unused` reports the fresh accounts as dead.
+Filling a pool needs no deploy, no TTL wait and no cache flush. `wrangler secret put` does not have
+to be timed against a merge. `YT_META_TTL_MS` is 30 days (`src/worker.ts:2118`), so every age-gated
+video viewed before fill-day left a record saying `ageLimit: 18`, written by a jar-capable build
+with no jar to send. Those are `g10` records too, the generation the running build still writes, so
+1.8.0's bump to `g10` retired nothing here: `metaCacheKey` (`src/worker.ts:1657`) namespaces every
+record by generation, and a bump to `g11` would orphan these along with a month of good dates,
+descriptions and counts. `ytMetaUsable` (`src/worker.ts:2240`) refuses a gated record carrying no
+`jarred` flag while `jarAvailable(env, 'yt')` holds, and the next view re-extracts with the jar.
+That conditional shipped in 1.9.0 on 2026-08-04 (`docs/CHANGELOG.md:8`, `:39`) and adds no second
+bump. Without it, filling a secret heals none of those records, and `pool_unused` reports the fresh
+accounts as dead.
 
 Rotating a dead pool leaves the cached verdicts in place. A record measured with a jar that still
-says gated describes an extract that was logged in and walled anyway, so it is believed. Only a
+says gated is treated as correct, because the extract was logged in and walled anyway. Only a
 `RESOLVER_GENERATION` bump (`src/worker.ts:1187`, currently `g10`) clears it.
 
 ---

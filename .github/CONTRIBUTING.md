@@ -24,7 +24,7 @@ npm run typecheck
 npx wrangler dev      # local worker
 ```
 
-`npm run build` runs the suite and a type check. Cloudflare Workers Builds, the only system that deploys this Worker, runs it before deploying, so a red suite ships nothing. GitHub Actions runs the same two steps on pushes to `main` and `staging` and on every pull request, though a red check there cannot stop a deploy.
+`npm run build` runs the suite and a type check. Cloudflare Workers Builds, the only system that deploys this Worker, runs it before deploying, so a red suite ships nothing. GitHub Actions runs the same two steps on pushes to `main` and `staging` and on every pull request; those checks do not gate the deploy.
 
 Do **not** deploy by hand. Workers Builds watches `main`, so merging is the deploy, and `npm run deploy` refuses on purpose. A hand deploy overwrites whatever the build shipped, and prod goes on looking healthy while the pipeline is broken. That has cost the project real downtime once already.
 
@@ -44,7 +44,7 @@ The code says what it does. A comment carries the measurement behind a value, th
 
 ### Don't guess
 
-Never invent a title, an author or a thumbnail to fill a hole. When something cannot be determined the card says so: a private card, an age-gated one, or a plain "couldn't load" for everything else.
+Never invent a title, an author or a thumbnail. When something cannot be determined the card says so: there are private and age-gated cards, and a plain "couldn't load" for everything else.
 
 ### Fetching and normalising are separate
 
@@ -71,7 +71,7 @@ There is no CLA. By opening a PR you agree your contribution is licensed under t
 
 Roughly, in order:
 
-1. A `Route` arm in `src/router.ts`, plus a `PostRef` variant, plus the `parseRefKey` allowlist entry. The allowlist entry is easy to forget, and its absence 404s every image on the new platform.
+1. A `Route` arm in `src/router.ts`, plus a `PostRef` variant, plus the `parseRefKey` allowlist entry. Forgetting the allowlist entry 404s every image on the new platform.
 2. `src/platforms/<site>/fetch.ts` and `normalize.ts`.
 3. A dispatch arm in `src/worker.ts`.
 4. A captured fixture and normalizer tests.

@@ -31,7 +31,7 @@ for an upstream fetch, a mux wait and a `yt-dlp -J`, then failed for want of
 One parameter, `url`, carrying the whole original link. Percent-encode it. A raw `?` or `&` in the
 post url ends the parameter early.
 
-Routing reads the path and the query, never the host. `https://x.com/jack/status/20`,
+Routing reads the path and the query. The host is ignored. `https://x.com/jack/status/20`,
 `https://mbedfx.app/jack/status/20` and `?url=/jack/status/20` are one request, and a host cannot
 break the tie on a path two sites claim ([`ambiguous`](#ambiguous)).
 
@@ -240,7 +240,7 @@ the platform.
 `d.` in front of either official host serves the file itself, video or image, at its own url:
 `https://d.mbedfx.app/jack/status/20`, `https://d.megapenispoopenfarten.sex/jack/status/20`. Those
 bytes answer range requests, and a client seeks and resumes properly. A `d.` url renders no card,
-and a crawler and a person get the same bytes.
+and it serves crawlers and people the same bytes.
 
 With nothing to serve, `d.` answers a plain-text 404; an HTML body there leaves a downloader holding
 a file full of markup. `media_miss` on this host means the post has no usable media at all, a second
@@ -250,7 +250,7 @@ meaning `docs/METRICS.md` records under "Known defects in the write shape" (`src
 
 ## The seventeen platform codes
 
-`platform` is the two-letter code. `tw` is Twitch; Twitter is `x`.
+`platform` is the two-letter code. `tw` is Twitch. Twitter is `x`.
 
 | Code | Site | Hosts |
 |---|---|---|
@@ -294,8 +294,8 @@ That column records where a link came from. Routing never reads it.
 ## When the answer is not JSON
 
 Every code in the [failure table](#failures) arrives inside the envelope. The answers below do not,
-and `.json()` on one of them throws. Cloudflare's own edge errors are the same: 502, 520, 522, 524
-and friends come back from the proxy as HTML, without the Worker running.
+and `.json()` on one of them throws. Cloudflare's own edge errors are the same. 502, 520, 522, 524
+and the rest come back from the proxy as HTML and the Worker never runs.
 
 ### A path that is not exactly `/_api/v1`
 
@@ -378,7 +378,7 @@ total ≈ upstream fetch + max(300 ms, 9000 ms − upstream fetch) + (YouTube on
 An upstream answering within 8.7 s gives 9.0 s, 17.0 s on a cold YouTube link; slower, the mux drops
 to its 300 ms floor and the total tracks the upstream. Set the client timeout to 20 s: the 17.0 s
 worst case plus roughly 3 s for connection setup and a slower upstream. 12 s covers a client that
-never sends YouTube links; 5 or 10 s cuts off requests about to answer.
+never sends YouTube links. 5 or 10 s cuts off requests about to answer.
 
 Measured, all in `src/worker.ts`: a cold video remux 6-9 s at ≤480p (`1313`, 2026-07-24),
 `yt-dlp -J` on YouTube 2.3-6.7 s over five runs (`2299`, 2026-07-26), a Facebook metadata extract

@@ -2,12 +2,13 @@
 
 ## FxEmbed
 
-`src/platforms/twitter/fetch.ts` reproduces the GraphQL feature-flag table used by
-[FxEmbed](https://github.com/FixTweet/FxEmbed) (formerly FxTwitter). It's copied verbatim because
-Twitter 400s the request if a required flag is missing. The set is whatever the endpoint accepts
-today.
+`src/platforms/twitter/fetch.ts` carries the `rwebTweetFeatureKeys` subset of the GraphQL
+feature-flag table used by [FxEmbed](https://github.com/FixTweet/FxEmbed) (formerly FxTwitter), with
+each key's value inlined, read at FxEmbed HEAD 9f57d264. Twitter 400s the request when a required
+flag is missing, and the set drifts as Twitter rotates it. Re-copy the table from FxEmbed when a
+request starts 400ing.
 
-FxEmbed is MIT licensed and its notice is retained here:
+FxEmbed is MIT licensed:
 
 ```
 MIT License
@@ -33,17 +34,18 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
 
-The guest bearer token and query ids near it are Twitter-side facts rather than FxEmbed's
-authorship, and carry no obligation.
+The guest bearer token and query ids in the same file come from Twitter and carry no licence
+obligation.
 
 ## Simple Icons
 
-The brand marks in `public/index.html` are from [Simple Icons](https://simpleicons.org), released
-under **CC0 1.0**. Attribution isn't required, and is given anyway. The marks remain the trademarks
-of their respective owners, used nominatively to identify the sites this project supports.
+The brand marks in `public/index.html` are from [Simple Icons](https://simpleicons.org) 16.27.1,
+released under CC0 1.0. Attribution is not required under CC0 and is given anyway. The marks
+themselves remain their owners' trademarks and only identify which sites are supported.
 
-## yt-dlp and FFmpeg
+## yt-dlp, FFmpeg and Deno
 
-The media container installs [yt-dlp](https://github.com/yt-dlp/yt-dlp) (Unlicense) and
-[FFmpeg](https://ffmpeg.org) at build time and invokes them as separate processes. Neither is
-vendored into this repository.
+None of these are vendored here. The media container installs
+[yt-dlp](https://github.com/yt-dlp/yt-dlp) (Unlicense), [FFmpeg](https://ffmpeg.org) and a
+[Deno](https://github.com/denoland/deno) binary (MIT; yt-dlp needs a JS runtime for YouTube) at
+build time and invokes them as separate processes.

@@ -29,7 +29,7 @@ https://x.com/jack/status/20
 https://mbedfx.app/jack/status/20
 ```
 
-<https://mbedfx.app> does the same swap in the browser, unfurls share codes, and draws the finished card before you send it.
+<https://mbedfx.app> does the same swap in the browser and draws the card before you send it. It also unfurls share codes.
 
 > **<https://megapenispoopenfarten.sex>** runs the same worker. It's where this started, and links people already pasted still point at it.
 
@@ -82,14 +82,14 @@ A bare `dai.ly` or `redd.it` code names no site on its own, and the converter pa
 
 ## Features
 
-A companion container remuxes the stream into one progressive faststart MP4, cached in R2 and served with `accept-ranges: bytes` for Discord's player to seek on. A cold video draws its cover image first and plays on the next view; that card is never response-cached. [container/README.md](container/README.md) has the resolver and its ceilings.
+The container remuxes the stream into one progressive faststart MP4, cached in R2 and served with `accept-ranges: bytes` for Discord's player to seek on. Cold videos draw the cover image first and play on the next view; that card is never response-cached. [container/README.md](container/README.md) has the resolver and its ceilings.
 
-A post that can't be read gets a card naming the reason: 🔒 private or friends-only, 🔞 age-restricted, or deleted and never existed. Where the platform gives no reason the card lists the likely ones and picks none. A path two sites both claim is not guessed either ([docs/API.md](docs/API.md#failures) has the codes; `src/render/chooser.ts` draws the human version).
+Posts that can't be read get a card naming the reason: 🔒 private or friends-only, 🔞 age-restricted, or deleted and never existed. Where the platform gives no reason the card lists the likely ones and picks none. A path two sites both claim is not guessed either ([docs/API.md](docs/API.md#failures) has the codes; `src/render/chooser.ts` draws the human version).
 
 <details>
 <summary><strong>Translation</strong></summary>
 
-A caption that isn't in English gets translated, with the original kept below it:
+Captions that aren't in English get translated, with the original kept below it:
 
 ```
 Chinese cabbage is delicious, isn't it?
@@ -111,13 +111,13 @@ Non-Latin scripts (Japanese, Korean, Chinese, Russian, Arabic, Thai, Greek, Hebr
 
 ## JSON API
 
-`/_api/v1?url=<the post url>` serves the post data the cards are drawn from, as JSON. No key, no signup, and CORS is open to any origin.
+`/_api/v1?url=<the post url>` serves the post data the cards are drawn from, as JSON. No key or signup, and CORS is open to any origin.
 
 ```sh
 curl -s 'https://mbedfx.app/_api/v1?url=https%3A%2F%2Fx.com%2Fjack%2Fstatus%2F20' | jq
 ```
 
-Branch on `ok` and `error.code`, never on the HTTP status. [docs/API.md](docs/API.md) is the contract.
+Branch on `ok` and `error.code`, never on the HTTP status. See [docs/API.md](docs/API.md).
 
 ## Caveats
 
@@ -132,8 +132,8 @@ Branch on `ok` and `error.code`, never on the HTTP status. [docs/API.md](docs/AP
 - The page sets no cookies, needs no account, and carries no analytics.
 - The counters carry a platform code, an outcome and the caller's class, never a url, post id, IP or verbatim user agent ([docs/METRICS.md](docs/METRICS.md)).
 - R2 holds remuxed video, container metadata and translations, keyed by the post and, for translations, by a hash of the text. All three expire after 60 days and can be regenerated from the platform.
-- Cards cache for about 15 minutes. A just-deleted post can linger that long.
-- The Worker fetches from its own egress. A reader's IP and user agent stop there and never reach the platform.
+- Cards cache for about 15 minutes, so a just-deleted post can linger that long.
+- The Worker fetches from its own egress, and a reader's IP and user agent never reach the platform.
 
 ## How it compares
 
@@ -181,11 +181,11 @@ The three `*_ACCOUNTS` pools each buy something different. `YT_ACCOUNTS` turns a
 <details>
 <summary><strong>Discord reads two different documents</strong></summary>
 
-For a post with media it follows the `<link rel="alternate" type="application/activity+json">` tag and renders a Mastodon-shaped status. For a post without media it reads the plain OpenGraph head. A fix applied to one head and not the other leaves half the posts unfixed.
+Both heads need the same fix, or half the posts stay broken. For a post with media it follows the `<link rel="alternate" type="application/activity+json">` tag and renders a Mastodon-shaped status. For a post without media it reads the plain OpenGraph head.
 
 </details>
 
-- `src/router.ts` turns a url into a `Route`, from the path and the query, never the host.
+- `src/router.ts` reads the path and the query, never the host, and returns a `Route`.
 - `src/refkey.ts` is the security boundary for what crosses the wire and back.
 - `src/render/` draws the two heads, the Mastodon spoof and the failure cards.
 - `src/translate.ts` holds detection, translation and the marker.
@@ -195,7 +195,7 @@ For a post with media it follows the `<link rel="alternate" type="application/ac
 
 ## Contributing
 
-File bugs and feature requests through the [issue templates](../../issues/new/choose). [CONTRIBUTING.md](.github/CONTRIBUTING.md) has what to run before a PR.
+Bugs and feature requests go through the [issue templates](../../issues/new/choose); what to run before a PR is in [CONTRIBUTING.md](.github/CONTRIBUTING.md).
 
 If your PR rests on what an upstream returned, say where you ran it. A datacenter IP and a residential one are served different bytes, and more than one feature here worked from a laptop and did nothing in production.
 

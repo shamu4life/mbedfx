@@ -12,8 +12,9 @@ deploys against each other, where the older commit can win. Only 1.9.0 ever exis
 Minor, because the public JSON API is new surface area. Everything else is a fix or a document.
 
 Two things do not take effect on merge. The YouTube date fix stays inert until the container image is
-rebuilt and redeployed. The age-gate pools do nothing until the secrets are filled, and this release
-makes filling one take effect while filling none of them.
+rebuilt and redeployed. The age-gate pools do nothing until the secrets are filled. This release
+fills none of them; filling `IG_ACCOUNTS` or `YT_ACCOUNTS` now takes effect, and `X_ACCOUNTS` still
+does not.
 
 ### Age-gate account pools: filling one now takes effect
 
@@ -46,7 +47,9 @@ makes filling one take effect while filling none of them.
   "READ BY NOTHING YET" and that setting them "CHANGES NOTHING TODAY", and it pointed at a
   `credentialSeamArmed` that no longer exists. A later paragraph in the same comment narrowed the
   claim correctly, to `X_ACCOUNTS` alone. That comment is what an operator reads before deciding
-  whether a throwaway account is worth spending on a secret, and it was answering no.
+  whether a throwaway account is worth spending on a secret, and it was answering no. It now records
+  that `IG_ACCOUNTS` and `YT_ACCOUNTS` are spent inside the container, on both the mux and the `-J`
+  meta call, and that `X_ACCOUNTS` is not.
 
 ### Operator metrics, and Workers Logs turned off
 
@@ -123,8 +126,8 @@ makes filling one take effect while filling none of them.
     a service where a hostname is also something the Worker fetches. The answer names its
     `candidates` and the caller re-asks with a two-letter prefix.
   - An unknown upload date is `null` and never the epoch. `/_card` serialises `new Date(0)` because
-    the page draws a note beside it. An API consumer would sort by it and file every dateless post at
-    the beginning of time.
+    the page draws a note beside it. An API consumer would sort by it and file every dateless post
+    in 1970.
   - A count that is zero, `NaN`, `null` or a string is omitted, and an absent key says the count is
     unknown. Counts come out of the post cache, which validates three fields and not these, and
     upstreams use `0` for a genuinely uninteracted post and for a count they withhold.
@@ -372,9 +375,8 @@ makes filling one take effect while filling none of them.
   `muxing`, and the page shows an indeterminate spinner and polls until it clears.
 
   It's not a progress bar and can't be: yt-dlp and ffmpeg run inside the container, and the Worker
-  sees a Durable Object that has either finished or not. An honest spinner beats an invented
-  percentage. The label says the link is already correct and can be sent now. The poll is capped at
-  25s, after which a sentence replaces the spinner and the turning stops.
+  sees a Durable Object that has either finished or not. The label says the link is already correct
+  and can be sent now. The poll is capped at 25s, after which a sentence replaces the spinner.
 
 ### Fixed
 - A video too long to mux advertised a video url that could never resolve. The over-ceiling degrade

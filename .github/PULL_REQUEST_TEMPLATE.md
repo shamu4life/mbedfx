@@ -6,7 +6,7 @@
 
 ## Type of change
 
-- [ ] Bug fix — a card was wrong, missing, or a link wouldn't resolve `→ PATCH`
+- [ ] Bug fix — a card was wrong or missing, or a link did not resolve `→ PATCH`
 - [ ] New site or new path shape `→ MINOR`
 - [ ] Feature or behaviour change `→ MINOR`
 - [ ] Breaking change — a url shape or a rendered card changes for existing links `→ MAJOR`
@@ -14,7 +14,7 @@
 
 ## Where did you measure it?
 
-<!-- Only if this change rests on what an upstream returned. Datacenter egress and a laptop
+<!-- Only if this rests on what an upstream returned. Datacenter egress and a laptop
      routinely get different bytes from the same url. A feature that works from a laptop and
      does nothing in production is this project's most common failure. -->
 

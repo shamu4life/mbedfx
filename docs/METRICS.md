@@ -1,8 +1,8 @@
 # Reading the counters
 
 `src/worker.ts` calls `count()` from 49 sites into the `mbedfx_counters` Analytics Engine dataset.
-Nothing reads it back; the SQL below does, run by hand from a laptop or a cron box against
-Cloudflare's account-level SQL API.
+Nothing in the Worker reads it back. The queries below do, run by hand from a laptop or a cron box
+against Cloudflare's account-level SQL API.
 
 None of it has been run against the live account: every query comes from this repo's source and from
 Cloudflare's documentation, fetched 2026-08-03, those pages reading `Last updated Apr 23, 2026`.
@@ -12,7 +12,7 @@ Correct one when it comes back wrong.
 
 ## Cloudflare's observability surfaces
 
-Seven products, no single screen over them, each switched on, billed and retained on its own.
+No single screen covers all seven. Each is switched on, billed and retained on its own.
 Per-request means one record per request, including what the request was; streamed means kept
 nowhere.
 
@@ -25,7 +25,7 @@ nowhere.
   of them `SERVER-SIDE ONLY (wrangler tail)`.
 - **Workers Metrics** (stored, aggregate, automatic): request / error / CPU / wall-time charts on the
   Worker's dashboard page. No per-request detail, three months of history, no configuration, no
-  price. They answer "is it up and is it erroring", nothing past that.
+  price.
 - **Analytics Engine** (stored, aggregate, on): the `mbedfx_counters` dataset `src/analytics.ts`
   writes into (`wrangler.jsonc:178`). Own config key, own write and read APIs, three months of
   retention, out of `observability.enabled`'s reach.
@@ -49,10 +49,10 @@ Worker that url is the post somebody pasted, kept seven days. `src/analytics.ts:
 any of it in a counter and records the precedent: TwitFix shut down in 2022 over a public log of
 processed urls, with zero legal contact.
 
-What that costs is searching after the fact for a request that already failed: the five
+In exchange, a request that already failed cannot be searched for after the fact. The five
 `console.error` calls still run, and nothing stores them. Reproduce the problem with
-`npx wrangler tail mbedfx` running instead. The dashboard charts and everything in this document are
-untouched.
+`npx wrangler tail mbedfx` running instead; the dashboard charts and everything in this document are
+unaffected either way.
 
 `wrangler tail` still works with `observability.enabled` off: streaming and storage are independent
 consumers of one trace-event stream. Cloudflare's docs state it neither way. That left an
@@ -88,8 +88,8 @@ env.AE?.writeDataPoint({ blobs: [platform, outcome, client], doubles: [1] })
 Columns are 1-based: the first `blobs` element is `blob1`, and there is no `blob0`. `writeDataPoint`
 passes no `indexes` array, leaving no `index1` to filter or group on; `blob1`/`blob2`/`blob3` are the
 only dimensions. `double1` is always 1, and there are no durations, byte counts, latencies or cache
-ages, so nothing here answers "how long" or "how big". No urls, post ids, IPs or verbatim user agents
-either (`src/analytics.ts:207`). Adding a url column breaks what that constraint protects.
+ages. No urls, post ids, IPs or verbatim user agents either (`src/analytics.ts:207`). Adding a url
+column breaks what that constraint protects.
 
 ---
 
@@ -106,8 +106,8 @@ API="https://api.cloudflare.com/client/v4/accounts/${CF_ACCOUNT_ID}/analytics_en
 
 The query text is the POST body, with no JSON wrapper and no `query` field. Every POST is one billed
 read query, flat, whatever the complexity and however many rows come back; a dashboard polling every
-10s costs about 8,640 queries a day. A 200 is necessary and not sufficient: it will not separate a
-query that matched nothing from one that failed, so read `rows` in the JSON envelope.
+10s costs about 8,640 queries a day. A 200 will not separate a query that matched nothing from one
+that failed, so read `rows` in the JSON envelope.
 
 Run `SHOW TABLES` before any `SELECT`. A dataset does not exist as a table until the first data point
 lands, and the docs don't say what a `SELECT` against a table that was never created returns.
@@ -144,11 +144,11 @@ carries `_sample_interval`, the number of original rows it stands for.
 | `quantile(0.5)(col)` | `quantileExactWeighted(0.5)(col, _sample_interval)` |
 
 The interval varies per row; Cloudflare's docs say explicitly that multiplying a `COUNT()` by a
-constant factor does not work. Read-time sampling responds to query cost: a longer window makes a
+constant factor does not work. Read-time sampling responds to query cost. A longer window makes a
 naive `COUNT()` under-report more, which on a chart is indistinguishable from a traffic decline.
 
-Whether any mbedfx row is sampled today is unknown, as is what `index1` holds when no `indexes` array
-is passed; Cloudflare's docs only ever describe the index as present.
+Nobody has checked whether mbedfx rows are sampled today, or what `index1` holds when no `indexes`
+array is passed. Cloudflare's docs only ever describe the index as present.
 [Is any of this being sampled](#is-any-of-this-being-sampled) answers both. At low volume
 `_sample_interval` may be uniformly `1`, agreeing with `COUNT()`; use `SUM` anyway, since that
 agreement can stop holding without the written data changing.
@@ -217,9 +217,8 @@ Most mean nothing as an absolute number, and several mislead alone.
 
 - `rd`/`private` only fires on the Reddit OAuth fallback, which runs only when `REDDIT_CLIENT_ID` and
   `REDDIT_CLIENT_SECRET` are set.
-- `pool_unused` only fires when the matching account secret is non-empty, and for `x` only when an
-  entry carries both `auth_token` and `ct0` (`src/credentials.ts:146`). An unparseable secret counts
-  as an empty pool.
+- `pool_unused` needs a non-empty matching account secret, and for `x` an entry carrying both
+  `auth_token` and `ct0` (`src/credentials.ts:146`). An unparseable secret counts as an empty pool.
 - `copyright_gql` depends on a `doc_id` Meta rotates.
 - Every counter is zero if the `AE` binding is absent from the deployed bundle.
   `env.AE?.writeDataPoint` is optional-chained (`src/analytics.ts:225`): a deploy without it writes
@@ -401,8 +400,8 @@ run on your own network. Off the public edge, none of the exposure below applies
 ## Why there is no `/_metrics`
 
 The `AE` binding is write-only; reads need the account-level SQL API and a bearer token. Add the
-route and `Env` grows an account-scoped Cloudflare API token, live on the public edge, serving data
-that same token already pulls from a laptop with no new attack surface. `src/analytics.ts:195`
+route and `Env` grows an account-scoped Cloudflare API token, live on the public edge. The same
+token already pulls this data from a laptop, where it is not exposed. `src/analytics.ts:195`
 forbids the addition by name and records the precedent: the last secret-gated endpoint mounted here
 fetched a caller-supplied shortcode from the Worker's egress, and was deleted with its module, its
 mount in `worker.ts` and its wrangler secret. Its path stays unspelled in the source; a test fails
