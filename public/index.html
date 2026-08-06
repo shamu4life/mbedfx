@@ -531,8 +531,7 @@ footer .fine { font-size: 12px; opacity: .8; }
         <div>
           <div class="who"><span class="name">mbedfx</span><span class="bot">BOT</span><span class="ts">today</span></div>
           <p>Paste a social link and I'll hand back one Discord can actually draw. Swap the site's
-             domain for mine and the link still points at the same post. Read here, not
-             handed off to someone else's fixer.</p>
+             domain for mine and the link still points at the same post. I fetch the post myself.</p>
 
           <div class="tool">
             <div class="toolbar">
@@ -573,8 +572,8 @@ footer .fine { font-size: 12px; opacity: .8; }
         <div class="ava">fx</div>
         <div>
           <div class="who"><span class="name">mbedfx</span><span class="bot">BOT</span><span class="ts">today</span></div>
-          <h2 class="head">Every path shape that works</h2>
-          <p class="sub">Straight out of the router. If a site isn't here, it's in
+          <h2 class="head">Every link shape that works</h2>
+          <p class="sub">This is the list I match against. If a site isn't here, it's in
              <a href="#nope">#nope</a>.</p>
           <div id="grid"></div>
         </div>
@@ -587,10 +586,16 @@ footer .fine { font-size: 12px; opacity: .8; }
         <div class="ava">fx</div>
         <div>
           <div class="who"><span class="name">mbedfx</span><span class="bot">BOT</span><span class="ts">today</span></div>
-          <h2 class="head">Keep the instance in the link</h2>
-          <p class="sub">A post id is meaningless without the server it lives on. About one in five
-             bare id lookups against a default server returns a real but completely different post,
-             so there's no default here and no allow-list. Any server works.</p>
+          <h2 class="head">Keep the server in the link</h2>
+          <!-- THE ONE-IN-FIVE NUMBER STAYS VISIBLE. A copy pass moved it into this comment as a
+               measurement the reader could not act on. Ten blind readers then picked this page over
+               that version and every one of them named the same loss unprompted: the number is what
+               turns "type the server name" from an arbitrary chore into a measured decision, and it
+               is the only quantified claim on the page. "Any server works" carries the no-allow-list
+               fact without the repo's word for it. -->
+          <p class="sub">I need the server name as well as the post id. About one in five bare id
+             lookups against a default server return a real post that isn't the one meant, so
+             there's no default here. Any server works.</p>
           <p style="margin-top:10px">Slot me in after the <code>https://</code>:</p>
 <pre>https://<b>mbedfx.app</b>/mstdn.social/@stux/116994812581955524</pre>
           <p>Or just type me in front of the whole thing, which is one <kbd>Home</kbd> keypress:</p>
@@ -608,28 +613,28 @@ footer .fine { font-size: 12px; opacity: .8; }
         <div>
           <div class="who"><span class="name">mbedfx</span><span class="bot">BOT</span><span class="ts">today</span></div>
           <h2 class="head">Some posts can't be shown</h2>
-          <p class="sub">The card says so, instead of pretending otherwise.</p>
+          <p class="sub">The card says so.</p>
 
           <div class="embed wide" style="--c:var(--red)">
             <div class="t">🔒 Private or restricted</div>
             <div class="d">A protected account, a friends-only post, or a private, banned or
-              quarantined community. Logged-out is logged-out.</div>
+              quarantined community. I read every post logged out.</div>
           </div>
           <div class="embed wide" style="--c:var(--amber)">
             <div class="t">🔞 Age-gated</div>
             <div class="d">Needs a signed-in adult account. On YouTube it is the thumbnail and no
-              playback, and that one is permanent rather than worth retrying.</div>
+              playback, and retrying never helps.</div>
           </div>
           <div class="embed wide" style="--c:var(--blurple)">
             <div class="t">🎬 Video came back as a still</div>
             <div class="d">Carousels with video flatten to the cover. Instagram reels using
               major-label audio arrive with no video at all. Anything over 25 minutes or 375 MB
-              isn't remuxed.</div>
+              stays a still.</div>
           </div>
           <div class="embed wide" style="--c:var(--faint)">
             <div class="t">😕 "Couldn't load this post"</div>
-            <div class="d">The reason isn't knowable. On Threads, private, deleted and age-gated
-              look identical from outside, so I don't guess.</div>
+            <div class="d">I can't tell why. On Threads, private, deleted and age-gated look
+              identical from outside, so I don't guess.</div>
           </div>
         </div>
       </article>
@@ -649,10 +654,10 @@ footer .fine { font-size: 12px; opacity: .8; }
             <div><code>fb.watch</code></div>
             <div><code>pin.it</code>. Full <code>/pin/…</code> links are fine.</div>
             <div>Instagram stories</div>
-            <div>Twitch VODs and live channels. Clips only.</div>
+            <div>Twitch VODs and live channels. Only clips work.</div>
             <div>Facebook text posts. Video, reels and group posts work.</div>
-            <div>Pixelfed and GoToSocial. Their APIs refuse logged-out reads.</div>
-            <div>Bare profile links. There's no post to draw.</div>
+            <div>Pixelfed and GoToSocial. Their APIs refuse the logged-out reads I make.</div>
+            <div>Bare profile links. There's no one post for me to draw.</div>
             <div>PeerTube playlists, Friendica, Bilibili, pixiv</div>
           </div>
         </div>
@@ -666,8 +671,8 @@ footer .fine { font-size: 12px; opacity: .8; }
         <p>No-framework Cloudflare Worker ·
           <a href="https://github.com/shamu4life/mbedfx">Source on GitHub</a> ·
           <a href="https://github.com/shamu4life/mbedfx/blob/main/LICENSE">MIT</a></p>
-        <p class="fine">Not affiliated with Discord. Platform names and marks belong to their owners
-          and are used here to say which sites are supported.</p>
+        <p class="fine">Not affiliated with Discord. Platform names and marks belong to their
+          owners and are used here to say which sites are supported.</p>
       </footer>
 
     </div>
