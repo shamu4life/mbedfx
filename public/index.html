@@ -532,7 +532,7 @@ footer .fine { font-size: 12px; opacity: .8; }
           <div class="who"><span class="name">mbedfx</span><span class="bot">BOT</span><span class="ts">today</span></div>
           <p>Paste a social link and get back one Discord can actually draw. Swap the site's domain
              for mbedfx.app and the link still points at the same post. The post is fetched
-             here, not by another service.</p>
+             here, not by another fixer.</p>
 
           <div class="tool">
             <div class="toolbar">
@@ -574,7 +574,7 @@ footer .fine { font-size: 12px; opacity: .8; }
         <div>
           <div class="who"><span class="name">mbedfx</span><span class="bot">BOT</span><span class="ts">today</span></div>
           <h2 class="head">Every link shape that works</h2>
-          <p class="sub">These are the shapes that match. If a site isn't here, it's in
+          <p class="sub">Straight out of the router. If a site isn't here, it's in
              <a href="#nope">#nope</a>.</p>
           <div id="grid"></div>
         </div>
@@ -594,9 +594,9 @@ footer .fine { font-size: 12px; opacity: .8; }
                turns "type the server name" from an arbitrary chore into a measured decision, and it
                is the only quantified claim on the page. "Any server works" carries the no-allow-list
                fact without the repo's word for it. -->
-          <p class="sub">The server name is needed as well as the post id. About one in five bare id
-             lookups against a default server return a real post that isn't the one meant, so
-             there's no default here. Any server works.</p>
+          <p class="sub">A post id is meaningless without its server. About one in five bare id
+             lookups against a default server returns a real post, just not the right one, so
+             there's no default here. Any server's links work.</p>
           <p style="margin-top:10px">Put mbedfx.app after <code>https://</code>:</p>
 <pre>https://<b>mbedfx.app</b>/mstdn.social/@stux/116994812581955524</pre>
           <p>Or just type mbedfx.app/ in front of the whole link, one <kbd>Home</kbd> keypress:</p>
@@ -614,7 +614,7 @@ footer .fine { font-size: 12px; opacity: .8; }
         <div>
           <div class="who"><span class="name">mbedfx</span><span class="bot">BOT</span><span class="ts">today</span></div>
           <h2 class="head">Some posts can't be shown</h2>
-          <p class="sub">The card says so.</p>
+          <p class="sub">The card says so, instead of pretending otherwise.</p>
 
           <div class="embed wide" style="--c:var(--red)">
             <div class="t">🔒 Private or restricted</div>
@@ -1115,7 +1115,7 @@ function mbedfxConvert(input, host) {
     } else {
       result.style.display = 'none'; copy.style.display = 'none';
       note.className = 'msgline bad';
-      var why = r.why || (r.kind === 'unparseable' ? 'That doesn’t parse as a link.' : 'That can’t be fixed.');
+      var why = r.why || (r.kind === 'unparseable' ? 'That doesn’t parse as a link.' : 'Nothing mbedfx can fix.');
       /**
        * A REFUSAL STILL OFFERS THE OVERRIDE, as long as there is a path to force. Every refusal here
        * is a JUDGEMENT — "that looks like a channel rather than a clip", "stories aren't routed",
