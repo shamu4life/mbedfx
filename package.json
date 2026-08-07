@@ -11,7 +11,9 @@
     "typecheck": "tsc --noEmit",
     "test": "node --test",
     "// build": "THE CI GATE, and it is not a no-op despite a Worker needing no build step. Cloudflare Workers Builds runs `npm run build` before its deploy command; with no such script the build FAILED and nothing shipped (measured 2026-07-26: three consecutive failed builds on main, phase-2 and staging, all 'Missing script: build', while the live worker sat on a hand-uploaded version). Pointing it at the suite turns that required-and-previously-broken step into the gate that was lost when deploys moved off GitHub Actions: a red suite or a type error now fails the build, so it never reaches deploy. This matters more here than on a typical worker because Discord CACHES the og:video url we serve, keyed by a url that never changes \u2014 a bad deploy outlives its own fix.",
-    "build": "npm test && tsc --noEmit"
+    "build": "npm test && tsc --noEmit",
+    "test:container": "python3 -m unittest discover -s container -p 'test_*.py'",
+    "// test:container": "EXECUTES container/server.py rather than reading it as text. NOT in `build`: that script is the Cloudflare Workers Builds gate and python3 is not guaranteed in that image, so a failure there would block the deploy instead of catching a bug. GitHub Actions runs it on ubuntu-latest."
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^5",
