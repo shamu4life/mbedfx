@@ -1,81 +1,79 @@
 # Reading the counters
 
-mbedfx writes counters into a Cloudflare Analytics Engine dataset from 50 call sites, and has never
-had a way to read them back. This is that way.
+`src/worker.ts` calls `count()` from 49 sites into the `mbedfx_counters` Analytics Engine dataset.
+Nothing in the Worker reads it back. The queries below do, run by hand from a laptop or a cron box
+against Cloudflare's account-level SQL API.
 
-It is a **cookbook, not an endpoint**, and that is a decision rather than a shortcut — see
-[Why there is no `/_metrics`](#why-there-is-no-_metrics) at the bottom. Everything here runs from your
-laptop or a cron box against Cloudflare's SQL API.
-
-**Where this was measured: nowhere.** Every query below is written from Cloudflare's documentation
-(fetched 2026-08-03; those pages read "Last updated Apr 23, 2026") and from this repo's source. None
-has been run against the live account. The first person to run them should correct whatever is wrong
-here rather than assume it was verified.
+None of it has been run against the live account: every query comes from this repo's source and from
+Cloudflare's documentation, fetched 2026-08-03, those pages reading `Last updated Apr 23, 2026`.
+Correct one when it comes back wrong.
 
 ---
 
-## What Cloudflare actually gives you to look at
+## Cloudflare's observability surfaces
 
-Cloudflare does not have one "monitoring" screen. It has several separate products that sit near each other in the dashboard but are switched on, billed and retained independently. Turning one off does not touch the others, and most of the confusion here comes from assuming it does.
+No single screen covers all seven. Each is switched on, billed and retained on its own.
+Per-request means one record per request, including what the request was; streamed means kept
+nowhere.
 
-Two distinctions carry the whole picture.
+- **Workers Logs** (stored, per-request, off): one invocation log per request plus every
+  `console.log`/`console.error`, indexed and queryable in the dashboard for 7 days. The only surface
+  `observability.enabled` (`wrangler.jsonc:44`) controls.
+- **Real-time logs / `wrangler tail`** (streamed, per-request, always available, no setting): the
+  same events in a terminal or the dashboard's Live tab, stored nowhere. Four of the five
+  `console.error` calls in `worker.ts` were written for it, each commented `SERVER-SIDE ONLY`, three
+  of them `SERVER-SIDE ONLY (wrangler tail)`.
+- **Workers Metrics** (stored, aggregate, automatic): request / error / CPU / wall-time charts on the
+  Worker's dashboard page. No per-request detail, three months of history, no configuration, no
+  price.
+- **Analytics Engine** (stored, aggregate, on): the `mbedfx_counters` dataset `src/analytics.ts`
+  writes into (`wrangler.jsonc:178`). Own config key, own write and read APIs, three months of
+  retention, out of `observability.enabled`'s reach.
+- **Workers Logpush** (export, off, own flag): the same trace events shipped off Cloudflare to R2, S3
+  or a log vendor.
+- **Tail Workers** (export, off, own config key): a second Worker receiving the telemetry stream,
+  able to filter or transform before anything is stored.
+- **Workers Traces** (stored, per-request, beta, off): spans of where time went inside one request,
+  behind `observability.traces.enabled`, which `observability.enabled` does not imply.
 
-**Aggregate versus per-request.** Some surfaces count things (a chart of requests per hour, a table of counters). Others keep a record of individual requests, which necessarily means keeping what those requests were. The privacy question and the debugging question live on opposite sides of that line.
+Dashboard → Workers & Pages → Overview → mbedfx reaches all but one: metrics on that page, Workers
+Logs under Observability, real-time logs under Logs → Live. Analytics Engine has no dashboard page.
 
-**Stored versus streamed.** Some surfaces write a record to Cloudflare that you can come back to tomorrow. Others show you events as they happen and keep nothing. A streamed surface cannot leak later, because there is nothing there later.
+### Why Workers Logs are off
 
-With that, the seven surfaces:
+`observability: { enabled: false }` sits at `wrangler.jsonc:44` for privacy, and read `true` until
+2026-08-04 (`398f971`). Measured against this account that day, a stored invocation log carries the
+full request URL including query string, the client IP (`cf-connecting-ip`), the verbatim user agent,
+the referer, and Cloudflare's geolocation block (city, latitude/longitude, ASN, timezone). On this
+Worker that url is the post somebody pasted, kept seven days. `src/analytics.ts:207` refuses to put
+any of it in a counter and records the precedent: TwitFix shut down in 2022 over a public log of
+processed urls, with zero legal contact.
 
-- **Workers Logs** — stored, per-request. Cloudflare writes one "invocation log" per request plus every `console.log`/`console.error` the code emitted, indexes them, and lets you query them in the dashboard for 7 days. This is the only surface controlled by `observability.enabled` in `wrangler.jsonc`, and it is the one being turned off. Measured against this account on 2026-08-04, the stored records carry the full request URL including query string, the client IP (`cf-connecting-ip`), the verbatim user agent, the referer, and Cloudflare's geolocation block (city, latitude/longitude, ASN, timezone).
-- **Real-time logs / `wrangler tail`** — streamed, per-request. The same events, shown live in a terminal or the dashboard's Live tab, stored nowhere. This is what the four `console.error` calls in `worker.ts` were written for; their comments already say "SERVER-SIDE ONLY (wrangler tail)".
-- **Workers Metrics** — stored, aggregate. The request / error / CPU / wall-time charts on the Worker's dashboard page. No per-request detail, three months of history, no configuration, no price. This is the surface that answers "is it up and is it erroring", and it is entirely separate from logs.
-- **Analytics Engine** — stored, aggregate, ours. The `mbedfx_counters` dataset that `src/analytics.ts` writes counters into. Its own product, its own config key, its own read API. Three months of retention. Nothing about it is affected by the observability setting.
-- **Workers Logpush** — export. Ships the same trace events off Cloudflare to R2, S3 or a log vendor. Off; its own flag.
-- **Tail Workers** — export with code in front of it. A second Worker that receives the telemetry stream and can filter or transform it before anything is stored. Off; its own config key.
-- **Workers Traces** — stored, per-request, beta. Spans showing where time went inside one request. Off; needs its own `observability.traces.enabled`, which `observability.enabled` does not imply.
+In exchange, a request that already failed cannot be searched for after the fact. The five
+`console.error` calls still run, and nothing stores them. Reproduce the problem with
+`npx wrangler tail mbedfx` running instead; the dashboard charts and everything in this document are
+unaffected either way.
 
-**On for this Worker today:** Workers Logs (`wrangler.jsonc:27`), Workers Metrics (automatic), Analytics Engine writes (`wrangler.jsonc:161`). Real-time logs is always available and needs no setting. Logpush, Tail Workers and Traces are all off.
+`wrangler tail` still works with `observability.enabled` off: streaming and storage are independent
+consumers of one trace-event stream. Cloudflare's docs state it neither way. That left an
+inference until 2026-08-05 (`64ff6f8`), when `npx wrangler tail mbedfx --format json` ran against the
+live Worker with `observability: { enabled: false }` deployed, alongside three uncacheable requests,
+and returned trace records carrying `scriptName: mbedfx`, `outcome: ok` and the request url. Their
+`logs` array was empty, those requests having missed every `console.error` path: the run covers the
+tail session delivering, not `console` output reaching it. Tail a failing path once for that. A
+cached response never invokes the Worker and produces no record, which looks like a broken tail; test
+with an uncacheable request.
 
-**Where to click:** everything except Analytics Engine starts at **Cloudflare dashboard → Workers & Pages → Overview → mbedfx**. Metrics are on that page. Workers Logs is the **Observability** tab. Real-time logs is **Logs → Live**. Analytics Engine has no dashboard page at all; it is read over an HTTP SQL API with an account token, which is what `docs/METRICS.md` is a cookbook for.
-
-### Workers Logs are off here, on purpose
-
-`wrangler.jsonc` sets `observability: { enabled: false }`, and it is a privacy boundary rather than a
-debugging preference. With it on, Cloudflare persists one invocation log per request for seven days,
-and those records carry the whole request url. On this Worker the url **is** the post somebody
-pasted, alongside their IP, user agent and geolocation. That is exactly what `src/analytics.ts`
-refuses to put in a counter, and its reason (TwitFix died over a public log of processed urls) does
-not stop applying because the log belongs to Cloudflare rather than to us.
-
-What that costs, and what it does not:
-
-| | |
-|---|---|
-| **Lost** | Searching *after the fact* for a request that already failed. The four `console.error` calls still run; nothing stores them. |
-| **Kept** | `npx wrangler tail mbedfx` for live debugging. Reproduce the problem with a tail running. |
-| **Kept** | The dashboard traffic / error-rate / CPU charts. Separate product, separate pipeline, unaffected. |
-| **Kept** | Everything in this document. Analytics Engine is a different product with its own key, its own write API and its own retention. |
-
-One honest gap: **Cloudflare's docs never state whether `wrangler tail` works with observability
-disabled.** The real-time logs page says it "does not store Workers Logs", and the config field is
-defined in terms of *persisting*, which reads as two independent consumers of the same trace-event
-stream — but that is an inference, not a quoted guarantee. Settle it in thirty seconds after the next
-deploy: run `npx wrangler tail mbedfx` and load a card. If lines appear, it is answered.
-
-The middle position that was not taken, recorded so the choice is legible rather than to reopen it:
-`observability.logs.invocation_logs = false` drops the record carrying the url, IP and user agent
-while keeping `console` output stored and searchable. Full off is stricter, and needs no trust in
-Cloudflare's field selection staying where it is.
-
+`observability.logs.invocation_logs = false` is the middle position, not taken. It drops the
+url/IP/user-agent record while keeping `console` output stored and searchable. Full off is stricter
+and survives Cloudflare moving its field selection.
 
 ---
 
-## What is actually written
-
-One function, one call, and that is the whole surface:
+## What the Worker writes
 
 ```ts
-// src/analytics.ts:204
+// src/analytics.ts:225
 env.AE?.writeDataPoint({ blobs: [platform, outcome, client], doubles: [1] })
 ```
 
@@ -87,26 +85,18 @@ env.AE?.writeDataPoint({ blobs: [platform, outcome, client], doubles: [1] })
 | `double1` | the literal `1` | always |
 | `timestamp` | set by the runtime | `DateTime`, always UTC |
 
-**Columns are 1-based.** There is no `blob0`. The first element of the `blobs` array is `blob1`.
-
-**No index is written.** `writeDataPoint` is called with no `indexes` array, so there is no `index1` to
-filter or group on. `blob1`/`blob2`/`blob3` are the only dimensions this dataset has.
-
-**`double1` is always 1**, so there is no duration, no byte count, no latency and no cache age
-anywhere in here. Any "how long" or "how big" question is unanswerable from this dataset as written,
-and no query below can be talked into answering one.
-
-**Counters only** — no URLs, no post ids, no IPs, no verbatim user agents. That is a deliberate
-constraint with a reason attached (`src/analytics.ts:197`): the demonstrated way a fixer dies is not
-lawyers, it is logging. A query that asks for a URL is asking for a column that does not exist, and
-adding one would break the thing the constraint protects.
+Columns are 1-based: the first `blobs` element is `blob1`, and there is no `blob0`. `writeDataPoint`
+passes no `indexes` array, leaving no `index1` to filter or group on; `blob1`/`blob2`/`blob3` are the
+only dimensions. `double1` is always 1, and there are no durations, byte counts, latencies or cache
+ages. No urls, post ids, IPs or verbatim user agents either (`src/analytics.ts:207`). Adding a url
+column breaks what that constraint protects.
 
 ---
 
-## Reading it
+## Connecting to the SQL API
 
-The dataset is read through Cloudflare's Analytics Engine SQL API — an account-level API, not the
-Worker binding. The `AE` binding is write-only.
+Reads go through the account-level Analytics Engine SQL API, separate from the write-only `AE`
+Worker binding.
 
 ```sh
 CF_ACCOUNT_ID="<the 32-character account id from the dashboard>"
@@ -114,33 +104,37 @@ CF_API_TOKEN="<a Custom Token: Account | Account Analytics | Read>"
 API="https://api.cloudflare.com/client/v4/accounts/${CF_ACCOUNT_ID}/analytics_engine/sql"
 ```
 
-The query text **is** the POST body. It is not JSON-wrapped and there is no `query` field.
+The query text is the POST body, with no JSON wrapper and no `query` field. Every POST is one billed
+read query, flat, whatever the complexity and however many rows come back; a dashboard polling every
+10s costs about 8,640 queries a day. A 200 will not separate a query that matched nothing from one
+that failed, so read `rows` in the JSON envelope.
 
-**Start with `SHOW TABLES`, not a `SELECT`.** A dataset does not exist as a table until the first
-data point lands, and the docs do not say what a `SELECT` against a table that was never created
-returns. So confirm it is there first:
+Run `SHOW TABLES` before any `SELECT`. A dataset does not exist as a table until the first data point
+lands, and the docs don't say what a `SELECT` against a table that was never created returns.
 
 ```sh
 curl -s "$API" -H "Authorization: Bearer ${CF_API_TOKEN}" --data "SHOW TABLES"
 ```
 
-Two more things worth knowing before the first real query. Every POST to this API is **one billed read
-query**, flat, regardless of complexity or rows returned — a dashboard polling every 10s is ~8,640
-queries a day. And a query "succeeding" is a 200 *plus* a readable body: the JSON envelope carries
-`rows`, so a syntactically fine query returning nothing is only distinguishable from a failure by
-reading the body.
+Undocumented in Cloudflare's SQL reference: the write-to-query visibility lag (write a test point,
+query it immediately, and nothing may come back while the binding is fine); the default row limit
+(put an explicit `LIMIT` on exploratory queries, or an undocumented one decides where results stop);
+quoting syntax for table or column names (irrelevant for `mbedfx_counters`, a plain identifier,
+unknown for any dataset named with a hyphen or a dot); the accepted `Content-Type`, whether `GET`
+works, a body size limit, a query timeout, rate limits distinct from the billed quota, and the
+error-response shape. The docs show `--data` with an `Authorization` header and say success is a 200.
 
 ---
 
-## Three things that make a first query confidently wrong
+## Traps that make a query wrong
 
-Each of these returns a number rather than an error, which is why they are here and not in a footnote.
+Each returns a number instead of an error.
 
-### 1. `COUNT()` counts stored rows, not events
+### Sampling
 
-Analytics Engine samples twice — at write time if points arrive too fast into one index, and again at
-**query time if the query is too complex**. Each stored row carries `_sample_interval`, the number of
-original rows it represents. So:
+`COUNT()` counts stored rows, not events. Analytics Engine samples twice: at write time when points
+arrive too fast into one index, and again at read time when a query is too complex. Each stored row
+carries `_sample_interval`, the number of original rows it stands for.
 
 | Do not write | Write |
 |---|---|
@@ -149,114 +143,120 @@ original rows it represents. So:
 | `SELECT AVG(double1)` | `SELECT SUM(_sample_interval * double1) / SUM(_sample_interval)` |
 | `quantile(0.5)(col)` | `quantileExactWeighted(0.5)(col, _sample_interval)` |
 
-The sample interval varies per row, so multiplying a `COUNT()` by a constant factor does not work —
-Cloudflare's docs say so explicitly. And because read-time sampling responds to query cost, **a naive
-`COUNT()` under-reports more the further back you look**, which reads exactly like a traffic decline.
+The interval varies per row; Cloudflare's docs say explicitly that multiplying a `COUNT()` by a
+constant factor does not work. Read-time sampling responds to query cost. A longer window makes a
+naive `COUNT()` under-report more, which on a chart is indistinguishable from a traffic decline.
 
-Whether any mbedfx row is sampled today is unknown. At low volume `_sample_interval` may be uniformly
-`1`, in which case `SUM(_sample_interval)` and `COUNT()` agree — use `SUM` anyway, because that stops
-being true without anything about the written data changing. [Recipe 6](#6-is-any-of-this-being-sampled)
-answers it for real.
+Nobody has checked whether mbedfx rows are sampled today, or what `index1` holds when no `indexes`
+array is passed. Cloudflare's docs only ever describe the index as present.
+[Is any of this being sampled](#is-any-of-this-being-sampled) answers both. At low volume
+`_sample_interval` may be uniformly `1`, agreeing with `COUNT()`; use `SUM` anyway, since that
+agreement can stop holding without the written data changing.
 
-### 2. The dataset is two days old, and the old rows are in a different table
+### The dataset rename
 
-The dataset was renamed `fxeverything_counters` → `mbedfx_counters` on **2026-08-01** (commit
-`99e88f8`), and a rename does not migrate rows. So as of 2026-08-03, `mbedfx_counters` holds at most
-about two days of data, and **every `INTERVAL '7' DAY` example below will return a partial window that
-looks like a traffic collapse.** Shorten the range until the dataset has aged, or you will diagnose a
-cliff that is just the rename.
+`fxeverything_counters` → `mbedfx_counters` on 2026-08-01 (commit `99e88f8`), and a rename doesn't
+migrate rows. As of 2026-08-03 `mbedfx_counters` holds at most about two days of data, so every
+`INTERVAL '7' DAY` example below returns a partial window that looks like a traffic collapse.
 
-`wrangler.jsonc:159` records that the historical counters "stay in `fxeverything_counters` and are
-still queryable there". That is a note the author wrote, not something anyone has confirmed — the
-Worker itself was renamed in the same commit, so nothing in the repo shows the old script ever
-deployed and wrote a point. `SHOW TABLES` settles it in one call. Retention is three months either
-way, so anything before 2026-05-03 is gone regardless of which table it was in.
+`wrangler.jsonc:176` records that the historical counters "stay in `fxeverything_counters` and are
+still queryable there". Neither table has been confirmed to exist; `SHOW TABLES` settles both in one
+call. The Worker was renamed in the same commit, and the repo has no evidence the old script ever
+deployed and wrote a point. Retention is three months either way: anything before 2026-05-03 is gone
+whichever table held it.
 
-### 3. Counters stack, so never `SUM` across outcomes
+"Data written to Workers Analytics Engine is stored for three months" is verbatim from Cloudflare's
+limits page. Whether that means 90 days, 92, or calendar months is unstated, as is whether expiry is
+exact or lazy and what a query reaching past the window returns. Don't convert it into a day count.
 
-`fetch_fail` is a **superset**, not a disjoint bucket. Every gate counter and every `assert_fail` is
-counted *on top of* it, deliberately (`src/worker.ts:204`). One age-gated Instagram request can emit
-four points: `assert_fail` + `age_restricted` + `pool_unused` + `fetch_fail`.
+### Stacked counters
 
-So a total across `blob2` is not a request count and never was. Compare named pairs instead. And note
-there are **two counting rates mixed in one dataset**: the counters inside `liveFetchPost` fire once
-per *post-cache miss*, while the route-level ones (`ok`, `media_hit`/`media_miss`, `api_hit`/`api_miss`,
-`fetch_fail`, `ambiguous`, `notfound`, `api_bad_id`) fire once per *request*. A ratio built across the
-two is not a ratio of comparable things.
+`fetch_fail` is a superset, not a disjoint bucket. Every gate counter and every `assert_fail` is
+counted on top of it by design (`src/worker.ts:204`); one age-gated Instagram request can emit four
+points, `assert_fail`, `age_restricted`, `pool_unused` and `fetch_fail`. A total across `blob2` is
+therefore not a request count. Compare named pairs.
+
+Two counting rates also mix. Counters inside `liveFetchPost` (`src/worker.ts:209`) fire once per
+post-cache miss; the route-level ones (`ok`, `media_hit`/`media_miss`, `api_hit`/`api_miss`,
+`fetch_fail`, `ambiguous`, `notfound`, `api_bad_id`) fire once per request, spread across
+`renderPostRoute`, `serveDirectMedia` and `handle()` from `src/worker.ts:3222` through `:4220`.
+A ratio across the two compares unlike things.
 
 ---
 
 ## The counters
 
-Read the "against" column as mandatory, not advisory. Most of these are meaningless as an absolute
-number and several are actively misleading alone.
+Most mean nothing as an absolute number, and several mislead alone.
 
 | Counter | What a rise means | Read against |
 |---|---|---|
-| `ok` | A card was rendered and served. The health denominator for the whole project. | — |
-| `assert_fail` | The page did not answer — upstream changed shape, blocked us, or served a decoy. **Not** "the post is gone". On `ig` this is the only way to see the 599 KB HTTP-200 decoy at all. | `fetch_fail`; on `yt`, `ok` (the ratio is the oembed-miss rate) |
-| `fetch_fail` | The route served the generic failure card. Superset — subtract the named failures to get "failures we have no name for". | everything below that stacks on it |
-| `age_restricted` | The post exists behind an age wall (🔞). Every emitter reads a *positive* signal from the platform's own payload rather than inferring a wall from missing tags. | `pool_unused` on the same platform |
-| `private` | The post exists behind a login/private wall (🔒). Instagram's is the one **inferential** emitter, and it has already produced a false 🔒 from datacenter egress once. | `fullpage_recovered` — these must move in **opposite** directions |
-| `pool_unused` | A credential pool is set and the gate held anyway. **Means three different things by platform** — see below. | `age_restricted`/`private` on the same platform |
-| `media_hit` / `media_miss` | On `/_media/`, cache-hit vs "this cost an upstream fetch". The miss/hit ratio is the fetch-amplification alert. | each other |
-| `api_hit` / `api_miss` | The same, for the Mastodon-spoof callbacks. Kept separate from `media_*` on purpose: a second traffic class sharing those counters would blind the amplification alert. | each other |
-| `api_bad_id` | A spoof-shaped callback arrived whose `{id}` did not decode. Kept out of `notfound` because domain-wide 404s are noise and this one says Discord's callbacks are arriving mangled. Always `blob1='none'`. | — |
-| `ambiguous` | A chooser card was served. `blob1='none'` is the free router-level chooser; `blob1='tt'` is one that **cost an upstream fetch**. The split is why a wave of Threads links is distinguishable from TikTok blocking us. | — |
+| `ok` | A card was rendered and served. The health denominator. | — |
+| `assert_fail` | The page didn't answer: upstream changed shape, blocked mbedfx, or served a decoy. Not "the post is gone". On `ig`, the only way to see the 599 KB HTTP-200 decoy. | `fetch_fail`; on `yt`, `ok` (the ratio is the oembed-miss rate) |
+| `fetch_fail` | The generic failure card was served. Subtract the named failures to leave the ones with no name. | everything below that stacks on it |
+| `age_restricted` | An age wall (🔞). Every emitter reads a positive signal out of the platform's payload; none infers a wall from missing tags. | `pool_unused`, same platform |
+| `private` | A login or private wall (🔒). Instagram's is the one inferential emitter, and has produced a false 🔒 from datacenter egress once. | `fullpage_recovered`, which must move the opposite way |
+| `pool_unused` | A credential pool is set and the gate held anyway. Means something different on each of three platforms, below. | `age_restricted`/`private`, same platform |
+| `media_hit` / `media_miss` | On `/_media/`, cache-hit vs an upstream fetch. The miss/hit ratio is the fetch-amplification alert. | each other |
+| `api_hit` / `api_miss` | The same for the Mastodon-spoof callbacks. Separate from `media_*`: a second traffic class in those counters would blind the amplification alert. | each other |
+| `api_bad_id` | A spoof-shaped callback whose `{id}` did not decode. Kept out of `notfound`, where domain-wide 404s are noise, because this one says Discord's callbacks are arriving mangled. Always `blob1='none'`. | — |
+| `ambiguous` | A chooser card was served. `blob1='none'` is the free router-level chooser, `blob1='tt'` one that cost an upstream fetch. The split separates a wave of Threads links from TikTok blocking mbedfx. | — |
 | `notfound` | `blob1='none'` is a domain-wide 404 (noise). `ms`/`mk`/`pt` is an upstream 404/410, counted here so a deleted post does not inflate `assert_fail`. | — |
-| `copyright_gql` / `copyright_recovered` / `copyright_remux` | The three Instagram copyright recoveries, cheapest first. **The ratio across all three is the signal**; none means anything alone. | each other, and `ig`/`ok` |
-| `fullpage_recovered` | The primary surface failed but the full page carried the whole post. On `ig`, every count is a post that would previously have shown a **false** 🔒. | `private` |
-| `translated` / `translate_fallback` | Which engine served a translation — Google, or Workers AI as the fallback. **Only the ratio means anything.** | each other |
+| `copyright_gql` / `copyright_recovered` / `copyright_remux` | The three Instagram copyright recoveries, cheapest first. The signal is the ratio across all three. | each other, and `ig`/`ok` |
+| `fullpage_recovered` | The primary surface failed but the full page carried the whole post. On `ig`, every count is a post that would previously have shown a false 🔒. | `private` |
+| `translated` / `translate_fallback` | Which engine served a translation, Google or Workers AI as the fallback. Only the ratio means anything. | each other |
 
-### `pool_unused` is three different counters wearing one name
+### `pool_unused` by platform
 
 | `blob1` | What it means |
 |---|---|
-| `x` | **Expected.** The secret can be filled today and the Worker-side call that would spend it is a later phase. This counts the staging gap, not a fault. |
-| `yt` | **A real fault.** The jar was sent with the container extract and the age wall held anyway: the accounts are signed out, rate-limited or flagged, and need rotating. |
-| `ig` | **Neither.** `IG_ACCOUNTS` is spent in the container, not on the page fetch that reads the gate — so a rise means the credential is not reaching the request that needs it, *not* that the accounts are dead. |
+| `x` | Expected. The secret can be filled today; the Worker-side call that would spend it is a later phase. This counts the staging gap. |
+| `yt` | A real fault (`src/worker.ts:601`). The jar went with the container extract and the age wall held anyway: the accounts are signed out, rate-limited or flagged, and need rotating. |
+| `ig` | Neither (`src/worker.ts:351`). `IG_ACCOUNTS` is spent in the container, not on the page fetch that reads the gate. A rise means the credential is not reaching the request that needs it, and says nothing about whether the accounts are alive. |
 
-### Counters that can read zero for a reason other than health
+### Zeros that do not mean health
 
-A zero here is not evidence the platform is fine:
-
-- `rd`/`private` only fires on the Reddit OAuth fallback, which only runs when `REDDIT_CLIENT_ID` and
+- `rd`/`private` only fires on the Reddit OAuth fallback, which runs only when `REDDIT_CLIENT_ID` and
   `REDDIT_CLIENT_SECRET` are set.
-- `pool_unused` only fires when the matching account secret is non-empty — and for `x`, only when an
-  entry carries **both** `auth_token` and `ct0`.
+- `pool_unused` needs a non-empty matching account secret, and for `x` an entry carrying both
+  `auth_token` and `ct0` (`src/credentials.ts:146`). An unparseable secret counts as an empty pool.
 - `copyright_gql` depends on a `doc_id` Meta rotates.
-- Everything is zero if the `AE` binding is absent from the deployed bundle. `env.AE?.writeDataPoint`
-  is optional-chained (`src/analytics.ts:205`), so a deploy without it records nothing, throws nothing
-  and logs nothing. "Zero rows" means "no traffic" **or** "no binding".
+- Every counter is zero if the `AE` binding is absent from the deployed bundle.
+  `env.AE?.writeDataPoint` is optional-chained (`src/analytics.ts:225`): a deploy without it writes
+  nothing and neither throws nor logs, and "zero rows" means "no traffic" or "no binding".
+  `wrangler.jsonc:178` declares it, prod can diverge from `main` here, and the deployed bundle has
+  not been checked.
 
-### Two known defects in the write shape
+### Known defects in the write shape
 
-Documented because a query cannot work around either, and someone will otherwise spend an afternoon
-on it:
+No query works around either of these.
 
-- **`media_hit`/`media_miss` carry two meanings.** On `/_media/` they mean cache-hit vs upstream-fetch.
-  On the direct-media `d.` host (`src/worker.ts:2861`) `media_miss` instead means "this post has no
-  usable media at all". Both write identical blobs, so no query separates them, and `d.` host traffic
-  silently contaminates the fetch-amplification ratio.
-- **`translated`/`translate_fallback` are mislabelled `discord`.** The literal `'discord'` is passed
-  at `src/worker.ts:2585` because `withTranslated` takes no client class. It is also called from the
-  converter preview (`src/worker.ts:3284`), which is a person with a browser — so those rows are not
-  merely un-breakdownable by `blob3`, they are actively wrong about who asked. Never split the
-  translation ratio by client.
+- `media_hit`/`media_miss` carry two meanings. On `/_media/` (`src/worker.ts:3399`), cache-hit vs
+  upstream-fetch. On the direct-media `d.` host, matched by `DIRECT_MEDIA_HOST` at
+  `src/worker.ts:3306`, `media_miss` instead means the post has no usable media at all
+  (`src/worker.ts:3346`), the request answering 404 `no media: this post has nothing to serve`. Both
+  write identical blobs: no query separates them, and `d.` host traffic contaminates the
+  fetch-amplification ratio with nothing in the data to mark it.
+- `translated`/`translate_fallback` all say `discord`: `withTranslated` takes no client class and
+  `src/worker.ts:2755` passes the literal `'discord'`. Three callers reach it. Two are the seams
+  Discord really does read, where the label is accidentally true: `renderPostRoute`
+  (`src/worker.ts:3268`) and the activity callback (`:3519`, via `translationFor` at `:2686`). The
+  third is `describeTarget` (`:2936`), serving the converter preview (`:3723`) and `/_api/v1`
+  (`:3911`), where it is a lie. Never split the translation ratio by client.
 
-Also stale: the comment at `src/analytics.ts:36` calls `fullpage_recovered` Instagram-only. It fires
-for Facebook too (`src/worker.ts:646`, `:700`), so a query filtered to `blob1='ig'` under-reports it.
+`src/analytics.ts:36` still calls `fullpage_recovered` Instagram-only. It fires for Facebook too
+(`src/worker.ts:655`, `:709`), and a query filtered to `blob1='ig'` under-reports it.
 
 ---
 
 ## Recipes
 
-Every one uses `SUM(_sample_interval)`. Shorten `INTERVAL '7' DAY` until the dataset has aged past the
-rename — see trap 2.
+Every one uses `SUM(_sample_interval)`. Shorten `INTERVAL '7' DAY` until the dataset has aged past
+[the rename](#the-dataset-rename). A platform absent from a result had no traffic in the window,
+which is not the same as healthy.
 
-### 1. Everything, once
+### Everything, once
 
-The orientation query. Run this first and read the shape before asking anything narrower.
+Run this first.
 
 ```sql
 SELECT blob1 AS platform, blob2 AS outcome, blob3 AS client,
@@ -268,10 +268,9 @@ ORDER BY events DESC
 LIMIT 200
 ```
 
-### 2. Which platform is broken
+A platform can also be missing for falling below the `LIMIT 200` cut.
 
-`assert_fail` against `ok`, per platform. A platform whose ratio moves is a platform whose upstream
-changed shape — which is the failure this project expects to happen on somebody else's schedule.
+### Which platform is broken
 
 ```sql
 SELECT blob1 AS platform,
@@ -284,10 +283,11 @@ GROUP BY platform
 ORDER BY assert_fail DESC
 ```
 
-### 3. Are the account pools working
+A moving `assert_fail`/`ok` ratio means that platform's upstream changed shape.
 
-The one that matters after filling a secret. Read `yt` as a real fault, `ig` as a plumbing signal and
-`x` as expected — [see above](#pool_unused-is-three-different-counters-wearing-one-name).
+### Are the account pools working
+
+Run after filling a secret.
 
 ```sql
 SELECT blob1 AS platform,
@@ -300,10 +300,14 @@ WHERE timestamp > NOW() - INTERVAL '7' DAY
 GROUP BY platform
 ```
 
-### 4. Is the Instagram copyright recovery still alive
+Read `yt` as a real fault, `ig` as a plumbing signal and `x` as expected, per
+[`pool_unused` by platform](#pool_unused-by-platform). A zero can mean the gate stopped holding,
+which is the pool working, or any reading under
+[Zeros that do not mean health](#zeros-that-do-not-mean-health); the dataset cannot separate them.
 
-All three at zero while `ig`/`ok` keeps climbing means Instagram closed the recovery and every blocked
-reel is quietly a photo again — which no card will ever say, because they all still render.
+### Is the Instagram copyright recovery still alive
+
+Emitted at `src/worker.ts:439`, `:445` and `:463`.
 
 ```sql
 SELECT SUM(_sample_interval * (blob2 = 'copyright_gql')) AS gql,
@@ -315,10 +319,10 @@ FROM mbedfx_counters
 WHERE timestamp > NOW() - INTERVAL '7' DAY AND blob1 = 'ig'
 ```
 
-### 5. Is Google refusing our egress
+All three at zero while `ok` keeps climbing means Instagram closed the recovery and every blocked
+reel is a photo again. The cards render either way.
 
-`translated` at zero while `translate_fallback` climbs means the weaker model is quietly carrying the
-feature. Cards render either way, which is what makes it invisible without this.
+### Is Google refusing the Worker's egress
 
 ```sql
 SELECT SUM(_sample_interval * (blob2 = 'translated')) AS google,
@@ -327,10 +331,11 @@ FROM mbedfx_counters
 WHERE timestamp > NOW() - INTERVAL '7' DAY
 ```
 
-### 6. Is any of this being sampled
+`google` at zero while `workers_ai` climbs means the weaker fallback model (`FALLBACK_MODEL`,
+`@cf/google/gemma-4-26b-a4b-it`, `src/translate.ts:276`) is carrying the feature. Nothing on the card
+changes when it takes over.
 
-Settles whether `SUM(_sample_interval)` and `COUNT()` currently agree, and what `index1` holds when no
-index is written — which the Cloudflare docs do not describe.
+### Is any of this being sampled
 
 ```sql
 SELECT _sample_interval AS sample_interval,
@@ -342,10 +347,13 @@ GROUP BY sample_interval
 ORDER BY sample_interval
 ```
 
-### 7. Fetch amplification
+One row with `sample_interval` of 1 and `stored_rows` equal to `represented_events` means nothing is
+sampled today. Any value above 1 means every `COUNT()` written elsewhere under-reports. The same run
+shows what `index1` holds when no index is written.
 
-The miss/hit ratio the spec's alert watches. Remember `d.` host traffic contaminates the `media_*`
-half — see the known defects above.
+### Fetch amplification
+
+The ratio the spec's fetch-amplification alert watches, written at `src/worker.ts:3399` and `:3478`.
 
 ```sql
 SELECT SUM(_sample_interval * (blob2 = 'media_hit')) AS media_hit,
@@ -356,10 +364,12 @@ FROM mbedfx_counters
 WHERE timestamp > NOW() - INTERVAL '1' DAY
 ```
 
-### 8. As a time series
+A rising `media_miss` may be nothing but `d.` host traffic, which no query separates out (see
+[Known defects in the write shape](#known-defects-in-the-write-shape)).
 
-The documented bucketing idiom. `timestamp` is UTC — `SHOW TIMEZONE` returns `Etc/UTC` — so a report
-that looks off by your local offset is this.
+### As a time series
+
+Cloudflare documents this bucketing idiom.
 
 ```sql
 SELECT intDiv(toUInt32(timestamp), 3600) * 3600 AS t,
@@ -372,81 +382,56 @@ ORDER BY t
 FORMAT JSONEachRow
 ```
 
+`timestamp` is UTC and `SHOW TIMEZONE` returns `Etc/UTC`. A daily shape shifted by a local offset is
+the bucketing, not a traffic pattern.
+
 ---
 
 ## Grafana
 
-Cloudflare documents pointing the Altinity ClickHouse plugin at the same SQL API URL with the same
-bearer token, which gives you dashboards and alerting without anything running here. That is the
-supported path and there is nothing to add to this repo for it.
+Point the Altinity ClickHouse plugin at the same SQL API URL and bearer token. Cloudflare documents
+that route; it covers dashboards and alerting and adds nothing to this repo.
 
-If a Prometheus scrape target is genuinely wanted, write a small exporter that queries this API and
-emits Prometheus text, and run it **on your own network**. That is a normal Prometheus story with none
-of the exposure below, because the endpoint is not on the public edge.
+A Prometheus scrape target means a small exporter that queries this API and emits Prometheus text,
+run on your own network. Off the public edge, none of the exposure below applies.
 
 ---
 
 ## Why there is no `/_metrics`
 
-Three reasons, in order of weight.
+The `AE` binding is write-only; reads need the account-level SQL API and a bearer token. Add the
+route and `Env` grows an account-scoped Cloudflare API token, live on the public edge. The same
+token already pulls this data from a laptop, where it is not exposed. `src/analytics.ts:195`
+forbids the addition by name and records the precedent: the last secret-gated endpoint mounted here
+fetched a caller-supplied shortcode from the Worker's egress, and was deleted with its module, its
+mount in `worker.ts` and its wrangler secret. Its path stays unspelled in the source; a test fails
+the suite for any comment naming it (`test/pipeline.test.mjs:2621`).
 
-**The Worker is the wrong place to read from — gated or not.** The `AE` binding is write-only; reading
-goes through the account-level SQL API with a bearer token. So any in-Worker metrics route has to
-carry an **account-scoped** Cloudflare API token as a Worker secret, on the public edge, to serve data
-an operator can already get from a laptop with that same token and no new attack surface. That is a
-credential with account-wide blast radius bought for nothing. `src/analytics.ts:186` forbids exactly
-this kind of addition, and records that the last secret-gated endpoint mounted here was deleted for
-being a caller-driven egress hole.
+Three tests read the tree. `:1515` and `:2656` fail if the route returns; `:2621` fails if a comment
+outlives the file it names, which is what catches a half-finished deletion. `:1515` is named
+"THE PROBE IS GONE — a debug egress endpoint must not ship to a public origin". `:2656` widened it
+beyond the three strings `_probe`, `PROBE_TOKEN` and `runProbe`, after an identical caller-driven
+egress endpoint added as `src/diag.ts` and mounted at `/_diag/` passed the whole suite green with no
+token gate. A fourth, `:1541`, drives `/_probe/t?code=AAAAAAAAAAA` through `handle()` with
+`PROBE_TOKEN: 't'` in env and asserts on the body; the code is eleven characters because `runProbe`
+rejected anything failing `/^[A-Za-z0-9_-]{5,32}$/` with a 400 before emitting a report, and a
+shorter code would pass against a live mounted probe.
 
-**A public one leaks, and the worst of it is `pool_unused`.** `poolSetButUnused` is literally
-`accountPool(env, platform).length > 0`, so publishing that counter publishes "mbedfx has logged-in
-IG/YT/X accounts loaded" — and the `yt` arm additionally reports whether those accounts are *still
-passing the age gate*. The audience for that is the platform's enforcement team, and it turns a ban
-wave into an experiment they can run against our own endpoint and read the result of. The Instagram
-copyright trio is the same shape for Meta and the translation pair for Google: those counters exist
-*because* the outcomes they measure are invisible in the rendered card, and publishing them makes them
-visible to the party being measured. `api_bad_id` is a decode oracle for the `statusid.ts` SENTINEL
-hazard — craft a callback id, watch which counter moves, learn decode-success from decode-failure.
-And because anyone can make the public Worker render any URL they choose, a readable counter surface
-is a general property oracle: the observer picks the post, the counter names the property.
+An ungated route leaks, worst at `pool_unused`. `poolSetButUnused` is literally
+`accountPool(env, platform).length > 0` (`src/credentials.ts:182`), so publishing it publishes that
+mbedfx has logged-in IG/YT/X accounts loaded, and the `yt` arm reports whether they still pass the
+age gate. The audience is the platform's enforcement team, and it turns a ban wave into an experiment
+they run against mbedfx's own endpoint. The Instagram copyright trio is the same shape for Meta, the
+translation pair for Google: each shows an outcome the card hides, and publishing hands that outcome
+to the party being measured. `api_bad_id` is a decode oracle for the `statusid.ts` SENTINEL hazard,
+separating decode-success from decode-failure for a crafted callback id. Anyone can make the public
+Worker render any URL, which makes a readable counter surface a property oracle for whichever post
+the observer picks.
 
-**A cookbook is what closes the gap honestly.** The gap in the README's table is "we have counters and
-no way to read them". The missing thing is a *read path for an operator*, and documented SQL plus the
-Grafana pointer is a complete one — for us and for any self-hoster, since each gets their own dataset
-and their own token.
+The gap the README's table names is counters nobody can read. Documented SQL plus the Grafana pointer
+closes it, for mbedfx and for any self-hoster, each with its own dataset and token. The row should
+still not read "✅ Prometheus": documented Analytics Engine access is not a scrape endpoint. Whether
+fxTikTok's ✅ names the same feature is unestablished, their metrics handler being unread here.
 
-So: **the README row should not become "✅ Prometheus".** What ships is documented Analytics Engine
-access, not a scrape endpoint, and the row should say that. (Nobody here has read fxTikTok's metrics
-handler, so whether their ✅ is even the same feature is also unestablished.)
-
-If a route is ever wanted anyway, the cheapest safe version is not on this Worker: a separate unrouted
-Worker or a cron job holding the read token, writing a pre-aggregated summary. Same data, no public
-surface, no account token at the edge.
-
----
-
-## What is not established
-
-Written down rather than smoothed over, because a metrics doc that guesses is worse than none.
-
-- **Nothing here has been run.** No query in this file has touched the live account. `mbedfx_counters`
-  has not been confirmed to exist as a table, and neither has `fxeverything_counters`.
-- **Whether the `AE` binding is attached in the deployed bundle.** It is declared in
-  `wrangler.jsonc:161`, but prod can diverge from `main` in this project, and a missing binding looks
-  exactly like no traffic.
-- **Whether any row is sampled**, and how `index1` is populated when `writeDataPoint` passes no
-  `indexes` array. Cloudflare's docs only ever describe the index as present. Recipe 6 answers both.
-- **Retention mechanics.** "Data written to Workers Analytics Engine is stored for three months" is
-  verbatim from Cloudflare's limits page. Whether that is 90 days, 92, or calendar months; whether
-  expiry is exact or lazy; and what a query reaching past the window returns — none of that is stated.
-  Do not convert "three months" into a day count as though the day count were documented.
-- **Identifier quoting.** There is no documented quoting syntax for table or column names anywhere in
-  Cloudflare's SQL reference. Irrelevant for `mbedfx_counters`, which is a plain identifier; unknown
-  for any dataset named with a hyphen or a dot.
-- **Default row limit.** Not documented. Put an explicit `LIMIT` on exploratory queries so the cap is
-  yours rather than an undocumented one.
-- **Write-to-query visibility lag.** Not stated. Write a test point, query immediately, see nothing,
-  and the binding may be perfectly fine.
-- **HTTP details**: accepted `Content-Type`, whether `GET` works, body size limit, query timeout, SQL
-  API rate limits distinct from the billed quota, and the error-response shape. The docs show
-  `--data` with an `Authorization` header and say success is a 200.
+For a route anyway, put it off this Worker: a separate unrouted Worker or a cron job holds the read
+token and writes a pre-aggregated summary, with no public surface and no account token at the edge.

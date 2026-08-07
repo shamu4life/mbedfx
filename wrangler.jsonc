@@ -32,7 +32,7 @@
   // reason it gives (TwitFix died over a public log of processed urls) does not stop applying because
   // the log is Cloudflare's rather than ours.
   //
-  // WHAT IT COSTS, stated so nobody turns it back on without knowing what they are buying: the four
+  // WHAT IT COSTS, stated so nobody turns it back on without knowing what they are buying: the five
   // console.error calls in src/worker.ts still run, but nothing STORES them, so a mux failure that
   // happens while nobody is tailing is no longer reconstructable afterwards. Live debugging is
   // `npx wrangler tail mbedfx`; trends are the Analytics Engine counters in docs/METRICS.md; traffic,

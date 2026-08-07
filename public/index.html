@@ -507,7 +507,7 @@ footer .fine { font-size: 12px; opacity: .8; }
       <b>#</b> <span id="chanName">convert</span> <div class="sep"></div>
       <span id="chanDesc">Paste a link, get one that embeds.</span>
       <div class="theme" id="theme" role="group" aria-label="Colour theme">
-        <button type="button" data-theme-set="system" aria-pressed="true" title="Match my system">
+        <button type="button" data-theme-set="system" aria-pressed="true" title="Match OS theme">
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 4.5h18a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1h-7v2h3v2H7v-2h3v-2H3a1 1 0 0 1-1-1v-10a1 1 0 0 1 1-1Zm1 2v8h16v-8H4Z"/></svg>
           <span class="sr">System</span>
         </button>
@@ -530,9 +530,9 @@ footer .fine { font-size: 12px; opacity: .8; }
         <div class="ava">fx</div>
         <div>
           <div class="who"><span class="name">mbedfx</span><span class="bot">BOT</span><span class="ts">today</span></div>
-          <p>Paste a social link and I'll hand back one Discord can actually draw. Swap the site's
-             domain for mine and the link still points at the same post. Read here, not
-             handed off to someone else's fixer.</p>
+          <p>Paste a social link and get back one Discord can actually draw. Swap the site's domain
+             for mbedfx.app and the link still points at the same post. The post is fetched
+             here, not by another fixer.</p>
 
           <div class="tool">
             <div class="toolbar">
@@ -573,7 +573,7 @@ footer .fine { font-size: 12px; opacity: .8; }
         <div class="ava">fx</div>
         <div>
           <div class="who"><span class="name">mbedfx</span><span class="bot">BOT</span><span class="ts">today</span></div>
-          <h2 class="head">Every path shape that works</h2>
+          <h2 class="head">Every link shape that works</h2>
           <p class="sub">Straight out of the router. If a site isn't here, it's in
              <a href="#nope">#nope</a>.</p>
           <div id="grid"></div>
@@ -587,13 +587,19 @@ footer .fine { font-size: 12px; opacity: .8; }
         <div class="ava">fx</div>
         <div>
           <div class="who"><span class="name">mbedfx</span><span class="bot">BOT</span><span class="ts">today</span></div>
-          <h2 class="head">Keep the instance in the link</h2>
-          <p class="sub">A post id is meaningless without the server it lives on. About one in five
-             bare id lookups against a default server returns a real but completely different post,
-             so there's no default here and no allow-list. Any server works.</p>
-          <p style="margin-top:10px">Slot me in after the <code>https://</code>:</p>
+          <h2 class="head">Keep the server in the link</h2>
+          <!-- THE ONE-IN-FIVE NUMBER STAYS VISIBLE. A copy pass moved it into this comment as a
+               measurement the reader could not act on. Ten blind readers then picked this page over
+               that version and every one of them named the same loss unprompted: the number is what
+               turns "type the server name" from an arbitrary chore into a measured decision, and it
+               is the only quantified claim on the page. "Any server works" carries the no-allow-list
+               fact without the repo's word for it. -->
+          <p class="sub">A post id is meaningless without its server. About one in five bare id
+             lookups against a default server returns a real post, just not the right one, so
+             there's no default here. Any server's links work.</p>
+          <p style="margin-top:10px">Put mbedfx.app after <code>https://</code>:</p>
 <pre>https://<b>mbedfx.app</b>/mstdn.social/@stux/116994812581955524</pre>
-          <p>Or just type me in front of the whole thing, which is one <kbd>Home</kbd> keypress:</p>
+          <p>Or just type mbedfx.app/ in front of the whole link, one <kbd>Home</kbd> keypress:</p>
 <pre>https://<b>mbedfx.app/</b>https://mstdn.social/@stux/116994812581955524</pre>
           <p class="sub">Works for Mastodon, Pleroma, Akkoma, Iceshrimp, Misskey, Sharkey, Lemmy,
              PieFed and PeerTube.</p>
@@ -613,30 +619,30 @@ footer .fine { font-size: 12px; opacity: .8; }
           <div class="embed wide" style="--c:var(--red)">
             <div class="t">🔒 Private or restricted</div>
             <div class="d">A protected account, a friends-only post, or a private, banned or
-              quarantined community. Logged-out is logged-out.</div>
+              quarantined community. Every post here is read logged out.</div>
           </div>
           <div class="embed wide" style="--c:var(--amber)">
             <div class="t">🔞 Age-gated</div>
             <div class="d">Needs a signed-in adult account. On YouTube it is the thumbnail and no
-              playback, and that one is permanent rather than worth retrying.</div>
+              playback, and retrying never helps.</div>
           </div>
           <div class="embed wide" style="--c:var(--blurple)">
             <div class="t">🎬 Video came back as a still</div>
             <div class="d">Carousels with video flatten to the cover. Instagram reels using
               major-label audio arrive with no video at all. Anything over 25 minutes or 375 MB
-              isn't remuxed.</div>
+              stays a still.</div>
           </div>
           <div class="embed wide" style="--c:var(--faint)">
             <div class="t">😕 "Couldn't load this post"</div>
-            <div class="d">The reason isn't knowable. On Threads, private, deleted and age-gated
-              look identical from outside, so I don't guess.</div>
+            <div class="d">No reason comes back. On Threads, private, deleted and age-gated look
+              identical from outside, so the card doesn't guess.</div>
           </div>
         </div>
       </article>
       </section>
 
       <!-- ===================== NOPE ===================== -->
-      <section class="chan" id="nope" data-desc="Things I can't fix.">
+      <section class="chan" id="nope" data-desc="Unfixable links.">
       <article class="msg">
         <div class="ava">fx</div>
         <div>
@@ -649,10 +655,10 @@ footer .fine { font-size: 12px; opacity: .8; }
             <div><code>fb.watch</code></div>
             <div><code>pin.it</code>. Full <code>/pin/…</code> links are fine.</div>
             <div>Instagram stories</div>
-            <div>Twitch VODs and live channels. Clips only.</div>
+            <div>Twitch VODs and live channels. Only clips work.</div>
             <div>Facebook text posts. Video, reels and group posts work.</div>
             <div>Pixelfed and GoToSocial. Their APIs refuse logged-out reads.</div>
-            <div>Bare profile links. There's no post to draw.</div>
+            <div>Bare profile links. There's no single post to draw.</div>
             <div>PeerTube playlists, Friendica, Bilibili, pixiv</div>
           </div>
         </div>
@@ -666,8 +672,8 @@ footer .fine { font-size: 12px; opacity: .8; }
         <p>No-framework Cloudflare Worker ·
           <a href="https://github.com/shamu4life/mbedfx">Source on GitHub</a> ·
           <a href="https://github.com/shamu4life/mbedfx/blob/main/LICENSE">MIT</a></p>
-        <p class="fine">Not affiliated with Discord. Platform names and marks belong to their owners
-          and are used here to say which sites are supported.</p>
+        <p class="fine">Not affiliated with Discord. Platform names and marks belong to their
+          owners and are used here to say which sites are supported.</p>
       </footer>
 
     </div>
@@ -858,7 +864,7 @@ function mbedfxConvert(input, host) {
   }
   if (seg.length === 0) return no('That’s a server’s front page, not a post.');
   return out('/' + h + path, 'Fediverse',
-    'Unrecognised host, so I treated it as a fediverse instance. That’s the right guess for Mastodon, Misskey, Lemmy, PieFed and PeerTube.');
+    'Unrecognised host, treated as a fediverse instance. That’s the right guess for Mastodon, Misskey, Lemmy, PieFed and PeerTube.');
 }
 </script>
 
@@ -1029,7 +1035,7 @@ function mbedfxConvert(input, host) {
    *   1. A REFUSAL. The chip was drawn only on success, so the one moment you actually want to force a
    *      platform — "I can't read this" — was the one moment the override was unreachable.
    *   2. A PLATFORM WITH NO CODE. The fediverse branch guesses by design and says so out loud
-   *      ("Unrecognised host, so I treated it as a fediverse instance"). It passed no code, so the
+   *      ("Unrecognised host, treated as a fediverse instance"). It passed no code, so the
    *      single case in this converter that ADMITS to guessing was the single case offering no way to
    *      correct the guess.
    *
@@ -1109,7 +1115,7 @@ function mbedfxConvert(input, host) {
     } else {
       result.style.display = 'none'; copy.style.display = 'none';
       note.className = 'msgline bad';
-      var why = r.why || (r.kind === 'unparseable' ? 'That doesn’t parse as a link.' : 'Not something I can fix.');
+      var why = r.why || (r.kind === 'unparseable' ? 'That doesn’t parse as a link.' : 'Nothing mbedfx can fix.');
       /**
        * A REFUSAL STILL OFFERS THE OVERRIDE, as long as there is a path to force. Every refusal here
        * is a JUDGEMENT — "that looks like a channel rather than a clip", "stories aren't routed",
@@ -1161,7 +1167,7 @@ function mbedfxConvert(input, host) {
         if (!j.ok && j.reason === 'ambiguous' && j.candidates && j.candidates.length) {
           result.style.display = 'none'; copy.style.display = 'none';
           note.className = 'msgline';
-          note.textContent = 'That path exists on more than one site, so I won’t guess.';
+          note.textContent = 'More than one site has that path, so mbedfx won’t guess.';
           showPicker(j.candidates.map(function (c) { return { code: c.platform, name: c.name }; }),
             'Which site?');
           return;

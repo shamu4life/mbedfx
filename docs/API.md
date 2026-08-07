@@ -1,63 +1,62 @@
 # The JSON API
 
-Everything the card knows about a post, as data, for anything that is not Discord.
+`/_api/v1` serves the post data the cards are drawn from, as JSON. Shipped in 1.9.0
+(`docs/CHANGELOG.md`, 2026-08-04).
 
 ```
 GET https://mbedfx.app/_api/v1?url=<the post url>
 ```
 
-No key, no signup, no headers. CORS is open, so a page can call it from script.
+No key, no signup, no required headers. Every answer carries `access-control-allow-origin: *` and
+`x-content-type-options: nosniff` (`apiHeaders`, `src/worker.ts:3008`).
 
 ```sh
 curl -s 'https://mbedfx.app/_api/v1?url=https%3A%2F%2Fx.com%2Fjack%2Fstatus%2F20' | jq
 ```
 
-It answers for the thirteen single-host sites the cards cover, including their short links and share
-codes — the same resolution a pasted link gets, because it is the same code path. The four
-**fediverse** platforms need a different request form; see below.
+It answers for the thirteen single-host sites the cards cover, plus short links and share codes. The
+four fediverse platforms need the request form [below](#mastodon-misskey-lemmy-and-peertube).
 
-Methods: `GET` and `HEAD`. `OPTIONS` is answered as a CORS preflight without running anything;
-anything else is `405`.
+`GET` and `HEAD` are answered. `OPTIONS` returns `204` with
+`access-control-allow-methods: GET, HEAD, OPTIONS`, `access-control-allow-headers: *` and
+`access-control-max-age: 86400`, before any work is spent (`src/worker.ts:3894`). Every other method
+is `405` `method_not_allowed` (`3905`). Neither branch existed at 1.9.0's review: a preflight paid
+for an upstream fetch, a mux wait and a `yt-dlp -J`, then failed for want of
+`access-control-allow-methods`.
 
 ---
 
 ## The request
 
-One parameter, `url`, and it is the whole original link. Percent-encode it; a raw `?` or `&` in the
-post url will otherwise be read as the end of it.
+One parameter, `url`, carrying the whole original link. Percent-encode it. A raw `?` or `&` in the
+post url ends the parameter early.
 
-The **host in that url is ignored.** Routing here reads the path and the query only, exactly as it
-does when you swap a domain — so `https://x.com/jack/status/20` and `https://mbedfx.app/jack/status/20`
-are the same request, and a bare path (`?url=/jack/status/20`) works too.
+Routing reads the path and the query. The host is ignored. `https://x.com/jack/status/20`,
+`https://mbedfx.app/jack/status/20` and `?url=/jack/status/20` are one request, and a host cannot
+break the tie on a path two sites claim ([`ambiguous`](#ambiguous)).
 
-That has two consequences, and both bite.
+### Mastodon, Misskey, Lemmy and PeerTube
 
-### Mastodon, Misskey, Lemmy and PeerTube: put the instance in the path
-
-For those four there is no single host — the instance *is* part of the post's identity, and because
-the host is ignored, passing the whole url loses it:
+Those four have no single host. The instance is part of the post's identity, and routing drops it:
 
 ```
-?url=https://lemmy.world/post/123456        ->  notfound
-?url=/lemmy.world/post/123456               ->  the post
+?url=https://lemmy.world/post/49966212      ->  notfound
+?url=/lemmy.world/post/49966212             ->  the post
 ```
 
-So move the instance into the path and drop the scheme:
+Move the instance into the path and drop the scheme:
 
 | Site | Send |
 |---|---|
-| Mastodon | `?url=/mastodon.social/@Gargron/109384049300000000` |
-| Misskey | `?url=/misskey.io/notes/9abcdefghi` |
-| Lemmy | `?url=/lemmy.world/post/123456` |
-| PeerTube | `?url=/tilvids.com/w/abcdefghijklmnop` |
+| Mastodon | `?url=/mstdn.social/@stux/116994812581955524` |
+| Misskey | `?url=/misskey.io/notes/ap7sliijot1f03nr` |
+| Lemmy | `?url=/lemmy.world/post/49966212` |
+| PeerTube | `?url=/framatube.org/w/vZNcho9kCoVzc8wZwacPtc` |
 
-This is the same shape the cards use — `https://mbedfx.app/lemmy.world/post/123456` is how a
-fediverse link is swapped — so it is not a special case for the API so much as the general rule
-showing through.
-
-### Some paths belong to more than one site
-
-Supplying the host does **not** break that tie. See [`ambiguous`](#ambiguous) below.
+`test/link-hygiene.test.mjs:71-74` drives those four through the router, with the Lemmy, Misskey and
+PeerTube ids from `test/fixtures/` and the Mastodon one from the converter page's example list
+(`public/index.html:976`). The cards mint the same shape:
+`https://mbedfx.app/lemmy.world/post/49966212`.
 
 ---
 
@@ -97,147 +96,161 @@ Supplying the host does **not** break that tie. See [`ambiguous`](#ambiguous) be
 }
 ```
 
-### Field by field
-
-Two tables: the envelope, then `post`. **Every key listed here is always present.** Where a value can
-be missing it is spelled `null` (or `""`, or an empty object/array) rather than by dropping the key —
-with exactly one exception, `counts`, which is documented below and is the only place in the payload
-where a key's absence carries meaning.
+`post` comes from `toApiPost` (`src/worker.ts:3105-3171`), the envelope from the arm wrapping it
+(`3932-3939`). Answers here were driven offline through `route()` and `handle()`, 2026-08-04 and
+again 2026-08-05.
 
 ### The envelope
 
-| Field | Type | Nullable | Always present |
-|---|---|---|---|
-| `ok` | boolean | no | yes — `true` on this shape, `false` on a failure envelope |
-| `muxing` | boolean | no | yes |
-| `pending` | boolean | no | yes |
-| `post` | object | no | yes when `ok` is `true`; absent when `ok` is `false` |
+| Field | Type | Nullable |
+|---|---|---|
+| `ok` | boolean | no |
+| `muxing` | boolean | no |
+| `pending` | boolean | no |
+| `post` | object | no |
+
+`ok` is `true` on this shape, `false` on a failure envelope, where `post` is absent.
 
 ### `post`
 
-| Field | Type | Nullable | Always present |
-|---|---|---|---|
-| `platform` | string, one of the seventeen two-letter codes | no | yes |
-| `canonical` | string, absolute url | no | yes |
-| `createdAt` | string, ISO 8601 UTC | **yes** | yes |
-| `title` | string | **yes** | yes — `null` rather than `""` when there is none |
-| `text` | string | no | yes — `""` when there is none |
-| `sensitive` | boolean | no | yes |
-| `author` | object | no | yes |
-| `author.name` | string | **yes** | yes |
-| `author.handle` | string | **yes** | yes |
-| `author.url` | string | **yes** | yes |
-| `author.avatar` | string, absolute url on our origin | **yes** | yes |
-| `counts` | object | no | yes — may be `{}` |
-| `counts.likes` | integer > 0 | no | **no — key omitted when unknown** |
-| `counts.reposts` | integer > 0 | no | **no — key omitted when unknown** |
-| `counts.replies` | integer > 0 | no | **no — key omitted when unknown** |
-| `counts.views` | integer > 0 | no | **no — key omitted when unknown** |
-| `media` | array of objects | no | yes — may be `[]` |
-| `media[].kind` | string, `"video"` or `"image"` | no | yes |
-| `media[].url` | string, absolute url on our origin | no | yes |
-| `media[].poster` | string, absolute url on our origin | **yes** | yes |
-| `media[].width` | number | **yes** | yes |
-| `media[].height` | number | **yes** | yes |
-| `media[].still` | boolean | no | yes |
-| `quote` | object | **yes** | yes |
-| `quote.canonical` | string, absolute url | **yes** | yes when `quote` is an object |
-| `quote.text` | string | no | yes when `quote` is an object — `""` when there is none |
-| `quote.author` | object | no | yes when `quote` is an object |
-| `quote.author.name` | string | **yes** | yes |
-| `quote.author.handle` | string | **yes** | yes |
-| `quote.author.url` | string | **yes** | yes |
+| Field | Type | Nullable |
+|---|---|---|
+| `platform` | string, one of the seventeen two-letter codes | no |
+| `canonical` | string, absolute url | no |
+| `createdAt` | string, ISO 8601 UTC | **yes** |
+| `title` | string | **yes** |
+| `text` | string | no |
+| `sensitive` | boolean | no |
+| `author` | object | no |
+| `author.name` | string | **yes** |
+| `author.handle` | string | **yes** |
+| `author.url` | string | **yes** |
+| `author.avatar` | string, absolute url on the mbedfx origin | **yes** |
+| `counts` | object | no |
+| `counts.likes` | integer > 0 | no |
+| `counts.reposts` | integer > 0 | no |
+| `counts.replies` | integer > 0 | no |
+| `counts.views` | integer > 0 | no |
+| `media` | array of objects | no |
+| `media[].kind` | string, `"video"` or `"image"` | no |
+| `media[].url` | string, absolute url on the mbedfx origin | no |
+| `media[].poster` | string, absolute url on the mbedfx origin | **yes** |
+| `media[].width` | number | **yes** |
+| `media[].height` | number | **yes** |
+| `media[].still` | boolean | no |
+| `quote` | object | **yes** |
+| `quote.canonical` | string, absolute url | **yes** |
+| `quote.text` | string | no |
+| `quote.author` | object | no |
+| `quote.author.name` | string | **yes** |
+| `quote.author.handle` | string | **yes** |
+| `quote.author.url` | string | **yes** |
 
-Derived by reading `toApiPost` (`src/worker.ts:2921-2987`) line by line and confirmed by driving the
-endpoint offline through `handle()` with an injected post, 2026-08-04.
+Every key is always present except the four under `counts`, **omitted when unknown** and the only
+place an absent key carries meaning. With nothing to report: `title` is `null`, `text` is `""`,
+`counts` is `{}`, `media` is `[]`. The `quote.*` keys are present whenever `quote` is an object.
 
-**Notes that are easy to get wrong from the table alone:**
+### `createdAt`
 
-- **`counts` is the one place a key disappears.** `apiCounts` (`src/worker.ts:2894-2902`) copies a key
-  only when the value is a finite number greater than zero, so a count of zero is omitted rather than
-  published. Upstreams use `0` for two different things — a genuinely uninteracted post, and a count
-  the platform withholds — and nothing distinguishes them by the time it reaches us. An absent key
-  means "we do not know". There is deliberately no way to say "we know, and it is none".
-- **`width` and `height` are `0` far more often than they are `null`.** `0` is what several
-  normalizers emit for "the platform did not tell us the size" (Reddit, TikTok covers, Threads,
-  Facebook galleries, and every remuxed video, which carries `w: 0, h: 0` on purpose so a player reads
-  the real dimensions out of the file). `null` only happens when the cached value was not a finite
-  number at all. **Treat `0` and `null` the same: unknown. Do not divide by either.**
-- **`width`/`height` describe the bytes at `url`, not the original video.** The published value is
-  `posterW ?? w` and `posterH ?? h` (`src/worker.ts:2965-2966`), so a `still` entry reports the poster
-  frame's size and not the video's.
-- **On a `still: true` entry, `url` and `poster` are the same url.** Both address the poster slot,
-  because that is where the bytes are.
-- **`quote.author` has no `avatar`**, and `quote` has no `media`. The quoted post's own media is not
-  published in v1; its entries live at indices after the outer post's and getting that arithmetic
-  wrong would publish urls that resolve to the wrong bytes.
-- **`quote` is `null` unless the quoted post carries an author object** (`src/worker.ts:2983`). A
-  quote we could not attribute is not published as a half-quote.
-- **`media` only contains entries that resolve to something servable.** An entry with no url is
-  dropped, and the remaining entries are still addressed by their position in the *unfiltered* list,
-  so the published urls stay correct.
+`null` where a platform publishes no post date, and until a second, slower call brings one. A Post
+without one holds `new Date(0)`, which `/_card` draws as `"1970-01-01T00:00:00.000Z"` beside a
+`⚠ no upload date` note and `src/worker.ts:3117` sends as `null`. Sort a `null` as unknown, never as
+old (`test/api.test.mjs:142`).
 
-### `createdAt` can be `null`, and that is not a bug
+### `counts`
 
-Some platforms do not tell us when a post was made, and for others the date arrives on a second,
-slower call. When the date is genuinely unknown this says `null` rather than a plausible-looking
-timestamp. Sort accordingly, and treat `null` as "unknown", never as "old".
+`apiCounts` (`src/worker.ts:3079-3086`) copies `likes`, `reposts`, `replies` and `views` only for a
+finite number above zero. A `0` reaches that filter both from an untouched post and from a count the
+platform withholds (a hidden like count, comments switched off), indistinguishable there. An absent
+key means unknown; v1 cannot encode a count known to be zero. Which of the four keys exist varies by
+site.
 
-### `counts` only contains what we know
+### `text`
 
-A key is **absent** when the number is unavailable — including when the platform reports zero.
-Upstreams use `0` for two different things, a genuinely uninteracted post and a count the platform
-withholds (a hidden like count, a video with comments switched off), and nothing distinguishes them
-by the time it reaches us. So an absent key means "we do not know", and there is deliberately no way
-to say "we know, and it is none".
+What the card shows, the card's overlays composed in. v1 gives none of them a field of its own:
 
-The possible keys are `likes`, `reposts`, `replies`, `views`. Which ones exist varies by site.
-
-### `text` is display text, not just the author's words
-
-`text` is what the card shows, which is not always only what the author typed. Three things can be
-composed into it, and none of them has a structured field of its own in v1:
-
-- a **translation**, followed by a `🌐 Translated from …` marker and then the original text;
+- a translation, followed by a `🌐 Translated from …` marker and then the original text;
 - `🔞 Age-restricted on …` on a gated YouTube video (`sensitive` is also `true`);
-- `🎬 Too long to play here — open it on …` on a video past the conversion ceiling.
+- `🎬 Too long to play here — open it on …` on a video past the length ceiling for a remux.
 
-If you need the author's untouched words, v1 cannot give them to you. Splitting them out is additive
-and on the list.
+No v1 field carries the author's untouched words; splitting them out is additive and on the list.
 
-### `still`: an image that is really a video
+`deserializePost` validates the ref, the canonical and the date, nothing else. `text` goes out
+through `str()` (`src/worker.ts:3129`): a cached value of the wrong type is published as `""`, never
+verbatim (`test/api.test.mjs:497`).
 
-A video that has not finished converting, or one too long to convert at all, is published as an
-`image` entry pointing at its poster frame. `still: true` marks those. Pair it with the top-level
-`muxing` flag:
+### `width` and `height`
 
-| `still` | `muxing` | |
+`0` is far more common than `null`. Reddit, TikTok covers, Threads, Facebook galleries and every
+remuxed video emit `0` for an unreported size; a remux carries `w: 0, h: 0` to make a player read
+the real dimensions out of the file. `null` means the cached value wasn't a finite number (`num`,
+`src/worker.ts:3089`). Both mean unknown; divide by neither.
+
+The pair describes the bytes at `url`, not the original video: `posterW ?? w` and `posterH ?? h`
+(`src/worker.ts:3149-3150`), and a `still` entry reports the poster frame's size. Both rows were
+added 2026-08-04 (`3a2406f`).
+
+### `media`
+
+Entries with no servable url are dropped. The rest keep their position in the unfiltered array
+(`usableWithIndex`, `src/worker.ts:2998`), which is the index `/_media/` resolves against. Taking
+the position after the filter publishes entry N at entry N+1's bytes, or a 404 past the end;
+`test/api.test.mjs:372` pins that off-by-one. A degraded still is addressed through its poster slot,
+never that bare number (`bytesIndex`, `src/render/embed.ts:52`), which goes on naming the video
+entry and answers `503`. `kind` collapses `Media.kind`'s three values (`src/types.ts:229`) to two,
+publishing a `gif` as `"video"` (`src/worker.ts:3140`).
+
+### `still`
+
+A video that hasn't finished muxing, or one too long to mux at all, is published as an `image` entry
+carrying `still: true`; `url` and `poster` are both the poster frame, where the bytes are. Read it
+with the top-level `muxing` flag:
+
+| `still` | `muxing` | Meaning |
 |---|---|---|
 | `false` | `false` | An ordinary picture. |
-| `true` | `true` | A video is still converting. Ask again in a few seconds. |
-| `true` | `false` | A video exists that we will not be able to serve — usually too long. This is final. |
+| `true` | `true` | A video is still muxing. Ask again in a few seconds. |
+| `true` | `false` | A video exists that cannot be served, usually because it is too long. This is final. |
 
-Without `still`, that last row is indistinguishable from an ordinary photo except by reading English
-prose out of `text`, which is not something a contract should ask of anyone.
+Without `still`, that last row is indistinguishable from an ordinary photo except by reading the
+English in `text`.
 
-### Media urls are ours
+### `quote`
 
-Every url in the payload points at `mbedfx.app`, never at the platform's CDN — so nothing in the
-payload expires, and you have a stable url to hold on to.
+`null` unless the quoted post carries an author object (`src/worker.ts:3167`). The normalizers cap
+depth at 1, leaving `quote.quote` always absent. `quote.author` has no `avatar`, and `quote` has no
+`media`: those entries live at indices after the outer post's in `mediaList`, and getting that
+arithmetic wrong publishes urls that resolve to the wrong bytes.
 
-Be aware of what that url does, because it varies: **converted video is served from our storage with
-byte-range support**, so it seeks and downloads properly. **Images, avatars, posters and
-already-progressive video are a `302` to the platform's CDN** — the redirect is stable even though
-its destination is not, but the range support and the reachability past that hop are the platform's,
-not ours. Two platforms (Instagram, Twitch) are proxied rather than redirected.
+### Media urls
+
+Every url in the payload is on `mbedfx.app`, never the platform's CDN, which hands out signed,
+short-lived and sometimes IP-locked urls. An mbedfx url carries no expiry, stays valid as its
+destination changes, and is safe to store. Past a redirect, range support and reachability belong to
+the platform.
+
+| Media | Served as |
+|---|---|
+| remuxed video | R2 bytes, answering range requests, so a player can seek |
+| images, avatars, posters, already-progressive video | `302` to the CDN under `cache-control: public, max-age=300` (`MEDIA_MAX_AGE`, `src/cache.ts:8`) |
+| Instagram and Twitch video | proxied rather than redirected (`src/worker.ts:3422-3425`; the two platforms are scoped at `src/mediaproxy.ts:163`) |
+
+### The `d.` host
+
+`d.` in front of either official host serves the file itself, video or image, at its own url:
+`https://d.mbedfx.app/jack/status/20`, `https://d.megapenispoopenfarten.sex/jack/status/20`. Those
+bytes answer range requests, and a client seeks and resumes properly. A `d.` url renders no card,
+and it serves crawlers and people the same bytes.
+
+With nothing to serve, `d.` answers a plain-text 404; an HTML body there leaves a downloader holding
+a file full of markup. `media_miss` on this host means the post has no usable media at all, a second
+meaning `docs/METRICS.md` records under "Known defects in the write shape" (`src/worker.ts:3346`).
 
 ---
 
-
 ## The seventeen platform codes
 
-`platform` is the two-letter code. **`tw` is Twitch. Twitter is `x`.** The two sit next to each other
-in every list in this repo and that is the one pair worth reading twice.
+`platform` is the two-letter code. `tw` is Twitch. Twitter is `x`.
 
 | Code | Site | Hosts |
 |---|---|---|
@@ -259,56 +272,64 @@ in every list in this repo and that is the one pair worth reading twice.
 | `lm` | Lemmy | any instance |
 | `pt` | PeerTube | any instance |
 
-The order is the README's. The codes are the seventeen in `Platform` (`src/types.ts:1`); the site each
-one means is fixed by the canonical url the router rebuilds for it (`src/router.ts`: `bs` 197, `x`
-205/210, `tt` 240, `th` 357, `rd` 387, `ig` 414, `yt` 435, `fb` 489-499, `dm` 651, `st` 672, `im`
-698-700, `tw` 845/852/858, `pn` 1078; the four fediverse arms at 895/971/1011/1038 take their host
-from the path instead).
+The codes are the seventeen in `Platform` (`src/types.ts:1`), in the README's order. The canonical
+url the router rebuilds fixes which site each one means (`src/router.ts`: `bs` 197, `x` 205/210,
+`tt` 240, `th` 357, `rd` 387, `ig` 414, `yt` 435, `fb` 489-499, `dm` 651, `st` 672, `im` 698-700,
+`tw` 845/852/858, `pn` 1078; the four fediverse arms at 895/971/1011/1038 take their host from the
+path instead).
 
-**The Hosts column is where the link came from, not something the API reads.** Routing here is
-host-agnostic, so what actually decides the answer is the path. Two consequences worth knowing before
-you send anything:
+### The Hosts column
 
-- A short link whose code is a bare single path segment does **not** resolve through this endpoint.
-  `?url=https://redd.it/1abc23` and `?url=https://dai.ly/x7abcde` answer `ambiguous` with candidates
-  `["x","ig"]`, because `/1abc23` is also the shape of an X or Instagram profile and nothing in the
-  path says otherwise. Driven offline against `route()`, 2026-08-04.
-- The short links that *do* work are the ones whose path carries its own shape: `youtu.be/{11-char id}`
-  (an 11-character segment is a YouTube id outright), `tiktok.com/t/{code}`, `reddit.com/r/{sub}/s/{code}`,
-  and Meta's `/share/…` codes. Those are resolved with the same hop a pasted link gets.
+That column records where a link came from. Routing never reads it.
+
+- A short link whose code is a bare single path segment doesn't resolve here.
+  `?url=https://redd.it/haucpf` and `?url=https://dai.ly/xaqwy7q` answer `ambiguous` with candidates
+  `["x","ig"]`, measured 2026-08-05: `/haucpf` is also the shape of an X or Instagram profile.
+- The ones that do work carry their own shape, each resolved with the hop a pasted link gets:
+  `youtu.be/dQw4w9WgXcQ` (an 11-character segment is a YouTube id outright),
+  `tiktok.com/t/ZTSw2mYwR`, `reddit.com/r/{sub}/s/{code}`, and Meta's `/share/…` codes.
+
+---
 
 ## When the answer is not JSON
 
-Every code in the table above arrives inside the envelope. Three things do not, and a client that
-calls `.json()` unconditionally breaks on all three.
+Every code in the [failure table](#failures) arrives inside the envelope. The answers below do not,
+and `.json()` on one of them throws. Cloudflare's own edge errors are the same. 502, 520, 522, 524
+and the rest come back from the proxy as HTML and the Worker never runs.
 
-**A path that is not exactly `/_api/v1`.** `/_api/v2`, `/_api/v1/anything` and `/_api` never reach the
-API arm at all — they are ordinary routes, and they answer the way any unrouted path answers. Measured
-offline, 2026-08-04: `/_api/v2?url=…` returns **HTTP 404, `content-type: text/plain`, body
-`not found\n`** to an ordinary client, and an HTML embed at HTTP 200 to a user agent we classify as
-Discord. `/_api` returns an HTML chooser page at HTTP 300. None of them is the JSON contract. Pin the
-path exactly.
+### A path that is not exactly `/_api/v1`
 
-**An unhandled exception.** There is no `try`/`catch` around the API arm, around `handle()`
-(`src/worker.ts:3174`) or around the module's `fetch` handler (`src/worker.ts:4042-4051`) — verified by
-reading all three. What is guarded is guarded individually and deliberately: the live upstream fetch
-(`loadPost`, `src/worker.ts:2362-2366`), the three share-code and short-link resolvers
-(`unwrapToPost`, `src/worker.ts:2649-2681`), the mux (`src/worker.ts:1445`) and the translation
-(`src/worker.ts:2539`) all turn a throw into a normal answer, which is why an upstream that is down or
-blocking us becomes `fetch_fail` at HTTP 200 rather than an error. What is **not** guarded is the
-storage layer: the post-cache read and write in `loadPost` (`src/worker.ts:2350-2353`, `2372`, `2388`)
-are left uncaught on purpose — its own comment says so — as is the R2 record read on the YouTube path.
-If one of those throws, it propagates out of the Worker and Cloudflare answers with its own error page:
-**Error 1101, "Worker threw a JavaScript exception"**, served as HTML with a 5xx status
-([Cloudflare Workers errors](https://developers.cloudflare.com/workers/observability/errors/)). Error
-1102 ("Worker exceeded CPU time limit") is the other runtime code you could see. Neither is ours and
-neither is JSON.
+`/_api/v2`, `/_api/v1/anything` and `/_api` never reach the API arm. Measured offline 2026-08-04,
+re-measured 2026-08-05: `/_api/v2?url=…` and `/_api/v1/anything?url=…` return HTTP 404 to an
+ordinary client, body `not found\n`, carrying exactly one header,
+`content-type: text/plain;charset=UTF-8`. That header is the runtime's own default;
+`src/render/index.ts:51` builds the response as `new Response('not found\n', { status: 404 })` with
+no headers object, so no `cache-control` reaches the client and an intermediary applies whatever it
+defaults to. A user agent classified as Discord gets an HTML embed at HTTP 200 on the same path,
+`og:title` `Not found`, minted by the `notfound` arm's `render()` call (`src/worker.ts:3377`) and
+split from the human 404 at `src/render/index.ts:49-53`. `/_api` returns an HTML chooser page at
+HTTP 300 (`src/render/chooser.ts:72`). Pin the path exactly; `test/api.test.mjs:524` refuses to
+serve `/_api/v2` as v1.
 
-**Anything Cloudflare answers on our behalf.** This runs behind Cloudflare's proxy, so the usual edge
-errors (502, 520, 522, 524 and friends) can be returned as HTML without the Worker running at all.
+### An unhandled exception
 
-So guard the parse. Branch on `ok` and `error.code` **after** you have confirmed you were given JSON,
-not before:
+Line numbers below are `src/worker.ts`.
+
+- No `try`/`catch` wraps the API arm, `handle()` (`3358`) or the module's `fetch` handler
+  (`4226-4236`), verified by reading all three.
+- Guarded per call, each throw becoming a normal answer: the live upstream fetch (`loadPost`,
+  `2532-2536`), the three share-code and short-link resolvers (`unwrapToPost`, `2819-2851`), the mux
+  (`1485`), the translation (`2709`). A down or blocking upstream becomes `fetch_fail` at HTTP 200.
+- Unguarded: the post-cache read and write (`2520-2523`, `2542`, `2558`) and the R2 record read on
+  the YouTube path. `loadPost`'s wrap covers only the live fetch; its comment records that a corrupt
+  cache read is meant to propagate.
+
+A throw in that last group leaves the Worker for Cloudflare's own error page: Error 1101, "Worker
+threw a JavaScript exception", HTML with a 5xx status ([Cloudflare Workers
+errors](https://developers.cloudflare.com/workers/observability/errors/)). Error 1102, "Worker
+exceeded CPU time limit", is the other runtime code that appears. Neither is JSON.
+
+### Guarding the parse
 
 ```js
 const res = await fetch(endpoint)
@@ -321,74 +342,67 @@ const body = await res.json()
 if (!body.ok) { /* body.error.code */ }
 ```
 
-Checking `res.status >= 500` is not enough on its own: the plain-text 404 above is a 4xx and still is
-not JSON.
+`res.status >= 500` is not enough of a check: the plain-text 404 above is a 4xx and is not JSON.
+
+---
 
 ## How long a request can take
 
-There is no timeout you can pass and no per-step limit. What bounds a request is a single budget taken
-at the top of the shared pipeline (`describeTarget`, `src/worker.ts:2717`) and spent as a deadline on
-the whole response rather than as an amount added after each step.
-
-The constants, all in `src/worker.ts`:
+No timeout parameter, no per-step limit. One budget, taken at the top of the shared pipeline
+(`describeTarget`, `src/worker.ts:2881`), bounds the whole response and leaves each step whatever is
+left. The card and the converter preview run that pipeline too, the three differing only in
+serialisation (`test/api.test.mjs:325`).
 
 | Constant | Value | What it bounds |
 |---|---|---|
-| `CARD_DEADLINE_MS` (= `MUX_WAIT_API_MS`) | **9000 ms** (`1307`, `1321`) | everything after the upstream fetch: the deadline the mux wait is measured against |
-| `MUX_WAIT_FLOOR_MS` | **300 ms** (`1306`) | the floor under that wait, so a video already sitting in storage is not thrown away by a spent budget |
-| `XLATE_MAX_WAIT_MS` | **1500 ms** (`2495`) | the translation's share of the budget |
-| `XLATE_WAIT_FLOOR_MS` | **300 ms** (`2481`) | the floor under the translation's wait |
-| `META_WAIT_API_MS` | **8000 ms** (`2185`) | **YouTube only**: the metadata extract, awaited after the two above |
+| `CARD_DEADLINE_MS` (= `MUX_WAIT_API_MS`) | **9000 ms** (`1345`, `1359`) | everything after the upstream fetch; the mux wait is measured against it |
+| `MUX_WAIT_FLOOR_MS` | **300 ms** (`1344`) | the floor under that wait, leaving a spent budget time to pick up a video already in storage |
+| `XLATE_MAX_WAIT_MS` | **1500 ms** (`2665`) | the translation's share of the budget |
+| `XLATE_WAIT_FLOOR_MS` | **300 ms** (`2651`) | the floor under the translation's wait |
+| `META_WAIT_API_MS` | **8000 ms** (`2316`) | **YouTube only**: the metadata extract, awaited after the two above |
 
-The mux and the translation race concurrently (`src/worker.ts:2762-2770`), so they cost
-`max(300, 9000 − elapsed)` between them, not the sum. The YouTube metadata warm runs after them
-(`src/worker.ts:2790-2800`) and only when the post has no known date yet, so it adds up to 8000 ms on a
-first request for a YouTube link and nothing thereafter.
+All five are in `src/worker.ts`. The mux and the translation race concurrently (`2932-2940`),
+costing `max(300, 9000 − elapsed)` between them rather than the sum. The YouTube metadata warm runs
+after them (`2960-2975`), only when the post has no known date yet: up to 8000 ms on a first YouTube
+link, nothing thereafter.
 
-**The upstream fetch itself is unbounded by this repository.** There is no `AbortSignal` anywhere in
-`src/` — verified by grep — and Cloudflare places no wall-clock limit on an HTTP-triggered Worker
-([Workers limits](https://developers.cloudflare.com/workers/platform/limits/): "No limit … as long as
-the client remains connected"). Only CPU time is capped, and this endpoint spends almost none of it.
-So the arithmetic is:
+The upstream fetch is unbounded. Nothing in `src/` sets an `AbortSignal` (verified by grep), and
+Cloudflare places no wall-clock limit on an HTTP-triggered Worker ([Workers
+limits](https://developers.cloudflare.com/workers/platform/limits/): "No limit … as long as the
+client remains connected"). Only CPU time is capped, and this endpoint spends almost none.
 
 ```
 total ≈ upstream fetch + max(300 ms, 9000 ms − upstream fetch) + (YouTube only: up to 8000 ms)
 ```
 
-If the upstream answers within 8.7 s, that is **9.0 s**, or **17.0 s** on a cold YouTube link. If the
-upstream is slower than that, the mux drops to its 300 ms floor and the total tracks the upstream.
+An upstream answering within 8.7 s gives 9.0 s, 17.0 s on a cold YouTube link; slower, the mux drops
+to its 300 ms floor and the total tracks the upstream. Set the client timeout to 20 s: the 17.0 s
+worst case plus roughly 3 s for connection setup and a slower upstream. 12 s covers a client that
+never sends YouTube links. 5 or 10 s cuts off requests about to answer.
 
-**Recommend a 20-second client timeout**: 17.0 s worst case in the code, plus roughly 3 s for
-connection setup and for an upstream slower than 8.7 s. **12 seconds** is enough if you never send
-YouTube links. Do not set 5 or 10 seconds and conclude the service is down — you will be cutting off
-requests that were about to answer.
+Measured, all in `src/worker.ts`: a cold video remux 6-9 s at ≤480p (`1313`, 2026-07-24),
+`yt-dlp -J` on YouTube 2.3-6.7 s over five runs (`2299`, 2026-07-26), a Facebook metadata extract
+~3.0 s (`1508`, 2026-07-25), a translation 217-798 ms (`2924`).
 
-For scale, the measurements those budgets were built from, all recorded in the source: a cold video
-conversion is 6-9 s at ≤480p (`src/worker.ts:1275`, measured 2026-07-24), `yt-dlp -J` on YouTube is
-2.3-6.7 s over five runs (`src/worker.ts:2168`, 2026-07-26), a Facebook metadata extract is ~3.0 s
-(`src/worker.ts:1470`, 2026-07-25), and a translation is 217-798 ms (`src/worker.ts:2754`).
+A post is held 900 s (`POST_TTL`, `src/cache.ts:5`) independently of the response, and a second
+request skips the upstream fetch even when the first answer wasn't cacheable. `/_api/v1` never
+consults the response cache; a cold post pays the upstream fetch until that entry is warm.
 
-Two things make the slow case rarer than it looks. A complete answer is sent
-`cache-control: public, max-age=900`, so anything caching in front of you absorbs repeats. And the post
-itself is cached for 900 s (`POST_TTL`, `src/cache.ts:5`) independently of the response, so a second
-request for the same post skips the upstream fetch even when the first answer was not cacheable. Note
-that `/_api/v1` does not consult the response cache at all — only the post cache — so a cold post pays
-the upstream fetch every time until that entry is warm.
+---
 
 ## `muxing` and `pending`
 
-Two flags that mean **the answer is incomplete, ask again in a moment**. Both responses are sent
-`cache-control: no-store` so nothing between us caches a half-answer.
+Either flag means an incomplete answer, and both carry `cache-control: no-store` to keep a
+half-answer out of any cache in between.
 
-**`muxing: true`** — a video is still being converted. What you got is its poster still, published as
-an `image` entry. The conversion is still running; re-request in a few seconds and it will be a
-`video`.
+- `muxing: true`: a video is still being remuxed into the progressive MP4 mbedfx serves, and what
+  arrived is its poster still. A re-request in a few seconds returns a `video`.
+- `pending: true`: a translation lost its race and `text` is the original. The translation is still
+  being written; a re-request carries it.
 
-**`pending: true`** — a translation lost its race. `text` is the original. The translation is still
-being written; re-request and it will be there.
-
-Neither is an error, and both clear on their own. A caller that ignores them gets a correct but less
-complete answer.
+Neither is an error. Both clear on their own, the work behind each running on in `waitUntil`, and an
+answer that ignores them is still correct. `test/api.test.mjs:288` asserts the `no-store`, `317` the
+`max-age=900`.
 
 ---
 
@@ -406,65 +420,46 @@ complete answer.
 }
 ```
 
-**Branch on `ok` and `error.code`, not on the HTTP status.** Every answer *about a post* is `200`,
-including the ones that say the post cannot be read. The `4xx`s are all about the request itself —
-`400` for a missing or unreadable `url`, `405` for a write verb — and never about the post. This is the same rule we apply to the platforms we read: several of
-them answer `200` with a login wall and `500` with a perfectly good JSON error, so a status code is
-not where the answer lives.
-
-`message` is prose for humans and may be reworded. `code` is the contract.
+Branch on `ok` and `error.code`, never on the HTTP status. Every answer about a post is `200`,
+including the ones saying it can't be read; the `4xx`s are about the request itself. Several
+platforms mbedfx reads answer `200` with a login wall, or `500` with a good JSON error. Match on
+`code`; `message` is prose for humans and may be reworded.
 
 | `code` | Status | Means |
 |---|---|---|
 | `age_restricted` | 200 | The post exists behind an age gate. |
 | `private` | 200 | The post exists behind a private account or a login wall. |
-| `fetch_fail` | 200 | Could not be loaded — deleted, or the platform did not answer. |
-| `ambiguous` | 200 | That path belongs to more than one site. Carries `candidates`. **Also where every profile url, bare handle and unrecognised one-segment path lands** — see below. |
-| `notfound` | 200 | The path has a shape we route for nobody. |
+| `fetch_fail` | 200 | Not loadable: deleted, or the platform did not answer. |
+| `ambiguous` | 200 | The path belongs to more than one site. Carries `candidates`. Every profile url, bare handle and unrecognised one-segment path lands here. |
+| `notfound` | 200 | A shape mbedfx routes for nobody. |
 | `bad_id` | 200 | A Mastodon-spoof-shaped path (`/users/{handle}/statuses/{id}`, `/api/v1/statuses/{id}`, `/_oembed/{id}`) whose id did not decode. Not reachable from an ordinary post url. |
-| `not_a_post` | 200 | The path routes to something that is not a post: a site page (`/`, `/index.html`), one of our own endpoints (`/_media/…`, `/_prep`, `/_card`, `/_api/v1`), or an internal route kind we do not name. |
+| `not_a_post` | 200 | Routes to something that is not a post: a site page (`/`, `/index.html`), one of this service's own endpoints (`/_media/…`, `/_prep`, `/_card`, `/_api/v1`), or an internal route kind not named here. |
 | `no_url` | 400 | No `url` parameter, **or an empty one**. `?url=` and no `url=` at all are the same answer. |
-| `unparseable` | 400 | `new URL(value, our origin)` threw. Only a malformed **absolute** url does that. Anything that can be read as a path resolves against our own origin and gets a 200 answer instead. |
+| `unparseable` | 400 | `new URL(target, origin)` threw, `origin` being the mbedfx origin. Only a malformed **absolute** url does that; anything readable as a path resolves against that origin and gets a 200 instead. |
 | `method_not_allowed` | 405 | This endpoint reads. Use `GET`. |
 
-`platform` and `canonical` are `null` whenever the request did not get far enough to establish them,
-and carry real values on `age_restricted`, `private` and `fetch_fail`. They are never guessed.
-`candidates` appears on `ambiguous` and nowhere else.
+`platform` and `canonical` carry real values on `age_restricted`, `private` and `fetch_fail`, and
+are `null` whenever the request didn't get far enough to establish them. They are never guessed.
+`candidates` appears on `ambiguous` and nowhere else. Until 2026-08-04 (`3a2406f`) both were absent
+on `no_url`, `unparseable` and `method_not_allowed` and `null` on every other code; `apiError`
+defaults them to `null` now (`src/worker.ts:3020-3028`).
 
-### What these actually return
+No failure is cached, not even `private`: accounts go public, gates lift, and a deleted post can
+come back as somebody's repost.
 
-Driven offline through `route()` and `handle()`, 2026-08-04. This is the part most likely to surprise
-you, so it is written down rather than left to be discovered.
+### What common inputs return
 
-| You send | You get | Why |
+Measured offline 2026-08-04, re-driven 2026-08-05. Every row but the last two answers `200`
+`ambiguous`.
+
+| Sent | `candidates` | Why |
 |---|---|---|
-| a bare handle — `?url=jack` | `200` `ambiguous`, `candidates: ["x","ig"]` | one path segment, and both X and Instagram mint profiles at that shape |
-| a profile url — `?url=https://x.com/jack` | `200` `ambiguous`, `candidates: ["x","ig"]` | the host is ignored, so this is the same request as the line above |
-| a TikTok or Threads profile — `?url=https://www.tiktok.com/@charlidamelio` | `200` `ambiguous`, `candidates: ["tt","th"]` | the `@` narrows it to the two sites that use one |
-| a junk string — `?url=not a url at all` | `200` `ambiguous`, `candidates: ["x","ig"]` | it resolves to the one-segment path `/not%20a%20url%20at%20all` |
-| `?url=javascript:alert(1)` | `200` `ambiguous`, `candidates: ["x","ig"]` | `javascript:` parses fine as an absolute url; its path is `alert(1)`, one segment |
-| an empty url — `?url=` | `400` `no_url` | the empty string is falsy, so it takes the missing-parameter branch |
-| a malformed absolute url — `?url=http://[` | `400` `unparseable` | `new URL` throws. `https://` and `http://:` are the other spellings that do |
-
-Two rules fall out of that, and they are the ones to design a client around.
-
-**`unparseable` is much narrower than it sounds.** The target is parsed with a base — our own origin —
-so a string only lands here if it fails url parsing outright, which in practice means a malformed
-absolute url. Junk that merely does not name a post does not reach it.
-
-**`ambiguous` is the catch-all for anything one segment long**, not just the contested paths the
-chooser was built for. `/gallery/YcAQlkx` is the designed case; a handle, a profile url and a typo all
-arrive at the same code with `["x","ig"]` because nothing in a single unrecognised segment says
-otherwise. So: **`ambiguous` does not mean "this is a post on one of these sites"** — it means "this
-path shape belongs to more than one site, and none of them has been asked". Walking the candidate list
-is still the right move for a real contested path, and for a profile url every candidate will answer
-`notfound`, because there is no profile route to reach (`/x/jack` → `notfound`, verified).
-
-`platform` and `canonical` are `null` whenever the request did not get far enough to establish them.
-They are never guessed.
-
-**Failures are never cached** — not even `private`, which looks permanent. Accounts go public, gates
-lift, deleted posts come back as reposts. Ask again whenever you like.
+| a bare handle: `?url=jack` | `["x","ig"]` | one path segment; both mint profiles at that shape |
+| a profile url: `?url=https://x.com/jack` | `["x","ig"]` | the host is ignored; same request as above |
+| a TikTok or Threads profile: `?url=https://www.tiktok.com/@charlidamelio` | `["tt","th"]` | the `@` narrows it to the two sites that use one |
+| junk: `?url=not a url at all`, `?url=:::not-a-url`, `?url=javascript:alert(1)` | `["x","ig"]` | one unrecognised segment each: `/not%20a%20url%20at%20all`, `/:::not-a-url`, `alert(1)` (`javascript:` parses fine as an absolute url). A source comment claimed `notfound` for the middle one until 2026-08-04 (`test/api.test.mjs:233-249`) |
+| an empty url: `?url=` | `400` `no_url` | the empty string is falsy and takes the missing-parameter branch |
+| a malformed absolute url: `?url=http://[` | `400` `unparseable` | `new URL` throws. `https://` and `http://:` are the other spellings that do |
 
 ### `ambiguous`
 
@@ -481,69 +476,52 @@ lift, deleted posts come back as reposts. Ask again whenever you like.
 }
 ```
 
-`/gallery/YcAQlkx` could be Reddit, Instagram or Imgur. Re-ask with the site code in front of the
-path:
+`/gallery/YcAQlkx` could be Reddit, Instagram or Imgur, and is the case the code was built for.
+Re-ask with the site code in front of the path:
 
 ```
 ?url=/im/gallery/YcAQlkx
 ```
 
-**A candidate is a site the path could belong to, not a promise the prefix will resolve.** `candidates`
-comes from which sites claim that path *shape*; whether a given site then accepts that particular id
-is a second question. `/rd/gallery/…` is the clearest case — Reddit's own gallery links are
-deprecated upstream and we deliberately do not route them — so a caller walking the candidate list
-should expect some of them to answer `notfound` and treat the first success as the answer.
+That message read `/im/gallery/abc` at 1.9.0's review. `?url=/im/gallery/abc` answers `notfound`
+(Imgur ids run five characters or more), and a caller following it verbatim reached the same dead
+end twice (`src/worker.ts:3053-3056`).
 
-**We do not use the host in your `url` to resolve this**, even though it would usually work. Letting
-a caller-supplied hostname decide which site's fetcher runs is a decision we would rather not make on
-a service where a hostname is also a thing we fetch. Sending the prefix is explicit and cannot be
-turned into something else.
+`candidates` is which sites claim that path shape; whether one accepts that id is a second question.
+`/rd/gallery/…` is the clearest case, Reddit's gallery links being deprecated upstream and
+deliberately unrouted. Expect a few `notfound`s while walking the list, and take the first success.
+On a profile url every candidate answers `notfound`, there being no profile route (`?url=/x/jack` →
+`notfound`, verified 2026-08-05).
+
+A hostname never breaks the tie, even though it usually could. A hostname here is a thing the Worker
+fetches, the fediverse arm turning one into a request, and `src/refkey.ts` states outright that
+Cloudflare is not relied on to block private addresses. The prefix names one of the seventeen codes
+and nothing else.
 
 ---
 
 ## Caching and limits
 
-A complete answer is sent `cache-control: public, max-age=900`. Incomplete answers and failures are
-`no-store`.
+A complete answer is sent `cache-control: public, max-age=900` (`RESP_TTL`, `src/cache.ts:6`); an
+incomplete one `no-store` (`src/worker.ts:3939`), as is every failure envelope (`3020-3028`).
 
-There is **no API key, no quota and no rate limiting in this repository.** Any limit in front of the
-public instance is a rule on the zone, configured in the Cloudflare dashboard — nothing in the source
-can tell you whether one exists or what its thresholds are, so this document does not claim one. If
-you are self-hosting, you get no rate limiting by forking; add your own before you point anything at
-it.
-
-Please be reasonable. The expensive parts of a request are the upstream fetch, the video conversion
-and the translation, and all three are shared with the people using the cards.
+`src/` holds no API key, no quota and no rate limiting. Any limit on the public instance is a zone
+rule in the Cloudflare dashboard, which the source cannot see. A fork inherits none of it: put
+something in front of a self-hosted instance before pointing traffic at it, and read
+`docs/SELF-HOSTING.md` first. A cold request pays the whole budget above. Repeating one url is free
+while its post is warm; space out distinct ones.
 
 ---
 
 ## Stability
 
-`v1` is in the path so it is visible in a url you paste into a bug report. `/_api/v2` is deliberately
-**not** served as v1 — asking for a version we do not have gets you a different contract than you
-asked for, which is worse than an error.
+`/_api/v2` is never answered with v1, and an unrecognised path is the plain-text 404
+([above](#when-the-answer-is-not-json)). Within `v1`:
 
-What you get instead is not an API response at all: an unrecognised path is HTTP 404 with a
-`text/plain` body of `not found`, the same answer any unrouted url gets. So a client that assumes
-every reply is JSON will fail parsing rather than reading a code — see the non-JSON section above.
-
-Within `v1`:
-
-- Fields will be **added**, never removed or retyped.
+- Fields will be added, never removed or retyped.
 - `error.code` values will be added; existing ones keep their meaning.
 - `error.message` wording may change. Do not match on it.
 - Two-letter platform codes are stable.
 
-Not in v1, and each is additive if it lands later: media on a **quoted** post (its entries live at
-indices after the outer post's, and getting that arithmetic wrong would publish urls that resolve to
-the wrong bytes), an opt-in translation parameter, profile lookups, and any form of batch request.
-
----
-
-## What this is built on
-
-The same pipeline as the card and the converter preview — one function fetches, waits for the video,
-waits for the translation and applies the per-platform overlays, and the three surfaces differ only
-in how they serialise the result. That is not an implementation detail so much as the point: this
-project's most repeated defect has been teaching one surface something its twin did not learn, and a
-published contract is the worst place to discover a new instance of it.
+Four things are absent from v1, each additive if it lands later: media on a quoted post (see
+[`quote`](#quote)), an opt-in translation parameter, profile lookups, and batch requests.
