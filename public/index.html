@@ -1100,14 +1100,21 @@ function mbedfxConvert(input, host) {
     outClass(true);
     if (r.ok) {
       result.style.display = ''; copy.style.display = '';
-      result.textContent = r.url;
+      // A RESOLVED SHARE CODE OUTRANKS THE RAW CONVERSION. Both toggles land here, and rebuilding from
+      // the input alone is what used to put the share code back — see resolvedTo.
+      var known = resolvedTo[r.url.slice(r.url.indexOf('/', 8))];
+      result.textContent = known ? onChosenHost(known) : r.url;
       note.className = 'msgline';
       // THE CHIP, on every conversion. A detected site shown is a detected site that can be
       // corrected; the note alone said it in prose and could not be acted on.
       // A platform without a code still gets a chip — see chipFor. The fediverse guess is the case
       // that matters: it is the one reading this converter admits is a guess.
       var chip = r.platform ? chipFor(r.code, r.platform) : '';
-      note.innerHTML = chip + (r.note ? ' ' + esc(r.note) : (r.platform ? '. Ready to paste.' : ''));
+      // The link on screen is the resolved permalink, so the line above it has to agree. Saying
+      // "Ready to paste" over a resolved link loses the one fact the reader needed.
+      note.innerHTML = known
+        ? chip + '. Share link resolved to the real post.'
+        : chip + (r.note ? ' ' + esc(r.note) : (r.platform ? '. Ready to paste.' : ''));
       // The domain toggle reaches here without going through schedulePrep, so the already-drawn
       // preview would otherwise keep announcing the OTHER domain's link. Same card, same post — only
       // the host changed — so the line is corrected in place rather than the card being refetched.
@@ -1151,6 +1158,20 @@ function mbedfxConvert(input, host) {
    * prep is invisible, which is the right failure mode for an optimisation.
    */
   var prepTimer = null, prepped = Object.create(null);
+  /**
+   * WHAT A SHARE CODE RESOLVED TO, kept rather than only painted.
+   *
+   * The resolution used to live in the result field and nowhere else, so anything that re-rendered
+   * threw it away: switching domain, or toggling media only, rebuilt the link from the raw input and
+   * put the SHARE CODE back. `prepped` then refused to ask again, because that path had already been
+   * asked about, so it never came back either.
+   *
+   * That is a privacy regression rather than a cosmetic one. A share code is minted per sharing act
+   * and TikTok can join it to that event; the worker resolves it precisely so the pasted link does not
+   * carry it onward (see the shortlink arm in worker.ts). Someone who swaps the domain reasonably
+   * expects the link to stay sanitised, not to quietly revert.
+   */
+  var resolvedTo = Object.create(null);
   function prep(url) {
     var path = url.slice(url.indexOf('/', 8));
     if (prepped[path]) return;
@@ -1177,6 +1198,9 @@ function mbedfxConvert(input, host) {
         // the reader's cursor, and a warming mux explains a wait they would otherwise not understand.
         // onChosenHost, not j.url: the worker builds it from the request origin and cannot know
         // which domain is selected or whether media-only is on. See onChosenHost.
+        // Stored against the path ASKED about, which is stable across both toggles: only the host
+        // changes, and onChosenHost re-applies whichever one is selected when render() reads this.
+        resolvedTo[path] = j.url;
         var unfurled = onChosenHost(j.url);
         if (unfurled && unfurled !== url) {
           result.textContent = unfurled;

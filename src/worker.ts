@@ -4144,7 +4144,10 @@ export async function handle(req: Request, env: Env, ctx: ExecutionContext, d: D
       // writes the resolved post under the CANONICAL key too, so the short link, the long-form
       // permalink and every /_media/ hit still share one entry.
       const rkey = cacheUrl(shortRespCacheKey(r.p, r.code, client, origin))
-      const hit = await d.cache.match(rkey)
+      // NOT ON A d. HOST. These entries hold the HTML card this arm answers with, and the d. host
+      // promises bytes — a card cached under the direct origin would keep being served for the whole
+      // RESP_TTL. The direct answer is returned below, once the code has resolved to a ref.
+      const hit = direct ? null : await d.cache.match(rkey)
       if (hit) return hit
 
       /**
@@ -4242,6 +4245,25 @@ export async function handle(req: Request, env: Env, ctx: ExecutionContext, d: D
         ctx.waitUntil(d.cache.put(rkey, toCacheAmb))
         return amb
       }
+
+      /**
+       * THE d. HOST, REPEATED HERE BECAUSE THIS ARM NEVER REACHES renderPostRoute.
+       *
+       * That function short-circuits a direct-media origin for "every route rather than the one it was
+       * first wired into", and its comment says the convergence is what makes remembering unnecessary.
+       * A shortlink does not converge on it: a short code caches in its OWN namespace, so this arm
+       * renders the post itself and the short-circuit never runs.
+       *
+       * MEASURED 2026-08-08, which is how the gap was found rather than reasoned about:
+       *
+       *   d.<host>/@user/video/{id}   302 -> /_media/tt:{id}/0     the file, via renderPostRoute
+       *   d.<host>/t/{code}           302 -> tiktok.com/@user/...  the POST, bouncing a human away
+       *
+       * Same post, same host, two answers, decided only by which url shape was pasted — which is the
+       * defect this file argues against everywhere else. The ref is not known until the code resolves,
+       * so this cannot be hoisted above the resolution the way renderPostRoute's copy is.
+       */
+      if (direct) return serveDirectMedia(post.ref, d, env, ctx, client, origin)
 
       const res = render({ kind: 'post', post }, client, origin)
       const toCache = new Response(res.clone().body, res)
