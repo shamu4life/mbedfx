@@ -75,6 +75,12 @@ export type Outcome2 =
   // zero while ig/ok keeps climbing means Instagram closed the recovery entirely and every blocked
   // reel is quietly a photo again — which no card will ever tell anyone, since they all still render.
   | 'copyright_gql' | 'copyright_recovered' | 'copyright_remux' | 'fullpage_recovered'
+  // `plugin_recovered` is a Facebook post read off Meta's EMBED-PLUGIN fragment because every
+  // ordinary post surface answered our egress with a login wall (measured 2026-08-08 from
+  // Cloudflare; see facebookPluginCard). Read it against `fb`/`ok`: while the wall stands this
+  // carries most Facebook posts, so it going to ZERO is not good news — it means Meta closed the
+  // plugin too and every Facebook link is a failure card again.
+  | 'plugin_recovered'
   | 'translated' | 'translate_fallback'
 
 /**
