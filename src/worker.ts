@@ -2794,7 +2794,22 @@ async function withTranslated(
 
   const timeout = new Promise<typeof TIMED_OUT>(resolve => setTimeout(() => resolve(TIMED_OUT), budgetMs))
   const raced = await Promise.race([work, timeout])
-  if (raced === TIMED_OUT) return { post, pending: true, source }
+  if (raced === TIMED_OUT) {
+    /**
+     * THE LOSING HALF OF THE PAIR ABOVE, counted for the first time here.
+     *
+     * `translated` and `translate_fallback` fire inside `work`, i.e. only when a translation ARRIVES.
+     * A race the model loses returned `pending` and nothing else, so the one state that makes a post
+     * render uncached on every single unfurl was invisible in the counters — and Workers Logs are off
+     * on purpose (see wrangler.jsonc), so it was invisible there too.
+     *
+     * 'discord' for the same reason its siblings hardcode it: this ratio is about the MODEL's latency
+     * against the budget, not about who happened to be looking. Splitting it by client would divide
+     * the signal across classes for no question anyone is asking of it.
+     */
+    count(env, post?.ref?.p ?? 'none', 'translate_pending', 'discord')
+    return { post, pending: true, source }
+  }
   // Null here is FINAL, not late: the model declined or errored. See the sentinel note above.
   if (!raced) return { post, pending: false, source }
   /**

@@ -192,6 +192,28 @@ export const AWEME_PLAY = '/aweme/v1/play/'
  * Post TTL. Upstream okdargy/fxTikTok selects it by substring too (src/generate.ts:63, with the
  * cookie behaviour noted at src/generate.ts:91-92); index position is not guaranteed stable.
  *
+ * THAT VERIFICATION NO LONGER HOLDS FOR **OUR** EGRESS, measured 2026-08-08 from Cloudflare with
+ * `wrangler dev --remote`, on three unrelated videos including one whose card was rendering fine
+ * in Discord at the time:
+ *
+ *   aweme url, Discordbot UA   200, 33,227 bytes, text/html -> www.tiktok.com/404?fromUrl=...
+ *   aweme url, browser UA      200, 33,227 bytes, text/html -> the same 404 page
+ *   v19-webapp-prime url       403
+ *   aweme url, RESIDENTIAL     200, 6,028,413 bytes, video/mp4
+ *
+ * Byte-identical 404s across videos and user agents, so it is the EGRESS and not the post, not the
+ * UA, and not a per-video signature expiring.
+ *
+ * IT DOES NOT MEAN TIKTOK VIDEO IS BROKEN, which is the tempting and wrong conclusion — one of the
+ * videos measured above was playing in Discord while its aweme url answered this egress with the 404
+ * page. Discord's media proxy is not Cloudflare, and TikTok evidently does not refuse it. Redirecting
+ * Discord at the aweme url therefore still works, and that is what this function keeps doing.
+ *
+ * WHAT IT RULES OUT is anything where WE fetch the bytes: proxying /_media/ through the Worker
+ * instead of redirecting, or handing the url to the mux container. Both look like obvious upgrades —
+ * they are what every other platform here does — and both would fetch from this same egress and get
+ * 33 KB of HTML where a card expects an mp4. Measure before building either.
+ *
  * NO aweme URL degrades to the still cover, NEVER to a gated URL. That is Phase 1's I-1 lesson
  * restated: an og:video pointing at something that cannot play renders a DEAD player AND
  * suppresses og:image, so the post shows nothing at all. A still is strictly better.
