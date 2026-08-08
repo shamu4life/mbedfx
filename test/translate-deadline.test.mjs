@@ -401,3 +401,52 @@ test('THE HTML SEAM TRANSLATES A VIDEO POST TOO — the two seams must not disag
   assert.match(html, /Latte-chan nap service video/,
     'the og:description carries the translation instead of the budget going entirely to the mux')
 })
+
+
+/* ===================== THE LOSING RACE IS COUNTED =====================
+ *
+ * Reported 2026-08-08: a TikTok post rendered no Discord card at all, and by the time anyone looked
+ * its translation had landed and every url worked. The one measurable difference from a working post
+ * was that it had been in this state — translation lost, response uncached, every unfurl a full
+ * render — and NOTHING recorded it. `translated` and `translate_fallback` fire only when a
+ * translation arrives, and Workers Logs are off on purpose (they persist the pasted url).
+ *
+ * So the question "was that rare or constant?" had no answer at all. These pin the counter that gives
+ * it one.
+ */
+
+/** An AE that remembers, so a test can read what was counted rather than that something was. */
+function recordingAE() {
+  const points = []
+  return { points, AE: { writeDataPoint(p) { points.push(p) } } }
+}
+const outcomes = points => points.map(p => (p.blobs || [])[1])
+
+test('A LOST RACE IS COUNTED — the state that made a report undiagnosable', async () => {
+  const rec = recordingAE()
+  const slow = async () => {
+    await new Promise(r => setTimeout(r, HTML_DEADLINE_MS * 3))
+    return { response: 'Tonight, a Latte-chan nap service video' }
+  }
+  const { ctx } = trackingCtx()
+  const env = { ...envWith(slow), AE: rec.AE }
+  const res = await handle(req(), env, ctx, deps())
+  assert.equal(res.status, 200)
+  assert.ok(outcomes(rec.points).includes('translate_pending'),
+    'the card went out untranslated and uncached, and the counters say so')
+})
+
+test('A TRANSLATION THAT LANDS IS NOT COUNTED AS PENDING — the ratio would be meaningless', async () => {
+  // Both counters firing for one render would make `pending / (pending + landed)` unreadable, which
+  // is the only form this counter is ever read in.
+  const rec = recordingAE()
+  const fast = async () => ({ response: 'Tonight, a Latte-chan nap service video' })
+  const { ctx } = trackingCtx()
+  const env = { ...envWith(fast), AE: rec.AE }
+  const res = await handle(req(), env, ctx, deps())
+  assert.equal(res.status, 200)
+  const seen = outcomes(rec.points)
+  assert.ok(!seen.includes('translate_pending'), 'it did not lose the race, so it is not pending')
+  assert.ok(seen.includes('translated') || seen.includes('translate_fallback'),
+    'and the engine that answered is still counted')
+})

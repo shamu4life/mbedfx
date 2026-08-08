@@ -204,6 +204,7 @@ Most mean nothing as an absolute number, and several mislead alone.
 | `copyright_gql` / `copyright_recovered` / `copyright_remux` | The three Instagram copyright recoveries, cheapest first. The signal is the ratio across all three. | each other, and `ig`/`ok` |
 | `fullpage_recovered` | The primary surface failed but the full page carried the whole post. On `ig`, every count is a post that would previously have shown a false 🔒. | `private` |
 | `translated` / `translate_fallback` | Which engine served a translation, Google or Workers AI as the fallback. Only the ratio means anything. | each other |
+| `translate_pending` | A translation that lost its deadline race. The card went out untranslated **and uncached**, so every unfurl of that post re-runs the full render until the R2 entry lands. | `translated` + `translate_fallback` |
 
 ### `pool_unused` by platform
 
@@ -236,7 +237,7 @@ No query works around either of these.
   (`src/worker.ts:3346`), the request answering 404 `no media: this post has nothing to serve`. Both
   write identical blobs: no query separates them, and `d.` host traffic contaminates the
   fetch-amplification ratio with nothing in the data to mark it.
-- `translated`/`translate_fallback` all say `discord`: `withTranslated` takes no client class and
+- `translated`/`translate_fallback`/`translate_pending` all say `discord`: `withTranslated` takes no client class and
   `src/worker.ts:2755` passes the literal `'discord'`. Three callers reach it. Two are the seams
   Discord really does read, where the label is accidentally true: `renderPostRoute`
   (`src/worker.ts:3268`) and the activity callback (`:3519`, via `translationFor` at `:2686`). The
@@ -247,6 +248,102 @@ No query works around either of these.
 (`src/worker.ts:655`, `:709`), and a query filtered to `blob1='ig'` under-reports it.
 
 ---
+
+
+### Reading `translate_pending`
+
+A few percent is the design working: a post whose translation is cold defers it to the next reader
+and self-heals, which is exactly what `pending` suppressing the response cache is for.
+
+A large or rising share is the alarm, and it is not about translations. It means posts are **not**
+self-healing — the R2 write is failing, or the model's latency has outgrown `XLATE_MAX_WAIT_MS` —
+and every affected unfurl is a full uncached render of a post that will never get cheaper.
+
+```sql
+SELECT
+  SUM(_sample_interval * (blob2 = 'translate_pending')) AS pending,
+  SUM(_sample_interval * (blob2 IN ('translated', 'translate_fallback'))) AS landed
+FROM mbedfx_counters
+WHERE timestamp > NOW() - INTERVAL '24' HOUR
+```
+
+WHY IT EXISTS. A TikTok post rendered no Discord card at all on 2026-08-08. By the time it was
+looked at, its translation had landed and every url worked; the only measurable difference from a
+working post was this state, and nothing recorded whether it had been rare or constant. Workers Logs
+would have answered it and are off on purpose — they persist the pasted url, the IP and the
+geolocation, which is the one thing this whole file refuses to collect. A counter answers the same
+question without naming a single post.
+
+
+## Diagnosing "the card never appeared"
+
+Written 2026-08-08 from a report that took hours and self-healed before it could be caught. The order
+matters: each step rules out a layer, and the expensive one is last.
+
+The failure mode this is for is the WORST one to chase — Discord shows nothing at all, this service
+answers HTTP 200, and the post often works again by the time anyone looks. Assume nothing self-evident
+and measure downward.
+
+**1. Does the API answer, and is it degraded?**
+
+```sh
+curl -s 'https://mbedfx.app/_api/v1?url=<the post url>' | jq '{ok, pending, muxing, err: .error.code}'
+```
+
+`ok:false` names the layer immediately. `pending:true` is the one that matters here: the translation
+lost its race, so the card went out untranslated AND uncached, and every unfurl re-runs the whole
+render. Check `translate_pending` against its siblings before concluding anything from one sample.
+
+**2. What does Discord actually receive?**
+
+```sh
+curl -s -o /tmp/card.html -w '%{http_code} %{size_download}B %{time_total}s\n' '<the mbedfx url>' \
+  -H 'user-agent: Mozilla/5.0 (compatible; Discordbot/2.0; +https://discordapp.com)'
+```
+
+A well-formed head is not proof: a post WITH media renders from the Mastodon-shaped document behind
+`<link rel="alternate" type="application/activity+json">`, not from the og: tags. Fetch that too, and
+check `media_attachments[].meta.original` is present — `render/mastodon.ts` drops it on a zero
+dimension, and an attachment with no size is a real cause of nothing being drawn.
+
+**3. Compare against a post that works.**
+
+Change ONE variable. A report naming a different post on a different domain settles nothing, which is
+exactly how a whole afternoon went once. Run the same post on both domains, and both posts on one
+domain, before believing either.
+
+**4. Follow the media.**
+
+```sh
+curl -sL -o /dev/null -w '%{http_code} %{content_type} %{size_download}B\n' '<the og:video or og:image url>'
+```
+
+Assert on the CONTENT TYPE, never the status. Every interesting failure on this service answers 200:
+TikTok hands a 404 page as `text/html`, Meta hands a metadata-stripped shell, Instagram hands a decoy.
+
+**5. If any of it depends on where the request comes from, measure from Cloudflare.**
+
+`curl` from a laptop is a RESIDENTIAL client and routinely gets a different answer than this Worker
+does. `wrangler dev --remote` runs the real worker on Cloudflare and is the only way to ask that
+question honestly:
+
+```sh
+npx wrangler dev --remote --enable-containers=false
+```
+
+Both the Meta wall and the TikTok 404 were invisible until measured this way, and both had already
+been reasoned about wrongly from a laptop. Preview URLs are behind Access and are NOT a substitute.
+
+**6. Then read the counters,** which are the only record that survives the incident — Workers Logs are
+off on purpose and there is nothing to go back to. `ok` broken down by `client` says whether Discord
+was served at all; the gate counters say whether the post was walled rather than broken.
+
+WHAT CANNOT BE ANSWERED AFTER THE FACT, so nobody wastes time looking: whether Discord requested a
+specific url, and what it did with the answer. That needs `event.request.url`, which is the pasted
+post, and collecting it is the line this service does not cross. Ask the reporter whether a re-paste
+still fails instead — Discord caches a failed unfurl per url, so a healed post can keep showing
+nothing to the person who first hit it.
+
 
 ## Recipes
 

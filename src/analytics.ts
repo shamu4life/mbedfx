@@ -82,6 +82,26 @@ export type Outcome2 =
   // plugin too and every Facebook link is a failure card again.
   | 'plugin_recovered'
   | 'translated' | 'translate_fallback'
+  /**
+   * `translate_pending` is the THIRD member of that pair, and it exists because the state it names
+   * was invisible. A translation that loses its deadline race returns `pending`, which deliberately
+   * suppresses the response cache so the untranslated card is not pinned for RESP_TTL — so every
+   * unfurl of that post re-runs the whole render until the R2 entry lands. `translated` and
+   * `translate_fallback` are counted only when a translation ARRIVES, so the losing case left no
+   * trace at all: nothing in the counters, and nothing in the logs, which are off for privacy.
+   *
+   * ADDED AFTER A REPORT NOBODY COULD DIAGNOSE, 2026-08-08. A TikTok post rendered no Discord card at
+   * all; by the time it was looked at, the translation had landed and every url worked. The only
+   * measurable difference between the failing and working posts was this state, and there was no way
+   * to tell whether it had been rare or constant. That is the whole reason this counter exists —
+   * not to prove that theory, but so the next report has something to read.
+   *
+   * READ IT AS A RATIO against `translated` + `translate_fallback`, never alone. A few percent is the
+   * design working: a cold post defers its translation to the next reader and self-heals. A large or
+   * rising share means posts are NOT self-healing — the R2 write is failing, or the budget is too
+   * small for the model's current latency — and every one of those unfurls is an uncached full render.
+   */
+  | 'translate_pending'
 
 /**
  * The two analytics outcomes that are content GATES (walls a post sits behind) rather than fetch
