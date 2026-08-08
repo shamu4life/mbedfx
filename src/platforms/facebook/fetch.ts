@@ -1,6 +1,3 @@
-import type { PostRef } from '../../types.ts'
-import { fbPageUrl } from './normalize.ts'
-
 /**
  * I/O ONLY, and this is the FIRST Facebook fetcher this project has had — the platform was
  * container-only (yt-dlp for both video and metadata) because Meta was measured to decoy the
@@ -77,20 +74,65 @@ const BROWSER_HEADERS: Record<string, string> = {
 }
 
 /**
- * Split from fetchFacebookPage so the share-code FALLBACK can fetch a RESOLVED permalink while still
+ * TAKES A URL, NOT A REF, so the share-code FALLBACK can fetch a RESOLVED permalink while still
  * caching and rendering under the ORIGINAL share ref. The url is always built by fbPageUrl from a
  * routed ref — never taken raw from a redirect Location — so the SSRF boundary stays exactly where it
  * already was: a literal facebook.com host assembled from validated ref fields.
  */
-export async function fetchFacebookPageUrl(url: string): Promise<string | null> {
+/**
+ * THE SECOND CLIENT SHAPE, and the reason there are now two.
+ *
+ * BROWSER_HEADERS above stopped working from datacenter egress between 2026-08-01 and 2026-08-08.
+ * normalize.ts:41 records /{owner}/posts/{id} answering "our datacenter egress with a complete og:
+ * set" on the earlier date; on the later one the same url, same code, same headers returns nothing
+ * facebookPostCard can read, and every spelling of the same post fails with it (share, story.php,
+ * pfbid, numeric-owner). Nothing in this repo changed in between.
+ *
+ * IT IS NOT THE EGRESS BEING BLOCKED OUTRIGHT, which is the tempting and wrong conclusion. The SAME
+ * Cloudflare egress reaches Facebook fine in the same minute — resolveMetaShare pulls og:url out of
+ * a real /share/{code} body, and it can only be doing so from the BODY, because metashare/fetch.ts:74
+ * measured that Facebook hands Cloudflare no 3xx on that url at all. So Facebook is serving this
+ * egress real HTML to one client shape and not to the other.
+ *
+ * WHAT DIFFERS, and why this set is the one to fall back to. The working shape is
+ * metashare's SHARE_HEADERS: a CURRENT Chrome and five headers. The failing one pins
+ * Chrome/131 — roughly two years stale by 2026-08 — and adds sec-ch-ua client hints advertising the
+ * same stale build. A stale client is a cheap thing for Meta to gate on, and cheaper still when the
+ * IP is a datacenter. This is the best-supported reading of the measurements, NOT a proven cause:
+ * the two probes also differ in url surface, and separating those needs a request from Cloudflare
+ * egress that this repo has no way to make on demand (preview URLs sit behind Access).
+ *
+ * WHY IT IS ADDED RATHER THAN SUBSTITUTED. BROWSER_HEADERS is what makes the GALLERY work — the
+ * multi-image preload is what the fuller header set bought, measured 2026-07-26 — so replacing it
+ * would trade a live feature for a hypothesis. Tried second, it costs one request on a path that has
+ * already failed, and if the theory is wrong the answer is exactly today's failure card.
+ *
+ * VERIFIED to parse: fetched residentially 2026-08-08 against the reported post, this shape returns
+ * 990,812 bytes and facebookPostCard builds the full card from it (author, caption, image). That
+ * says the shape is not WORSE, which is all a residential probe can say about a datacenter gate.
+ */
+const LEAN_HEADERS: Record<string, string> = {
+  'user-agent':
+    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36',
+  accept: 'text/html',
+  'sec-fetch-dest': 'document',
+  'sec-fetch-mode': 'navigate',
+  'sec-fetch-site': 'none',
+}
+
+/**
+ * Tried IN ORDER by the caller, richest first. The order is the point: the first entry is the one
+ * that reads a gallery, the second is the one measured still reaching this egress.
+ */
+export const FB_CLIENT_SHAPES: readonly Record<string, string>[] = [BROWSER_HEADERS, LEAN_HEADERS]
+
+export async function fetchFacebookPageUrl(
+  url: string, headers: Record<string, string> = BROWSER_HEADERS,
+): Promise<string | null> {
   try {
-    const res = await fetch(url, { headers: BROWSER_HEADERS, redirect: 'follow' })
+    const res = await fetch(url, { headers, redirect: 'follow' })
     return await res.text()
   } catch {
     return null
   }
-}
-
-export function fetchFacebookPage(ref: Extract<PostRef, { p: 'fb' }>): Promise<string | null> {
-  return fetchFacebookPageUrl(fbPageUrl(ref))
 }

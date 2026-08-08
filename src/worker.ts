@@ -45,7 +45,7 @@ import {
 import {
   facebookAgeGate, facebookPostCard, fbPageUrl, normalizeFacebook, type FacebookMeta,
 } from './platforms/facebook/normalize.ts'
-import { fetchFacebookPage, fetchFacebookPageUrl } from './platforms/facebook/fetch.ts'
+import { FB_CLIENT_SHAPES, fetchFacebookPageUrl } from './platforms/facebook/fetch.ts'
 import { fetchPinterest } from './platforms/pinterest/fetch.ts'
 import { normalizePinterest } from './platforms/pinterest/normalize.ts'
 import { fetchLemmy } from './platforms/lemmy/fetch.ts'
@@ -206,6 +206,30 @@ export function renderGate(reason: GateReason | undefined): 'age' | 'private' | 
  * COUNTS ON TOP of the worker's own fetch_fail rather than instead of it — the same layering
  * the activity/oembed case already does with api_miss, so the ratio is the readable signal.
  */
+/**
+ * ONE FACEBOOK PAGE READ, TRIED IN EVERY CLIENT SHAPE UNTIL ONE PARSES.
+ *
+ * Facebook serves this project's datacenter egress real HTML to one header set and a shell to
+ * another, and which one works has already changed once under us — see FB_CLIENT_SHAPES for the
+ * measurements. Asking in both shapes is what stops that from being a silent outage: the richer
+ * shape still runs first and still wins when it can, so the gallery it buys is not given up.
+ *
+ * RETURNS THE PAGE AS WELL AS THE CARD because the caller still needs a body to read the age gate
+ * out of when no shape produced a card. The FIRST non-empty body is the one kept for that: the
+ * age-gate marker lives in Meta's own React route name, which the shell does not carry either way,
+ * and preferring the first keeps the reading identical to what this path did before.
+ */
+async function fbReadPage(url: string, ref: PostRef): Promise<{ page: string | null, card: Post | null }> {
+  let page: string | null = null
+  for (const headers of FB_CLIENT_SHAPES) {
+    const body = await fetchFacebookPageUrl(url, headers)
+    if (body && !page) page = body
+    const card = facebookPostCard(body, ref)
+    if (card) return { page: body, card }
+  }
+  return { page, card: null }
+}
+
 export async function liveFetchPost(
   ref: PostRef, env: Env, client: ClientClass, report?: FetchReport, ctx?: ExecutionContext,
 ): Promise<Post | null> {
@@ -639,7 +663,7 @@ export async function liveFetchPost(
          * metadata surface from datacenter. That was measured against `facebookexternalhit` — Meta's
          * OWN crawler UA, which gets HTTP 200 and ZERO BYTES — and generalised further than the
          * measurement did: Twitterbot gets the full page with a complete og: set (measured
-         * 2026-07-26, 319,851 bytes on the same url). See fetchFacebookPage.
+         * 2026-07-26, 319,851 bytes on the same url). See FB_CLIENT_SHAPES.
          *
          * Two of the three links reported that day become real cards this way (both image posts); the
          * third is a TEXT post whose page carries no og tags under any UA tried, and it stays an
@@ -649,8 +673,7 @@ export async function liveFetchPost(
          * FAILS SAFE: a throw, an empty body or a decoy all return null from either half, and null
          * lands on exactly the generic failure card this arm already produced.
          */
-        const page = await fetchFacebookPage(ref)
-        const card = facebookPostCard(page, ref)
+        const { page, card } = await fbReadPage(fbPageUrl(ref), ref)
         if (card) {
           count(env, 'fb', 'fullpage_recovered', client)
           return card
@@ -703,8 +726,7 @@ export async function liveFetchPost(
           }
           const resolved = loc ? route(new URL(stripMetaTracking(loc), 'https://www.facebook.com')) : null
           if (resolved?.kind === 'post' && resolved.ref.p === 'fb') {
-            const viaPermalink = await fetchFacebookPageUrl(fbPageUrl(resolved.ref))
-            const recovered = facebookPostCard(viaPermalink, ref)
+            const { card: recovered } = await fbReadPage(fbPageUrl(resolved.ref), ref)
             if (recovered) {
               count(env, 'fb', 'fullpage_recovered', client)
               return recovered
