@@ -43,7 +43,7 @@ import {
   youtubeVouched,
 } from './platforms/youtube/normalize.ts'
 import {
-  facebookAgeGate, facebookPostCard, fbPageUrl, normalizeFacebook, type FacebookMeta,
+  facebookAgeGate, facebookPluginCard, facebookPostCard, fbPageUrl, fbPluginUrl, normalizeFacebook, type FacebookMeta,
 } from './platforms/facebook/normalize.ts'
 import { fetchFacebookPage, fetchFacebookPageUrl } from './platforms/facebook/fetch.ts'
 import { fetchPinterest } from './platforms/pinterest/fetch.ts'
@@ -656,6 +656,28 @@ export async function liveFetchPost(
           return card
         }
         /**
+         * THE EMBED PLUGIN, which since 2026-08-08 is the surface that actually answers. Every
+         * ordinary post url — permalink, story.php, pfbid, share — now returns a login wall or a
+         * metadata-stripped page to this project's datacenter egress, in four different client
+         * shapes; the plugin fragment returns the post. The measurements are in facebookPluginCard.
+         *
+         * SECOND, NOT FIRST, and deliberately: when the og: surface DOES answer it carries the whole
+         * multi-image gallery from its preload links, and this fragment carries what the embed
+         * paints. So a post that still renders the richer way keeps doing so, and this costs one
+         * request only on a path that has already failed.
+         *
+         * A SHARE REF SKIPS IT — `fbPageUrl` spells a share as /share/v/{code}, which is a redirect
+         * to a post rather than a post, and the plugin has nothing to render for it. That case is
+         * handled below instead, once the code has been resolved to a real permalink.
+         */
+        if (ref.kind !== 'share') {
+          const viaPlugin = facebookPluginCard(await fetchFacebookPageUrl(fbPluginUrl(fbPageUrl(ref))), ref)
+          if (viaPlugin) {
+            count(env, 'fb', 'plugin_recovered', client)
+            return viaPlugin
+          }
+        }
+        /**
          * NOT RENDERABLE — but say WHY when Facebook tells us. An 18+ post answers with a substantial
          * page (304,440 bytes measured) carrying no og: set and no scontent url, so it is
          * indistinguishable from "empty" by shape alone. Meta names the state itself in the React
@@ -708,6 +730,14 @@ export async function liveFetchPost(
             if (recovered) {
               count(env, 'fb', 'fullpage_recovered', client)
               return recovered
+            }
+            // The resolved permalink is a real post url, so the plugin has something to render. This
+            // is the arm that carries a pasted /share/{code} while the login wall stands.
+            const sharePlugin = facebookPluginCard(
+              await fetchFacebookPageUrl(fbPluginUrl(fbPageUrl(resolved.ref))), ref)
+            if (sharePlugin) {
+              count(env, 'fb', 'plugin_recovered', client)
+              return sharePlugin
             }
           }
         }

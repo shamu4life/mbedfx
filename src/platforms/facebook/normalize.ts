@@ -212,16 +212,23 @@ export function normalizeFacebook(meta: FacebookMeta | null, ref: PostRef): Post
  * a 500. Out-of-range escapes are left as written instead.
  */
 const ENTITY = /&#(x)?([0-9a-f]{1,6});/gi
-const FB_OG = (html: string, prop: string): string => {
-  const m = html.match(new RegExp(`<meta property="og:${prop}" content="([^"]{0,2000})"`))
-  if (!m) return ''
-  return m[1]
+/**
+ * SHARED WITH THE PLUGIN SURFACE BELOW, which is why this is a function rather than inlined into
+ * FB_OG. The ordering rules above are the whole value of it, and a second decoder written for the
+ * second surface is exactly the "two copies of one rule" this file avoids everywhere else.
+ */
+function fbDecode(raw: string): string {
+  return raw
     .replace(/&quot;/g, '"')
     .replace(ENTITY, (whole, hex, digits) => {
       const n = parseInt(digits, hex ? 16 : 10)
       return n > 0 && n <= 0x10FFFF ? String.fromCodePoint(n) : whole
     })
     .replace(/&amp;/g, '&')
+}
+const FB_OG = (html: string, prop: string): string => {
+  const m = html.match(new RegExp(`<meta property="og:${prop}" content="([^"]{0,2000})"`))
+  return m ? fbDecode(m[1]) : ''
 }
 
 /** Meta's image CDNs. The og:image url reaches the renderer and can be fetched, so it is range-checked. */
@@ -415,4 +422,135 @@ function fbGallery(html: string): string[] {
 const FB_AGE_GATE = 'CometAgeInappropriate'
 export function facebookAgeGate(html: unknown): 'age_restricted' | undefined {
   return typeof html === 'string' && html.includes(FB_AGE_GATE) ? 'age_restricted' : undefined
+}
+
+
+/**
+ * THE EMBED-PLUGIN SURFACE — the only Facebook post surface measured reachable from this project's
+ * datacenter egress, and the reason there is a second Facebook parser at all.
+ *
+ * WHAT BROKE. On 2026-08-08 every spelling of a reported post answered with the failure card:
+ * /share/p/{code}, story.php, /{page}/posts/{pfbid} and /{ownerId}/posts/{id}. The same code against
+ * the same url from a RESIDENTIAL ip built the full card — confirmed by running the shipped worker
+ * under `wrangler dev`, which holds the runtime constant and moves only the egress.
+ *
+ * MEASURED FROM CLOUDFLARE EGRESS, 2026-08-08, with `wrangler dev --remote` — which runs this worker
+ * on Cloudflare and so answers the question a laptop curl cannot:
+ *
+ *   /{ownerId}/posts/{id}, rich headers   200, 324,247 bytes, NO og: tags at all
+ *   ditto, Twitterbot UA                  200, 307,396 bytes, NO og: tags
+ *   ditto, current-Chrome lean headers    200, 322,749 bytes, NO og: tags
+ *   /share/p/{code}                       200 -> facebook.com/login/?next=...      A LOGIN WALL
+ *   mbasic.facebook.com/{owner}/posts/    200 -> facebook.com/login.php?next=...   A LOGIN WALL
+ *   /plugins/post.php?href=...            200,  74,434 bytes, THE POST
+ *
+ * FOUR CLIENT SHAPES GOT THE SAME STRIPPED PAGE, which is what rules out the tempting header theory —
+ * an earlier attempt at this bug added a second header set and was measured to change nothing. Meta
+ * now wants a login for the post surfaces from this egress. The plugin endpoint is Meta's own
+ * documented embed surface and is not behind that wall.
+ *
+ * NO og: TAGS HERE, so facebookPostCard cannot be reused: a plugin renders a FRAGMENT, not a document
+ * with a head. Every field is read out of the markup instead.
+ *
+ * WHY IT IS A FALLBACK AND NOT THE FRONT DOOR. The og: surface, when it answers, carries the whole
+ * multi-image gallery from its preload links; this one carries what the embed paints. Placed after
+ * it, this costs one request on a path that has already failed and cannot regress a post that still
+ * renders the richer way.
+ *
+ * REGEXES ARE BOUNDED, and with a lesson of its own behind it: an unbounded match over this 74 KB
+ * single-line document hung a grep hard enough to need killing while it was being explored.
+ */
+export function fbPluginUrl(pageUrl: string): string {
+  return 'https://www.facebook.com/plugins/post.php?href=' + encodeURIComponent(pageUrl)
+}
+
+/** The permalink the plugin links back to. `?ref=embed_post` is Meta's marker, not part of the url. */
+const FB_PLUGIN_PERMALINK = /href="(https:\/\/www\.facebook\.com\/[^"]{1,200}\/posts\/\d{5,25})\?ref=embed_post"/
+/**
+ * The byline. TWO anchors carry this marker and BOTH point at the same page: the avatar wraps an
+ * <img> and has no text, the byline wraps the name. So the first anchor with actual TEXT is the
+ * answer, not the first anchor found.
+ *
+ * THE NAME IS NESTED, which is the whole reason this captures markup and strips it afterwards. The
+ * byline is `<a href="…"><span class="…">WYFF News 4</span></a>`, so a `[^<]` capture matches the
+ * empty string before the <span> and the byline reads as textless — which is exactly how the first
+ * version of this regex failed, silently, against the real fragment.
+ */
+const FB_PLUGIN_AUTHOR = /<a[^>]{0,400}?href="(https:\/\/www\.facebook\.com\/[^"?]{1,80})\?ref=embed_post"[^>]{0,200}?>([\s\S]{0,200}?)<\/a>/g
+/** The caption sits in a bare <p>. Emoji arrive as <span> wrappers around the character itself. */
+const FB_PLUGIN_TEXT = /<p>([\s\S]{0,4000}?)<\/p>/
+/**
+ * `t39.30808-6` IS THE PHOTO BUCKET and `-1` is the avatar bucket — the SAME discriminator fbGallery
+ * documents, reused rather than re-derived. Without it the poster's profile picture is the first
+ * image scraped in, and it sits EARLIER in the document than the post's own photo: measured on the
+ * reported post, avatar at offset 46,200 and the photo at 47,703.
+ */
+const FB_PLUGIN_IMG = /<img\s[^>]{0,1400}?>/g
+/** The photo bucket, and the media id inside it that dedupes one photo across its sizes. */
+const FB_PLUGIN_SRC = /src="(https:\/\/[^"]{20,200}?t39\.30808-6\/\d+_(\d+)_[^"]{0,900}?)"/
+/**
+ * REAL DIMENSIONS, WHICH THE og: SURFACE NEVER HAD. The plugin prints width/height on the <img>, and
+ * render/mastodon.ts drops `meta.original` entirely when either is 0 — so a card built without these
+ * hands Discord an attachment with no size and no aspect ratio. Reading them is the difference
+ * between the client sizing the photo correctly and it guessing.
+ *
+ * Attribute ORDER is not assumed: the whole tag is matched first and these are pulled out of it,
+ * because width/height sit after `src` on the measured fragment and nothing promises they stay there.
+ */
+const FB_PLUGIN_W = /\swidth="(\d{1,5})"/
+const FB_PLUGIN_H = /\sheight="(\d{1,5})"/
+
+export function facebookPluginCard(html: unknown, ref: PostRef): Post | null {
+  if (ref.p !== 'fb') return null
+  if (typeof html !== 'string' || !html) return null
+
+  let name = ''
+  let page = ''
+  for (const m of html.matchAll(FB_PLUGIN_AUTHOR)) {
+    const text = fbDecode(m[2].replace(/<[^>]{0,400}>/g, '')).trim()
+    if (text) { page = m[1]; name = text; break }
+  }
+
+  const body = html.match(FB_PLUGIN_TEXT)
+  // Tags are STRIPPED rather than parsed: the only markup inside a caption is the emoji <span>s, whose
+  // text content is the emoji character itself, so dropping the tags keeps it.
+  const text = body ? fbDecode(body[1].replace(/<[^>]{0,400}>/g, '')).trim() : ''
+
+  // The same assertion facebookPostCard makes, for the same reason: a fragment carrying neither a
+  // byline nor a caption is the plugin's own error state, and a card asserting an empty post is worse
+  // than an honest failure.
+  if (!name || !text) return null
+
+  const byId = new Map<string, { url: string, w: number, h: number }>()
+  for (const tag of html.matchAll(FB_PLUGIN_IMG)) {
+    const src = tag[0].match(FB_PLUGIN_SRC)
+    if (!src || byId.has(src[2])) continue
+    // The src is an HTML attribute, so every '&' in the signed CDN query arrives as '&amp;'. Decoding
+    // it is what makes the url fetchable; a raw one 403s on the signature.
+    const url = src[1].replace(/&amp;/g, '&')
+    if (!fbImage(url)) continue
+    byId.set(src[2], {
+      url,
+      w: Number(tag[0].match(FB_PLUGIN_W)?.[1] ?? 0),
+      h: Number(tag[0].match(FB_PLUGIN_H)?.[1] ?? 0),
+    })
+    if (byId.size >= 10) break
+  }
+
+  const permalink = html.match(FB_PLUGIN_PERMALINK)
+  return {
+    ref: { p: 'fb', kind: ref.kind, id: ref.id },
+    canonical: permalink ? permalink[1] : fbPageUrl(ref as Extract<PostRef, { p: 'fb' }>),
+    // No @-handle on this surface, same as the og: one — the renderers omit an empty handle rather
+    // than printing "(@)".
+    author: { name, handle: '', url: page || 'https://www.facebook.com' },
+    text,
+    // NO DATE HERE EITHER. The plugin prints a RELATIVE age ("2d"), and a relative age cannot become a
+    // timestamp without knowing when the fragment was rendered. The epoch is what the other Facebook
+    // surfaces already use for absent, rather than a guessed "now" that would be a WRONG date.
+    createdAt: new Date(0),
+    media: [...byId.values()].map(m => ({ kind: 'image' as const, url: m.url, w: m.w, h: m.h })),
+    counts: {},
+    sensitive: false,
+  }
 }
