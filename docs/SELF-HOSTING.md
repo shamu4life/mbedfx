@@ -31,7 +31,7 @@ curl localhost:8080/health
 second command is an unauthenticated remuxer that fetches and downloads whatever any caller names.
 Do not publish it or bind it to a public interface.
 
-`container/Dockerfile:16` installs an x86_64 Deno binary and `container/README.md:198` requires
+`container/Dockerfile:16` installs an x86_64 Deno binary and `container/README.md:264` requires
 linux/amd64, which `--platform` pins above. What an arm64 build produces is unrecorded; nobody has
 built or resolved on one.
 
@@ -143,8 +143,10 @@ entry point: `port = int(os.environ.get("PORT", "8080"))` under `if __name__ == 
 
 `container/Dockerfile` is `python:3.12-slim` plus ffmpeg, `yt-dlp[default,curl-cffi]>=2025.1.1` and
 a static Deno binary, `EXPOSE 8080`, `CMD ["python", "server.py"]`. None of it needs porting. The
-image has not been re-exercised outside Workers, and `container/README.md` documents only the
-`wrangler deploy` path.
+image has not been re-exercised outside Workers, though `server.py` itself has: it answered
+`/health`, enforced `X-Resolver-Secret` and refused every SSRF probe on a stock interpreter with no
+container at all, 2026-08-08 on macOS x86_64. `container/README.md` documents that path under
+[Running it standalone](../container/README.md#running-it-standalone).
 
 #### The `/resolve` contract
 

@@ -131,9 +131,8 @@ To require the shared-secret header, run `npx wrangler secret put RESOLVER_SECRE
 Wrangler documents that as build-time only, and a value set there never reaches the running
 instance.
 
-Outside Cloudflare is the one case where you build the image yourself. `server.py` is a plain HTTP
-server with no Cloudflare surface in it, and `docs/SELF-HOSTING.md` has the plan. Set
-`RESOLVER_SECRET`. Without it, the deployment is an unauthenticated fetch-anything remuxer.
+Running it anywhere else is [Running it standalone](#running-it-standalone) below.
+`docs/SELF-HOSTING.md` carries the wider plan, for the Worker half that has no adapter yet.
 
 ### Warm instances
 
@@ -144,6 +143,74 @@ likely land on an existing warm slot, so it's an unreliable way to reach a new i
 in `src/worker.ts` has the note on the rollout.
 
 To reach a rebuild sooner, wait out `sleepAfter` or recycle the instances.
+
+## Running it standalone
+
+Outside Cloudflare is the one case that needs the image built by hand. Nothing in `server.py`
+imports a Cloudflare module or expects a binding: it is stdlib-only Python over
+`ThreadingHTTPServer`, and it holds no state, so there is no volume to mount and nothing to migrate.
+
+```sh
+docker build --platform linux/amd64 -t media-resolver container/
+docker run --rm -p 8080:8080 -e RESOLVER_SECRET=<a long random string> media-resolver
+```
+
+`--platform linux/amd64` is not optional on an ARM host. The Dockerfile fetches
+`deno-x86_64-unknown-linux-gnu.zip` by name, so an arm64 build lands an x86_64 binary that cannot
+execute. Nothing fails at build time and nothing fails at boot. Only YouTube breaks, and only at the
+moment a `{page}` resolve reaches for the JS runtime, which is a long way from the cause.
+
+Check it answers:
+
+```sh
+curl -s localhost:8080/health                                  # -> ok
+curl -s -X POST localhost:8080/resolve \
+  -H 'X-Resolver-Secret: <the same string>' \
+  -d '{"video":"https://v.redd.it/<id>/HLSPlaylist.m3u8"}' -o out.mp4
+```
+
+A few MB of `video/mp4` with a valid `ftyp` means the whole path works. A JSON `{"error"}` body
+means it does not, and the code carries the reason: `401` the secret, `400` a source the SSRF gate
+refused, `502` a failed or empty mux, `504` the `PROC_TIMEOUT` wall clock.
+
+**Set `RESOLVER_SECRET`.** Without it, `/resolve` is an open fetch-anything remuxer: it will pull
+whatever url an anonymous caller names, from the host's own network position, and spend a
+`PROC_TIMEOUT` of CPU doing it. The Worker deployment can lean on the container binding not being a
+public route; a standalone one is reachable by whatever the host's firewall allows, so the secret is
+the only thing in front of it. `/health` stays unauthenticated by design, since a load balancer has
+to reach it.
+
+Give the host disk, not just memory. A mux streams to a temp file before a byte is returned, so
+`/tmp` inside the container needs headroom to `MAX_BYTES` (375 MB) per concurrent call.
+
+The listener is IPv4-only: `server.py:430` binds `0.0.0.0`, which is the whole of it. Nothing in the
+Cloudflare path cares, and `docker run -p` hides it. An IPv6-only host, or a reverse proxy resolving
+the upstream to `::1`, reaches a closed port and reports the container as down.
+
+### Without Docker
+
+The image exists for ffmpeg, yt-dlp and Deno, not for Python. Where those three are already on the
+host, `server.py` runs against a stock interpreter with no venv, no `pip install` and no build step:
+
+```sh
+PORT=8080 RESOLVER_SECRET=<a long random string> python3 container/server.py
+```
+
+Verified 2026-08-08 on macOS x86_64, Python 3.14.6 and ffmpeg 8.1.2, off Cloudflare and outside a
+container: `/health` answered `200 ok`; `/resolve` answered `401` with a missing and with a wrong
+secret, and passed to argument parsing with the right one; and the SSRF gate refused
+`169.254.169.254`, loopback, `file:///etc/passwd` and a leading-dash url with `400 invalid source`
+apiece.
+
+One caveat that build does not cover. `HTTP_OPTS` sends `-http_persistent 0` with every input, and
+that option belongs to ffmpeg's HLS demuxer. On ffmpeg 8.1.2 the `dash` demuxer does not define it
+and a plain MP4 has no demuxer that does, so either input dies at
+`Option http_persistent not found` before a byte is read. Production never reaches it: `{video}` is
+only ever set from `src/platforms/reddit/normalize.ts:102` and
+`src/platforms/bluesky/normalize.ts:73`, both HLS playlists, and everything else arrives as `{page}`
+where yt-dlp builds its own ffmpeg call.
+The interface note above still advertises a bare `.mpd` as `video`, which is the shape to re-measure
+before relying on it, and a self-hoster on a newer ffmpeg than the image's is who would find out.
 
 ## Status (2026-08-03)
 
