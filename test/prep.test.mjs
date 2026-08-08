@@ -634,6 +634,65 @@ test('A HUMAN ON d. GETS THE FILE FROM A SHARE LINK, not a bounce to the origina
     'the redirect is to our own bytes, not out to reddit.com')
 })
 
+test('A HUMAN ON d. GETS THE FILE FROM A TIKTOK SHORT LINK TOO — the one kind that never reaches renderPostRoute', async () => {
+  /**
+   * THE SAME RULE AS THE REDDIT TEST ABOVE, AND IT WAS NOT TRUE FOR THIS ROUTE.
+   *
+   * renderPostRoute short-circuits a d. origin for every route that reaches it, and its comment says
+   * the convergence is what makes remembering unnecessary. A shortlink does not converge on it — a
+   * short code caches in its own namespace, so that arm renders the post itself — so the check was
+   * simply absent there. Reported and reproduced against production, 2026-08-08:
+   *
+   *   d.<host>/@user/video/{id}   302 -> /_media/tt:{id}/0     the file
+   *   d.<host>/t/{code}           302 -> tiktok.com/@user/...  the POST
+   *
+   * One post, one host, two answers, decided only by which url shape someone pasted.
+   */
+  const { ctx: c } = ctx()
+  const resolved = {
+    kind: 'post',
+    post: {
+      ref: { p: 'tt', id: '7246058829106973978' },
+      canonical: 'https://www.tiktok.com/@someone/video/7246058829106973978',
+      author: { name: 'n', handle: 'h', url: 'https://example.invalid' },
+      text: '', createdAt: new Date('2026-07-01T00:00:00Z'), counts: {}, sensitive: false,
+      media: [{ kind: 'video', url: 'https://example.invalid/v.mp4', w: 5, h: 5 }],
+    },
+  }
+  const human = new Request('https://d.mbedfx.app/t/ZTAvgEAL3', {
+    headers: { 'user-agent': 'Mozilla/5.0 (Macintosh) AppleWebKit/537.36 Chrome/126 Safari/537.36' },
+  })
+  const res = await handle(human, envWith(fakeResolver().binding), c,
+    deps({ resolveShortlink: async () => resolved }))
+  assert.equal(res.status, 302)
+  assert.match(res.headers.get('location'), /\/_media\//,
+    'the redirect is to our own bytes, not out to tiktok.com')
+})
+
+test('A SHORT LINK ON THE APEX IS UNTOUCHED BY THAT — a person is still bounced to the real post', async () => {
+  // The share code is resolved away first, which is the privacy behaviour the shortlink arm exists
+  // for; the point here is only that adding the d. branch did not change what the apex does.
+  const { ctx: c } = ctx()
+  const resolved = {
+    kind: 'post',
+    post: {
+      ref: { p: 'tt', id: '7246058829106973978' },
+      canonical: 'https://www.tiktok.com/@someone/video/7246058829106973978',
+      author: { name: 'n', handle: 'h', url: 'https://example.invalid' },
+      text: '', createdAt: new Date('2026-07-01T00:00:00Z'), counts: {}, sensitive: false,
+      media: [{ kind: 'video', url: 'https://example.invalid/v.mp4', w: 5, h: 5 }],
+    },
+  }
+  const human = new Request('https://mbedfx.app/t/ZTAvgEAL3', {
+    headers: { 'user-agent': 'Mozilla/5.0 (Macintosh) AppleWebKit/537.36 Chrome/126 Safari/537.36' },
+  })
+  const res = await handle(human, envWith(fakeResolver().binding), c,
+    deps({ resolveShortlink: async () => resolved }))
+  assert.equal(res.status, 302)
+  assert.equal(res.headers.get('location'), 'https://www.tiktok.com/@someone/video/7246058829106973978',
+    'the sanitised permalink, not our own bytes and not the share code')
+})
+
 test('THE APEX IS UNCHANGED BY ALL OF THAT — a share link still renders a card', async () => {
   // The guard is "human AND NOT a direct host", so ordinary hosts must keep bouncing people to the
   // post and rendering cards for crawlers exactly as before.
