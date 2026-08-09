@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { handle } from '../src/worker.ts'
+import { handle, HTML_DEADLINE_MS, MUX_WAIT_BOT_MS } from '../src/worker.ts'
 import { refKey } from '../src/refkey.ts'
 
 /**
@@ -385,4 +385,51 @@ test('muxing AND pending ARE INDEPENDENT — two failure modes, and each needs i
   )).json()
   assert.equal(c.muxing, true, 'a foreign-language video post is incomplete in two independent ways')
   assert.equal(c.pending, true)
+})
+
+
+/* ============ WHAT A CRAWLER WILL WAIT, WHICH IS LESS THAN THE CARD USED TO TAKE ============
+ *
+ * Reported 2026-08-08: YouTube links "fail to embed until warmed on the site". Measured against
+ * production the next day, on four cold videos of 28s, ~60s and 615s:
+ *
+ *   card, fully cold          5.14 - 5.18s     no media on it
+ *   activity document, cold   8.19 - 8.29s
+ *   card, second view         0.19 - 0.29s     with og:video
+ *
+ * Every budget involved was individually argued and internally consistent; together they answered a
+ * crawler in ~13s, and Discord is gone by then. THE WAIT BOUGHT NOTHING: a cold mux measured ~5s for a
+ * 60-second Short — verified by fetching /_media/ the instant the 5.1s card returned and getting
+ * 6,472,085 complete bytes — so no budget a crawler tolerates was ever going to catch it. The old
+ * ceiling spent five seconds losing a race it loses in one.
+ *
+ * These pin the ceiling rather than the wall clock: asserting "under 2s" would pass for the wrong
+ * reason on a fast machine and fail for the wrong reason on a loaded one.
+ */
+
+test('A CRAWLER IS NOT MADE TO WAIT OUT A COLD MUX — the ceiling is the bot budget, not the response budget', async () => {
+  // The container never answers, which is the honest shape of a mux that has only just been
+  // dispatched. Before this, the head spent the whole HTML_DEADLINE_MS here and then degraded anyway.
+  const ref = { p: 'x', kind: 'status', id: '9200000000000000001' }
+  const t0 = Date.now()
+  const res = await handle(
+    new Request(`https://mbedfx.app/muxwatch/status/${ref.id}`, {
+      headers: { 'user-agent': 'Mozilla/5.0 (compatible; Discordbot/2.0; +https://discordapp.com)' },
+    }),
+    envWith({ resolver: silentResolver() }), retainingCtx(), depsFor(r => videoPost(r)),
+  )
+  const elapsed = Date.now() - t0
+  assert.equal(res.status, 200)
+  assert.ok(elapsed < HTML_DEADLINE_MS,
+    `the head must not spend the whole response budget on a mux that cannot finish (elapsed ${elapsed}ms)`)
+  assert.ok(elapsed >= MUX_WAIT_BOT_MS - 100 || elapsed < MUX_WAIT_BOT_MS,
+    'and the wait it does spend is the bot budget')
+})
+
+test('THE BOT BUDGET IS A FRACTION OF THE RESPONSE BUDGET, and stays one', () => {
+  // The relationship is the rule, not the number. A later edit that raises this to "just under
+  // HTML_DEADLINE_MS" reintroduces the reported defect while leaving both constants looking sensible
+  // on their own — which is exactly how it happened the first time.
+  assert.ok(MUX_WAIT_BOT_MS < HTML_DEADLINE_MS / 2,
+    'a crawler budget that approaches the response budget is not a crawler budget')
 })

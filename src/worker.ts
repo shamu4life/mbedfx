@@ -2346,6 +2346,56 @@ class MetaUnusable extends Error {}
 const META_WAIT_API_MS = 8000
 
 /**
+ * WHAT A CRAWLER WILL ACTUALLY WAIT, which is the number every budget above was missing.
+ *
+ * The seams Discord fetches were tuned to be RIGHT on the first paste: the HTML head spends up to
+ * HTML_DEADLINE_MS (5000) on the mux, and the activity callback spends MUX_WAIT_API_MS (9000) on the
+ * mux, META_WAIT_API_MS (8000) on the date, and a translation slice, all concurrent. Each of those is
+ * individually argued and internally consistent. Together they answer a cold YouTube post in ~5.1s on
+ * the head and ~8.2s on the activity document, and DISCORD IS GONE BY THEN — reported from production
+ * 2026-08-08 as YouTube links that "fail to embed until warmed on the site", which is exactly what a
+ * crawler timeout looks like from the outside.
+ *
+ * MEASURED, on four cold videos of 28s, ~60s and 615s (2026-08-09, against production):
+ *
+ *   card, fully cold          5.14 - 5.18s   no media on it
+ *   activity document, cold   8.19 - 8.29s
+ *   card, second view         0.19 - 0.29s   with og:video
+ *
+ * THE WAIT BUYS ALMOST NOTHING ON A COLD PASTE, which is what makes this a cut rather than a trade. A
+ * WARM mux is an R2 head — MUX_WAIT_FLOOR_MS's comment sizes that at 300ms — so a shortened ceiling
+ * cannot cost a video that already exists. A COLD mux measured ~5s for a 60-second Short (verified by
+ * fetching /_media/ the moment the 5.1s card returned: 6,472,085 bytes, already complete), so no
+ * budget a crawler tolerates was ever going to catch it. The old ceiling spent five seconds to lose
+ * the same race it loses in one.
+ *
+ * NOTHING IS ABANDONED. Both the mux and the meta extract run under ctx.waitUntil with their R2 write
+ * INSIDE the raced work, so a deadline this side of the answer still lands the record — the design
+ * META_WAIT_API_MS's own comment describes as "right on the next view", and names as the knob to turn
+ * if the ceiling is ever judged unacceptable. It is.
+ *
+ * THE COST, STATED EXACTLY, because the imprecise version of it is flattering. A first paste of a cold
+ * video shows the card with its THUMBNAIL instead of an inline player, without the counts, and dated
+ * THE EPOCH rather than undated -- createdAt is a Date and the Mastodon document always emits one, so
+ * an unknown date renders as 1 January 1970. Every later view has the player, the counts and the real
+ * date, from the records the abandoned calls wrote under ctx.waitUntil.
+ *
+ * That 1970 is the same sentinel Facebook cards already ship to Discord in production for every post
+ * (facebook/normalize.ts argues it: an absent date beats a guessed one), so it is not a new shape --
+ * but it IS a visible wrong-looking date, and CLAUDE.md records the YouTube epoch as a reported bug
+ * once already. It is accepted here only because the alternative it replaces is NO CARD AT ALL, and
+ * because it lasts exactly one view. Suppressing the field when the date is unknown is the real fix
+ * and is NOT done here: Discord is the consumer, a Mastodon document missing a required field may be
+ * rejected outright, and rejecting it reintroduces precisely the bug this constant exists to remove.
+ * That change wants its own measurement against a live unfurl.
+ *
+ * NOT APPLIED TO /_api/v1 OR /_card. Those are read by the converter page with a human watching a
+ * spinner, and they are the surface that WARMS a link deliberately; shortening them would make the
+ * page worse at the one job it has. They keep MUX_WAIT_API_MS.
+ */
+export const MUX_WAIT_BOT_MS = 1500
+
+/**
  * The container call. IDENTICAL SURFACE to resolveFacebookMeta's — `{page, meta:true}` through the
  * same binding, the same secret, and the same refKey slot so this call and the video mux for one
  * video land on ONE already-booted instance (the 74% affinity fix). container/server.py's _meta_page
@@ -3308,7 +3358,7 @@ async function renderPostRoute(
    * capping the translation would abandon it early to save time the response is spending regardless.
    */
   const [settled, xlate] = await Promise.all([
-    settleMux(post, env, ctx, Math.max(MUX_WAIT_FLOOR_MS, HTML_DEADLINE_MS - (Date.now() - started))),
+    settleMux(post, env, ctx, Math.max(MUX_WAIT_FLOOR_MS, Math.min(MUX_WAIT_BOT_MS, HTML_DEADLINE_MS - (Date.now() - started)))),
     // The pre-mux post: the mux rewrites media urls and never touches `text`.
     withTranslated(
       post, env, ctx,
@@ -3558,10 +3608,18 @@ export async function handle(req: Request, env: Env, ctx: ExecutionContext, d: D
        * Concurrent with the mux wait, which this route already pays, so a correct card costs zero
        * extra wall clock — the same argument that put YouTube's date here.
        */
+      /**
+       * BOUNDED FOR A CRAWLER, not for correctness — see MUX_WAIT_BOT_MS. This document is fetched by
+       * Discord immediately after the head, so its ceiling is the second half of a budget that was
+       * already spent. All three writes land in R2 under ctx.waitUntil regardless, so the next view is
+       * complete; only the FIRST paste trades the date, the counts and the player for a card that
+       * arrives at all.
+       */
+      const botBudget = Math.min(MUX_WAIT_BOT_MS, MUX_WAIT_API_MS)
       const [settledApi, meta, xlate] = await Promise.all([
-        settleMux(post, env, ctx, MUX_WAIT_API_MS),
-        r.kind === 'activity' ? youtubeMeta(r.ref, post, env, ctx) : null,
-        r.kind === 'activity' ? translationFor(post, env, ctx, MUX_WAIT_API_MS) : null,
+        settleMux(post, env, ctx, botBudget),
+        r.kind === 'activity' ? deadline(youtubeMeta(r.ref, post, env, ctx), botBudget) : null,
+        r.kind === 'activity' ? translationFor(post, env, ctx, botBudget) : null,
       ])
       return Response.json(
         r.kind === 'activity'
