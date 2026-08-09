@@ -280,7 +280,7 @@ question without naming a single post.
 Written 2026-08-08 from a report that took hours and self-healed before it could be caught. The order
 matters: each step rules out a layer, and the expensive one is last.
 
-The failure mode this is for is the WORST one to chase — Discord shows nothing at all, this service
+The failure mode this is for is the worst one to chase — Discord shows nothing at all, this service
 answers HTTP 200, and the post often works again by the time anyone looks. Assume nothing self-evident
 and measure downward.
 
@@ -291,7 +291,7 @@ curl -s 'https://mbedfx.app/_api/v1?url=<the post url>' | jq '{ok, pending, muxi
 ```
 
 `ok:false` names the layer immediately. `pending:true` is the one that matters here: the translation
-lost its race, so the card went out untranslated AND uncached, and every unfurl re-runs the whole
+lost its race, so the card went out untranslated and uncached, and every unfurl re-runs the whole
 render. Check `translate_pending` against its siblings before concluding anything from one sample.
 
 **2. What does Discord actually receive?**
@@ -301,14 +301,14 @@ curl -s -o /tmp/card.html -w '%{http_code} %{size_download}B %{time_total}s\n' '
   -H 'user-agent: Mozilla/5.0 (compatible; Discordbot/2.0; +https://discordapp.com)'
 ```
 
-A well-formed head is not proof: a post WITH media renders from the Mastodon-shaped document behind
+A well-formed head is not proof: a post with media renders from the Mastodon-shaped document behind
 `<link rel="alternate" type="application/activity+json">`, not from the og: tags. Fetch that too, and
 check `media_attachments[].meta.original` is present — `render/mastodon.ts` drops it on a zero
 dimension, and an attachment with no size is a real cause of nothing being drawn.
 
 **3. Compare against a post that works.**
 
-Change ONE variable. A report naming a different post on a different domain settles nothing, which is
+Change one variable at a time. A report naming a different post on a different domain settles nothing, which is
 exactly how a whole afternoon went once. Run the same post on both domains, and both posts on one
 domain, before believing either.
 
@@ -318,12 +318,12 @@ domain, before believing either.
 curl -sL -o /dev/null -w '%{http_code} %{content_type} %{size_download}B\n' '<the og:video or og:image url>'
 ```
 
-Assert on the CONTENT TYPE, never the status. Every interesting failure on this service answers 200:
+Assert on the content type, never the status. Every interesting failure on this service answers 200:
 TikTok hands a 404 page as `text/html`, Meta hands a metadata-stripped shell, Instagram hands a decoy.
 
 **5. If any of it depends on where the request comes from, measure from Cloudflare.**
 
-`curl` from a laptop is a RESIDENTIAL client and routinely gets a different answer than this Worker
+`curl` from a laptop is a residential client and routinely gets a different answer than this Worker
 does. `wrangler dev --remote` runs the real worker on Cloudflare and is the only way to ask that
 question honestly:
 
@@ -332,13 +332,15 @@ npx wrangler dev --remote --enable-containers=false
 ```
 
 Both the Meta wall and the TikTok 404 were invisible until measured this way, and both had already
-been reasoned about wrongly from a laptop. Preview URLs are behind Access and are NOT a substitute.
+been reasoned about wrongly from a laptop. Preview URLs are behind Access and are not a substitute.
 
-**6. Then read the counters,** which are the only record that survives the incident — Workers Logs are
-off on purpose and there is nothing to go back to. `ok` broken down by `client` says whether Discord
-was served at all; the gate counters say whether the post was walled rather than broken.
+**6. Then read the counters.**
 
-WHAT CANNOT BE ANSWERED AFTER THE FACT, so nobody wastes time looking: whether Discord requested a
+They are the only record that survives the incident — Workers Logs are off on purpose and there is
+nothing to go back to. `ok` broken down by `client` says whether Discord was served at all; the gate
+counters say whether the post was walled rather than broken.
+
+What cannot be answered after the fact, so nobody wastes time looking: whether Discord requested a
 specific url, and what it did with the answer. That needs `event.request.url`, which is the pasted
 post, and collecting it is the line this service does not cross. Ask the reporter whether a re-paste
 still fails instead — Discord caches a failed unfurl per url, so a healed post can keep showing

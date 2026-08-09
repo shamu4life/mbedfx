@@ -7,9 +7,9 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [1.9.1] — 2026-08-09
 
-Five merges shipped under 1.9.0 without a bump, which is the defect this entry opens with. Nothing
+Five merges shipped under 1.9.0 without a bump. Nothing
 forces one: `landing-convert.test.mjs` pins the site badge to package.json, so the four places the
-number lives cannot DISAGREE, but a release that changes none of them still looks like the last one
+number lives cannot disagree, but a release that changes none of them still looks like the last one
 from the outside. Patch, because none of it is new public surface — the JSON API is unchanged.
 
 Two upstreams changed under the service inside eight days, and three of these five are the answer to
@@ -22,11 +22,11 @@ that rather than to anything in the repo.
   `/{ownerId}/posts/{id}` — answered the failure card. Meta began requiring a login for the post
   surfaces from datacenter egress: measured 2026-08-08 from Cloudflare, the permalink returns 324,247
   bytes with NO og: tags in four different client shapes, and `/share/{code}` and `mbasic` both
-  redirect to a login wall. The same urls from a residential ip built the full card, which is what
+  redirect to a login wall. The same urls from a residential IP built the full card, which is what
   made it look like a code defect.
 
   `facebookPluginCard` reads the byline, caption, canonical and photos out of `/plugins/post.php`,
-  Meta's own embed endpoint, which is not behind that wall. It runs AFTER the og: surface, so a post
+  Meta's own embed endpoint, which is not behind that wall. It runs after the og: surface, so a post
   that still renders the richer way keeps its multi-image gallery, and it costs one request only on a
   path that has already failed. Counted as `plugin_recovered`.
 
@@ -57,7 +57,7 @@ that rather than to anything in the repo.
   against a crawler that leaves at 3–4s. Every budget involved was individually argued — the head
   spends `HTML_DEADLINE_MS` on the mux, the activity route spends `MUX_WAIT_API_MS` on the mux,
   `META_WAIT_API_MS` on the date and a slice on the translation — and each was tuned to make the card
-  RIGHT on the first paste. Together they made it absent.
+  right on the first paste. Together they made it absent.
 
   The wait bought nothing: a warm mux is a 300ms R2 head, and a cold one measured ~5s for a
   60-second Short, so no budget a crawler tolerates was going to catch it. `MUX_WAIT_BOT_MS` (1500)
@@ -75,7 +75,7 @@ that rather than to anything in the repo.
 
 #### Added
 - `translate_pending` counts a translation that loses its deadline race. `translated` and
-  `translate_fallback` fire only when one ARRIVES, so the state that makes a post render uncached on
+  `translate_fallback` fire only when one arrives, so the state that makes a post render uncached on
   every unfurl left no trace — and Workers Logs are off on purpose, because they persist the pasted
   url. Read as a ratio against its siblings; `docs/METRICS.md` carries the query.
 
