@@ -5,6 +5,99 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [1.9.1] — 2026-08-09
+
+Five merges shipped under 1.9.0 without a bump. Nothing
+forces one: `landing-convert.test.mjs` pins the site badge to package.json, so the four places the
+number lives cannot disagree, but a release that changes none of them still looks like the last one
+from the outside. Patch, because none of it is new public surface — the JSON API is unchanged.
+
+Two upstreams changed under the service inside eight days, and three of these five are the answer to
+that rather than to anything in the repo.
+
+### Facebook posts stopped rendering, and now read off the embed plugin
+
+#### Fixed
+- Every spelling of a post — `/share/p/{code}`, `story.php`, `/{page}/posts/{pfbid}` and
+  `/{ownerId}/posts/{id}` — answered the failure card. Meta began requiring a login for the post
+  surfaces from datacenter egress: measured 2026-08-08 from Cloudflare, the permalink returns 324,247
+  bytes with NO og: tags in four different client shapes, and `/share/{code}` and `mbasic` both
+  redirect to a login wall. The same urls from a residential IP built the full card, which is what
+  made it look like a code defect.
+
+  `facebookPluginCard` reads the byline, caption, canonical and photos out of `/plugins/post.php`,
+  Meta's own embed endpoint, which is not behind that wall. It runs after the og: surface, so a post
+  that still renders the richer way keeps its multi-image gallery, and it costs one request only on a
+  path that has already failed. Counted as `plugin_recovered`.
+
+  Coverage is not universal: some fragments do not server-render, and those still land on the failure
+  card. `/{page}/photos/{slug}/{id}/` remains unrouted and is unaffected by this.
+
+### TikTok short links on the direct-media host
+
+#### Fixed
+- `d.<host>/t/{code}` bounced a person to tiktok.com instead of serving the file, while
+  `d.<host>/@user/video/{id}` served it. `renderPostRoute` short-circuits a direct-media origin and
+  its comment claims that covers every route because they all converge there; a shortlink does not
+  converge, since a short code caches in its own namespace and renders in its own arm. The check is
+  repeated there now. `prep.test.mjs` had pinned this rule for Reddit share links, which do reach
+  `renderPostRoute`; the TikTok twin is written now.
+
+- The converter page put a share code back into a resolved link. The resolution lived in the result
+  field and nowhere else, so switching domain or toggling media-only rebuilt the link from the raw
+  input, and `prepped` then refused to resolve it again. That is a privacy regression rather than a
+  cosmetic one: the shortlink arm resolves the code precisely so the pasted link does not carry it
+  onward, and someone who swaps the domain expects it to stay sanitised.
+
+### A cold YouTube paste answered a crawler in thirteen seconds
+
+#### Fixed
+- YouTube links did not embed until they had been warmed on the converter page. Measured against
+  production on four cold videos: the card took 5.14–5.18s and the activity document 8.19–8.29s,
+  against a crawler that leaves at 3–4s. Every budget involved was individually argued — the head
+  spends `HTML_DEADLINE_MS` on the mux, the activity route spends `MUX_WAIT_API_MS` on the mux,
+  `META_WAIT_API_MS` on the date and a slice on the translation — and each was tuned to make the card
+  right on the first paste. Together they made it absent.
+
+  The wait bought nothing: a warm mux is a 300ms R2 head, and a cold one measured ~5s for a
+  60-second Short, so no budget a crawler tolerates was going to catch it. `MUX_WAIT_BOT_MS` (1500)
+  now caps the crawler-facing seams; measured after, the card is 0.36–1.84s and the activity document
+  0.23–1.63s. `/_api/v1` and `/_card` keep the long budget: a human is watching a spinner there, and
+  that surface is what warms a link deliberately.
+
+  A first paste now shows the thumbnail rather than a player, without counts, and dated the epoch —
+  the Mastodon document always emits a `created_at`, so an unknown date renders as 1 January 1970.
+  Every later view has all three. Suppressing the field is the real fix and is deliberately not
+  attempted: a document missing a required field may be rejected outright, which reintroduces exactly
+  the defect this removes.
+
+### Diagnosis
+
+#### Added
+- `translate_pending` counts a translation that loses its deadline race. `translated` and
+  `translate_fallback` fire only when one arrives, so the state that makes a post render uncached on
+  every unfurl left no trace — and Workers Logs are off on purpose, because they persist the pasted
+  url. Read as a ratio against its siblings; `docs/METRICS.md` carries the query.
+
+- `docs/METRICS.md` gained a runbook for a "no card" report, written after one that self-healed
+  before it could be diagnosed. It records the order to check things, the two mistakes that cost an
+  afternoon (comparing posts that differ in more than one variable, and reasoning from a laptop about
+  behaviour that depends on the caller), and what cannot be answered after the fact.
+
+- `container/README.md` documents running the resolver outside Cloudflare, verified by running
+  `server.py` on a stock interpreter: `/health`, the `X-Resolver-Secret` gate and every SSRF refusal.
+  Three traps are recorded with it, including that `--platform linux/amd64` is load-bearing on an ARM
+  host and that the listener is IPv4-only.
+
+#### Corrected
+- `tiktok/normalize.ts` recorded the aweme endpoint as serving datacenter egress 12,550,214 bytes of
+  video. Measured 2026-08-09 from Cloudflare, it returns 33,227 bytes of `text/html` — a 404 page at
+  HTTP 200 — byte-identical across three videos and both user agents, while residential still gets
+  the video. Discord's proxy is not Cloudflare and still plays these, so TikTok video is not broken;
+  what it rules out is ever proxying or muxing that video through the Worker or the container.
+
+---
+
 ## [1.9.0] — 2026-08-04
 
 Five pieces of work in one release. Merging them back-to-back would have raced five Workers Builds
