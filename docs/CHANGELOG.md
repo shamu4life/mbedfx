@@ -71,6 +71,33 @@ that rather than to anything in the repo.
   attempted: a document missing a required field may be rejected outright, which reintroduces exactly
   the defect this removes.
 
+### An Instagram reel older than an account's last twelve posts rendered as a still
+
+#### Fixed
+- instagram.com/reel/DZxLuleoEoC/ rendered a frozen image while the same reel played on a rival. The
+  account feed is the only video recovery this platform has, and it returns twelve posts and ignores
+  `count` (measured: `count=50` still answers twelve, with `more_available: true`). Every post older
+  than an account's last twelve was unrepairable, and nothing said so.
+
+  The reporter's own observation located it: ten other Instagram videos worked the same day, which
+  rules out the account, the format and the egress and leaves age. An earlier reading of this as a
+  datacenter block was wrong and was discarded — a control reel from the SAME account renders video
+  from production. Instagram's `/embed/captioned/` answers `EmbedBrokenMedia` for both that control
+  and the reported reel, so the embed is not what separated them.
+
+  The recovery now follows `next_max_id`. Measured from Cloudflare egress, the reel is on page three
+  carrying `video_versions` 3, 720x1280 and `like_count` 113,385, so pagination is not gated the way
+  the surfaces around it are. The walk stops the moment it finds the post, so a recent post still
+  costs one request.
+
+  Bounded by pages AND by wall clock, because a page count is not a latency bound: a cold crawler
+  card went 2.57s with no walk to 4.21s with one, and 3.79s once the clock was added. A page is
+  ~0.8s and ~530 KB. An unfurl that answers too late is not a late card but no card, which would be
+  worse than the bug being fixed. On a slow account the walk stops and the answer is page one, which
+  is exactly what this path returned before.
+
+  The copyright-recovery path is wired the same way, for the same reason.
+
 ### Diagnosis
 
 #### Added
