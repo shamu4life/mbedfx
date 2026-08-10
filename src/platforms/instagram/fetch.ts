@@ -348,7 +348,75 @@ export async function fetchInstagram(ref: Extract<PostRef, { p: 'ig' }>): Promis
 const IG_HANDLE = /^[A-Za-z0-9._]{1,40}$/
 const IG_WEB_APP_ID = '936619743392459'
 
-export async function fetchInstagramUserFeed(username: unknown): Promise<string | null> {
+/**
+ * HOW MANY PAGES OF THE ACCOUNT FEED THE RECOVERY WILL WALK, and the whole reason it walks at all.
+ *
+ * THE DEFECT, reported from production 2026-08-09: instagram.com/reel/DZxLuleoEoC/ rendered a frozen
+ * image while the same reel played on a rival. The reporter's own observation is what located it —
+ * ten other Instagram videos worked that day, so nothing about the account, the egress or the format
+ * could be the cause. The difference is AGE. This endpoint returns twelve posts and ignores `count`
+ * (measured: `count=50` still answers twelve, with `more_available: true`), so the recovery could
+ * only ever repair a post inside an account's twelve most recent. The reported reel was from June.
+ *
+ * MEASURED FROM CLOUDFLARE EGRESS with `wrangler dev --remote`, walking `next_max_id`:
+ *
+ *   page 1  200 application/json  529,497 B  12 items  more=true   not found
+ *   page 2  200 application/json  540,750 B  12 items  more=true   not found
+ *   page 3  200 application/json  526,339 B  12 items  more=true   FOUND: video_versions 3,
+ *                                                                  720x1280, like_count 113,385
+ *
+ * So pagination is not gated the way the surfaces around it are, and the renditions survive on a
+ * later page exactly as they do on the first. That measurement is from the datacenter, not a laptop.
+ *
+ * THREE, NOT MORE. Each page is ~530 KB and a request, and this runs inside the crawler's budget on a
+ * path that has ALREADY failed its embed. Thirty-six posts is the window this buys; an account that
+ * posts daily still gets a month. An unbounded walk would be a slow unfurl, which on this project
+ * means no card at all rather than a late one — see MUX_WAIT_BOT_MS for the same lesson learned on
+ * YouTube the day before this.
+ *
+ * IT STOPS THE MOMENT IT FINDS THE POST, so the common case (a recent post, page one) costs exactly
+ * what it costs today and pays nothing for this.
+ */
+const IG_FEED_MAX_PAGES = 3
+
+/**
+ * AND A WALL CLOCK ON THE WALK, because a page count alone is not a latency bound.
+ *
+ * Measured from Cloudflare egress with the walk in place, cold, as a crawler:
+ *
+ *   page-one post, no walk needed    2.57s     (the cost this path already had)
+ *   third-page post, full walk       4.21s     og:video present, the reported reel repaired
+ *
+ * A page is ~0.8s and ~530 KB, so three of them is most of a crawler's patience. This project spent
+ * the previous day learning that an unfurl which answers too late is not a late card, it is NO card
+ * (see MUX_WAIT_BOT_MS), and trading a frozen image for an absent one would be a worse bug than the
+ * one being fixed here.
+ *
+ * SO THE WALK IS ALLOWED ONLY WHILE THERE IS TIME FOR IT. A new page is not STARTED once the walk has
+ * already spent this long; whatever page is in flight is still read. The bound is on the extra work
+ * this change introduces, not on the request as a whole, which is why it is a plain elapsed check
+ * rather than a deadline threaded down from the route: the caller's budget is already enforced above
+ * it, and two budgets disagreeing is worse than one that is slightly conservative.
+ *
+ * WHEN IT CUTS OFF, the answer is the first page, which is exactly what this function returned before
+ * pagination existed. A slow account therefore degrades to today's behaviour rather than to a
+ * timeout, and the post that could not be reached ships the cover still it ships now.
+ */
+const IG_FEED_WALK_BUDGET_MS = 1600
+
+/**
+ * `wanted` is the shortcode the caller is trying to repair. Passing it is what lets this stop early
+ * and what makes the extra pages conditional rather than routine; without it the behaviour is
+ * page-one-only, exactly as before.
+ *
+ * ON A MISS IT RETURNS THE FIRST PAGE, never null and never the last one fetched. The caller's
+ * `recoveredMediaFrom` is pure and simply finds nothing, which is the answer it already gets today —
+ * so a walk that fails leaves the degraded-still behaviour untouched rather than replacing one
+ * failure with another.
+ */
+export async function fetchInstagramUserFeed(
+  username: unknown, wanted?: string, maxPages: number = IG_FEED_MAX_PAGES,
+): Promise<string | null> {
   // The handle reaches here off a PARSED payload, not off the router, so it is shape-checked before
   // it is interpolated into a path — the same discipline SHORTCODE applies above, and for the same
   // reason: `.` is not escaped by encodeURIComponent and two of them traverse.
@@ -383,7 +451,49 @@ export async function fetchInstagramUserFeed(username: unknown): Promise<string 
         },
       },
     )
-    return await res.text()
+    const first = await res.text()
+    // `wanted` absent, or already on page one: identical to the behaviour this function has always
+    // had, with no extra request made.
+    if (typeof wanted !== 'string' || !wanted || first.includes(`"${wanted}"`)) return first
+
+    let cursor = nextMaxId(first)
+    const walkStarted = Date.now()
+    for (let page = 2; page <= maxPages && cursor; page++) {
+      // Checked BEFORE the request, never after: the point is to avoid starting work that will
+      // arrive too late to be drawn, not to abandon bytes already paid for.
+      if (Date.now() - walkStarted >= IG_FEED_WALK_BUDGET_MS) break
+      const more = await fetch(
+        `https://www.instagram.com/api/v1/feed/user/${encodeURIComponent(username)}/username/`
+        + `?count=12&max_id=${encodeURIComponent(cursor)}`,
+        {
+          headers: {
+            'user-agent': INSTAGRAM_UA,
+            accept: 'application/json',
+            'x-ig-app-id': IG_WEB_APP_ID,
+            'sec-fetch-site': 'same-origin',
+            'sec-fetch-mode': 'cors',
+            'sec-fetch-dest': 'empty',
+            referer: `https://www.instagram.com/${encodeURIComponent(username)}/`,
+          },
+        },
+      )
+      const body = await more.text()
+      // ASSERT ON CONTENT: this endpoint answers a refusal with HTTP 200 and a text body, so a page
+      // that does not carry the code is simply the wrong page and the walk continues or stops.
+      if (body.includes(`"${wanted}"`)) return body
+      cursor = nextMaxId(body)
+    }
+    return first
+  } catch {
+    return null
+  }
+}
+
+/** The pagination cursor, or null when the feed says there is no further page. */
+function nextMaxId(body: string): string | null {
+  try {
+    const j = JSON.parse(body) as { more_available?: unknown, next_max_id?: unknown }
+    return j.more_available === true && typeof j.next_max_id === 'string' ? j.next_max_id : null
   } catch {
     return null
   }
