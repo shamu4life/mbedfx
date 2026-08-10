@@ -314,7 +314,9 @@ export async function liveFetchPost(
           // `card` is non-null, and instagramFullPageCard refuses a story ref outright — so this arm
           // is unreachable for one. The narrow is for the TYPE, which cannot know that.
           const code = ref.kind === 'story' ? '' : ref.code
-          const rec = recoveredMediaFrom(await fetchInstagramUserFeed(card.author.handle), code)
+          // The code is passed so the feed walk can STOP as soon as it finds this post, and so it
+          // only pages at all for a post that is not already on page one. See IG_FEED_MAX_PAGES.
+          const rec = recoveredMediaFrom(await fetchInstagramUserFeed(card.author.handle, code), code)
           return withRecoveredVideo(card, rec)
         }
         /**
@@ -439,7 +441,9 @@ export async function liveFetchPost(
           count(env, 'ig', 'copyright_gql', client)
           return withRecoveredVideo(post, gql)
         }
-        const feed = await fetchInstagramUserFeed(post.author?.name)
+        // Same walk, same reason: a copyright-blocked post outside the account's twelve most recent
+        // was unrecoverable here too, for the age reason IG_FEED_MAX_PAGES records.
+        const feed = await fetchInstagramUserFeed(post.author?.name, code)
         const recovered = recoveredMediaFrom(feed, code)
         if (recovered) {
           count(env, 'ig', 'copyright_recovered', client)
