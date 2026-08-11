@@ -1700,6 +1700,94 @@ test('THE POST ARM SHADOWS NOTHING — the reservation it makes, pinned', () => 
   assert.notEqual(route(new URL('https://megapenispoopenfarten.sex/story.php?id=100071151613394')).kind, 'post')
 })
 
+/* ===================== FACEBOOK'S PHOTO PERMALINK ==================================
+ *
+ * REPORTED 2026-08-11: /_api/v1 for a photo permalink answered
+ * {"ok":false,"error":{"code":"notfound"}}. Facebook spells ONE picture six ways and the
+ * router claimed none of them; two of the six reached the ambiguous chooser instead, which
+ * offered "x.com/photo.php or instagram.com/photo.php" for a url that is unambiguously
+ * Facebook's — the same defect /story.php had, ten days earlier.
+ *
+ * MEASURED FROM CLOUDFLARE EGRESS with `wrangler dev --remote`, 2026-08-11, because that is
+ * the only client whose answer this code will ever see. The photo page itself is stripped
+ * (837,611 bytes with no og: tag in it), and Meta's embed plugin returns the post: eleven
+ * photo permalinks across four pages, all eleven rendering a card with a byline, the picture
+ * and its real dimensions.
+ */
+
+const PHOTO_FBID = '1596906755391068'
+
+test('FACEBOOK: all six photo spellings name ONE photo, by its fbid', () => {
+  /**
+   * The fbid is the WHOLE identity, unlike every other fb kind whose id is the {owner}_{post}
+   * pair — because two of the six spellings carry no owner at all. Measured: handed to the embed
+   * plugin, `/photo/?fbid={id}` with no owner and no `set` returns the same fragment as the fully
+   * qualified spellings do.
+   */
+  const want = { p: 'fb', kind: 'photo', id: PHOTO_FBID }
+  for (const path of [
+    `/WYFF4/photos/${PHOTO_FBID}/`,
+    `/WYFF4/photos/exclusive-sky-4-footage-shows-the-scene/${PHOTO_FBID}/`,
+    `/WYFF4/photos/a.416661013162614/${PHOTO_FBID}/`,
+    `/WYFF4/photos/pcb.1596906778724399/${PHOTO_FBID}/`,
+    `/photo.php?fbid=${PHOTO_FBID}&set=pb.100044561550831.-2207520000&type=3`,
+    `/photo/?fbid=${PHOTO_FBID}`,
+  ]) {
+    const r = route(new URL(`https://megapenispoopenfarten.sex${path}`))
+    assert.equal(r.kind, 'post', `${path} must not be notfound or ambiguous`)
+    assert.deepEqual(r.ref, want, path)
+    // ONE cache entry for six urls, which is the reason the id is the fbid alone.
+    assert.equal(refKey(r.ref), `fb:photo:${PHOTO_FBID}`, path)
+  }
+})
+
+test('THE TRAILING NUMBER IS THE PHOTO, NOT THE POST — a post ref from it names nothing', () => {
+  /**
+   * Measured on the reported link: photo 1596906755391068 belongs to post 1596906778724399, and on
+   * a second page photo 1632169048280519 belongs to post 1632169068280517. The two id spaces look
+   * alike and are not the same number, so the tempting reading — "reuse kind:'post' with
+   * {owner}_{trailing}" — builds a permalink Facebook has never heard of.
+   */
+  const r = route(new URL(`https://megapenispoopenfarten.sex/WYFF4/photos/${PHOTO_FBID}/`))
+  assert.equal(r.ref.kind, 'photo', 'a photo is its own kind')
+  assert.ok(!r.ref.id.includes('_'), 'no owner is folded in: two spellings do not carry one')
+  assert.equal(r.canonical, `https://www.facebook.com/photo/?fbid=${PHOTO_FBID}`)
+})
+
+test('THE PHOTO ARM SHADOWS NOTHING — the reservation it makes, pinned', () => {
+  /**
+   * Measured by running the real route() over 36,521 paths — every token this router names, crossed
+   * with sixteen id shapes at both depths — before and after the arm. 534 answers changed: 518
+   * notfound -> post and 16 ambiguous -> post, every one of them a /photos/ path or a /photo query.
+   * Nothing that already worked moved. These are the four claims that measurement rests on.
+   */
+  // 'photo' SINGULAR IS TIKTOK'S — a live TikTok photo post — and the plural is Facebook's.
+  const tt = route(new URL('https://megapenispoopenfarten.sex/@someone/photo/7660566211100511518'))
+  assert.equal(tt.ref.p, 'tt', 'the singular segment must stay TikTok’s')
+
+  // /settings is ambiguous at EVERY depth, and FB_OWNER would otherwise swallow it — the same defect
+  // the yt-dlp tier had when ST_ID ate 'followers'. reserved() is what refuses it.
+  const settings = route(new URL(`https://megapenispoopenfarten.sex/settings/photos/${PHOTO_FBID}`))
+  assert.equal(settings.kind, 'ambiguous', 'a token the ambiguity table speaks for is never consumed')
+
+  // A group post keeps its own kind: 'groups' is excluded at seg[0], as in the post arm.
+  const group = route(new URL('https://megapenispoopenfarten.sex/groups/328668786145521/posts/1391536379858751/'))
+  assert.equal(group.ref.kind, 'group')
+
+  // The chooser is taken away ONLY when fbid is present and numeric. @photo is a plausible handle:
+  // /photo/status/{id} is a real Twitter permalink by @photo and /photo/p/{code} a real Instagram
+  // one, and both are claimed at depth 3 by matchers this depth-1 arm never reaches.
+  assert.equal(route(new URL('https://megapenispoopenfarten.sex/photo')).kind, 'ambiguous')
+  assert.equal(route(new URL('https://megapenispoopenfarten.sex/photo.php')).kind, 'ambiguous')
+  assert.equal(route(new URL('https://megapenispoopenfarten.sex/photo/?fbid=abc')).kind, 'ambiguous')
+  assert.equal(route(new URL('https://megapenispoopenfarten.sex/photo/?set=a.123')).kind, 'ambiguous')
+  assert.equal(route(new URL('https://megapenispoopenfarten.sex/photo/status/1234')).ref.p, 'x')
+  assert.equal(route(new URL('https://megapenispoopenfarten.sex/photo/p/BsOGulcndj-')).ref.p, 'ig')
+
+  // A non-numeric trailing segment is not a photo — the shape is the whole discriminator at depth 3.
+  assert.equal(route(new URL('https://megapenispoopenfarten.sex/WYFF4/photos/album')).kind, 'notfound')
+})
+
 test("DISCORD'S SPOILER BARS DO NOT BREAK A LINK", () => {
   /**
    * REPORTED 2026-08-01: `||https://mbedfx.app/hepi01967211/status/2083545767893983385||` rendered

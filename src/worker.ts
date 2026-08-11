@@ -663,6 +663,17 @@ export async function liveFetchPost(
       // immutable for a video id, so it is paid at most once per video per day (R2, global — the
       // response cache is per-colo and Discord's three fetches do not reliably share one).
       // `ctx` so the extract survives the response — see cachedMeta's waitUntil.
+      //
+      // A `photo` REF TAKES THIS SAME PATH, extract first, and the obvious optimisation is DELIBERATELY
+      // NOT TAKEN. A /photos/ or /photo/?fbid= url names a picture, so yt-dlp will decline it and the
+      // ~3s is spent to learn nothing — but "yt-dlp declines a Facebook photo url" was NOT measured:
+      // `wrangler dev --remote --enable-containers=false` is the sanctioned way to measure from this
+      // egress and it has no container to ask. Skipping the call on an unmeasured belief would trade a
+      // known cost for an unknown one (a video that a photo spelling happens to address would silently
+      // become a still). Measure the decline, then skip it.
+      //
+      // The fall-through below is what actually renders a photo: the plugin fragment. Measured
+      // 2026-08-11 from Cloudflare egress over eleven photo permalinks on four pages — all eleven.
       const meta = await cachedFacebookMeta(ref, env, ctx)
       if (!meta) {
         /**

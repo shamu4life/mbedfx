@@ -174,10 +174,20 @@ test('EVERY FACEBOOK REF KIND SURVIVES THE WIRE — the assertion "group" never 
    * PostRef union fails here until it is allowlisted deliberately — this function is the security
    * boundary, and its list must stay a decision rather than an oversight.
    */
-  for (const kind of ['watch', 'reel', 'share', 'group', 'post']) {
+  for (const kind of ['watch', 'reel', 'share', 'group', 'post', 'photo']) {
     const ref = { p: 'fb', kind, id: '328668786145521_1391536379858751' }
     assert.deepEqual(parseRefKey(refKey(ref)), ref, `fb:${kind} must round-trip`)
   }
   // And an unknown kind is still REFUSED — the allowlist is not merely decorative.
   assert.equal(parseRefKey('fb:nonsense:123'), null)
+  /**
+   * THE ROUND TRIP THE ROUTER ACTUALLY MINTS for the kind added 2026-08-11, driven through route()
+   * rather than a hand-built ref: a photo card is ALL images, so every picture on it is served from
+   * /_media/{refKey}/{i}, and a kind missing from the allowlist above would 404 every one of them
+   * while the card itself still rendered — exactly the shape the `group` omission had.
+   */
+  const photo = route(new URL('https://www.facebook.com/WYFF4/photos/1596906755391068/'))
+  assert.equal(photo.kind, 'post')
+  assert.equal(refKey(photo.ref), 'fb:photo:1596906755391068')
+  assert.deepEqual(parseRefKey(refKey(photo.ref)), photo.ref, 'a routed photo must survive its own cache key')
 })
