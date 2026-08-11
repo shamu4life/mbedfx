@@ -102,6 +102,24 @@ export type Outcome2 =
    * small for the model's current latency — and every one of those unfurls is an uncached full render.
    */
   | 'translate_pending'
+  /**
+   * `smoke_ok` / `smoke_fail` are the OUTAGE DETECTOR, and they are a pair like the translate ones:
+   * a raw count means nothing, a RATIO per platform means everything.
+   *
+   * ADDED AFTER AN OUTAGE NOBODY NOTICED. Facebook embeds were broken for up to a week — Meta walled
+   * the post surfaces from datacenter egress between 2026-08-01 and 2026-08-08 — and the way it was
+   * discovered was the owner pasting a link. The service had no opinion about its own health.
+   *
+   * A scheduled check now renders one known post per platform through this worker's own handler and
+   * asks whether a real card came back, asserting on CONTENT because every interesting failure here
+   * answers HTTP 200. See src/smoke.ts.
+   *
+   * READ IT PER PLATFORM. One platform failing while the others pass is either that platform's
+   * upstream or a rotted check url, and both want a human. All of them failing at once is this
+   * service. `smoke_fail` sitting at zero forever is also a signal: it means the checks are not
+   * running, which is indistinguishable from health if nobody asks.
+   */
+  | 'smoke_ok' | 'smoke_fail'
 
 /**
  * The two analytics outcomes that are content GATES (walls a post sits behind) rather than fetch

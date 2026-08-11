@@ -204,6 +204,7 @@ Most mean nothing as an absolute number, and several mislead alone.
 | `copyright_gql` / `copyright_recovered` / `copyright_remux` | The three Instagram copyright recoveries, cheapest first. The signal is the ratio across all three. | each other, and `ig`/`ok` |
 | `fullpage_recovered` | The primary surface failed but the full page carried the whole post. On `ig`, every count is a post that would previously have shown a false 🔒. | `private` |
 | `translated` / `translate_fallback` | Which engine served a translation, Google or Workers AI as the fallback. Only the ratio means anything. | each other |
+| `smoke_ok` / `smoke_fail` | The scheduled self-check: did a known post on this platform still render a real card? Read per platform. | each other |
 | `translate_pending` | A translation that lost its deadline race. The card went out untranslated **and uncached**, so every unfurl of that post re-runs the full render until the R2 entry lands. | `translated` + `translate_fallback` |
 
 ### `pool_unused` by platform
@@ -273,6 +274,54 @@ working post was this state, and nothing recorded whether it had been rare or co
 would have answered it and are off on purpose — they persist the pasted url, the IP and the
 geolocation, which is the one thing this whole file refuses to collect. A counter answers the same
 question without naming a single post.
+
+
+
+## The self-check
+
+Facebook embeds were broken for up to a week — Meta walled the post surfaces from datacenter egress
+between 2026-08-01 and 2026-08-08 — and the way it was found was the owner pasting a link. The
+counters would have shown it to anyone who went looking. Nobody had a reason to look.
+
+A cron runs every thirty minutes and renders one known post per platform through this worker's own
+handler, then counts whether a real card came back. `src/smoke.ts` holds the list and the assertion;
+`/_smoke` runs the same checks on demand and answers JSON.
+
+It asserts on CONTENT. Every interesting failure on this service answers HTTP 200 — the failure card,
+Meta's login wall, TikTok's 404 page — so a monitor watching status codes would have reported perfect
+health for the whole week Facebook was down.
+
+```sql
+SELECT blob1 AS platform,
+       SUM(_sample_interval * (blob2 = 'smoke_ok'))   AS ok,
+       SUM(_sample_interval * (blob2 = 'smoke_fail')) AS fail
+FROM mbedfx_counters
+WHERE timestamp > NOW() - INTERVAL '24' HOUR
+  AND blob2 IN ('smoke_ok', 'smoke_fail')
+GROUP BY platform
+ORDER BY fail DESC
+```
+
+### Reading it
+
+One platform failing while the others pass is either that platform's upstream or a check url that has
+rotted, and both want a human. Every platform failing at once is this service rather than the
+platforms.
+
+`smoke_fail` sitting at zero forever is not automatically good news. It is also what "the cron is not
+running" looks like, and the two are indistinguishable from the counters alone. Check that `smoke_ok`
+is climbing, not merely that `smoke_fail` is flat.
+
+### What it cannot tell you
+
+It runs inside the worker it is checking, so it cannot report that the worker is unreachable: DNS, the
+route binding, a failed deploy and a Cloudflare incident are all invisible to it. It is a
+platform-breakage detector, not an uptime monitor, and treating it as the second thing would be a
+worse mistake than not having it.
+
+The check urls are a permanent list of real posts. When one is deleted, that platform fails forever
+until somebody swaps the entry — the counter names the platform, which is the signal to go and look.
+Each entry records the date it was last seen working.
 
 
 ## Diagnosing "the card never appeared"
