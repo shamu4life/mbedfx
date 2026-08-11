@@ -481,7 +481,19 @@ const FB_POST_ID = /^(?:\d{5,}|pfbid[A-Za-z0-9]{10,})$/
  */
 const FB_OWNER = /^[A-Za-z0-9.]{3,}$/
 
-function fbCanonical(kind: 'watch' | 'reel' | 'share' | 'group' | 'post', id: string): string {
+type FbKind = 'watch' | 'reel' | 'share' | 'group' | 'post' | 'photo'
+
+function fbCanonical(kind: FbKind, id: string): string {
+  if (kind === 'photo') {
+    /**
+     * The `/photo/?fbid={id}` spelling, which is the one of the six that needs NOTHING but the fbid —
+     * no owner, no album, no `set`. Measured 2026-08-11 from Cloudflare egress: handed to Meta's embed
+     * plugin it returns the same 74 KB fragment as the owner-bearing spellings, so rebuilding this one
+     * loses nothing and gives the two query forms (which carry no owner) something to rebuild INTO.
+     * Facebook emits this spelling itself — it is what the page's own JSON links a picture by.
+     */
+    return `https://www.facebook.com/photo/?fbid=${id}`
+  }
   if (kind === 'post') {
     // The /{owner}/posts/{id}/ spelling, which is what Facebook's OWN og:url uses — so a card and the
     // page it came from agree, and the three routable spellings converge on one cache entry.
@@ -498,7 +510,7 @@ function fbCanonical(kind: 'watch' | 'reel' | 'share' | 'group' | 'post', id: st
     : kind === 'share' ? `https://www.facebook.com/share/v/${id}`
       : `https://www.facebook.com/watch/?v=${id}`
 }
-const fbPost = (kind: 'watch' | 'reel' | 'share' | 'group' | 'post', id: string): Route =>
+const fbPost = (kind: FbKind, id: string): Route =>
   ({ kind: 'post', ref: { p: 'fb', kind, id }, canonical: canonical(fbCanonical(kind, id)) })
 
 function facebook(seg: string[]): Route | null {
@@ -548,6 +560,52 @@ function facebook(seg: string[]): Route | null {
   if (seg.length === 4 && seg[0] !== 'groups' && seg[1] === 'posts'
     && FB_OWNER.test(seg[0]) && FB_POST_ID.test(seg[3])) {
     return fbPost('post', `${seg[0]}_${seg[3]}`)
+  }
+  /**
+   * A PHOTO PERMALINK — the link you get by clicking a picture and copying the address bar, and it
+   * was `notfound` at every path spelling until 2026-08-11.
+   *
+   * TWO DEPTHS, because Facebook emits three shapes and they differ only in a middle segment it does
+   * not need: /{owner}/photos/{fbid}/, /{owner}/photos/{album-or-post}/{fbid}/ (the middle reads
+   * `a.{albumId}` or `pcb.{postId}`) and /{owner}/photos/{human-slug}/{fbid}/, which is the one
+   * Facebook's own share menu hands out. THE LAST SEGMENT IS THE fbid IN ALL THREE, so the middle is
+   * matched but not read — reading it would mean deciding which of the three it is, and nothing
+   * downstream wants the answer.
+   *
+   * THE MIDDLE IS NOT SHAPE-CHECKED, deliberately. It is a slug in one spelling and a dotted id in
+   * the others; a pattern loose enough for both is `.+`, and pretending otherwise would refuse the
+   * slug form, which is exactly the one a human pastes.
+   *
+   * SHADOWING, measured rather than argued — route() run over 36,521 paths built from every token
+   * this file names (each AMBIGUOUS key, each KNOWN member, IG_SURFACE, YT_SURFACE, the escape
+   * hatches, '@user', a fediverse host and real page names) crossed with sixteen id shapes at both
+   * depths, before and after this arm:
+   *
+   *   'photo' SINGULAR IS TIKTOK'S. /@{user}/photo/{id} is a live TikTok photo post — 32 of them in
+   *   the sweep resolve to a tt ref today — and tiktok() runs BEFORE facebook() anyway. This arm
+   *   requires the PLURAL, which no other matcher reads at any depth.
+   *
+   *   /settings/photos/… STAYS THE CHOOSER. 'settings' is ambiguous at EVERY depth (ambiguity()'s
+   *   first line), and FB_OWNER would otherwise have swallowed 448 of those paths — the same defect
+   *   the file already records for /settings/{surface}/{code} and for the yt-dlp tier eating
+   *   'followers'. `reserved()` is the existing guard and is what refuses them.
+   *
+   *   NOTHING ELSE CLAIMED A 'photos' SEGMENT. In the whole sweep, before this arm, every path with
+   *   'photos' at seg[1] was notfound except the /settings rows: x() needs 'status', reddit()
+   *   'comments'/'s', bluesky() 'profile' + 'post', tiktok() and threads() a leading '@',
+   *   youtube()'s surfaces are 'shorts'/'embed'/'live'/'v', instagram()'s are 'p'/'reel'/'reels'/'tv'
+   *   and twitch()'s is 'clip'. 'photos' is in none of those sets.
+   *
+   * `groups` IS EXCLUDED at seg[0] for the same reason the post arm excludes it — /groups/… is a
+   * different Facebook surface with its own ref kind, and no page is named `groups`.
+   */
+  if (seg.length === 3 && seg[1] === 'photos' && seg[0] !== 'groups'
+    && FB_OWNER.test(seg[0]) && !reserved(seg[0]) && FB_NUM.test(seg[2])) {
+    return fbPost('photo', seg[2])
+  }
+  if (seg.length === 4 && seg[1] === 'photos' && seg[0] !== 'groups'
+    && FB_OWNER.test(seg[0]) && !reserved(seg[0]) && seg[2] && FB_NUM.test(seg[3])) {
+    return fbPost('photo', seg[3])
   }
   // /reel/{numeric-id} — a NUMERIC reel is Facebook's; instagram() claims the alphanumeric ones after us.
   if (seg.length === 2 && seg[0] === 'reel' && FB_NUM.test(seg[1])) return fbPost('reel', seg[1])
@@ -1494,6 +1552,33 @@ export function route(url: URL): Route {
     const post = url.searchParams.get('story_fbid') || ''
     const owner = url.searchParams.get('id') || ''
     if (FB_POST_ID.test(post) && FB_OWNER.test(owner)) return fbPost('post', `${owner}_${post}`)
+  }
+
+  /**
+   * `/photo/?fbid={id}` and `/photo.php?fbid={id}` — the two QUERY spellings of a photo permalink,
+   * here for the same reason /story.php is: the id lives in the query, which the segment matchers
+   * never see. Facebook emits both, in the same document: measured 2026-08-11 on one page's own
+   * markup, its album links spell `/photo/?fbid={id}&set=a.{albumId}` while its timeline links spell
+   * `/photo.php?fbid={id}&set=pb.{pageId}.-2207520000&type=3`.
+   *
+   * THE OLD ANSWER WAS THE AMBIGUOUS CHOOSER, not a miss — /photo.php is one segment, so it fell
+   * through every matcher to the bare-username row and offered a human "x.com/photo.php or
+   * instagram.com/photo.php", two links that mean nothing, for a url that is unambiguously
+   * Facebook's. That is the same defect /story.php had, fixed the same way and for the same reason.
+   *
+   * WHAT IS AND IS NOT CLAIMED. The chooser is only taken away when `fbid` is present AND numeric:
+   * a bare /photo, /photo.php or a junk fbid still falls through to exactly today's answer. That
+   * matters because @photo IS a plausible handle — /photo/status/{id} is a real Twitter permalink by
+   * @photo and /photo/p/{code} a real Instagram one, and both are claimed by x() and instagram() at
+   * depth 3, which this depth-1 arm never reaches. No X or Instagram profile url carries `?fbid=`.
+   *
+   * `set` AND `type` ARE IGNORED, not required. They are decoration on the id — measured: the plugin
+   * returns the same fragment for `/photo/?fbid={id}` with no set at all as for the fully-qualified
+   * spelling — and requiring them would refuse the shortest form Facebook itself emits.
+   */
+  if (seg.length === 1 && (seg[0] === 'photo' || seg[0] === 'photo.php')) {
+    const fbid = url.searchParams.get('fbid') || ''
+    if (FB_NUM.test(fbid)) return fbPost('photo', fbid)
   }
 
   /**

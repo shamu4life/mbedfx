@@ -39,7 +39,33 @@ export type PostRef =
    * parses", and stripMetaTracking preserves exactly those keys for it. The router never built its
    * half, so a resolved share code landed on a url nothing could route.
    */
-  | { p: 'fb'; kind: 'watch' | 'reel' | 'share' | 'group' | 'post'; id: string }
+  /**
+   * `photo` IS A SINGLE PICTURE'S PERMALINK, added 2026-08-11 — and it is the ONE fb kind whose id is
+   * a LONE number rather than the `{owner}_{post}` pair, because the photo's `fbid` alone names it.
+   *
+   * MEASURED FROM CLOUDFLARE EGRESS (wrangler dev --remote), 2026-08-11, over the six spellings
+   * Facebook emits for one picture. Handed to Meta's embed plugin, all six return the SAME fragment:
+   *
+   *   /{page}/photos/{fbid}/                     74,474 bytes, the post
+   *   /{page}/photos/pcb.{postId}/{fbid}/        74,502 bytes, the same post
+   *   /photo.php?fbid={fbid}&set=pb.…&type=3     74,536 bytes, the same post
+   *   /photo/?fbid={fbid}                        74,471 bytes, the same post   <- NO owner, NO set
+   *
+   * The last line is why the id is the fbid alone: the query spellings carry no owner at all, so a
+   * composite id would have a hole in it on two of the six, and the fbid needs no company to resolve.
+   * All six therefore converge on ONE cache entry instead of six.
+   *
+   * THE TRAILING NUMBER IS THE PHOTO, NOT THE POST, and building a `post` ref out of it would name
+   * nothing: measured on the reported link, photo 1596906755391068 belongs to post 1596906778724399,
+   * and on a second page photo 1632169048280519 belongs to post 1632169068280517. The two id spaces
+   * look alike and are not the same number.
+   *
+   * TWO PICTURES OF ONE POST ARE TWO REFS, and that is accepted rather than fixed. Measured on a
+   * four-photo post, fbid …900257527 and fbid …666570257660 return the same 86,865-byte fragment and
+   * therefore the same card. They are two cache entries for one card, which costs a second fetch and
+   * nothing else; collapsing them would need the parent post id, which the url does not carry.
+   */
+  | { p: 'fb'; kind: 'watch' | 'reel' | 'share' | 'group' | 'post' | 'photo'; id: string }
   /**
    * THE yt-dlp TIER — Dailymotion and Streamable. One opaque id is the whole identity on each (like
    * yt), because exactly ONE surface per platform is routable: no `kind` discriminator can earn its

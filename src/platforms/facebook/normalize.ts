@@ -36,6 +36,13 @@ export type FacebookMeta = {
 
 /** The url the container's yt-dlp is handed (both the meta call and the /_media mux) — from the ref. */
 export function fbPageUrl(ref: Extract<PostRef, { p: 'fb' }>): string {
+  if (ref.kind === 'photo') {
+    // The one spelling of the six that needs nothing but the fbid — no owner, no album, no `set`.
+    // Measured 2026-08-11 from Cloudflare egress: `plugins/post.php?href=` this returns the same 74 KB
+    // fragment as the owner-bearing spellings do, so the two query forms (which carry no owner at all)
+    // and the four path forms can all rebuild into it. See the PostRef arm in types.ts.
+    return `https://www.facebook.com/photo/?fbid=${ref.id}`
+  }
   if (ref.kind === 'post') {
     // `{ownerId}_{postId}` -> the /{owner}/posts/{id}/ spelling, which is BOTH what Facebook's own
     // og:url uses and — measured 2026-08-01 — the shape that answers our datacenter egress with a
@@ -499,6 +506,61 @@ const FB_PLUGIN_SRC = /src="(https:\/\/[^"]{20,200}?t39\.30808-6\/\d+_(\d+)_[^"]
  */
 const FB_PLUGIN_W = /\swidth="(\d{1,5})"/
 const FB_PLUGIN_H = /\sheight="(\d{1,5})"/
+/**
+ * THE BYLINE FACEBOOK DOES NOT LINK — the avatar's own label, and the reason the anchor above is not
+ * enough on its own.
+ *
+ * MEASURED FROM CLOUDFLARE EGRESS 2026-08-11, over six real fragments: Facebook emits the poster's
+ * name in TWO different shapes and only one of them is inside an anchor.
+ *
+ *   <a href="…/WYFF4?ref=embed_post"><span class="_2_79 _50f7">WYFF News 4</span></a>   linked
+ *   <div class="_2iem"><span class="_2_79 _50f7">Humans of New York</span>…             NOT linked
+ *
+ * The unlinked shape is not an edge case: every fragment measured for @NASA and @humansofnewyork
+ * carried it, so facebookPluginCard returned null for all four of them — INCLUDING for
+ * /NASA/posts/1583701703125200, an ordinary post permalink this router has claimed since 2026-08-01.
+ * The photo work only found it; the defect is older and wider than photos.
+ *
+ * WHY THE AVATAR'S LABEL AND NOT THE SPAN. `_2_79` is a generated class of exactly the kind
+ * fbGallery's docstring refuses to match on — it churns. `aria-label` on the avatar image is a
+ * semantic attribute, it carried the page name in ALL SIX fragments (both shapes), and it is in the
+ * `t39.30808-1` avatar bucket, which is the discriminator this file already uses twice.
+ *
+ * THE FIRST ONE IS THE POSTER'S, and that is not merely an ordering assumption: the plugin renders a
+ * post's header and its pictures and no comment thread, and every one of the six fragments carried
+ * EXACTLY ONE labelled image in that bucket. If Meta ever server-renders commenters here, the header
+ * still comes first in document order and `!labelled` keeps the first.
+ *
+ * IT IS A FALLBACK, NOT THE FRONT DOOR. Every post that renders today keeps the exact byline it has:
+ * the anchor is still tried first, and this only runs when no anchor carried text. Additive by
+ * construction, so it cannot regress a card that already works.
+ *
+ * IT DOES NOT WEAKEN THE FAILURE CHECK. The plugin's own error state carries no avatar at all —
+ * measured on a bogus fbid: 38,109 bytes, "This Facebook post is no longer available", zero images in
+ * either bucket — so a fragment with no post still yields no name and still returns null.
+ */
+const FB_PLUGIN_AVATAR = /src="https:\/\/[^"]{20,200}?t39\.30808-1\/[^"]{0,900}?"/
+const FB_PLUGIN_LABEL = /\saria-label="([^"]{1,120})"/
+/**
+ * THE PAGE URL FOR THE UNLINKED SHAPE — an href with no anchor CONTENTS attached to it, which is the
+ * whole difference from FB_PLUGIN_AUTHOR above.
+ *
+ * FB_PLUGIN_AUTHOR cannot serve here: it must reach `</a>` within 200 characters to match at all, and
+ * the avatar anchor it would have to match wraps an <img> whose signed CDN query alone runs ~500. So
+ * the anchor that names the page is invisible to it, by construction rather than by accident.
+ *
+ * THE FIRST MATCH IS THE HEADER'S, in document order, which is what makes this the poster's page and
+ * not somebody else's: a MENTION inside the caption spells its href `…/{handle}?fref=mentions&ref=…`,
+ * and the `[^"?]` class refuses anything with a parameter in front of `ref=embed_post`.
+ *
+ * IT IS ALSO WHY SOME CARDS GET NO PAGE AT ALL, stated rather than discovered later. Measured
+ * 2026-08-11 across six fragments: four spell the page exactly this way, one spells it only as the
+ * permalink `…/{page}/posts/{id}?ref=embed_post` (hence the tail strip at the call site), and one
+ * spells it ONLY as `…/{page}?fref=nf&ref=embed_post`. Admitting that sixth form would mean admitting
+ * `fref=mentions` too, which points at a DIFFERENT account — a wrong byline url is worse than the
+ * honest facebook.com fallback the caller already has, so that one is left unclaimed.
+ */
+const FB_PLUGIN_PAGE = /href="(https:\/\/www\.facebook\.com\/[^"?]{1,80})\?ref=embed_post"/
 
 export function facebookPluginCard(html: unknown, ref: PostRef): Post | null {
   if (ref.p !== 'fb') return null
@@ -516,15 +578,22 @@ export function facebookPluginCard(html: unknown, ref: PostRef): Post | null {
   // text content is the emoji character itself, so dropping the tags keeps it.
   const text = body ? fbDecode(body[1].replace(/<[^>]{0,400}>/g, '')).trim() : ''
 
-  // The same assertion facebookPostCard makes, for the same reason: a fragment carrying neither a
-  // byline nor a caption is the plugin's own error state, and a card asserting an empty post is worse
-  // than an honest failure.
-  if (!name || !text) return null
-
   const byId = new Map<string, { url: string, w: number, h: number }>()
+  // The avatar's aria-label, kept only if no anchor gave a name — see FB_PLUGIN_AVATAR.
+  let labelled = ''
   for (const tag of html.matchAll(FB_PLUGIN_IMG)) {
     const src = tag[0].match(FB_PLUGIN_SRC)
-    if (!src || byId.has(src[2])) continue
+    if (!src) {
+      if (!labelled && FB_PLUGIN_AVATAR.test(tag[0])) {
+        labelled = fbDecode(tag[0].match(FB_PLUGIN_LABEL)?.[1] ?? '').trim()
+      }
+      continue
+    }
+    // The cap is checked BEFORE the insert and skips rather than breaks — it used to `break` after
+    // the tenth, which now would end the walk before the avatar is read on any fragment that puts the
+    // pictures first. Ten stays the media bound; the walk itself is bounded by the document and by
+    // each regex's own length limits.
+    if (byId.size >= 10 || byId.has(src[2])) continue
     // The src is an HTML attribute, so every '&' in the signed CDN query arrives as '&amp;'. Decoding
     // it is what makes the url fetchable; a raw one 403s on the signature.
     const url = src[1].replace(/&amp;/g, '&')
@@ -534,8 +603,28 @@ export function facebookPluginCard(html: unknown, ref: PostRef): Post | null {
       w: Number(tag[0].match(FB_PLUGIN_W)?.[1] ?? 0),
       h: Number(tag[0].match(FB_PLUGIN_H)?.[1] ?? 0),
     })
-    if (byId.size >= 10) break
   }
+  if (!name && labelled) {
+    name = labelled
+    // The permalink tail is stripped for the reason fbAuthor strips it on the og: surface: one of the
+    // six measured fragments spells the page only as `…/{page}/posts/{id}?ref=embed_post`, and a
+    // byline url pointing at a single post rather than at the page is a wrong link, not a shorter one.
+    page = (html.match(FB_PLUGIN_PAGE)?.[1] ?? '').replace(/\/posts\/\d{5,25}$/, '')
+  }
+
+  /**
+   * A BYLINE, AND EITHER A CAPTION OR A PICTURE. The old rule was byline AND caption, and it refused
+   * real posts: measured 2026-08-11 from Cloudflare egress, a photo post carrying a byline, one
+   * 552x414 photo and ZERO <p> elements (a picture posted with no words, which is an ordinary thing
+   * for a photo to be) returned null and drew the failure card.
+   *
+   * IT IS STILL AN ASSERTION ON CONTENT, not a relaxation into guessing. The plugin's own error state
+   * has neither half — measured on a bogus fbid: 38,109 bytes, "This Facebook post is no longer
+   * available", no byline anchor, no avatar label, and zero urls in the photo bucket — so it still
+   * returns null here. What changed is only that ONE of the two kinds of post content is now enough,
+   * where before a post had to have both.
+   */
+  if (!name || (!text && byId.size === 0)) return null
 
   const permalink = html.match(FB_PLUGIN_PERMALINK)
   return {

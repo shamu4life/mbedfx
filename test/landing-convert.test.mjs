@@ -768,3 +768,60 @@ test('TOGGLING MEDIA-ONLY NEVER HIDES THE LINK, and never refetches', () => {
   assert.match(HTML, /cardSeq\+\+;/,
     'and bumps the sequence so an in-flight fetch cannot land on top of the redraw')
 })
+
+
+/* ============ FACEBOOK'S ID-IN-THE-QUERY SHAPES, WHICH THIS PAGE USED TO THROW AWAY ============
+ *
+ * mbedfxConvert builds its answer from `u.pathname` and keeps the query for exactly two platforms:
+ * YouTube's `?v=` and Twitch's `?clip=`. Facebook carries the post id in the query in three of its
+ * spellings, so the page converted them to a bare `/photo`, `/photo.php` or `/story.php` — paths the
+ * worker reads as the ['x','ig'] chooser, offering a human two links that cannot resolve for a url
+ * that is unmistakably Facebook's.
+ *
+ * That is the SAME defect for /story.php that was reported on 2026-08-01 and fixed in the ROUTER
+ * then; the page kept its half of it. CLAUDE.md names the converter as a third seam that has to be
+ * checked whenever a route is fixed, and this is exactly the case it warns about: the worker handled
+ * these urls while the page in front of it did not.
+ *
+ * These assert the CONVERTED PATH ROUTES, not merely that conversion succeeded — a page that emits a
+ * tidy url the worker cannot read is the failure being prevented.
+ */
+test('THE PHOTO QUERY SPELLINGS CONVERT TO A PATH THE WORKER CLAIMS, not to the chooser', () => {
+  const { convert } = loadConverter()
+  for (const u of [
+    'https://www.facebook.com/photo/?fbid=1596906755391068',
+    'https://www.facebook.com/photo.php?fbid=1596906755391068&set=a.774304400984645&type=3',
+  ]) {
+    const r = convert(u, 'mbedfx.app')
+    assert.ok(r.ok, `${u} must convert`)
+    assert.match(r.url, /\/photo\/\?fbid=1596906755391068$/, 'the fbid survives into the converted url')
+    const routed = route(new URL(r.url))
+    assert.equal(routed.kind, 'post', `${r.url} must route to a post, not the chooser`)
+    assert.equal(routed.ref.p, 'fb')
+  }
+})
+
+test('story.php CONVERTS TO THE PERMALINK SHAPE, closing the page half of the 2026-08-01 report', () => {
+  const { convert } = loadConverter()
+  const r = convert('https://www.facebook.com/story.php?story_fbid=1596906778724399&id=100052152768666', 'mbedfx.app')
+  assert.ok(r.ok, 'it must convert')
+  const routed = route(new URL(r.url))
+  assert.equal(routed.kind, 'post', 'and the converted url must name a post')
+  assert.equal(routed.ref.p, 'fb')
+})
+
+test('A QUERY WITHOUT A USABLE ID IS STILL REFUSED, so the branch cannot invent a post', () => {
+  // The guard is the id's SHAPE, not the presence of the parameter. Without this, `?fbid=abc` would
+  // build /photo/?fbid=abc and hand the worker a ref that can never resolve.
+  const { convert } = loadConverter()
+  for (const u of [
+    'https://www.facebook.com/photo/?fbid=abc',
+    'https://www.facebook.com/photo/?fbid=12',
+    'https://www.facebook.com/photo/',
+  ]) {
+    const r = convert(u, 'mbedfx.app')
+    const routed = r.ok ? route(new URL(r.url)) : null
+    assert.ok(!routed || routed.kind !== 'post' || routed.ref.p !== 'fb',
+      `${u} must not become a Facebook photo post`)
+  }
+})

@@ -27,6 +27,15 @@ test('fbPageUrl reconstructs the url the container is handed, per kind', () => {
   assert.equal(fbPageUrl({ p: 'fb', kind: 'watch', id: '123' }), 'https://www.facebook.com/watch/?v=123')
   assert.equal(fbPageUrl({ p: 'fb', kind: 'reel', id: '123' }), 'https://www.facebook.com/reel/123')
   assert.equal(fbPageUrl({ p: 'fb', kind: 'share', id: 'ab12' }), 'https://www.facebook.com/share/v/ab12')
+  /**
+   * A PHOTO REBUILDS INTO THE OWNERLESS SPELLING, and it is the only kind that can: two of the six
+   * urls Facebook emits for a picture (/photo/?fbid= and /photo.php?fbid=) carry no owner at all, so
+   * a rebuild that needed one would have a hole in it. Measured 2026-08-11 from Cloudflare egress —
+   * handed to Meta's embed plugin, this spelling with no `set` and no owner returns the same fragment
+   * as the fully qualified /{page}/photos/{fbid}/ one.
+   */
+  assert.equal(fbPageUrl({ p: 'fb', kind: 'photo', id: '1596906755391068' }),
+    'https://www.facebook.com/photo/?fbid=1596906755391068')
 })
 
 test('the ref and canonical survive normalization unchanged', () => {

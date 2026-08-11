@@ -161,10 +161,30 @@ test('THE OLD PRE-g3 DICT still renders: a non-atomic deploy degrades, never thr
 })
 
 test('a meta response with NO title is a null Post — the content assertion, not the status', async () => {
-  for (const bad of [{}, { title: '' }, { title: 42 }]) {
-    const { binding } = fakeResolver({ meta: () => Response.json(bad) })
-    const html = await (await handle(req(FB_PATH), envWith(binding), ctx, deps())).text()
-    assert.match(html, /couldn't load/i, `a gone/blocked extract must render the failure card: ${JSON.stringify(bad)}`)
+  /**
+   * THE PAGE AND PLUGIN SURFACES ARE STUBBED, and until 2026-08-11 they were not — this test reached
+   * the REAL facebook.com, which is the one thing the suite is not allowed to do. It passed by
+   * accident: the plugin fragment for this video carries its byline UNLINKED, the parser could not
+   * read that shape, and "no card" looked like the assertion holding. Teaching the parser the second
+   * byline shape turned the same live fetch into a real card and the test went red — a network
+   * dependency reporting itself, three years' worth of luck later than it should have.
+   *
+   * The stub answers with the plugin's own measured error state, so the fall-through arms find nothing
+   * and the subject of this test — a container extract with no title must not become a card — is what
+   * the assertion actually measures.
+   */
+  const real = globalThis.fetch
+  globalThis.fetch = async () => new Response(
+    '<html><body><div class="pam uiBoxWhite"><p class="_1q3v">This Facebook post is no longer available.'
+    + '</p></div></body></html>', { headers: { 'content-type': 'text/html' } })
+  try {
+    for (const bad of [{}, { title: '' }, { title: 42 }]) {
+      const { binding } = fakeResolver({ meta: () => Response.json(bad) })
+      const html = await (await handle(req(FB_PATH), envWith(binding), ctx, deps())).text()
+      assert.match(html, /couldn't load/i, `a gone/blocked extract must render the failure card: ${JSON.stringify(bad)}`)
+    }
+  } finally {
+    globalThis.fetch = real
   }
 })
 

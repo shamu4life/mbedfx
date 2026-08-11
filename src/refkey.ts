@@ -251,11 +251,17 @@ export function parseRefKey(key: string): PostRef | null {
        * THE LIST IS SPELLED OUT RATHER THAN INFERRED because this function is the security boundary
        * (see the file header): what crosses here came off the wire, so the kinds are an ALLOWLIST and
        * a new one must be added deliberately. `ok(2)` still bounds the id.
+       *
+       * 'photo' JOINED IT 2026-08-11 WITH THE ROUTER ARM THAT MINTS IT, in the same commit and for
+       * the reason the paragraph above records: 'group' shipped without its entry and every
+       * /_media/{refKey}/{i} on a group post 404'd for weeks with nothing failing loudly. A photo
+       * card is ALL images, so it is the kind that needs /_media/ most — an unparseable key here
+       * would leave a card whose every picture is a 404.
        */
       case 'fb':
         return p.length === 3 && ok(2)
           && (p[1] === 'watch' || p[1] === 'reel' || p[1] === 'share'
-            || p[1] === 'group' || p[1] === 'post')
+            || p[1] === 'group' || p[1] === 'post' || p[1] === 'photo')
           ? { p: 'fb', kind: p[1], id: dec(p[2]) }
           : null
       // SHAPE-CHECKED like the yt-dlp tier, for the reason YTDLP_ID gives: this function, not the
