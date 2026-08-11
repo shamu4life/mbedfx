@@ -314,6 +314,37 @@ export async function liveFetchPost(
           // `card` is non-null, and instagramFullPageCard refuses a story ref outright — so this arm
           // is unreachable for one. The narrow is for the TYPE, which cannot know that.
           const code = ref.kind === 'story' ? '' : ref.code
+          /**
+           * BY SHORTCODE FIRST, BY ACCOUNT SECOND — and the order is the whole point.
+           *
+           * The account feed finds a post by SCANNING an account's posts newest-first, so whether it
+           * can repair a post depends on how recently that post was made. That is an accident of the
+           * lookup, not a fact about the post: reported 2026-08-10, a reel rendered as a still purely
+           * for being old, and paging the feed only moved the boundary (measured: post #49 on the
+           * reported account still failed with a three-page walk).
+           *
+           * The GraphQL surface addresses a post by its OWN shortcode, so age stops mattering
+           * entirely. Measured from CLOUDFLARE EGRESS 2026-08-10 with `wrangler dev --remote`, calling
+           * this same shipped fetcher: the reported reel, a control from another account, and the
+           * post that defeated the feed walk all returned the documented root and a 720x1280 video —
+           * 22,679 / 26,022 / 25,024 bytes. That retires fetchInstagramGraphQLMedia's own
+           * "NOT EGRESS-CONFIRMED" caveat, which had reasoned from the sibling media endpoint being
+           * refused from this egress and correctly refused to assume.
+           *
+           * IT IS ALSO THE CHEAPER CALL BY TWO ORDERS OF MAGNITUDE: ~25 KB and one request, against
+           * up to three feed pages of ~530 KB each.
+           *
+           * THE FEED STAYS AS THE FALLBACK rather than being replaced. A doc_id is a rotating
+           * identifier — IG_GRAPHQL_DOC_ID exists so a rotation is a config change — and the day it
+           * rotates this returns null and the account feed is what keeps recent posts working. Two
+           * independent surfaces failing the same day is a worse outage than either alone.
+           */
+          const viaCode = recoveredMediaFrom(
+            await fetchInstagramGraphQLMedia(code, env.IG_GRAPHQL_DOC_ID), code)
+          if (viaCode) {
+            count(env, 'ig', 'copyright_gql', client)
+            return withRecoveredVideo(card, viaCode)
+          }
           // The code is passed so the feed walk can STOP as soon as it finds this post, and so it
           // only pages at all for a post that is not already on page one. See IG_FEED_MAX_PAGES.
           const rec = recoveredMediaFrom(await fetchInstagramUserFeed(card.author.handle, code), code)
