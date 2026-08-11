@@ -656,7 +656,7 @@ footer .fine { font-size: 12px; opacity: .8; }
             <div><code>pin.it</code>. Full <code>/pin/…</code> links are fine.</div>
             <div>Instagram stories</div>
             <div>Twitch VODs and live channels. Only clips work.</div>
-            <div>Facebook text posts. Video, reels and group posts work.</div>
+            <div>Facebook posts that carry no picture and no video.</div>
             <div>Pixelfed and GoToSocial. Their APIs refuse logged-out reads.</div>
             <div>Bare profile links. There's no single post to draw.</div>
             <div>PeerTube playlists, Friendica, Bilibili, pixiv</div>
@@ -810,6 +810,26 @@ function mbedfxConvert(input, host) {
   var pcode = hit ? hit[1] : null;
 
   if (platform) {
+    /**
+     * FACEBOOK'S PHOTO QUERY FORMS carry the id in the QUERY, not the path, and this converter drops
+     * the query for every platform except YouTube's ?v= and Twitch's ?clip=. So /photo/?fbid=… and
+     * /photo.php?fbid=… converted to a bare /photo, which the worker reads as the ['x','ig'] chooser
+     * — offering two links that cannot resolve, for a url that is unmistakably Facebook's.
+     *
+     * The same hole has existed for /story.php since 2026-08-01. Both are closed here: the id is
+     * carried, and the worker's router claims the resulting path.
+     */
+    if (platform === 'Facebook') {
+      var fbid = u.searchParams.get('fbid');
+      if (fbid && /^\d{5,}$/.test(fbid) && /^\/(photo|photo\.php)\/?$/.test(path)) {
+        return out('/photo/?fbid=' + fbid, 'Facebook', '', 'fb');
+      }
+      var sfbid = u.searchParams.get('story_fbid');
+      var sid = u.searchParams.get('id');
+      if (sfbid && sid && /^\d{5,}$/.test(sfbid) && /^\d{5,}$/.test(sid) && /^\/story\.php\/?$/.test(path)) {
+        return out('/' + sid + '/posts/' + sfbid + '/', 'Facebook', '', 'fb');
+      }
+    }
     if (platform === 'Instagram' && seg[0] === 'stories') {
       return no('Instagram stories aren’t routed. They expire, so there’s no stable post to draw.');
     }
@@ -961,8 +981,8 @@ function mbedfxConvert(input, host) {
     { name: 'YouTube', host: 'youtube.com · youtu.be', icon: 'youtube', rail: '#FF0000',
       paths: ['watch?v=dQw4w9WgXcQ', 'shorts/dQw4w9WgXcQ', 'dQw4w9WgXcQ'], note: 'Age-restricted videos are thumbnail only.' },
     { name: 'Facebook', host: 'facebook.com', icon: 'facebook', rail: '#0866FF',
-      paths: ['watch?v=10153231379946729', 'reel/2209468366484962', 'share/v/Fixture03X', 'groups/328668786145521/posts/1391536379858751'],
-      note: 'Video, reels and group posts. Not text posts.' },
+      paths: ['watch?v=10153231379946729', 'reel/2209468366484962', 'share/v/Fixture03X', 'groups/328668786145521/posts/1391536379858751', 'photo/?fbid=1596906755391068'],
+      note: 'Video, reels, photos, and page and group posts.' },
     { name: 'Twitch', host: 'twitch.tv · clips.twitch.tv', icon: 'twitch', rail: '#9146FF',
       paths: ['xqc/clip/DeliciousDelightfulPicklesWOOP', 'clip/DeliciousDelightfulPicklesWOOP'],
       note: 'Clips only. No VODs, no live channels.' },
