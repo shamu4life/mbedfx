@@ -213,13 +213,24 @@ test('HEAD is forwarded as HEAD and answers headers with an empty body', async (
 /**
  * THREADS IS ON THE SAME CDN AND MUST KEEP ITS 302 — the regression this platform gate exists to stop.
  *
- * Threads video is Instagram's backend: `video_versions[0].url` is on scontent*.cdninstagram.com, so a
- * host-only allowlist captured it. That would have been a regression on a platform that WORKS: Meta blocks
- * Cloudflare datacenter egress for Threads media (platforms/threads/normalize.ts records the measurement —
- * it is why a remux through our container is impossible there), and the Worker's egress is a datacenter IP
- * too, so the proxy would get a non-video answer, refuse it, and 503 the url og:video points at — no
- * player on ANY Threads video post. `calls === 0` is the load-bearing half: the decision is made from the
- * ref, before any egress.
+ * Threads video is Instagram's backend: `video_versions[0].url` is on scontent*.cdninstagram.com, so the
+ * host allowlist covers it and only the ref can tell it apart from Instagram.
+ *
+ * IT USED TO 302, AND THIS TEST USED TO PIN THAT. The reasoning was that Meta blocks Cloudflare's
+ * datacenter egress for Threads media, so proxying would fetch a non-video answer, refuse it, and 503 the
+ * url og:video points at — no player on any Threads video post. That was an INFERENCE, and the comment
+ * that carried it named the one thing that could overturn it: a real measurement of a Worker-egress fetch
+ * of a Threads scontent url.
+ *
+ * MEASURED 2026-08-09 with `wrangler dev --remote`, so the request left Cloudflare rather than a laptop: a
+ * live post's 302 target answered HTTP 200, content-type video/mp4, 8,990,730 bytes. The block is not
+ * there. It may have been real when it was written; this project has watched Meta and TikTok change their
+ * egress rules inside a week.
+ *
+ * WHAT THE 302 COST A READER, reported the same day: a viewer who has not accepted Meta's cookie consent
+ * could not play Threads video full screen. A 302 hands the VIEWER'S OWN CLIENT a Meta url and that client
+ * meets the consent wall — while Discord's proxy, which has its own cookies, does not, which is why the
+ * inline embed looked fine and only the full-screen fetch failed. Proxying keeps the client on our origin.
  */
 const TH_REF = { p: 'th', code: 'DDYEM_foiI1' }
 const TH_VIDEO = 'https://scontent-lhr8-1.cdninstagram.com/o1/v/t2/f2/m86/AQthreads.mp4?oe=6A6739FF'
@@ -230,15 +241,30 @@ const thPost = () => ({
   media: [{ kind: 'video', url: TH_VIDEO, w: 720, h: 1280, poster: 'https://scontent.cdninstagram.com/thcover.jpg' }],
 })
 
-test('PLATFORM SCOPE: a Threads video on the SAME Meta CDN still 302s and costs ZERO fetches', async () => {
+test('PLATFORM SCOPE: a Threads video on the Meta CDN is PROXIED, so no viewer is sent to Meta', async () => {
   const d = { cache: fakeCache(), fetchPost: async () => thPost(), resolveShortlink: async () => ({ kind: 'unresolved' }) }
   const path = `/_media/${encodeURIComponent(refKey(TH_REF))}/0`
   const { seen, res } = await withUpstream(okVideo, () =>
     handle(new Request(`https://staging.megapenispoopenfarten.sex${path}`, { headers: { 'user-agent': 'Discordbot/2.0' } }),
       fakeEnv(), ctx, d))
-  assert.equal(res.status, 302, 'Threads keeps the 302 its player depends on')
+  assert.equal(res.status, 200, 'the bytes come from us, not from a redirect to Meta')
+  assert.equal(res.headers.get('content-type'), 'video/mp4')
+  assert.equal(res.headers.get('location'), null, 'nothing hands the viewer a Meta url to consent to')
+  assert.equal(seen.calls, 1, 'exactly one upstream fetch, made by us on our own egress')
+})
+
+test('A THREADS VIDEO THAT DOES NOT ANSWER WITH VIDEO STILL FALLS BACK TO THE 302', async () => {
+  // The safety half of the change. Proxying is an attempt, not a promise: if Meta ever reinstates the
+  // block this path met before 2026-08-09, the content assertion refuses the answer and the reader gets
+  // the redirect that worked for the year before it — not a 503 at the url og:video points at.
+  const d = { cache: fakeCache(), fetchPost: async () => thPost(), resolveShortlink: async () => ({ kind: 'unresolved' }) }
+  const path = `/_media/${encodeURIComponent(refKey(TH_REF))}/0`
+  const notVideo = () => new Response('<html>consent</html>', { status: 200, headers: { 'content-type': 'text/html' } })
+  const { res } = await withUpstream(notVideo, () =>
+    handle(new Request(`https://staging.megapenispoopenfarten.sex${path}`, { headers: { 'user-agent': 'Discordbot/2.0' } }),
+      fakeEnv(), ctx, d))
+  assert.equal(res.status, 302, 'a non-video answer degrades to the redirect rather than breaking the player')
   assert.equal(res.headers.get('location'), TH_VIDEO)
-  assert.equal(seen.calls, 0, 'the platform gate is decided from the ref, before any egress')
 })
 
 test('SSRF PIN: an allowlisted host that REDIRECTS off the allowlist is refused, not relayed', async () => {

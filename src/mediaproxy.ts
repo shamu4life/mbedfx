@@ -124,18 +124,29 @@ export function proxyableVideoUrl(post: Post, index: MediaIndex): string | null 
   // images are deliberately not proxied.
   if (typeof index !== 'number') return null
   /**
-   * INSTAGRAM ONLY — SCOPED TO THE PLATFORM THAT WAS ACTUALLY MEASURED (2026-07-25).
+   * INSTAGRAM, TWITCH AND THREADS. Threads was excluded until 2026-08-09 and the exclusion is now
+   * retired, by the measurement the excluding comment itself demanded.
    *
-   * THREADS IS THE REASON THIS LINE EXISTS. Threads video is Instagram's backend and its urls are on
-   * scontent*.cdninstagram.com, so a host-only allowlist captured it too — and that would have been a
-   * REGRESSION on a platform that works today. platforms/threads/normalize.ts's mediaFromDict docstring
-   * records the measurement: Meta blocks Cloudflare's DATACENTER egress for Threads media ("our container
-   * can't fetch it … that fetch is a datacenter IP; Discord's proxy is not"), which is precisely why
-   * Threads video is served by a 302 to Discord's own proxy and plays. The Worker's egress is a
-   * datacenter IP too, so serving those bytes ourselves would most likely get a non-video response, fail
-   * the content assertion, and answer the url og:video points at with 503 — killing the player on EVERY
-   * Threads video post. Revisit ONLY with a real measurement of a Worker-egress fetch of a Threads
-   * scontent url; until then the measured-good 302 stands.
+   * WHAT IT SAID, and it was an inference rather than a measurement: Threads video is Instagram's
+   * backend on scontent*.cdninstagram.com, Meta blocks Cloudflare's datacenter egress for those bytes,
+   * so serving them ourselves "would most likely get a non-video response, fail the content assertion,
+   * and answer the url og:video points at with 503 — killing the player on EVERY Threads video post."
+   * It closed with the only thing that could overturn it: "Revisit ONLY with a real measurement of a
+   * Worker-egress fetch of a Threads scontent url."
+   *
+   * THE MEASUREMENT, 2026-08-09, taken with `wrangler dev --remote` so the fetch left Cloudflare and
+   * not a laptop: a live Threads post's 302 target on scontent-bos5-1.cdninstagram.com answered
+   * HTTP 200, content-type video/mp4, 8,990,730 bytes. The block is not there. It may have been real
+   * when it was written — this project has watched Meta and TikTok change their egress rules inside a
+   * week — which is why the finding is dated rather than presented as a correction of a mistake.
+   *
+   * WHY IT MATTERS TO A READER RATHER THAN TO A COUNTER. Reported the same day: viewers who have not
+   * accepted Meta's cookie consent cannot play Threads video full screen. A 302 hands the VIEWER'S OWN
+   * CLIENT a Meta url, and that client meets Meta's consent wall; Discord's proxy has cookies of its
+   * own and does not, which is exactly why the inline embed looked fine and only the full-screen fetch
+   * failed. Proxying keeps the viewer's client on our origin, so there is no Meta request to consent
+   * to. It also gives Threads video the `accept-ranges` a 302 cannot add to someone else's response —
+   * the same reason Instagram is proxied, stated in the module head.
    *
    * Every other platform is out by construction rather than by this line — Twitter/TikTok on their own
    * CDNs (allowedHost says no), Facebook/YouTube/Reddit/Bluesky because their video carries `remux`
@@ -160,7 +171,7 @@ export function proxyableVideoUrl(post: Post, index: MediaIndex): string | null 
    * so it should not be address-bound; proxying means we do not have to rely on that being true.
    */
   const p = (post?.ref as { p?: string } | undefined)?.p
-  if (p !== 'ig' && p !== 'tw') return null
+  if (p !== 'ig' && p !== 'tw' && p !== 'th') return null
   const m = pickMediaEntry(post, index)
   // `remux` is the container's job (serveMuxed); its `url` is a manifest/page placeholder and must
   // never be streamed raw. Mutually exclusive with that branch by construction, twice over: the
