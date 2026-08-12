@@ -5,7 +5,35 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
-## [Unreleased]
+## [1.10.0] - 2026-08-12
+
+### Added
+- **A published OpenAPI spec.** `public/openapi.json` (OpenAPI 3.1), served at `/openapi.json`, with a
+  derive-and-compare drift test that checks it against the code that answers rather than against the
+  prose. It was the most conspicuous remaining gap against the rival embed fixers.
+- **Bluesky profile embeds.** `/profile/{handle}` renders an account card: display name, bio, avatar,
+  follower/following/post counts and the join month. Built for one platform on purpose — measured from
+  Cloudflare egress, x.com and tiktok.com already hand a crawler a complete profile card, so a route
+  for them would duplicate what Discord draws, and instagram.com is walled from this egress entirely
+  (HTTP 429, zero bytes, against a same-minute post-page control at 254 KB). Bare `/{handle}` and
+  `/@{handle}` stay choosers: a handle names an account on two sites at once.
+- **An outage detector.** A half-hourly cron renders one known post per platform through this worker's
+  own handler and counts whether a real card came back, asserting on CONTENT because every interesting
+  failure here answers HTTP 200. `/_smoke` runs the same checks on demand. Added because Facebook
+  embeds were broken for up to a week and the way it was found was the owner pasting a link.
+
+### Fixed
+- **A walled TikTok share code was published as `not_a_post`** — "that url resolves to something other
+  than a post" — about a post that demonstrably exists, on both `/_api/v1` and the converter preview,
+  while Discord drew the correct 🔒/🔞 card. Its two siblings were closed in the same pass: a deleted
+  post now answers `fetch_fail` with the platform it proved rather than `platform: null`, and a code
+  TikTok does not claim answers `ambiguous` with the same chooser the render arm offers.
+- **Facebook post coverage**, measured across 35 real urls and repaired where the count was hiding
+  wrong cards rather than absent ones. See the Facebook section below.
+- An uncaught **HTTP 500** on `/lm`, `/ms` and `/pt`, found by the router differential run over
+  1,115,451 paths while proving the profile route shadows nothing.
+
+### Facebook coverage, and the rest of this release
 
 ### Facebook post coverage, measured rather than assumed
 
