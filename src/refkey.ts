@@ -81,6 +81,33 @@ export const TWITCH_SLUG = /^[A-Za-z0-9][A-Za-z0-9_-]{2,99}$/
 export const FEDI_HOST = /^(?=.{4,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,24}$/
 
 /**
+ * A BLUESKY ACTOR — the `{handle}` of `bsky.app/profile/{handle}`, which is either a DNS handle
+ * (`bsky.app`, `alice.bsky.social`) or the DID the app links a renamed account by
+ * (`did:plc:z72i7hdynmk6r22z27h6tvur`). Both forms are what `?actor=` on the public API takes,
+ * verified from Cloudflare egress 2026-08-11.
+ *
+ * IT LIVES HERE FOR THE REASON TWITCH_SLUG DOES, not because a profile crosses this file's
+ * boundary — it does not. A profile mints no refKey (see types.ts's ProfileRef), so parseRefKey's
+ * allowlists are untouched; what this module also is, and has been since the yt-dlp tier, is the
+ * one place a SHAPE lives when both the router and a platform fetcher must apply it. router.ts
+ * already imports this file and this file imports nothing but types.ts, so this direction adds no
+ * cycle, and one spelling is what stops the two from drifting into a router that mints refs the
+ * fetcher refuses.
+ *
+ * WHAT THE SHAPE BUYS, stated rather than assumed: the value is interpolated into a query
+ * parameter on a FIXED origin (public.api.bsky.app), already through encodeURIComponent, so this
+ * is not what stands between a hostile segment and a request — it is what stops a junk segment
+ * from costing an upstream fetch at all, and what keeps `/profile/x` (no dot, not a DID, not a
+ * handle anywhere on Bluesky) an honest notfound instead of a failure card.
+ *
+ * A DNS HANDLE MUST CARRY A DOT. Bluesky handles are domain names and every one has at least two
+ * labels; the router's OTHER depth-2 neighbours are dotless tokens, so the dot is also the second,
+ * independent thing that keeps this arm off them. The DID form is admitted explicitly, method and
+ * all, rather than by loosening the handle class to allow colons.
+ */
+export const BS_ACTOR = /^(?:did:[a-z]{1,32}:[A-Za-z0-9._%-]{1,120}|(?=.{4,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,24})$/
+
+/**
  * A Lemmy row id. Numeric, no leading zero, bounded — so one post has exactly ONE spelling and
  * `/post/007` cannot mint a second cache entry for `/post/7`. Twelve digits is far above the largest
  * id observed anywhere (lemmy.dbzer0.com was at 72,981,433 on 2026-07-27).

@@ -1313,8 +1313,14 @@ function mbedfxConvert(input, host) {
       // A gate is Discord's own wording; anything else is not worth a fake card.
       // A FAILED CARD KEEPS THE RESULT ROW, because the preview is not carrying the link here.
       cardUp = false; outClass(true);
+      // A PROFILE LINK RESOLVES TO A CARD AND NOT TO A POST, so the generic line would be false:
+      // Discord draws this one. /_card describes a Post and nothing else (see describeTarget), so
+      // the preview cannot show it yet, and saying so beats implying the link is broken.
+      var noPost = j && j.reason === 'profile'
+        ? 'No preview for a profile link yet. Discord still draws the card.'
+        : 'No preview. This link doesn’t resolve to a post.';
       preview.innerHTML = '<div class="sentrow"><span class="sent" id="sentline"></span></div>'
-        + '<div class="pv"><div class="body">' + esc2(j && j.gate ? j.gate : 'No preview. This link doesn’t resolve to a post.') + '</div></div>';
+        + '<div class="pv"><div class="body">' + esc2(j && j.gate ? j.gate : noPost) + '</div></div>';
       preview.className = 'preview show';
       syncSent();
       // A card that could not be drawn has no media to link to either.

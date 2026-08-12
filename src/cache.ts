@@ -7,6 +7,22 @@ export const RESP_TTL = 900
 /** On the /_media/ 302 itself, bounding repeat media hits. Matches InstaFix-Revived. */
 export const MEDIA_MAX_AGE = 300
 
+/**
+ * 3 min, for a rendered PROFILE card — deliberately a fifth of RESP_TTL, and the asymmetry is the
+ * point rather than an oversight.
+ *
+ * A post is FINISHED: its text, its media and (near enough) its counts are what they were, so
+ * fifteen minutes of cache serves the same answer the upstream would. An account is a LIVE surface.
+ * Its follower count moves continuously and its bio moves whenever the owner edits it, so a long
+ * TTL does not save a fetch — it publishes a stale number under a label that reads as current.
+ *
+ * NOT ZERO, which is the other obvious answer and the wrong one: a link pasted into three channels
+ * unfurls three times within seconds, and a profile card is one upstream GET with no container and
+ * no inference behind it. Three minutes collapses that burst and bounds the staleness to something
+ * a reader would not notice.
+ */
+export const PROFILE_TTL = 180
+
 /** Shared across client classes: one upstream fetch serves every bot. */
 export const postCacheKey = (ref: PostRef) => `post:${refKey(ref)}`
 

@@ -1,6 +1,6 @@
 import type { Platform, PostRef, Route } from './types.ts'
 import {
-  DM_ID, FEDI_HOST, IM_ID, LEMMY_ID, MASTO_ID, PEERTUBE_ID, PIN_ID, ST_ID, TWITCH_SLUG, parseRefKey,
+  BS_ACTOR, DM_ID, FEDI_HOST, IM_ID, LEMMY_ID, MASTO_ID, PEERTUBE_ID, PIN_ID, ST_ID, TWITCH_SLUG, parseRefKey,
 } from './refkey.ts'
 import { decodeStatusId } from './statusid.ts'
 
@@ -216,6 +216,111 @@ function bluesky(seg: string[]): Route | null {
     return { kind: 'post', ref, canonical: canonical(`https://bsky.app/profile/${seg[1]}/post/${seg[3]}`) }
   }
   return null
+}
+
+/**
+ * BLUESKY PROFILES — `/profile/{handle}`, the ONE bare-account shape in this router, and the only
+ * one measurement says is worth claiming. Everything below is the argument for that sentence,
+ * because a matcher that reads two segments and accepts an arbitrary second one is exactly the
+ * shape matchPost's comment warns about.
+ *
+ * WHY THIS PLATFORM AND NOT THE OTHERS. Measured 2026-08-11 from CLOUDFLARE EGRESS (wrangler dev
+ * --remote, a temporary probe route in this worker; every fetch below left Cloudflare, not a
+ * laptop), asking two questions per candidate: can WE read the profile, and does a crawler already
+ * get a card from the platform itself — because closing a gap nobody has is not worth a route.
+ *
+ *   bsky.app       WE CAN READ IT: public.api.bsky.app/xrpc/app.bsky.actor.getProfile answers
+ *                  HTTP 200 / 1,052 bytes of JSON with displayName, description, avatar, banner,
+ *                  createdAt, followersCount, followsCount and postsCount, unauthenticated.
+ *                  A CRAWLER GETS ALMOST NOTHING: bsky.app/profile/jack.bsky.social answers a
+ *                  Discordbot with 8,561 bytes carrying og:title ("jack (@jack.bsky.social)") and
+ *                  NO og:description and NO og:image. So Discord draws a bare title today: no bio,
+ *                  no avatar, no counts. This is the whole gap, and it is ours to close.
+ *   x.com          Readable, and the platform ALREADY ANSWERS: x.com/jack gives a Discordbot
+ *                  og:title, og:description (the bio) and og:image (the avatar) in 3,549 bytes.
+ *                  The only thing we could add is the counts, and the only surface that carries
+ *                  them is syndication.twitter.com/srv/timeline-profile (323,789 bytes, a TWEET
+ *                  timeline whose user objects are the tweets' AUTHORS — a retweet-only account
+ *                  yields the wrong user or none). api.x.com/1.1/users/show.json with a live guest
+ *                  token is HTTP 403 behind a Cloudflare challenge page. Not claimed: a large
+ *                  fetch that can name the wrong account, to add one line to a card that already
+ *                  draws. The SHAPE is the other half — see the shadowing note below.
+ *   tiktok.com     Readable (the profile page carries webapp.user-detail with followerCount,
+ *                  heartCount, videoCount and the bio) and the platform ALREADY ANSWERS: a
+ *                  Discordbot gets og:title, og:image and an og:description reading
+ *                  "@tiktok 95.2m Followers, 0 Following, 462.6m Likes …" in 5,963 bytes. Its
+ *                  avatar url is also SIGNED and expiring (x-expires, x-signature), so a card
+ *                  would need the /_media/ hop this feature deliberately does not build.
+ *   instagram.com  WALLED FROM THIS EGRESS, which is a measurement and not a guess: the profile
+ *                  page answers HTTP 429 with a ZERO-byte body to both the crawler UA the post
+ *                  path uses and a Discordbot UA, `?__a=1&__d=dis` answers HTTP 201 with zero
+ *                  bytes, and /api/v1/users/web_profile_info answers HTTP 401 `require_login`.
+ *                  The control, taken minutes apart from the same isolate, rules out a blanket
+ *                  block: /p/{code}/embed/captioned/ returned 254,276 bytes of real post markup.
+ *                  So Instagram profiles are walled the way Facebook's post surfaces are.
+ *
+ * THE SHADOWING ANALYSIS, which is the dangerous half. A bare `/{handle}` and a bare `/@{handle}`
+ * are the two most contested shapes in this file and NEITHER is claimed here:
+ *
+ *   /{handle}        is the ['x','ig'] chooser. Both platforms really do mint that url, so
+ *                    claiming it for either serves a card from the WRONG SITE to somebody who
+ *                    pasted the other — the failure this codebase says it cannot debug. Unlike
+ *                    the two dead-end rows this file HAS taken (youtube()'s bare 11-char id,
+ *                    imgur()'s /{id}.gifv), this row is not a dead end: both candidates are real
+ *                    destinations a human may have meant. It stays the chooser, and the chooser
+ *                    now names the forced spelling instead of telling the reader profiles cannot
+ *                    work (see render/index.ts).
+ *   /@{handle}       is the ['tt','th'] chooser, contested between TikTok and Threads, and a
+ *                    handle exists on both platforms constantly — unlike an opaque share code,
+ *                    which exists on exactly one and can therefore be RESOLVED by asking. There
+ *                    is nothing to ask here, so it stays a chooser too.
+ *
+ * WHAT `/profile/{x}` COSTS TODAY, enumerated rather than asserted. Every matcher in the chain was
+ * read for a depth-2 arm that could hold seg[0]='profile': x() needs 'status' at seg[1] (depth 3+),
+ * reddit() needs 'comments'/'s', bluesky()'s own post arm is depth 4, tiktok() and threads() need a
+ * leading '@' and depth 3, youtube()'s depth-2 surfaces are shorts/embed/live/v, facebook()'s are
+ * 'reel' and 'share', instagram()'s are p/reel/reels/tv, pinterest() needs 'pin', dailymotion()
+ * 'video', streamable() 'e'/'s', imgur() 'a', twitch() 'clip', and lemmy/masto/misskey/peertube all
+ * require FEDI_HOST at seg[0], which 'profile' fails for want of a dot. KNOWN does not list
+ * 'profile'. So the shape was `notfound` at depth 2 — with ONE exception, and it is the exception
+ * this file has been bitten by twice:
+ *
+ *   /profile/followers and /profile/following ARE THE ['x','ig'] CHOOSER, because ambiguity()
+ *   reserves those tokens at seg[1] at any depth-2 path (@profile is a plausible X handle and that
+ *   is its followers page). `reserved()` is consulted here for exactly that reason — the same
+ *   guard the yt-dlp tier needed when ST_ID ate 'followers', and the same one the Twitch matcher
+ *   needed for /clip/followers. Neither is a Bluesky handle (no dot, not a DID), so BS_ACTOR would
+ *   have refused them anyway; the call stays because "the shape happens to save us" is how the
+ *   next token gets eaten.
+ *
+ * DEPTH 2 EXACTLY, never `>= 2`. `/profile/{handle}/post/{rkey}` is bluesky()'s post arm and must
+ * keep winning, and a looser arm here would also swallow every future /profile/… surface.
+ *
+ * AND THE WHOLE ARGUMENT WAS THEN MEASURED RATHER THAN LEFT AS PROSE. The router at the commit
+ * before this one and the router with this arm were run side by side over 1,115,451 paths — every
+ * token this file names (each AMBIGUOUS key, each KNOWN member, IG_SURFACE, YT_SURFACE, every
+ * ESCAPE hatch, every surface word the matchers read) at depths 1-3, plus depth 4 under eleven
+ * leading tokens. ELEVEN paths answer differently, and every one is accounted for:
+ *
+ *   8   notfound -> profile   the four actor-shaped segments, unforced and under /bs/
+ *   3   THREW    -> ambiguous /lm, /ms and /pt, which were an uncaught HTTP 500 (see lemmyArm)
+ *
+ * ZERO paths that resolved to a post before resolve to anything else now.
+ *
+ * THE DID FORM KEEPS ITS CASE AND THE HANDLE FORM DOES NOT. Handles are DNS names, so `Bsky.App`
+ * and `bsky.app` are one account and must be one cache key; a DID is an opaque identifier whose
+ * method-specific half is case-bearing, so lowercasing it would name a different account or none.
+ */
+const bsProfile = (handle: string): Route => ({
+  kind: 'profile',
+  ref: { p: 'bs', handle },
+  canonical: canonical(`https://bsky.app/profile/${handle}`),
+})
+
+function profile(seg: string[]): Route | null {
+  if (seg.length !== 2 || seg[0] !== 'profile' || !seg[1] || reserved(seg[1])) return null
+  const actor = seg[1].startsWith('did:') ? seg[1] : seg[1].toLowerCase()
+  return BS_ACTOR.test(actor) ? bsProfile(actor) : null
 }
 
 function x(seg: string[]): Route | null {
@@ -977,6 +1082,26 @@ const LM_SURFACE = new Set(['post', 'comment'])
 
 /** Shared by both spellings, so the guard cannot be applied to one and forgotten on the other. */
 function lemmyArm(seg: string[]): Route | null {
+  /**
+   * THE EMPTY-SEGMENT GUARD, AND IT WAS A LIVE HTTP 500 (found 2026-08-11 by the differential sweep
+   * behind the profile route, and CONFIRMED ON THE EDGE: `/lm`, `/ms` and `/pt` each answered 500
+   * from `wrangler dev --remote` before this line existed).
+   *
+   * The ESCAPE block calls `matchPost(seg.slice(1), forced)`, so a BARE escape token — the whole
+   * path being `/lm` — hands these arms an EMPTY array. `seg[0].toLowerCase()` then reads
+   * `undefined.toLowerCase()`, and handle() has no try/catch (see canonical()'s docstring for the
+   * last time that turned a router throw into a public 500), so the reader got a 500 and the
+   * counters got nothing.
+   *
+   * `/mk` never had it, and the reason is worth recording because it is luck rather than care:
+   * misskeyArm happens to test `seg.length !== 3` BEFORE it reads seg[0]. Same shape, one line
+   * apart in the ordering, and only one of the four crashed.
+   *
+   * The bare tokens are meant to fall through to the ambiguity chooser (the ESCAPE block's own
+   * comment says a forced miss must fall through, not dead-end), which is what a null here
+   * restores.
+   */
+  if (!seg[0]) return null
   // Hostnames are case-insensitive; lowercasing HERE is what stops `Lemmy.World` and `lemmy.world`
   // minting two cache entries for one instance.
   const host = seg[0].toLowerCase()
@@ -1050,6 +1175,9 @@ const msPost = (host: string, id: string): Route => ({
 })
 
 function mastoArm(seg: string[]): Route | null {
+  // A bare `/ms` reaches here with an EMPTY array and used to throw — see lemmyArm's guard for the
+  // measurement (HTTP 500 on the edge) and for why misskeyArm alone escaped it.
+  if (!seg[0]) return null
   const host = seg[0].toLowerCase()
   if (!FEDI_HOST.test(host) || reserved(seg[0])) return null
   const at = seg[1]?.startsWith('@')
@@ -1117,6 +1245,8 @@ const ptPost = (host: string, id: string): Route => ({
 })
 
 function peertubeArm(seg: string[]): Route | null {
+  // A bare `/pt` reaches here with an EMPTY array and used to throw — see lemmyArm's guard.
+  if (!seg[0]) return null
   const host = seg[0].toLowerCase()
   if (!FEDI_HOST.test(host) || reserved(seg[0])) return null
   // /{host}/w/{id}
@@ -1232,7 +1362,10 @@ function spoof(seg: string[]): Route | null {
  * It is a trap for whoever adds Threads or Reddit here, not a live defect.
  */
 function matchPost(seg: string[], forced?: Platform): Route | null {
-  if (forced === 'bs') return bluesky(seg)
+  // profile() is the unforced twin this forced arm needs (matchPost's rule): /bs/profile/{handle}
+  // and /profile/{handle} are one matcher, so the escape hatch cannot come to mean something the
+  // bare spelling does not. `??` and not a replacement: the POST arm still wins at depth 4.
+  if (forced === 'bs') return bluesky(seg) ?? profile(seg)
   if (forced === 'x') return x(seg)
   if (forced === 'tt') return tiktok(seg)
   if (forced === 'ig') return instagram(seg)
@@ -1278,9 +1411,14 @@ function matchPost(seg: string[], forced?: Platform): Route | null {
   // requires seg[0] to satisfy FEDI_HOST — at least two labels with an alphabetic TLD — which no
   // handle-shaped first segment on any other platform here can meet. They discriminate on the host,
   // not on a surface token, so they cannot swallow a shape a later matcher owns.
+  //
+  // profile() GOES LAST, and unlike twitch() that is a convention rather than a live requirement:
+  // it reads a LITERAL first segment at exactly depth 2, so no ordering makes it reach past
+  // anything. Last is where a matcher that claims an ACCOUNT rather than a post belongs — every
+  // matcher above it names a permalink, and a post must always beat a profile for the same url.
   return bluesky(seg) ?? x(seg) ?? tiktok(seg) ?? threads(seg) ?? reddit(seg) ?? youtube(seg) ?? facebook(seg)
     ?? instagram(seg) ?? lemmy(seg) ?? masto(seg) ?? misskey(seg) ?? peertube(seg) ?? pinterest(seg) ?? dailymotion(seg) ?? streamable(seg)
-    ?? imgur(seg) ?? twitch(seg)
+    ?? imgur(seg) ?? twitch(seg) ?? profile(seg)
 }
 
 /**

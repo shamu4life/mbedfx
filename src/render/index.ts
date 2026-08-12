@@ -1,5 +1,6 @@
 import type { ClientClass, Outcome } from '../types.ts'
 import { renderPost } from './discord.ts'
+import { renderProfile } from './profile.ts'
 import { renderTelegram } from './telegram.ts'
 import { HOST, displayName, renderChooser } from './chooser.ts'
 import { errorEmbed, redirect } from './fail.ts'
@@ -34,15 +35,40 @@ export function render(outcome: Outcome, client: ClientClass, origin: string): R
       // Discord-shaped concern in front of 'ambiguous' and 'failure', which must ignore it.
       return renderPost(outcome.post, client, origin)
 
+    /**
+     * AN ACCOUNT. One head for every bot client — see render/profile.ts for why there is no
+     * Mastodon spoof here — and the human short-circuit above it for the same reason the post arm
+     * has one: a person who pasted a profile link wants the profile, not our card.
+     *
+     * Telegram is NOT split out. renderTelegram exists because Telegram must be sent a list of
+     * ABSENCES (no callback links, one picture, no meta refresh), and this head already has all of
+     * them: no activity link, no oEmbed, one og:image, no video block. There is nothing for a
+     * Telegram-shaped variant to remove.
+     */
+    case 'profile':
+      if (isHuman) return redirect(outcome.profile.canonical)
+      return renderProfile(outcome.profile, origin)
+
     case 'ambiguous': {
       if (isHuman) return renderChooser(outcome.path, outcome.candidates)
-      // No prefix advice: bare profiles are not a post shape in any phase, so
-      // "/x/mrbeast" would 404. Name the sites instead.
+      /**
+       * THE PREFIX ADVICE, added 2026-08-11 with the profile route, and the sentence it replaces was
+       * true when it was written: "bare profile links cannot" work, and "/x/mrbeast would 404".
+       *
+       * BOTH HALVES CHANGED, and only one of them is about this file. `/x/{handle}` still 404s —
+       * bare handles on X are Instagram's shape too, so no unforced or forced X profile arm exists
+       * (router.ts's profile() carries the measurement and the reason). What exists is Bluesky's
+       * `/profile/{handle}`, which is not one of these candidates and never lands here.
+       *
+       * So the copy stops promising a prefix and stops claiming profiles are impossible. It says
+       * what is true of the ROW the reader is looking at: this path names an account on two sites
+       * and the domain swap threw away which one, so nothing here can be resolved without guessing.
+       */
       const names = outcome.candidates.map(c => HOST[c]).join(' or ')
       return errorEmbed(
         'Ambiguous link',
         `${outcome.path} is a valid link on ${names}, and replacing the domain threw away which. ` +
-        `Post links work; bare profile links cannot.`,
+        `Post links work; a bare handle names an account on both, so this one cannot be resolved.`,
       )
     }
 
@@ -74,7 +100,12 @@ export function render(outcome: Outcome, client: ClientClass, origin: string): R
         // displayName, NOT the raw outcome.platform: the CODE ('x') must never reach a user — titling
         // with it read "x …" on every platform. The code identifier stays 'x'; only the DISPLAYED
         // string maps to prose ('x' -> 'Twitter'), via the shared per-platform map (never a hardcode).
-        return errorEmbed(`Couldn't load this ${displayName(outcome.platform)} post`,
+        //
+        // The NOUN comes from outcome.subject, which every post site leaves undefined. Before the
+        // profile route existed this word was a literal, and a failed profile fetch rendered
+        // "Couldn't load this Bluesky post" for a url naming an account — see the Outcome arm.
+        const noun = outcome.subject === 'profile' ? 'profile' : 'post'
+        return errorEmbed(`Couldn't load this ${displayName(outcome.platform)} ${noun}`,
           'It may be private, removed, or unavailable.', '#657786')
       }
       // A genuinely unrecognizable ROUTE (no platform) is not "a post we couldn't load" — it is "this

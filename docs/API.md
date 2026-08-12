@@ -448,10 +448,10 @@ platforms mbedfx reads answer `200` with a login wall, or `500` with a good JSON
 | `age_restricted` | 200 | The post exists behind an age gate. |
 | `private` | 200 | The post exists behind a private account or a login wall. |
 | `fetch_fail` | 200 | Not loadable: deleted, or the platform did not answer. |
-| `ambiguous` | 200 | The path belongs to more than one site. Carries `candidates`. Every profile url, bare handle and unrecognised one-segment path lands here. |
+| `ambiguous` | 200 | The path belongs to more than one site. Carries `candidates`. A bare handle (`/{handle}`, `/@{handle}`) and an unrecognised one-segment path land here, because a handle names an account on more than one site and picking one would be a guess. |
 | `notfound` | 200 | A shape mbedfx routes for nobody, including a site prefix forced onto a path that site does not claim (`/x/jack`) and `/_prep` or `/_card` **without** their own `p` parameter. |
 | `bad_id` | 200 | A Mastodon-spoof-shaped path (`/users/{handle}/statuses/{id}`, `/api/v1/statuses/{id}`, `/_oembed/{id}`) whose id did not decode. Not reachable from an ordinary post url. |
-| `not_a_post` | 200 | Routes to something that is not a post: a site page (`/`, `/index.html`, `/robots.txt`), one of this service's own endpoints (`/_media/…`, `/_prep?p=…`, `/_card?p=…`, `/_api/v1`), or a **Meta or Reddit** share code that did not resolve to one. A TikTok `/t/{code}` never lands here; see below. |
+| `not_a_post` | 200 | Routes to something that is not a post: a site page (`/`, `/index.html`, `/robots.txt`), one of this service's own endpoints (`/_media/…`, `/_prep?p=…`, `/_card?p=…`, `/_api/v1`), a **profile** url (see below), or a **Meta or Reddit** share code that did not resolve to one. A TikTok `/t/{code}` never lands here; see below. |
 | `no_url` | 400 | No `url` parameter, **or an empty one**. `?url=` and no `url=` at all are the same answer. |
 | `unparseable` | 400 | `new URL(target, origin)` threw, `origin` being the mbedfx origin. Only a malformed **absolute** url does that; anything readable as a path resolves against that origin and gets a 200 instead. |
 | `method_not_allowed` | 405 | This endpoint reads. Use `GET`. |
@@ -483,9 +483,23 @@ post that demonstrably exists, and one the render path never made.
 
 `platform` and `canonical` carry real values on `age_restricted`, `private` and `fetch_fail`, and
 are `null` whenever the request didn't get far enough to establish them. They are never guessed.
+
 `candidates` appears on `ambiguous` and nowhere else. Until 2026-08-04 (`3a2406f`) both were absent
 on `no_url`, `unparseable` and `method_not_allowed` and `null` on every other code; `apiError`
 defaults them to `null` now (`apiError`, `src/worker.ts`).
+
+### Profile urls
+
+`/profile/{handle}` renders a Bluesky **profile** card, and this endpoint answers it `not_a_post`.
+That is a boundary rather than a failure: a profile is an account, not a post, so it carries no
+`text`, no `createdAt` and none of the four engagement counts this endpoint publishes. Serving one
+through the post payload would mean either omitting most of it or filling those fields with values
+nobody measured.
+
+Every other profile url — `x.com/{handle}`, `instagram.com/{handle}`, `tiktok.com/@{handle}` — is
+`ambiguous` or `notfound`, unchanged: a bare handle names an account on more than one site, so the
+router does not resolve it at all. A profile payload will be a versioned addition when there is a
+second platform to shape it around.
 
 No failure is cached, not even `private`: accounts go public, gates lift, and a deleted post can
 come back as somebody's repost.
@@ -533,8 +547,10 @@ end twice (`apiFailure`, `src/worker.ts`).
 `candidates` is which sites claim that path shape; whether one accepts that id is a second question.
 `/rd/gallery/…` is the clearest case, Reddit's gallery links being deprecated upstream and
 deliberately unrouted. Expect a few `notfound`s while walking the list, and take the first success.
-On a profile url every candidate answers `notfound`, there being no profile route (`?url=/x/jack` →
-`notfound`, verified 2026-08-05).
+On a profile url every candidate answers `notfound` (`?url=/x/jack` → `notfound`, verified
+2026-08-05). There is no BARE-HANDLE profile route — a bare handle names an account on more than one
+site — so a forced site prefix has nothing to resolve to. `/profile/{handle}` is a different shape and
+does route; see "Profile urls" above.
 
 A hostname never breaks the tie, even though it usually could. A hostname here is a thing the Worker
 fetches, the fediverse arm turning one into a request, and `src/refkey.ts` states outright that

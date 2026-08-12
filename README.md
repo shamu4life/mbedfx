@@ -46,6 +46,24 @@ https://mbedfx.app/x/status/20            Twitter
 
 Rarely needed: the converter page names the site it read a link as, offers a one-click fix, and gives a chooser for an ambiguous path. [docs/API.md](docs/API.md#ambiguous) has which sites claim which shape. If you do have to force one, [file a bug](../../issues/new/choose).
 
+### Bluesky profiles
+
+A Bluesky profile link works the same way, with nothing else edited:
+
+```
+https://bsky.app/profile/bsky.app
+https://mbedfx.app/profile/bsky.app
+```
+
+The card carries the display name, the bio, the avatar, the follower, following and post counts, and
+the month the account was created. bsky.app itself gives a crawler only a title, which is the reason
+this one is here.
+
+No other site's profile links work, and that is measured rather than pending. Twitter, TikTok and
+Instagram all already hand a crawler a complete profile card of their own, so there is nothing to
+fix; and their profile urls are a bare handle, which names an account on more than one of them at
+once. A bare handle therefore stays a chooser rather than a guess.
+
 ### Just the media
 
 Put `d.` in front of the domain and you get the file itself, the video or the image, at its own URL, with byte-range support so it seeks and downloads properly.
