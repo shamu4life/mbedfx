@@ -8,7 +8,7 @@ GET https://mbedfx.app/_api/v1?url=<the post url>
 ```
 
 No key, no signup, no required headers. Every answer carries `access-control-allow-origin: *` and
-`x-content-type-options: nosniff` (`apiHeaders`, `src/worker.ts:3008`).
+`x-content-type-options: nosniff` (`apiHeaders`, `src/worker.ts`).
 
 ```sh
 curl -s 'https://mbedfx.app/_api/v1?url=https%3A%2F%2Fx.com%2Fjack%2Fstatus%2F20' | jq
@@ -17,12 +17,31 @@ curl -s 'https://mbedfx.app/_api/v1?url=https%3A%2F%2Fx.com%2Fjack%2Fstatus%2F20
 It answers for the thirteen single-host sites the cards cover, plus short links and share codes. The
 four fediverse platforms need the request form [below](#mastodon-misskey-lemmy-and-peertube).
 
+The machine-readable half of this contract is `public/openapi.json`, served at
+`https://mbedfx.app/openapi.json`: OpenAPI 3.1, every response shape, every error code and the exact
+nullability of every field, in the form a generator or a schema viewer reads. It is JSON rather than
+YAML because there is no YAML parser in this toolchain, and a spec the suite cannot read is a spec
+nothing checks. `test/openapi.test.mjs` derives what can be derived — the `Platform` union,
+`API_COUNTS`, the error codes and their statuses read out of the `api` arm, the router's own answer
+for the documented path, `RESP_TTL` — and then validates real answers, driven offline through
+`handle()`, against the schemas with `additionalProperties: false`, so a field added to `toApiPost`
+and not to the document fails the build. Prose is not derivable and stays unguarded in both files;
+that test names what it does not cover.
+
+This file stays the longer half. A schema cannot hold what was measured, what was tried and failed,
+or what a rule costs.
+
+Source citations below name symbols rather than lines. The line numbers were right when 1.9.0
+shipped on 2026-08-04 and every one of them pointed into the wrong part of `src/worker.ts` by
+2026-08-11, the file having grown around 140 lines underneath them. A name survives a merge, and
+`test/openapi.test.mjs` fails when a cited one stops existing.
+
 `GET` and `HEAD` are answered. `OPTIONS` returns `204` with
 `access-control-allow-methods: GET, HEAD, OPTIONS`, `access-control-allow-headers: *` and
-`access-control-max-age: 86400`, before any work is spent (`src/worker.ts:3894`). Every other method
-is `405` `method_not_allowed` (`3905`). Neither branch existed at 1.9.0's review: a preflight paid
-for an upstream fetch, a mux wait and a `yt-dlp -J`, then failed for want of
-`access-control-allow-methods`.
+`access-control-max-age: 86400`, before any work is spent (the `OPTIONS` branch of the `api` arm,
+`src/worker.ts`). Every other method is `405` `method_not_allowed` (the method check beside it).
+Neither branch existed at 1.9.0's review: a preflight paid for an upstream fetch, a mux wait and a
+`yt-dlp -J`, then failed for want of `access-control-allow-methods`.
 
 ---
 
@@ -96,9 +115,9 @@ PeerTube ids from `test/fixtures/` and the Mastodon one from the converter page'
 }
 ```
 
-`post` comes from `toApiPost` (`src/worker.ts:3105-3171`), the envelope from the arm wrapping it
-(`3932-3939`). Answers here were driven offline through `route()` and `handle()`, 2026-08-04 and
-again 2026-08-05.
+`post` comes from `toApiPost` (`src/worker.ts`), the envelope from the `api` arm that wraps it.
+Answers here were driven offline through `route()` and `handle()`, 2026-08-04, again 2026-08-05, and
+again 2026-08-11 against every shape in `public/openapi.json`.
 
 ### The envelope
 
@@ -154,13 +173,13 @@ place an absent key carries meaning. With nothing to report: `title` is `null`, 
 
 `null` where a platform publishes no post date, and until a second, slower call brings one. A Post
 without one holds `new Date(0)`, which `/_card` draws as `"1970-01-01T00:00:00.000Z"` beside a
-`⚠ no upload date` note and `src/worker.ts:3117` sends as `null`. Sort a `null` as unknown, never as
-old (`test/api.test.mjs:142`).
+`⚠ no upload date` note and `toApiPost` sends as `null`. Sort a `null` as unknown, never as old
+(`test/api.test.mjs:142`).
 
 ### `counts`
 
-`apiCounts` (`src/worker.ts:3079-3086`) copies `likes`, `reposts`, `replies` and `views` only for a
-finite number above zero. A `0` reaches that filter both from an untouched post and from a count the
+`apiCounts` (`src/worker.ts`) copies `likes`, `reposts`, `replies` and `views` only for a finite
+number above zero. A `0` reaches that filter both from an untouched post and from a count the
 platform withholds (a hidden like count, comments switched off), indistinguishable there. An absent
 key means unknown; v1 cannot encode a count known to be zero. Which of the four keys exist varies by
 site.
@@ -176,29 +195,29 @@ What the card shows, the card's overlays composed in. v1 gives none of them a fi
 No v1 field carries the author's untouched words; splitting them out is additive and on the list.
 
 `deserializePost` validates the ref, the canonical and the date, nothing else. `text` goes out
-through `str()` (`src/worker.ts:3129`): a cached value of the wrong type is published as `""`, never
-verbatim (`test/api.test.mjs:497`).
+through `str()` (`src/render/embed.ts`, applied in `toApiPost`): a cached value of the wrong type is
+published as `""`, never verbatim (`test/api.test.mjs:497`).
 
 ### `width` and `height`
 
 `0` is far more common than `null`. Reddit, TikTok covers, Threads, Facebook galleries and every
 remuxed video emit `0` for an unreported size; a remux carries `w: 0, h: 0` to make a player read
 the real dimensions out of the file. `null` means the cached value wasn't a finite number (`num`,
-`src/worker.ts:3089`). Both mean unknown; divide by neither.
+`src/worker.ts`). Both mean unknown; divide by neither.
 
 The pair describes the bytes at `url`, not the original video: `posterW ?? w` and `posterH ?? h`
-(`src/worker.ts:3149-3150`), and a `still` entry reports the poster frame's size. Both rows were
+(`toApiPost`, `src/worker.ts`), and a `still` entry reports the poster frame's size. Both rows were
 added 2026-08-04 (`3a2406f`).
 
 ### `media`
 
 Entries with no servable url are dropped. The rest keep their position in the unfiltered array
-(`usableWithIndex`, `src/worker.ts:2998`), which is the index `/_media/` resolves against. Taking
-the position after the filter publishes entry N at entry N+1's bytes, or a 404 past the end;
+(`usableWithIndex`, `src/worker.ts`), which is the index `/_media/` resolves against. Taking the
+position after the filter publishes entry N at entry N+1's bytes, or a 404 past the end;
 `test/api.test.mjs:372` pins that off-by-one. A degraded still is addressed through its poster slot,
 never that bare number (`bytesIndex`, `src/render/embed.ts:52`), which goes on naming the video
-entry and answers `503`. `kind` collapses `Media.kind`'s three values (`src/types.ts:229`) to two,
-publishing a `gif` as `"video"` (`src/worker.ts:3140`).
+entry and answers `503`. `kind` collapses `Media.kind`'s three values (`src/types.ts`) to two,
+publishing a `gif` as `"video"` (`toApiPost`, `src/worker.ts`).
 
 ### `still`
 
@@ -217,10 +236,10 @@ English in `text`.
 
 ### `quote`
 
-`null` unless the quoted post carries an author object (`src/worker.ts:3167`). The normalizers cap
-depth at 1, leaving `quote.quote` always absent. `quote.author` has no `avatar`, and `quote` has no
-`media`: those entries live at indices after the outer post's in `mediaList`, and getting that
-arithmetic wrong publishes urls that resolve to the wrong bytes.
+`null` unless the quoted post carries an author object (`toApiPost`, `src/worker.ts`). The
+normalizers cap depth at 1, leaving `quote.quote` always absent. `quote.author` has no `avatar`, and
+`quote` has no `media`: those entries live at indices after the outer post's in `mediaList`, and
+getting that arithmetic wrong publishes urls that resolve to the wrong bytes.
 
 ### Media urls
 
@@ -233,7 +252,7 @@ the platform.
 |---|---|
 | remuxed video | R2 bytes, answering range requests, so a player can seek |
 | images, avatars, posters, already-progressive video | `302` to the CDN under `cache-control: public, max-age=300` (`MEDIA_MAX_AGE`, `src/cache.ts:8`) |
-| Instagram and Twitch video | proxied rather than redirected (`src/worker.ts:3422-3425`; the two platforms are scoped at `src/mediaproxy.ts:163`) |
+| Instagram, Twitch and Threads video | proxied rather than redirected (the `media` arm of `src/worker.ts`; the three platforms are scoped in `proxyableVideoUrl`, `src/mediaproxy.ts`) |
 
 ### The `d.` host
 
@@ -244,7 +263,8 @@ and it serves crawlers and people the same bytes.
 
 With nothing to serve, `d.` answers a plain-text 404; an HTML body there leaves a downloader holding
 a file full of markup. `media_miss` on this host means the post has no usable media at all, a second
-meaning `docs/METRICS.md` records under "Known defects in the write shape" (`src/worker.ts:3346`).
+meaning `docs/METRICS.md` records under "Known defects in the write shape" (`serveDirectMedia`,
+`src/worker.ts`).
 
 ---
 
@@ -306,23 +326,21 @@ ordinary client, body `not found\n`, carrying exactly one header,
 `src/render/index.ts:51` builds the response as `new Response('not found\n', { status: 404 })` with
 no headers object, so no `cache-control` reaches the client and an intermediary applies whatever it
 defaults to. A user agent classified as Discord gets an HTML embed at HTTP 200 on the same path,
-`og:title` `Not found`, minted by the `notfound` arm's `render()` call (`src/worker.ts:3377`) and
+`og:title` `Not found`, minted by the `notfound` arm's `render()` call (`src/worker.ts`) and
 split from the human 404 at `src/render/index.ts:49-53`. `/_api` returns an HTML chooser page at
 HTTP 300 (`src/render/chooser.ts:72`). Pin the path exactly; `test/api.test.mjs:524` refuses to
 serve `/_api/v2` as v1.
 
 ### An unhandled exception
 
-Line numbers below are `src/worker.ts`.
-
-- No `try`/`catch` wraps the API arm, `handle()` (`3358`) or the module's `fetch` handler
-  (`4226-4236`), verified by reading all three.
-- Guarded per call, each throw becoming a normal answer: the live upstream fetch (`loadPost`,
-  `2532-2536`), the three share-code and short-link resolvers (`unwrapToPost`, `2819-2851`), the mux
-  (`1485`), the translation (`2709`). A down or blocking upstream becomes `fetch_fail` at HTTP 200.
-- Unguarded: the post-cache read and write (`2520-2523`, `2542`, `2558`) and the R2 record read on
-  the YouTube path. `loadPost`'s wrap covers only the live fetch; its comment records that a corrupt
-  cache read is meant to propagate.
+- No `try`/`catch` wraps the API arm, `handle()` or the module's default `fetch` handler, verified
+  by reading all three.
+- Guarded per call, each throw becoming a normal answer: the live upstream fetch (`loadPost`), the
+  three share-code and short-link resolvers (`unwrapToPost`), the mux (`settleMux`), the translation
+  (`withTranslated`). A down or blocking upstream becomes `fetch_fail` at HTTP 200.
+- Unguarded: the post-cache read and both writes, all three inside `loadPost`, and the R2 record
+  read on the YouTube path. `loadPost`'s wrap covers only the live fetch; its comment records that a
+  corrupt cache read is meant to propagate.
 
 A throw in that last group leaves the Worker for Cloudflare's own error page: Error 1101, "Worker
 threw a JavaScript exception", HTML with a 5xx status ([Cloudflare Workers
@@ -349,22 +367,22 @@ if (!body.ok) { /* body.error.code */ }
 ## How long a request can take
 
 No timeout parameter, no per-step limit. One budget, taken at the top of the shared pipeline
-(`describeTarget`, `src/worker.ts:2881`), bounds the whole response and leaves each step whatever is
+(`describeTarget`, `src/worker.ts`), bounds the whole response and leaves each step whatever is
 left. The card and the converter preview run that pipeline too, the three differing only in
 serialisation (`test/api.test.mjs:325`).
 
 | Constant | Value | What it bounds |
 |---|---|---|
-| `CARD_DEADLINE_MS` (= `MUX_WAIT_API_MS`) | **9000 ms** (`1345`, `1359`) | everything after the upstream fetch; the mux wait is measured against it |
-| `MUX_WAIT_FLOOR_MS` | **300 ms** (`1344`) | the floor under that wait, leaving a spent budget time to pick up a video already in storage |
-| `XLATE_MAX_WAIT_MS` | **1500 ms** (`2665`) | the translation's share of the budget |
-| `XLATE_WAIT_FLOOR_MS` | **300 ms** (`2651`) | the floor under the translation's wait |
-| `META_WAIT_API_MS` | **8000 ms** (`2316`) | **YouTube only**: the metadata extract, awaited after the two above |
+| `CARD_DEADLINE_MS` (= `MUX_WAIT_API_MS`) | **9000 ms** | everything after the upstream fetch; the mux wait is measured against it |
+| `MUX_WAIT_FLOOR_MS` | **300 ms** | the floor under that wait, leaving a spent budget time to pick up a video already in storage |
+| `XLATE_MAX_WAIT_MS` | **1500 ms** | the translation's share of the budget |
+| `XLATE_WAIT_FLOOR_MS` | **300 ms** | the floor under the translation's wait |
+| `META_WAIT_API_MS` | **8000 ms** | **YouTube only**: the metadata extract, awaited after the two above |
 
-All five are in `src/worker.ts`. The mux and the translation race concurrently (`2932-2940`),
-costing `max(300, 9000 − elapsed)` between them rather than the sum. The YouTube metadata warm runs
-after them (`2960-2975`), only when the post has no known date yet: up to 8000 ms on a first YouTube
-link, nothing thereafter.
+All five are in `src/worker.ts`. The mux and the translation race concurrently (the `Promise.all` in
+`describeTarget`), costing `max(300, 9000 − elapsed)` between them rather than the sum. The YouTube
+metadata warm runs after them, only when the post has no known date yet: up to 8000 ms on a first
+YouTube link, nothing thereafter.
 
 The upstream fetch is unbounded. Nothing in `src/` sets an `AbortSignal` (verified by grep), and
 Cloudflare places no wall-clock limit on an HTTP-triggered Worker ([Workers
@@ -380,9 +398,9 @@ to its 300 ms floor and the total tracks the upstream. Set the client timeout to
 worst case plus roughly 3 s for connection setup and a slower upstream. 12 s covers a client that
 never sends YouTube links. 5 or 10 s cuts off requests about to answer.
 
-Measured, all in `src/worker.ts`: a cold video remux 6-9 s at ≤480p (`1313`, 2026-07-24),
-`yt-dlp -J` on YouTube 2.3-6.7 s over five runs (`2299`, 2026-07-26), a Facebook metadata extract
-~3.0 s (`1508`, 2026-07-25), a translation 217-798 ms (`2924`).
+Measured, each recorded in a comment beside the code it bounds in `src/worker.ts`: a cold video
+remux 6-9 s at ≤480p (2026-07-24), `yt-dlp -J` on YouTube 2.3-6.7 s over five runs (2026-07-26), a
+Facebook metadata extract ~3.0 s (2026-07-25), a translation 217-798 ms.
 
 A post is held 900 s (`POST_TTL`, `src/cache.ts:5`) independently of the response, and a second
 request skips the upstream fetch even when the first answer wasn't cacheable. `/_api/v1` never
@@ -431,18 +449,24 @@ platforms mbedfx reads answer `200` with a login wall, or `500` with a good JSON
 | `private` | 200 | The post exists behind a private account or a login wall. |
 | `fetch_fail` | 200 | Not loadable: deleted, or the platform did not answer. |
 | `ambiguous` | 200 | The path belongs to more than one site. Carries `candidates`. Every profile url, bare handle and unrecognised one-segment path lands here. |
-| `notfound` | 200 | A shape mbedfx routes for nobody. |
+| `notfound` | 200 | A shape mbedfx routes for nobody, including a site prefix forced onto a path that site does not claim (`/x/jack`) and `/_prep` or `/_card` **without** their own `p` parameter. |
 | `bad_id` | 200 | A Mastodon-spoof-shaped path (`/users/{handle}/statuses/{id}`, `/api/v1/statuses/{id}`, `/_oembed/{id}`) whose id did not decode. Not reachable from an ordinary post url. |
-| `not_a_post` | 200 | Routes to something that is not a post: a site page (`/`, `/index.html`), one of this service's own endpoints (`/_media/…`, `/_prep`, `/_card`, `/_api/v1`), or an internal route kind not named here. |
+| `not_a_post` | 200 | Routes to something that is not a post: a site page (`/`, `/index.html`, `/robots.txt`), one of this service's own endpoints (`/_media/…`, `/_prep?p=…`, `/_card?p=…`, `/_api/v1`), or a share code or short link that did not resolve to one. |
 | `no_url` | 400 | No `url` parameter, **or an empty one**. `?url=` and no `url=` at all are the same answer. |
 | `unparseable` | 400 | `new URL(target, origin)` threw, `origin` being the mbedfx origin. Only a malformed **absolute** url does that; anything readable as a path resolves against that origin and gets a 200 instead. |
 | `method_not_allowed` | 405 | This endpoint reads. Use `GET`. |
+
+Both gate codes also answer a TikTok `/t/{code}` whose resolution reports the wall, since
+2026-08-11. Until then a walled share code answered `not_a_post` — a false statement about a post
+that demonstrably exists, and one the render path never made: it has drawn the 🔒/🔞 card for that
+resolution since 2026-07-21. `canonical` is the share url, the only one that exists before the code
+resolves.
 
 `platform` and `canonical` carry real values on `age_restricted`, `private` and `fetch_fail`, and
 are `null` whenever the request didn't get far enough to establish them. They are never guessed.
 `candidates` appears on `ambiguous` and nowhere else. Until 2026-08-04 (`3a2406f`) both were absent
 on `no_url`, `unparseable` and `method_not_allowed` and `null` on every other code; `apiError`
-defaults them to `null` now (`src/worker.ts:3020-3028`).
+defaults them to `null` now (`apiError`, `src/worker.ts`).
 
 No failure is cached, not even `private`: accounts go public, gates lift, and a deleted post can
 come back as somebody's repost.
@@ -485,7 +509,7 @@ Re-ask with the site code in front of the path:
 
 That message read `/im/gallery/abc` at 1.9.0's review. `?url=/im/gallery/abc` answers `notfound`
 (Imgur ids run five characters or more), and a caller following it verbatim reached the same dead
-end twice (`src/worker.ts:3053-3056`).
+end twice (`apiFailure`, `src/worker.ts`).
 
 `candidates` is which sites claim that path shape; whether one accepts that id is a second question.
 `/rd/gallery/…` is the clearest case, Reddit's gallery links being deprecated upstream and
@@ -503,7 +527,7 @@ and nothing else.
 ## Caching and limits
 
 A complete answer is sent `cache-control: public, max-age=900` (`RESP_TTL`, `src/cache.ts:6`); an
-incomplete one `no-store` (`src/worker.ts:3939`), as is every failure envelope (`3020-3028`).
+incomplete one `no-store` (the `api` arm), as is every failure envelope (`apiError`).
 
 `src/` holds no API key, no quota and no rate limiting. Any limit on the public instance is a zone
 rule in the Cloudflare dashboard, which the source cannot see. A fork inherits none of it: put
