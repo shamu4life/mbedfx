@@ -83,8 +83,13 @@ export type Outcome2 =
   | 'plugin_recovered'
   // `caption_recovered` is the THIRD Facebook post surface and the narrowest: a page whose og: set
   // carries a byline and a caption but NO og:image, which both of the other two refuse — the picture
-  // requirement rejects it here and Meta's plugin answers "no longer available" for it. Measured
-  // 2026-08-12 from Cloudflare egress it is 2 of 35 sampled post urls, so it should stay SMALL. If it
+  // requirement rejects it here and Meta's plugin answers "no longer available" for it.
+  //
+  // EXPECT IT ON 1 OF 35, not 2. Measured 2026-08-12 from Cloudflare egress, the caption read ANSWERS
+  // two of the 35 sampled post urls, but it only RUNS on one of them: the plugin answers
+  // /NASA/posts/10150113094966772 first, so that url returns at `plugin_recovered` and never reaches
+  // here. The two numbers are different questions and only the second one is what this counter
+  // measures. It should stay SMALL either way. If it
   // ever overtakes `plugin_recovered`, Meta has narrowed the plugin and most Facebook cards have
   // quietly become captions with no picture — which no card will announce, since they all render.
   | 'caption_recovered'

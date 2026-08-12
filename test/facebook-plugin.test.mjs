@@ -257,3 +257,33 @@ test('a style that is NOT a size cannot become one', () => {
   assert.equal(card.media.length, 1, 'the photo is still the post')
   assert.deepEqual([card.media[0].w, card.media[0].h], [0, 0], 'and its size is absent, not guessed')
 })
+
+
+/* ===================== A CSS LONGHAND IS NOT THE SHORTHAND IT ENDS WITH =====================
+ *
+ * The style fallback originally matched `/\bwidth:\s*(\d+)px/` over the whole style attribute, and
+ * `\b` matches after a HYPHEN. So `max-width:658px` read as width=658 and `line-height:16px` read as
+ * height=16, both verified in node against the shipped regex.
+ *
+ * THAT IS WORSE THAN THE ZERO THIS FALLBACK EXISTS TO REPLACE. A 0x0 makes render/mastodon.ts drop
+ * `meta.original`, which is a picture Discord may not draw; an INVENTED size is a picture Discord
+ * draws at the wrong shape, and nothing about the resulting card looks wrong enough to report. The
+ * property is now anchored to a declaration boundary — the start of the attribute or a `;`.
+ */
+test('A HYPHENATED LONGHAND IS NOT READ AS A DIMENSION — max-width and line-height invent a size', () => {
+  const doc = STYLE_DIMS.replace('style="width:364px;height:364px"', 'style="max-width:658px;line-height:16px"')
+  const card = facebookPluginCard(doc, PHOTO_REF)
+  assert.ok(card, 'the card still renders; this is about the numbers on it')
+  assert.equal(card.media[0].w, 0, 'max-width:658px is not a width')
+  assert.equal(card.media[0].h, 0, 'line-height:16px is not a height')
+})
+
+test('A REAL DECLARATION AFTER ANOTHER ONE IS STILL READ, so the anchor did not break the feature', () => {
+  // The measured fragment carries `style="left:-3px; top:0px;"` on some photos, which is why the read
+  // is narrow in the first place. A width that genuinely follows a semicolon must still be found, or
+  // the fix for the invented size would have silently disabled the fallback it was fixing.
+  const doc = STYLE_DIMS.replace('style="width:364px;height:364px"', 'style="left:-3px; width:398px; height:498px"')
+  const card = facebookPluginCard(doc, PHOTO_REF)
+  assert.equal(card.media[0].w, 398)
+  assert.equal(card.media[0].h, 498)
+})

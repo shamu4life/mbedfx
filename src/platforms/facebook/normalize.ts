@@ -324,6 +324,40 @@ export function fbAuthor(title: string, canonical: string): Post['author'] {
  * the ORDER matters more than the rule — see facebookCaptionCard below, which is the only caller
  * that turns it on and runs only after the plugin fragment has already declined.
  */
+/**
+ * DOES FACEBOOK CLAIM THIS PAGE? The structural binding under the caption read, and the reason that
+ * read is not simply "any document with two og tags".
+ *
+ * THE OTHER TWO READS ARE ANCHORED TO SOMETHING and this one was not. The strict read requires a
+ * picture that passes `fbImage`, which range-checks the CDN host. The plugin read requires an anchor
+ * to facebook.com/{page}. The caption read, by dropping the picture requirement, dropped the only
+ * structural check it had — leaving `og:title` non-empty AND `og:description` non-empty as the whole
+ * test, which any page on the internet can satisfy.
+ *
+ * WHAT WAS HOLDING IT UP WAS A MEASUREMENT, and measurements of somebody else's product rot. The
+ * safety argument was that Meta's login wall, its stripped page and a deleted post all carry no og
+ * tags at all, verified over 35 urls on 2026-08-12. That was true when measured and it is not a
+ * property Meta has promised anyone: a wall that starts emitting a generic `og:title`/`og:description`
+ * pair would turn this read into a card asserting a post that was never read. Checking the host makes
+ * the refusal structural, so it survives Meta changing the shape of the wall.
+ *
+ * HOST ONLY, NOT THE POST ID, and that restraint is deliberate. Facebook rewrites permalinks into the
+ * opaque `pfbid…` form, so the numeric id in the ref is frequently absent from the canonical url it
+ * publishes — binding to the id would reject live posts to catch a hypothetical one. The host is the
+ * part that is stable, and it is the part an unrelated document cannot forge into being.
+ */
+function fbOwnsUrl(ogUrl: string): boolean {
+  if (!ogUrl) return false
+  try {
+    const h = new URL(ogUrl).hostname.toLowerCase()
+    return h === 'facebook.com' || h.endsWith('.facebook.com')
+  } catch {
+    // A canonical url that will not parse is not a claim of ownership. The strict read never needed
+    // this branch because it never trusted og:url for anything load-bearing.
+    return false
+  }
+}
+
 export function facebookPostCard(html: unknown, ref: PostRef, captionOnly = false): Post | null {
   if (ref.p !== 'fb') return null
   if (typeof html !== 'string' || !html) return null
@@ -331,6 +365,7 @@ export function facebookPostCard(html: unknown, ref: PostRef, captionOnly = fals
   const image = FB_OG(html, 'image')
   const title = FB_OG(html, 'title')
   const text = FB_OG(html, 'description')
+  const ogUrl = FB_OG(html, 'url')
   const picture = fbImage(image)
   // A BYLINE AND SOMETHING TO SAY. og:title is the byline on this surface, and a page carrying no
   // byline at all is the login wall or the stripped shell — a card asserting an empty post is worse
@@ -338,9 +373,9 @@ export function facebookPostCard(html: unknown, ref: PostRef, captionOnly = fals
   // three non-post shapes carry NO og tags whatsoever (a login wall at 438 KB, a stripped page at
   // 325 KB, a deleted post at 325 KB), so this refuses every one of them on either setting.
   if (!title) return null
-  if (!picture && !(captionOnly && text)) return null
+  if (!picture && !(captionOnly && text && fbOwnsUrl(ogUrl))) return null
 
-  const canonical = FB_OG(html, 'url') || fbPageUrl(ref as Extract<PostRef, { p: 'fb' }>)
+  const canonical = ogUrl || fbPageUrl(ref as Extract<PostRef, { p: 'fb' }>)
   const gallery = fbGallery(html)
 
   return {
@@ -621,12 +656,28 @@ const FB_PLUGIN_H = /\sheight="(\d{1,5})"/
  * attribute is NOT reliably a size: the same fragment carries `style="left:-3px; top:0px;"` on other
  * photos, and a looser read of it would hand the card a position as a dimension.
  */
-const FB_PLUGIN_STYLE_W = /\sstyle="[^"]{0,300}?\bwidth:\s*(\d{1,5})px/
-const FB_PLUGIN_STYLE_H = /\sstyle="[^"]{0,300}?\bheight:\s*(\d{1,5})px/
+const FB_PLUGIN_STYLE = /\sstyle="([^"]{0,300})"/
+/**
+ * THE PROPERTY IS MATCHED AT A DECLARATION BOUNDARY, and `\b` is not one.
+ *
+ * The first version of this read `/\bwidth:\s*(\d+)px/` over the whole attribute, which is wrong in a
+ * way that produces a plausible number rather than no number. `\b` matches after a HYPHEN, so
+ * `max-width:658px` read as width=658 and `line-height:16px` read as height=16 — both verified. Every
+ * one of those is a size Discord would have been handed for an image that is not that size, and an
+ * invented dimension is worse than the zero this fallback exists to avoid, because a wrong size draws
+ * a wrongly-cropped card while a zero at least declines to draw.
+ *
+ * A CSS declaration starts at the beginning of the attribute or after a `;`, so that is what this
+ * anchors on. `max-width`, `min-width` and `line-height` all fail it; `width:398px;height:498px` and
+ * `left:-3px; width:398px` both still read correctly.
+ */
+const fbStyleDim = (style: string, prop: 'width' | 'height'): string | undefined =>
+  style.match(new RegExp(String.raw`(?:^|;)\s*${prop}\s*:\s*(\d{1,5})px`))?.[1]
 /** One <img> tag's pixel size: the attributes when it has them, the style when it does not. */
 function fbPluginDims(tag: string): [number, number] {
-  const w = Number(tag.match(FB_PLUGIN_W)?.[1] ?? tag.match(FB_PLUGIN_STYLE_W)?.[1] ?? 0)
-  const h = Number(tag.match(FB_PLUGIN_H)?.[1] ?? tag.match(FB_PLUGIN_STYLE_H)?.[1] ?? 0)
+  const style = tag.match(FB_PLUGIN_STYLE)?.[1] ?? ''
+  const w = Number(tag.match(FB_PLUGIN_W)?.[1] ?? fbStyleDim(style, 'width') ?? 0)
+  const h = Number(tag.match(FB_PLUGIN_H)?.[1] ?? fbStyleDim(style, 'height') ?? 0)
   return [w, h]
 }
 /**

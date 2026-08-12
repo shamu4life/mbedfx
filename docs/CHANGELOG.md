@@ -23,7 +23,7 @@ embed. Every url, both readings and the reproduction command are in
   `og:description` and no `og:image`, and Meta's plugin answers "This Facebook post is no longer
   available" for it. `facebookCaptionCard` reads that page for its words, runs after the plugin so it
   can never take a picture card away from one, and is counted as `caption_recovered`. Two of the 35
-  sampled urls need it.
+  sampled urls are answered by it, and it runs on one of them: the plugin answers the other first.
 - A five-photo post rendered one photo. The `<img>` tag bound was sized against the signed CDN query
   at 1400 characters, and the tag is really sized by Facebook's auto-generated alt text, which
   transcribes the words inside the picture and is emitted twice. Measured across the 37 photo tags in

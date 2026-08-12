@@ -240,3 +240,52 @@ test('THE BYLINE IS NOT PRINTED TWICE — there is no @-handle on the og: surfac
     assert.equal(card.author.handle, '', 'no handle exists on this surface, so none is invented')
   }
 })
+
+
+/* ============ THE CAPTION READ IS BOUND TO A PAGE FACEBOOK CLAIMS, NOT JUST TO TWO OG TAGS ============
+ *
+ * Dropping the picture requirement dropped the only structural check this read had. The strict read
+ * range-checks the CDN host through fbImage; the plugin read anchors to facebook.com/{page}; this one
+ * was left with "og:title is non-empty and og:description is non-empty", which is true of most of the
+ * web.
+ *
+ * WHAT WAS HOLDING IT UP WAS A MEASUREMENT OF SOMEBODY ELSE'S PRODUCT: that Meta's login wall, its
+ * stripped page and a deleted post carry no og tags at all, over 35 urls on 2026-08-12. True when
+ * measured, and not a promise. A wall that starts emitting a generic og:title/og:description pair
+ * would turn this read into a card asserting a post nobody read, and no card would announce it.
+ * og:url's HOST is now checked, so the refusal is structural.
+ */
+test('A DOCUMENT FACEBOOK DOES NOT CLAIM IS REFUSED, even carrying both og tags the read wants', () => {
+  const foreign = CAPTION_ONLY.replace('https://www.facebook.com/NASA/posts/1304655294363177/',
+    'https://notfacebook.example.com/NASA/posts/1304655294363177/')
+  assert.notEqual(foreign, CAPTION_ONLY, 'the fixture must actually have been rewritten')
+  assert.equal(facebookCaptionCard(foreign, REF), null, 'the og tags are not enough on their own')
+})
+
+test('A LOOKALIKE HOST DOES NOT PASS FOR FACEBOOK — the check is the host, not a substring of it', () => {
+  for (const host of ['facebook.com.evil.example', 'notfacebook.com', 'wwwfacebook.com']) {
+    const doc = CAPTION_ONLY.replace('www.facebook.com', host)
+    assert.equal(facebookCaptionCard(doc, REF), null, `${host} is not facebook.com`)
+  }
+})
+
+test('A SUBDOMAIN OF FACEBOOK STILL PASSES, because m. and web. are the same product', () => {
+  const mobile = CAPTION_ONLY.replace('www.facebook.com/NASA/posts', 'm.facebook.com/NASA/posts')
+  assert.ok(facebookCaptionCard(mobile, REF), 'm.facebook.com is Facebook')
+})
+
+test('NO og:url AT ALL IS REFUSED, so an absent claim is not read as a claim', () => {
+  // The canonical falls back to fbPageUrl(ref) when og:url is missing, which is always a facebook.com
+  // url — so checking the FALLBACK would have made this test pass while checking nothing. The raw tag
+  // is what is read.
+  const stripped = CAPTION_ONLY.replace(/<meta property="og:url"[^>]*>/, '')
+  assert.ok(!/og:url/.test(stripped), 'the tag must actually be gone')
+  assert.equal(facebookCaptionCard(stripped, REF), null, 'no claim of ownership, no card')
+})
+
+test('THE PICTURE PATH IS UNTOUCHED BY THE BINDING, so a normal post cannot regress behind it', () => {
+  // The check is on the captionOnly branch only. A post with a real picture passes fbImage's host
+  // range-check and must not acquire a new way to fail.
+  const noUrl = POST.replace(/<meta property="og:url"[^>]*>/, '')
+  assert.ok(facebookPostCard(noUrl, REF), 'a picture post with no og:url still renders')
+})
