@@ -117,7 +117,7 @@ Non-Latin scripts (Japanese, Korean, Chinese, Russian, Arabic, Thai, Greek, Hebr
 curl -s 'https://mbedfx.app/_api/v1?url=https%3A%2F%2Fx.com%2Fjack%2Fstatus%2F20' | jq
 ```
 
-Branch on `ok` and `error.code`, never on the HTTP status. See [docs/API.md](docs/API.md).
+Branch on `ok` and `error.code`, never on the HTTP status. The contract is [docs/API.md](docs/API.md) in prose and [`/openapi.json`](https://mbedfx.app/openapi.json) ([source](public/openapi.json)) in OpenAPI 3.1 — every response shape, every error code, the nullability of every field — which a generator or a schema viewer reads directly.
 
 ## Caveats
 
@@ -146,7 +146,7 @@ Checked 2026-08-01 against each project's docs, source and live service. **?** m
 | How video reaches Discord | own remux | platform MP4 | CDN redirect | CDN redirect | CDN redirect | streamed |
 | Caption translation | ✅ automatic | opt-in `/en` | opt-in `/en`, undocumented | ❌ | ❌ | ❌ |
 | Card says *why* a post is missing | ✅ private / age / deleted | ? | ? | age only | ❌ redirects | one generic card |
-| Public JSON API | [✅ documented](docs/API.md) | ✅ OpenAPI | ✅ documented | ❌ | ❌ | undocumented |
+| Public JSON API | [✅ documented](docs/API.md) + [OpenAPI](public/openapi.json) | ✅ OpenAPI | ✅ documented | ❌ | ❌ | undocumented |
 | Self-host off Cloudflare | [no blockers, no adapter yet](docs/SELF-HOSTING.md) | ❌ Workers | ✅ Docker · systemd · Lambda | Docker, undocumented | ✅ Docker · K8s | ✅ Docker |
 | Operator metrics | [documented queries](docs/METRICS.md), no scrape endpoint | ? | ? | ✅ Prometheus | pprof | pprof |
 

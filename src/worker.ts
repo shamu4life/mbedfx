@@ -2971,8 +2971,42 @@ async function withTranslated(
  *
  * COSTS NOTHING WHEN WARM: these are the same doors the bot render already went through, so a code
  * whose card has been drawn is answered from cache rather than re-hopping upstream.
+ *
+ * `report` IS AN OUT-PARAM FOR THE ONE THING A Route CANNOT CARRY: a wall. TikTok's resolver can come
+ * back {kind:'gated'} — the post exists and is private or age-restricted — and there is no Route kind
+ * for that, so returning `inner` untouched loses the fact entirely. Same shape as liveFetchPost's
+ * FetchReport, and for the same reason: the return type is what the CALLER routes on, and a failure
+ * vocabulary does not belong in it. Nothing is required to pass one; /_prep does not.
  */
-async function unwrapToPost(inner: Route, d: Deps, env: Env, client: ClientClass): Promise<Route> {
+/**
+ * WHAT A /t/ CODE DEGRADES TO WHEN IT RESOLVES TO NOTHING — one list, because two seams answer with it.
+ *
+ * `tiktok.com/t/{code}` and `threads.com/t/{code}` are the same path on two different products, so a
+ * code that TikTok does not claim is genuinely ambiguous and the honest answer is to offer both. The
+ * render arm has served this chooser since the route was written; describeTarget now returns the same
+ * pair, and it is a constant so the two cannot drift into offering different links for one url.
+ */
+const SHORTLINK_CANDIDATES: Platform[] = ['tt', 'th']
+
+/**
+ * WHAT A SHORTLINK RESOLUTION CANNOT SAY THROUGH A `Route`, carried out of unwrapToPost instead.
+ *
+ * All three of these are facts the resolver learned and the return type has no room for: `Route` says
+ * what to render, not why a render is impossible. Each mirrors one branch of the shortlink RENDER arm
+ * exactly, which is the whole point of carrying them — see describeTarget.
+ */
+type ShortlinkReport = {
+  /** {kind:'gated'} — the post exists and is private or age-restricted. */
+  gate?: 'age' | 'private'
+  /** {kind:'gone'} — TikTok claimed the code and the post is not there. NOT a wall and NOT ambiguous. */
+  gone?: boolean
+  /** Anything else — TikTok did not claim the code, so both products are still candidates. */
+  candidates?: Platform[]
+}
+
+async function unwrapToPost(
+  inner: Route, d: Deps, env: Env, client: ClientClass, report?: ShortlinkReport,
+): Promise<Route> {
   const asPost = (u: string | null | undefined): Route | null => {
     if (!u) return null
     try {
@@ -2999,6 +3033,27 @@ async function unwrapToPost(inner: Route, d: Deps, env: Env, client: ClientClass
       got = await d.resolveShortlink(inner.p, inner.code, env, client)
     } catch {
       got = null
+    }
+    // THE WALL, CARRIED OUT — renderGate is the same map the post route and the shortlink RENDER arm
+    // call, so a gated /t/ code says the same thing on all three surfaces. Without it the resolver's
+    // {kind:'gated'} collapses back into an unresolved shortlink and the two JSON surfaces answer
+    // `not_a_post` about a post that exists and is walled, while Discord draws the 🔒 card. Measured
+    // offline through handle() with an injected resolver, 2026-08-11.
+    /**
+     * ALL THREE NON-POST RESOLUTIONS ARE CARRIED, not just the wall.
+     *
+     * The first version of this recorded only {kind:'gated'} and was closed against its own siblings:
+     * a DELETED TikTok reached by /t/{code} still answered `not_a_post` with `platform: null` on
+     * /_api/v1 while the render arm drew "Couldn't load this TikTok post" and counted ('tt',
+     * 'fetch_fail'), and an unresolvable code answered `not_a_post` with no candidates while the
+     * render arm offered the chooser. That is the same divergence the gated fix was written for,
+     * one branch over — and a null platform is a claim the render path refuses to make, because the
+     * page carried positive proof of whose post it is.
+     */
+    if (report) {
+      if (got?.kind === 'gated') report.gate = renderGate(got.reason)
+      else if (got?.kind === 'gone') report.gone = true
+      else if (got?.kind !== 'post') report.candidates = SHORTLINK_CANDIDATES
     }
     return asPost(got?.kind === 'post' ? got.post?.canonical : null) ?? inner
   }
@@ -3059,9 +3114,44 @@ async function describeTarget(
   }
   // A share code names no post until a hop resolves it — the same unfurl /_prep does, so both
   // surfaces follow the link the caller is actually about to hand somebody.
-  inner = await unwrapToPost(inner, d, env, client)
+  const unwrapped: ShortlinkReport = {}
+  inner = await unwrapToPost(inner, d, env, client, unwrapped)
 
   if (inner.kind !== 'post') {
+    /**
+     * A WALLED SHORT LINK IS A WALL, NOT A NON-POST — and this is the divergence the shared pipeline
+     * was built to stop, found 2026-08-11 while writing the OpenAPI spec.
+     *
+     * The RENDER arm for 'shortlink' has answered a {kind:'gated'} resolution with the calm 🔞/🔒 card
+     * since 2026-07-21, explicitly so one post does not draw two different cards depending on which
+     * url shape was pasted. Both JSON surfaces answered `not_a_post` for the same link: the API said
+     * "that url resolves to something other than a post" about a post that demonstrably exists, and
+     * the converter preview said the link does not resolve while Discord unfurled it correctly — the
+     * third-seam shape this file's own comments keep describing.
+     *
+     * Spelled as fetch_fail + gate because that is exactly what the post route returns for a walled
+     * PERMALINK, so /_api/v1 publishes `private` / `age_restricted` and /_card draws the same wording
+     * for both url shapes. platform and canonical are the shortlink's own — the short url is what the
+     * caller sent and the only canonical that exists before the code resolves — which is the pair the
+     * render arm already reports (`canonical: r.canonical, platform: r.p`).
+     */
+    if (inner.kind === 'shortlink' && (unwrapped.gate || unwrapped.gone)) {
+      return {
+        ok: false, reason: 'fetch_fail', gate: unwrapped.gate,
+        platform: inner.p, canonical: inner.canonical,
+      }
+    }
+    /**
+     * AND THE CODE TIKTOK DID NOT CLAIM IS THE CHOOSER, not a bare "that names no post".
+     *
+     * `ambiguous` is the one not-a-post answer a caller can DO something about, and the shortlink arm
+     * is where it was least available: a caller asking about `tiktok.com/t/{code}` for a Threads link
+     * got `not_a_post` with nothing to try, while a reader pasting the same url into the converter
+     * page was offered both. Same list as the render arm, from one constant.
+     */
+    if (inner.kind === 'shortlink' && unwrapped.candidates) {
+      return { ok: false, reason: 'ambiguous', candidates: unwrapped.candidates }
+    }
     // THE CANDIDATES RIDE ALONG even though the card ignores them. An ambiguous path is the one
     // not-a-post answer a caller can DO something about — /_prep already expands it into a chooser —
     // and computing it here rather than in one serialiser is what keeps the other from having to
@@ -4404,7 +4494,7 @@ export async function handle(req: Request, env: Env, ctx: ExecutionContext, d: D
          * us, since 'none' also carries every /mrbeast in the world.
          */
         count(env, r.p, 'ambiguous', client)
-        const amb = render({ kind: 'ambiguous', path: url.pathname, candidates: ['tt', 'th'] }, client, origin)
+        const amb = render({ kind: 'ambiguous', path: url.pathname, candidates: SHORTLINK_CANDIDATES }, client, origin)
         /**
          * CACHED, unlike the router-level chooser, for the reason it is counted differently: it
          * cost a fetch. Uncached, every re-unfurl of one pasted Threads link was another request

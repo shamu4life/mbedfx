@@ -1,0 +1,470 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "mbedfx JSON API",
+    "version": "v1",
+    "summary": "The post data the embed cards are drawn from, as JSON.",
+    "description": "Swap a social-media host for an mbedfx one and the post unfurls as an embed card. `/_api/v1` serves the same post the card is drawn from, as data.\n\nThe contract is versioned by path. Within `v1` fields are added, never removed or retyped; `error.code` values are added and existing ones keep their meaning; `error.message` wording may change, so match on `code`. `/_api/v2` is never answered with `v1`.\n\nNo key, no signup, no required headers, no rate limit in the source. Prose, measurements and the reasoning behind every rule are in `docs/API.md`; this document is the machine-readable half of it and `test/openapi.test.mjs` fails when the two drift from the code.",
+    "license": { "name": "MIT", "identifier": "MIT" }
+  },
+  "servers": [
+    { "url": "https://mbedfx.app", "description": "The project's own domain." },
+    { "url": "https://megapenispoopenfarten.sex", "description": "The original zone, retained so links already pasted keep resolving." },
+    { "url": "https://forsen.sex", "description": "A third serving domain on the same worker." }
+  ],
+  "externalDocs": {
+    "url": "https://github.com/shamu4life/mbedfx/blob/main/docs/API.md",
+    "description": "The prose contract, including the timing budget, the failure causes and what each field costs."
+  },
+  "paths": {
+    "/_api/v1": {
+      "summary": "One post, as data.",
+      "description": "Answers `GET` and `HEAD`. `OPTIONS` is answered as a CORS preflight before any work is spent. Every other method is `405` with `error.code` `method_not_allowed`; a write verb is refused before an upstream is touched, so it is not documented as an operation here.\n\nEvery answer about a post is `200`, including the ones saying it cannot be read. Branch on `ok` and `error.code`, never on the status: the `4xx`s are about the request itself.",
+      "get": {
+        "operationId": "getPost",
+        "summary": "Describe the post a url names.",
+        "description": "Routing reads the path and the query of `url`. The host in it is ignored, deliberately: it would make the answer depend on a caller-controlled string on a service where a hostname is a thing the worker fetches. A path two sites claim answers `ambiguous` with the candidate list; re-ask with a two-letter site prefix, for example `/im/gallery/YcAQlkx`.\n\nMastodon, Misskey, Lemmy and PeerTube have no single host, and routing drops it. Move the instance into the path and drop the scheme: `?url=/lemmy.world/post/49966212`.\n\nThe answer is one budget rather than a per-step limit. A cold post pays the upstream fetch plus up to 9000 ms for the mux and the translation, which race, plus up to 8000 ms more on a first YouTube link while its metadata is extracted. A 20 s client timeout covers the worst case; 5 or 10 s cuts off requests that were about to answer.",
+        "parameters": [
+          {
+            "name": "url",
+            "in": "query",
+            "required": true,
+            "description": "The whole original link, percent-encoded. A raw `?` or `&` in the post url ends the parameter early. A bare path is resolved against this origin, so `/jack/status/20` and `https://x.com/jack/status/20` are one request. An empty value is the same answer as no parameter at all: `400` `no_url`.",
+            "schema": { "type": "string", "minLength": 1 },
+            "example": "https://x.com/jack/status/20"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Everything known about the post, or the reason it cannot be read. Both shapes carry `ok`, which is the discriminator.",
+            "headers": {
+              "cache-control": {
+                "description": "`public, max-age=900` for a complete answer. `no-store` whenever `muxing` or `pending` is true, and on every failure envelope: a half-answer or a wall that can come down must not be cached at an edge this worker cannot invalidate.",
+                "schema": { "type": "string" },
+                "examples": {
+                  "complete": { "value": "public, max-age=900" },
+                  "incomplete": { "value": "no-store" }
+                }
+              },
+              "access-control-allow-origin": {
+                "description": "Always `*`. There is no cookie, session or credential anywhere on this path, so there is nothing for an origin check to protect.",
+                "schema": { "type": "string" },
+                "example": "*"
+              },
+              "x-content-type-options": {
+                "description": "Always `nosniff`. This endpoint returns caller-influenced strings and must never be sniffed into anything but JSON.",
+                "schema": { "type": "string" },
+                "example": "nosniff"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    { "$ref": "#/components/schemas/PostEnvelope" },
+                    { "$ref": "#/components/schemas/ErrorEnvelope" }
+                  ]
+                },
+                "examples": {
+                  "post": {
+                    "summary": "A post with a video",
+                    "value": {
+                      "ok": true,
+                      "muxing": false,
+                      "pending": false,
+                      "post": {
+                        "platform": "x",
+                        "canonical": "https://x.com/jack/status/20",
+                        "createdAt": "2006-03-21T20:50:14.000Z",
+                        "title": null,
+                        "text": "just setting up my twttr",
+                        "sensitive": false,
+                        "author": {
+                          "name": "jack",
+                          "handle": "jack",
+                          "url": "https://x.com/jack",
+                          "avatar": "https://mbedfx.app/_media/x%3A20/avatar"
+                        },
+                        "counts": { "likes": 183000, "reposts": 121000, "replies": 25000 },
+                        "media": [
+                          {
+                            "kind": "video",
+                            "url": "https://mbedfx.app/_media/x%3A20/0",
+                            "poster": "https://mbedfx.app/_media/x%3A20/poster0",
+                            "width": 1280,
+                            "height": 720,
+                            "still": false
+                          }
+                        ],
+                        "quote": null
+                      }
+                    }
+                  },
+                  "gate": {
+                    "summary": "A post that exists and cannot be read",
+                    "value": {
+                      "ok": false,
+                      "error": {
+                        "code": "age_restricted",
+                        "message": "That post is age-restricted, so it cannot be read without an account.",
+                        "platform": "x",
+                        "canonical": "https://x.com/i/status/1799212343123456789"
+                      }
+                    }
+                  },
+                  "ambiguous": {
+                    "summary": "A path more than one site claims",
+                    "value": {
+                      "ok": false,
+                      "error": {
+                        "code": "ambiguous",
+                        "message": "That path belongs to more than one site. Re-ask with a two-letter site prefix, e.g. /im/gallery/YcAQlkx.",
+                        "platform": null,
+                        "canonical": null,
+                        "candidates": ["rd", "ig", "im"]
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request itself is unusable: no `url` (or an empty one), or a `url` that is not a url. Nothing about a post.",
+            "headers": {
+              "cache-control": { "description": "Always `no-store`.", "schema": { "type": "string" }, "example": "no-store" }
+            },
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ErrorEnvelope" },
+                "examples": {
+                  "no_url": {
+                    "value": {
+                      "ok": false,
+                      "error": {
+                        "code": "no_url",
+                        "message": "Pass the post url as the `url` query parameter.",
+                        "platform": null,
+                        "canonical": null
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "405": {
+            "description": "A write verb. This endpoint reads, and the refusal is issued before an upstream fetch, a mux wait or a container call is spent.",
+            "headers": {
+              "cache-control": { "description": "Always `no-store`.", "schema": { "type": "string" }, "example": "no-store" }
+            },
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ErrorEnvelope" },
+                "examples": {
+                  "method_not_allowed": {
+                    "value": {
+                      "ok": false,
+                      "error": {
+                        "code": "method_not_allowed",
+                        "message": "This endpoint reads. Use GET.",
+                        "platform": null,
+                        "canonical": null
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "head": {
+        "operationId": "headPost",
+        "summary": "The headers of the same answer.",
+        "description": "Identical to `GET` in every respect but the body, and it costs the same: the whole pipeline runs. There is no cheap existence check here.",
+        "parameters": [
+          {
+            "name": "url",
+            "in": "query",
+            "required": true,
+            "description": "As `GET`.",
+            "schema": { "type": "string", "minLength": 1 }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "As `GET`, without a body.",
+            "headers": {
+              "cache-control": { "description": "As `GET`.", "schema": { "type": "string" } },
+              "access-control-allow-origin": { "description": "Always `*`.", "schema": { "type": "string" }, "example": "*" },
+              "x-content-type-options": { "description": "Always `nosniff`.", "schema": { "type": "string" }, "example": "nosniff" }
+            }
+          },
+          "400": {
+            "description": "No `url`, or one that is not a url. The same request-level failures `GET` has, and the body is `ErrorEnvelope` on a `GET` — a `HEAD` carries the status and the headers alone."
+          }
+        }
+      },
+      "options": {
+        "operationId": "preflightPost",
+        "summary": "The CORS preflight.",
+        "description": "Answered before any work is spent. A preflight that fell through to the pipeline paid for an upstream fetch, a mux wait and a `yt-dlp -J`, then failed for want of `access-control-allow-methods`, so the real request never fired. Any consumer sending a custom header is preflighted.",
+        "responses": {
+          "204": {
+            "description": "The preflight answer. No body.",
+            "headers": {
+              "access-control-allow-origin": { "schema": { "type": "string" }, "example": "*" },
+              "access-control-allow-methods": { "schema": { "type": "string" }, "example": "GET, HEAD, OPTIONS" },
+              "access-control-allow-headers": { "schema": { "type": "string" }, "example": "*" },
+              "access-control-max-age": { "schema": { "type": "string" }, "example": "86400" },
+              "cache-control": { "schema": { "type": "string" }, "example": "no-store" }
+            }
+          }
+        }
+      }
+    },
+    "/openapi.json": {
+      "get": {
+        "operationId": "getOpenapiDocument",
+        "summary": "This document.",
+        "description": "Served as a static asset. It takes no input, reaches no upstream and costs the worker nothing.",
+        "responses": {
+          "200": {
+            "description": "The OpenAPI document.",
+            "content": { "application/json": { "schema": { "type": "object" } } }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "PostEnvelope": {
+        "type": "object",
+        "description": "A post that could be read. `muxing` and `pending` both mean the answer is incomplete but correct; neither is an error, both clear on their own, and both suppress caching. Re-ask a few seconds later and the finished answer is free, because the work behind each is still running.",
+        "properties": {
+          "ok": { "const": true, "description": "The discriminator. `true` on this shape." },
+          "muxing": {
+            "type": "boolean",
+            "description": "A video is still being remuxed into the progressive MP4 this service serves, and what arrived is its poster still (`media[].still` is `true`). A re-request in a few seconds returns a `video`."
+          },
+          "pending": {
+            "type": "boolean",
+            "description": "A translation lost its race and `text` is the original. The translation is still being written; a re-request carries it."
+          },
+          "post": { "$ref": "#/components/schemas/Post" }
+        },
+        "required": ["ok", "muxing", "pending", "post"],
+        "additionalProperties": false
+      },
+      "ErrorEnvelope": {
+        "type": "object",
+        "description": "Something could not be answered. Present at `200` for everything about a post, and at `400` and `405` for the request itself.",
+        "properties": {
+          "ok": { "const": false, "description": "The discriminator. `false` on this shape, and `post` is absent." },
+          "error": { "$ref": "#/components/schemas/ApiError" }
+        },
+        "required": ["ok", "error"],
+        "additionalProperties": false
+      },
+      "ApiError": {
+        "type": "object",
+        "properties": {
+          "code": {
+            "type": "string",
+            "description": "The stable name of the failure. Match on this. The published vocabulary is deliberately smaller than the internal one: route kinds that exist because of how crawler callbacks work collapse into `not_a_post` rather than becoming a contract.",
+            "enum": [
+              "age_restricted",
+              "private",
+              "fetch_fail",
+              "ambiguous",
+              "notfound",
+              "bad_id",
+              "not_a_post",
+              "no_url",
+              "unparseable",
+              "method_not_allowed"
+            ],
+            "x-mbedfx-codes": {
+              "age_restricted": { "status": 200, "means": "The post exists behind an age gate. Also reached by a TikTok share code whose resolution reports the gate." },
+              "private": { "status": 200, "means": "The post exists behind a private account or a login wall. Also reached by a TikTok share code whose resolution reports the gate." },
+              "fetch_fail": { "status": 200, "means": "Not loadable: deleted, or the platform did not answer. Several platforms answer HTTP 200 with a login wall or 500 with a good JSON error, so this is a judgement about content rather than about a status. Also reached by a TikTok share code TikTok claims and cannot serve, where `platform` and `canonical` are populated because the page proved whose post it is." },
+              "ambiguous": { "status": 200, "means": "The path belongs to more than one site; `candidates` names them. Every profile url, bare handle and unrecognised one-segment path lands here, including a short link whose code is a bare single segment such as `redd.it/haucpf`, and a `/t/{code}` that TikTok did not claim — `tiktok.com/t/` and `threads.com/t/` are the same path on two products." },
+              "notfound": { "status": 200, "means": "A shape this service routes for nobody, including a site prefix forced onto a path that site does not claim (`/x/jack`) and `/_prep` or `/_card` without their own parameter." },
+              "bad_id": { "status": 200, "means": "A path shaped like one of this service's own JSON endpoints (`/users/{handle}/statuses/{id}`, `/api/v1/statuses/{id}`, `/_oembed/{id}`) whose id did not decode. Not reachable from an ordinary post url." },
+              "not_a_post": { "status": 200, "means": "Routes to something that is not a post: a site page (`/`, `/index.html`, `/robots.txt`), this service's own `/_media/`, `/_prep?p=`, `/_card?p=` or `/_api/v1`, or a Meta or Reddit share code that could not be resolved to a post. A TikTok `/t/{code}` never lands here: its three non-post resolutions answer `age_restricted`, `private`, `fetch_fail` or `ambiguous`, matching what the same code renders as a card." },
+              "no_url": { "status": 400, "means": "No `url` parameter, or an empty one. `?url=` and no `url=` at all are the same answer." },
+              "unparseable": { "status": 400, "means": "`new URL(value, origin)` threw. Only a malformed absolute url does that; anything readable as a path resolves against this origin and gets a 200 instead." },
+              "method_not_allowed": { "status": 405, "means": "This endpoint reads. Use GET." }
+            }
+          },
+          "message": {
+            "type": "string",
+            "description": "Prose for a human. Wording may change; never match on it."
+          },
+          "platform": {
+            "description": "The site the post belongs to, or `null` where the request never got far enough to establish one. Never guessed.",
+            "oneOf": [{ "$ref": "#/components/schemas/Platform" }, { "type": "null" }]
+          },
+          "canonical": {
+            "type": ["string", "null"],
+            "description": "The post's own url, or `null` where the request never got far enough to establish one. Carries a real value on `age_restricted`, `private` and `fetch_fail`; on a walled share code it is the share url itself, which is the only canonical that exists before the code resolves."
+          },
+          "candidates": {
+            "type": "array",
+            "description": "Which sites claim that path shape. Present on `ambiguous` and nowhere else. Whether one of them accepts that id is a second question, so expect a few `notfound`s while walking the list and take the first success.",
+            "items": { "$ref": "#/components/schemas/Platform" }
+          }
+        },
+        "required": ["code", "message", "platform", "canonical"],
+        "additionalProperties": false
+      },
+      "Post": {
+        "type": "object",
+        "description": "The facts the card is drawn from. The card's own answers are deliberately absent: no stripe colour, no pre-rendered stat line, no assembled author line. A consumer drawing its own presentation wants the parts.",
+        "properties": {
+          "platform": { "$ref": "#/components/schemas/Platform" },
+          "canonical": {
+            "type": "string",
+            "description": "The post's url on the platform, rebuilt by the router rather than echoed from the request."
+          },
+          "createdAt": {
+            "type": ["string", "null"],
+            "format": "date-time",
+            "description": "ISO 8601, UTC. `null` where the platform publishes no post date, and until a slower second call brings one. Never the epoch: a post with no known date carries `new Date(0)` internally and the cards draw that beside a `no upload date` note, but a consumer would sort by it. Sort a `null` as unknown, never as old."
+          },
+          "title": {
+            "type": ["string", "null"],
+            "description": "`null` on the platforms that have no such field, and for an empty one."
+          },
+          "text": {
+            "type": "string",
+            "description": "What the card shows, with the card's overlays composed in: a translation followed by a `Translated from …` marker and the original, an age note on a gated video, a `Too long to play here` note past the remux ceiling. `\"\"` when there is nothing to show. v1 has no field carrying the author's untouched words; splitting them out would be additive."
+          },
+          "sensitive": {
+            "type": "boolean",
+            "description": "The post's own flag. The cards apply a wider rule that also fires for a sensitive quoted post that contributed a picture to the gallery; v1 publishes neither that rule nor the quote's media."
+          },
+          "author": { "$ref": "#/components/schemas/Author" },
+          "counts": { "$ref": "#/components/schemas/Counts" },
+          "media": {
+            "type": "array",
+            "description": "Every entry that can actually become bytes, in order. Entries with no servable url are dropped and the rest keep their position in the unfiltered array, which is the index the media route resolves against.",
+            "items": { "$ref": "#/components/schemas/Media" }
+          },
+          "quote": {
+            "description": "The quoted post, or `null`. Present only when the quoted post carries an author.",
+            "oneOf": [{ "$ref": "#/components/schemas/Quote" }, { "type": "null" }]
+          }
+        },
+        "required": ["platform", "canonical", "createdAt", "title", "text", "sensitive", "author", "counts", "media", "quote"],
+        "additionalProperties": false
+      },
+      "Author": {
+        "type": "object",
+        "properties": {
+          "name": { "type": ["string", "null"], "description": "The display name." },
+          "handle": { "type": ["string", "null"], "description": "The @-name, without the `@`. `null` where the platform has none, such as a Facebook group." },
+          "url": { "type": ["string", "null"], "description": "The profile url on the platform." },
+          "avatar": {
+            "type": ["string", "null"],
+            "description": "`/_media/{refKey}/avatar` on this origin, or `null` when the post carries no avatar."
+          }
+        },
+        "required": ["name", "handle", "url", "avatar"],
+        "additionalProperties": false
+      },
+      "Counts": {
+        "type": "object",
+        "description": "Public interaction counts. An absent key means unknown, and it is the only place in v1 where an absent key carries meaning. A zero is never published: upstreams report zero both for an uninteracted post and for a count the platform withholds — a hidden like count, comments switched off — and nothing tells them apart by the time the value gets here. v1 cannot encode a count known to be zero. Which of the four keys exist varies by site.",
+        "properties": {
+          "likes": { "type": "integer", "minimum": 1 },
+          "reposts": { "type": "integer", "minimum": 1 },
+          "replies": { "type": "integer", "minimum": 1 },
+          "views": { "type": "integer", "minimum": 1 }
+        },
+        "additionalProperties": false
+      },
+      "Media": {
+        "type": "object",
+        "description": "One picture or video. Every url is on this origin, never the platform's CDN, which hands out signed, short-lived and sometimes IP-locked urls. Remuxed video is served from storage and answers range requests; images, avatars, posters and already-progressive video are a 302 to the CDN; Instagram, Twitch and Threads video is proxied rather than redirected.",
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": ["image", "video"],
+            "description": "Two kinds, not the internal three: a GIF is published as `video`, which is what it is everywhere it matters."
+          },
+          "url": {
+            "type": "string",
+            "description": "`/_media/{refKey}/{index}` on this origin. A still standing in for a video is addressed through its poster slot rather than its array position, which is where those bytes are."
+          },
+          "poster": {
+            "type": ["string", "null"],
+            "description": "The poster frame, `null` when the entry carries none. There is no fallback from the poster slot to the bytes, so an invented poster url would be a guaranteed 404."
+          },
+          "width": {
+            "type": ["number", "null"],
+            "description": "The width of the bytes at `url`, not of the original video: a `still` entry reports the poster frame's size. `0` is far more common than `null` and means the platform reported no size — a remuxed video deliberately carries 0 so a player reads the real dimensions out of the file. `null` means the cached value was not a finite number. Both mean unknown; divide by neither."
+          },
+          "height": {
+            "type": ["number", "null"],
+            "description": "As `width`."
+          },
+          "still": {
+            "type": "boolean",
+            "description": "This picture is standing in for a video. Read it with the envelope's `muxing`: `still` false with `muxing` false is an ordinary picture; `still` true with `muxing` true means a video is still muxing, so ask again; `still` true with `muxing` false means a video exists that cannot be served, usually because it is longer than the remux ceiling, and that is final. Without this flag the last case is indistinguishable from a photograph except by reading the English in `text`."
+          }
+        },
+        "required": ["kind", "url", "poster", "width", "height", "still"],
+        "additionalProperties": false
+      },
+      "Quote": {
+        "type": "object",
+        "description": "The quoted post. Depth is capped at 1 by the normalizers, so a quote never carries a quote of its own. Its media is not published in v1: those entries live at indices after the outer post's, and getting that arithmetic wrong would publish urls resolving to the wrong bytes. Additive later; wrong now would be permanent.",
+        "properties": {
+          "canonical": { "type": ["string", "null"], "description": "The quoted post's own url." },
+          "text": { "type": "string", "description": "`\"\"` when there is none." },
+          "author": { "$ref": "#/components/schemas/QuoteAuthor" }
+        },
+        "required": ["canonical", "text", "author"],
+        "additionalProperties": false
+      },
+      "QuoteAuthor": {
+        "type": "object",
+        "description": "The quoted post's author. No `avatar`: it would be a second media index to get wrong.",
+        "properties": {
+          "name": { "type": ["string", "null"] },
+          "handle": { "type": ["string", "null"] },
+          "url": { "type": ["string", "null"] }
+        },
+        "required": ["name", "handle", "url"],
+        "additionalProperties": false
+      },
+      "Platform": {
+        "type": "string",
+        "description": "The two-letter site code. `tw` is Twitch; Twitter is `x`. The four fediverse codes have no single host, so their instance goes in the path of `url`.",
+        "enum": ["x", "tt", "ig", "th", "rd", "bs", "yt", "fb", "dm", "st", "im", "tw", "lm", "pn", "ms", "mk", "pt"],
+        "x-mbedfx-sites": {
+          "x": "Twitter",
+          "tt": "TikTok",
+          "ig": "Instagram",
+          "th": "Threads",
+          "rd": "Reddit",
+          "bs": "Bluesky",
+          "yt": "YouTube",
+          "fb": "Facebook",
+          "dm": "Dailymotion",
+          "st": "Streamable",
+          "im": "Imgur",
+          "tw": "Twitch",
+          "lm": "Lemmy",
+          "pn": "Pinterest",
+          "ms": "Mastodon",
+          "mk": "Misskey",
+          "pt": "PeerTube"
+        }
+      }
+    }
+  }
+}
