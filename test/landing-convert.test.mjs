@@ -66,7 +66,7 @@ const CODE = {
 const RESOLVES = {
   't/ZTSw2mYwR': 'shortlink',
   'share/Fixture08X': 'metashare',
-  'r/pics/s/uucSZtDEbI': 'redditshare',
+  'r/BatmanArkham/s/uucSZtDEbI': 'redditshare',
 }
 
 const routed = p => route(new URL('https://mbedfx.app' + (p.startsWith('/') ? p : '/' + p)))

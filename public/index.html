@@ -975,7 +975,12 @@ function mbedfxConvert(input, host) {
     { name: 'Threads', host: 'threads.com', icon: 'threads', rail: MONO,
       paths: ['@dexerto/post/DbWxxQjFe4u', 'share/Fixture08X'], note: 'Video arrives as the cover image.' },
     { name: 'Reddit', host: 'reddit.com', icon: 'reddit', rail: '#FF4500',
-      paths: ['r/pics/comments/haucpf', 'r/pics/s/uucSZtDEbI', 'comments/haucpf'], note: 'App /s/ links resolve first.' },
+      // THE SUBREDDIT IN AN /s/ LINK IS LOAD-BEARING, which is why this row names r/BatmanArkham and
+      // not r/pics like the two beside it. uucSZtDEbI is a real share code belonging to that sub; it
+      // shipped here glued to r/pics, and Reddit answers that mismatch by landing on /r/pics/ with no
+      // post in it. Measured 2026-08-12: /r/pics/s/uucSZtDEbI renders the 253-byte failure card from
+      // Cloudflare egress, /r/BatmanArkham/s/uucSZtDEbI renders a real one. Re-pair, never re-sub.
+      paths: ['r/pics/comments/haucpf', 'r/BatmanArkham/s/uucSZtDEbI', 'comments/haucpf'], note: 'App /s/ links resolve first.' },
     { name: 'Bluesky', host: 'bsky.app', icon: 'bluesky', rail: '#1185FE',
       paths: ['profile/alice.bsky.social/post/3k2a'], note: 'Handles and did:plc: both work.' },
     { name: 'YouTube', host: 'youtube.com · youtu.be', icon: 'youtube', rail: '#FF0000',
@@ -989,7 +994,20 @@ function mbedfxConvert(input, host) {
     { name: 'Pinterest', host: 'pinterest.com', icon: 'pinterest', rail: '#BD081C',
       paths: ['pin/66287425756772418'], note: 'Every regional domain works.' },
     { name: 'Dailymotion', host: 'dailymotion.com · dai.ly', icon: 'dailymotion', rail: MONO,
-      paths: ['video/xaqwy7q', 'dm/xaqwy7q'], note: '' },
+      // x8ocv9e is Fortune's, i.e. publisher-owned rather than a reupload, because the id this row
+      // shipped with (xaqwy7q) went HTTP 410 Gone and sat on the page dead.
+      //
+      // TWO READINGS, TWO CLIENTS, AND THE DIFFERENCE MATTERS. Verified 2026-08-12 FROM CLOUDFLARE
+      // EGRESS: mbedfx.app/_api/v1 answers ok with one media for this id. That is the reading that
+      // counts, because it is the client this row's links are actually served to.
+      // Separately, FROM A LAPTOP: the dailymotion.com page is 125 KB carrying og:video and
+      // og:image 1280x720. That one is residential and is NOT evidence for this project — it is
+      // recorded only because it is how the replacement was found. This worker never fetches that
+      // page at all: platforms/dailymotion/fetch.ts has NO platform egress by design, and both the
+      // metadata and the video come from the container's yt-dlp.
+      //
+      // Prefer a publisher account here — a random reupload is the thing that 410s next.
+      paths: ['video/x8ocv9e', 'dm/x8ocv9e'], note: '' },
     { name: 'Streamable', host: 'streamable.com', icon: 'play', rail: '#0F90FA',
       paths: ['e/moo', 'st/moo'], note: '' },
     { name: 'Imgur', host: 'imgur.com · i.imgur.com', icon: 'imgur', rail: '#1BB76E',
