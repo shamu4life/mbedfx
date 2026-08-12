@@ -41,7 +41,7 @@ import type { ClientClass, Platform } from './types.ts'
  * "look at this entry" and several failing at once reads as "the platform broke". Swapping an entry
  * is a code change on purpose: the list is what makes the endpoint safe (see runSmoke).
  *
- * THE ROWS OUTNUMBER THE PLATFORMS, since 2026-08-12: fifteen platforms across sixteen rows, because
+ * THE ROWS OUTNUMBER THE PLATFORMS, since 2026-08-12: sixteen platforms across seventeen rows, because
  * Bluesky is checked twice (its profile route and a post, which share no code below render()). The
  * counter is per PLATFORM, so those two rows sum into one `bs` pair in the Analytics Engine query and
  * a single failure shows there as half a platform. `name` is what tells them apart, and it is what
@@ -68,6 +68,29 @@ export type SmokeCheck = {
 }
 
 export const SMOKE_CHECKS: readonly SmokeCheck[] = [
+  /**
+   * DAILYMOTION, and the reason it is here rather than in SMOKE_UNCHECKED with Streamable.
+   *
+   * Both were first excluded together for "a cron hits cold nearly every time: POST_TTL and RESP_TTL
+   * are 900s against a 30-minute schedule". That is the wrong cache. The card these two fail to
+   * produce depends on the yt-dlp META RECORD, which lives in R2 and is GLOBAL, not on the per-colo
+   * response cache — and `DM_META_TTL_MS` is 86_400_000, a full day. A scheduled check therefore
+   * reads a warm record on roughly 47 of every 48 ticks.
+   *
+   * EXPECT ABOUT ONE FAILURE A DAY FROM THIS ROW, and read it as the known cold tick rather than an
+   * outage. That is stated here because a counter nobody can interpret is worse than no counter: the
+   * ratio is what matters, and `dm` sitting near 47/48 is health. `dm` going to zero is not.
+   *
+   * FACEBOOK IS THE PRECEDENT ALREADY IN THIS LIST. It is the same container tier with the same 24h
+   * meta TTL (FB_META_TTL_MS), is checked, and is measured at 4.0s cold.
+   *
+   * Verified 2026-08-12 through production as a Discordbot: a complete card, og:title
+   * "Fortune (@Fortune)" with og:video and an activity link, 1674 bytes in 0.38s warm. Fortune's own
+   * upload, i.e. publisher-owned — the id this repo shipped before (xaqwy7q) went HTTP 410 Gone,
+   * which is what a random reupload does.
+   */
+  { platform: 'dm', name: 'dm', path: '/video/x8ocv9e', verifiedOn: '2026-08-12' },
+
   // Verified 2026-08-11 from Cloudflare egress: renders byline, caption and a photo through the
   // embed-plugin surface, which is the only Facebook post surface still answering this egress.
   { platform: 'fb', name: 'fb', path: '/WYFF4/posts/1596906778724399', verifiedOn: '2026-08-11' },
@@ -217,25 +240,28 @@ export const SMOKE_CHECKS: readonly SmokeCheck[] = [
  */
 export const SMOKE_UNCHECKED: readonly { platform: Platform, why: string }[] = [
   /**
-   * Dailymotion and Streamable, both left out for the same measured reason.
+   * STREAMABLE, and it is the ONLY platform excluded for a cadence reason. Dailymotion was excluded
+   * alongside it on a rationale this repo's own constants contradict; that is corrected below and dm
+   * is now checked.
    *
-   * Rendered through production on 2026-08-12 they each returned the 257-258 byte FAILURE CARD on
-   * the COLD first request and then healed — Dailymotion's second request gave a degraded cover
-   * still and its third the full 1920x1080 video card, Streamable's second gave the full card —
-   * while both upstreams were independently confirmed healthy at that moment (Streamable's oembed
-   * answered 200 at 852x480 and its page carried og:video). So the miss is ours, not theirs.
+   * Rendered through production on 2026-08-12, st returned the 257-byte FAILURE CARD on the COLD
+   * first request and healed on the second, while its upstream was independently confirmed healthy
+   * at that moment (oembed answered 200 at 852x480, and the page carried og:video). So the miss is
+   * ours, not theirs — see META_TIMEOUT_MS, whose 4700ms crawler budget a cold container extract
+   * overruns.
    *
-   * A cron hits cold nearly every time: POST_TTL and RESP_TTL are 900s against a 30-minute schedule,
-   * and `caches.default` is per-colo besides. A row for either would therefore fail most ticks while
-   * the platform works, and an alarm that cries every half hour teaches its only reader to ignore
-   * it — which leaves the service worse off than with no check at all, since the reader is the same
-   * person who has to believe the Facebook row when it fires.
+   * WHAT MAKES IT UNCHECKABLE IS THE TTL, NOT THE FAILURE. The card depends on the yt-dlp META
+   * RECORD, which lives in R2 and is therefore GLOBAL rather than per-colo — POST_TTL and RESP_TTL
+   * have nothing to do with it. `ST_META_TTL_MS` is 1_800_000, which is EXACTLY the cron interval,
+   * so a scheduled check would find the record freshly expired essentially every tick and would sit
+   * permanently on the cold path this service does not yet handle. An alarm that cries every half
+   * hour teaches its only reader to ignore it, which leaves the service worse off than with no check
+   * at all — the reader is the same person who has to believe the Facebook row when it fires.
    *
-   * ADD THEM the day a cold first request renders a real card, and say in the commit that the cold
-   * path is what changed.
+   * ADD IT when either the cold crawler path renders a real card or ST_META_TTL_MS stops coinciding
+   * with the schedule, and say in the commit which one changed.
    */
-  { platform: 'dm', why: 'cold first render returns the failure card (measured 2026-08-12); a cron is always cold' },
-  { platform: 'st', why: 'cold first render returns the failure card (measured 2026-08-12); a cron is always cold' },
+  { platform: 'st', why: 'ST_META_TTL_MS (1800s) equals the cron interval, so a scheduled check is always cold, and the cold crawler path still returns the failure card (measured 2026-08-12)' },
 ]
 
 /**

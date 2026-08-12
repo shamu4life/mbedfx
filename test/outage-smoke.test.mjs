@@ -119,12 +119,31 @@ test('EVERY PLATFORM IS EITHER CHECKED OR NAMED AS UNCHECKED, so "unwatched" can
    * The Platform union in src/types.ts is the source, so an eighteenth platform fails this test the
    * moment it is declared — which forces a decision (write a check, or write down why not) instead
    * of an oversight.
+   *
+   * IT SLICES TO THE NEXT DECLARATION RATHER THAN READING ONE LINE, and that is the difference
+   * between this guard working and only appearing to. The first version matched
+   * /export type Platform =([^\n]*)/ — a single line — and the union is already 150 characters, so
+   * the natural way to add an eighteenth platform is a continuation line. Reproduced: with `| 'zz'`
+   * on line 2 the parse still yields 17 names, `zz` is absent from the roll call, a `>= 17`
+   * assertion passes, and the new platform is silently unwatched. That is precisely the defect the
+   * paragraph above says is now impossible. test/prep.test.mjs, cited here as the precedent, was
+   * multi-line safe all along; this now does what that one does.
+   *
+   * AND THE COUNT IS EXACT, not `>= 17`. A floor cannot fail when the union GROWS, which is the only
+   * direction it ever moves — so the floor was unfalsifiable in practice. An exact count means
+   * adding a platform breaks this test on purpose.
    */
   const types = readFileSync(new URL('../src/types.ts', import.meta.url), 'utf8')
-  const decl = types.match(/export type Platform =([^\n]*)/)
-  assert.ok(decl, 'src/types.ts still declares Platform on one line')
-  const all = [...decl[1].matchAll(/'([a-z]+)'/g)].map(m => m[1])
-  assert.ok(all.length >= 17, `the Platform union should still hold every platform, saw ${all.length}`)
+  const start = types.indexOf('export type Platform =')
+  assert.notEqual(start, -1, 'src/types.ts still declares the Platform union')
+  const rest = types.slice(start + 'export type Platform ='.length)
+  // To the next top-level declaration, so a union spread over any number of lines is read whole.
+  const end = rest.search(/\n\s*(?:export |\/\*\*|type |const |interface )/)
+  const decl = end === -1 ? rest : rest.slice(0, end)
+  const all = [...decl.matchAll(/'([a-z]+)'/g)].map(m => m[1])
+  assert.equal(all.length, 17,
+    `the Platform union holds ${all.length} platforms; if that is deliberate, update this count AND `
+    + 'give the new platform a row in SMOKE_CHECKS or a reason in SMOKE_UNCHECKED')
 
   const checked = new Set(SMOKE_CHECKS.map(c => c.platform))
   const excused = new Set(SMOKE_UNCHECKED.map(u => u.platform))
@@ -213,11 +232,27 @@ test('EVERY RESULT CARRIES ITS OWN ELAPSED TIME, so the budget can be re-measure
    * project's most repeated defect is a budget that was true when it was written and never checked
    * again (META_WAIT_API_MS at 4000 against a 2.3-6.7s extract). `/_smoke` reports these so the next
    * person to widen the list reads the real cost instead of inheriting a number.
+   *
+   * ONE RENDER IS DELIBERATELY SLOW, and that is what makes this a test rather than a shape check.
+   * The first version asserted only `Number.isFinite(r.ms) && r.ms >= 0` against renders that all
+   * resolve instantly, so a hardcoded `ms: 0` in runSmoke would have passed it — a field whose whole
+   * purpose is carrying a REAL duration, pinned by an assertion that cannot tell a duration from a
+   * constant. Holding exactly one check for ~30ms also pins that the timer is PER CHECK and not per
+   * run: the others must still report near zero, which a single run-level stopwatch could not do.
    */
-  const render = async () => new Response(REAL_IMAGE_CARD, { status: 200 })
+  const SLOW = SMOKE_CHECKS[1].path
+  const render = async url => {
+    if (url.endsWith(SLOW)) await new Promise(r => setTimeout(r, 30))
+    return new Response(REAL_IMAGE_CARD, { status: 200 })
+  }
   return runSmoke('https://mbedfx.app', render).then(results => {
     assert.ok(results.every(r => Number.isFinite(r.ms) && r.ms >= 0), 'every check reports a duration')
     assert.ok(results.every(r => typeof r.name === 'string' && r.name), 'and names itself')
+    const slow = results[1]
+    assert.ok(slow.ms >= 25, `the slow check must report its real cost, got ${slow.ms}ms`)
+    const others = results.filter((_, i) => i !== 1)
+    assert.ok(others.every(r => r.ms < 25),
+      'and the others must not inherit it — the timer is per check, not per run')
   })
 })
 
