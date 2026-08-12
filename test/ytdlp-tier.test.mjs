@@ -588,7 +588,7 @@ const countingEnv = (resolver, r2 = fakeR2()) => {
 }
 const outcomes = points => points.map(b => b[1])
 
-test('THE PREVIEW SPENDS ITS OWN CEILING ON THE META CALL, AND THE CRAWLER HEAD STILL SPENDS 4700', async () => {
+test('THE PREVIEW OUTLIVES THE CRAWLER on one slow extract, and the two do not collapse into one', async () => {
   /**
    * THE DEFECT, MEASURED IN PRODUCTION 2026-08-12. Ten previously-unseen Dailymotion ids were rendered
    * through https://mbedfx.app as a Discord crawler: nine came back at 4.93-5.50s and ONE came back as
@@ -615,6 +615,13 @@ test('THE PREVIEW SPENDS ITS OWN CEILING ON THE META CALL, AND THE CRAWLER HEAD 
    *
    * IT COSTS ~5 SECONDS OF WALL CLOCK, and there is no cheaper honest version: the whole claim is about
    * a call that outlives one budget and not the other, and the two budgets are 4700 and 8700.
+   *
+   * WHAT THIS BODY CANNOT PIN, and where that is pinned instead. This test asserts the ORDERING —
+   * crawler loses, preview wins, one extract not two — and ordering survives either number moving.
+   * Setting META_TIMEOUT_MS to 6000 (the exact hand-picked value this file elsewhere calls a defect)
+   * leaves it green and merely 1.3s slower, because `release()` fires only after the crawler response
+   * resolves, so the crawler must lose for ANY budget below ~8450ms. The numbers themselves are pinned
+   * by 'THE TWO BUDGETS ARE DERIVED, NOT CHOSEN' below, which reads them out of the source.
    */
   let release
   const hold = new Promise(r => { release = r })
@@ -630,7 +637,7 @@ test('THE PREVIEW SPENDS ITS OWN CEILING ON THE META CALL, AND THE CRAWLER HEAD 
 
   const html = await (await crawler).text()
   assert.match(html, /couldn't load/i,
-    'the crawler head is UNCHANGED — 4700ms is derived from a real 5s ceiling and stays there')
+    'the crawler head loses the extract that the preview outlives — the whole point of the split')
   assert.ok(outcomes(points).includes('meta_timeout'),
     'and our own blown deadline is counted as ours')
   assert.ok(!outcomes(points).includes('assert_fail'),
@@ -663,4 +670,47 @@ test('A CONTAINER THAT ANSWERS WITH NOTHING IS STILL THE UPSTREAM\'S FAULT, not 
   assert.match(html, /couldn't load/i)
   assert.ok(outcomes(points).includes('assert_fail'), 'a real decline is still assert_fail')
   assert.ok(!outcomes(points).includes('meta_timeout'), 'and it must not be blamed on our budget')
+})
+
+
+test('THE TWO BUDGETS ARE DERIVED, NOT CHOSEN — and a hand-picked number here is the defect itself', () => {
+  /**
+   * THE TIMING TEST ABOVE DOES NOT PIN THESE, and its name used to say it did. It asserts that the
+   * crawler loses an extract the preview survives, which stays true for any crawler budget under
+   * ~8450ms — so META_TIMEOUT_MS could be quietly retuned to anything in that range and the suite
+   * would stay green while the comment claiming 4700 rotted.
+   *
+   * THE NUMBERS ARE NOT THE POINT; THE DERIVATION IS. Both budgets are a whole-response deadline
+   * minus the floor left for picking up a video already in storage, which is what makes them
+   * defensible. A literal in either place would be the "6000 was larger than the budget it spends
+   * from" defect: a number that looks measured, is not, and outlives the response it was supposed to
+   * fit inside. This reads the source rather than importing, because none of these are exported —
+   * the same technique test/prep.test.mjs uses on the Route union.
+   *
+   * RAISING META_TIMEOUT_MS MEANS RAISING HTML_DEADLINE_MS, which bounds how long a crawler holds
+   * the connection, and nobody has measured Discord's tolerance. That measurement is the gate, not
+   * this test — but this test is what makes skipping it visible.
+   */
+  const src = readFileSync(new URL('../src/worker.ts', import.meta.url), 'utf8')
+  const num = name => {
+    const m = src.match(new RegExp(`^(?:export )?const ${name} = (\\d+)$`, 'm'))
+    assert.ok(m, `${name} must be a plain literal in src/worker.ts`)
+    return Number(m[1])
+  }
+  const html = num('HTML_DEADLINE_MS')
+  const mux = num('MUX_WAIT_API_MS')
+  const floor = num('MUX_WAIT_FLOOR_MS')
+
+  // Both budgets, and the deadline the second leans on, must be SPELLED as derivations.
+  assert.match(src, /^const CARD_DEADLINE_MS = MUX_WAIT_API_MS$/m,
+    'the preview deadline is the mux wait itself, not a second number that can drift from it')
+  assert.match(src, /^const META_TIMEOUT_MS = HTML_DEADLINE_MS - MUX_WAIT_FLOOR_MS$/m,
+    'the crawler budget must be DERIVED from the crawler deadline, never written as a literal')
+  assert.match(src, /^const META_TIMEOUT_API_MS = CARD_DEADLINE_MS - MUX_WAIT_FLOOR_MS$/m,
+    'the preview budget must be DERIVED from the preview deadline, never written as a literal')
+
+  // The values the rest of this file's comments, and docs/API.md's published table, both quote.
+  assert.equal(html - floor, 4700, 'the crawler budget is 4700ms; docs/API.md publishes this')
+  assert.equal(mux - floor, 8700, 'the preview budget is 8700ms; docs/API.md publishes this')
+  assert.ok(mux > html, 'the preview may outlive the crawler, never the reverse')
 })

@@ -718,14 +718,17 @@ export async function liveFetchPost(
       // The fall-through below is what actually renders a photo: the plugin fragment. Measured
       // 2026-08-11 from Cloudflare egress over eleven photo permalinks on four pages — all eleven.
       //
-      // `metaBudgetMs` RIDES THROUGH HERE TOO, and it buys Facebook something different from what it
-      // buys the yt-dlp tier. There a lost meta deadline IS the failure card; here it is worse than a
-      // slow card and better than no card — the arm falls through to up to three MORE upstream fetches
-      // (page, plugin fragment, caption) that begin with the whole response budget already spent, so a
-      // preview that ran out of clock here reliably had nothing left for the surface that would have
-      // answered. Not measured live: Meta walls these surfaces from this egress, so a fresh probe would
-      // confound rather than settle it. Read off the code path and stated as such.
-      const meta = await cachedFacebookMeta(ref, env, ctx, metaBudgetMs)
+      // `metaBudgetMs` DELIBERATELY DOES NOT RIDE THROUGH HERE, and the reasoning that said it should
+      // was wrong in both directions. Facebook was not in the diagnosis that produced the wider preview
+      // budget; that diagnosis measured Dailymotion, where a lost meta deadline IS the failure card
+      // because there is no second upstream. Facebook has two more (the page and the plugin fragment),
+      // neither of which carries a deadline at all — platforms/facebook/fetch.ts has no AbortSignal and
+      // no budget parameter — so nothing here "runs out of clock" and a wider meta budget cannot help
+      // them. It can only hurt: widening this makes the fall-through start LATER, and the photo path
+      // three paragraphs above takes this call EXPECTING yt-dlp to decline, so every Facebook photo
+      // with a slow or cold container would sit up to 8700ms — with a human watching the converter
+      // spinner — before reaching the plugin fragment that is what actually renders it.
+      const meta = await cachedFacebookMeta(ref, env, ctx)
       if (!meta) {
         /**
          * NOT A VIDEO — so try the POST surface before giving up. Facebook's share sheet hands out one
