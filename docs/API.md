@@ -303,8 +303,11 @@ path instead).
 That column records where a link came from. Routing never reads it.
 
 - A short link whose code is a bare single path segment doesn't resolve here.
-  `?url=https://redd.it/haucpf` and `?url=https://dai.ly/xaqwy7q` answer `ambiguous` with candidates
-  `["x","ig"]`, measured 2026-08-05: `/haucpf` is also the shape of an X or Instagram profile.
+  `?url=https://redd.it/haucpf` and `?url=https://dai.ly/x8ocv9e` answer `ambiguous` with candidates
+  `["x","ig"]`, re-measured 2026-08-12: `/haucpf` is also the shape of an X or Instagram profile.
+  The Dailymotion id here changed from `xaqwy7q`, which went HTTP 410 Gone. The answer does not
+  depend on it — the path shape decides ambiguity before anything is fetched, so both ids give the
+  same `["x","ig"]` — but a published example that 404s under a reader sends them debugging nothing.
 - The ones that do work carry their own shape, each resolved with the hop a pasted link gets:
   `youtu.be/dQw4w9WgXcQ` (an 11-character segment is a YouTube id outright),
   `tiktok.com/t/ZTSw2mYwR`, `reddit.com/r/{sub}/s/{code}`, and Meta's `/share/…` codes.
