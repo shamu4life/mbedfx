@@ -7,7 +7,26 @@ import { decodeStatusId } from './statusid.ts'
 // A CLOSED ALLOWLIST, and og.jpg has to be in it. The asset binding only answers for paths this
 // set names, so an og:image pointing anywhere else 404s and the site's own card draws no picture —
 // which is a conspicuous way for an embed fixer to fail.
-const SITE_PATHS = new Set(['/', '/index.html', '/favicon.ico', '/robots.txt', '/og.jpg'])
+//
+// /openapi.json IS THE SIXTH, ADDED 2026-08-11, AND IT COSTS A PATH — so the shadowing is stated
+// rather than assumed. Measured before adding it: route() answered /openapi.json with the ambiguity
+// chooser, candidates ['x','ig'], and BOTH candidates dead-end — /x/openapi.json and
+// /ig/openapi.json are each notfound, there being no profile route kind. So nothing that resolves
+// today stops resolving; what is shadowed is a chooser page for a would-be profile whose every
+// branch is already a 404. (An Instagram handle may legally contain a dot, which is why this is
+// checked rather than dismissed.)
+//
+// WHAT IT BUYS. A spec that only sits in the repository is a file somebody has to go and find; a
+// served one is a url `openapi-generator -i` and every schema viewer take directly, which is the
+// form the rival fixers publish theirs in. The ASSET binding serves it, so the worker runs no code
+// for it: no input is read, no upstream is reached, nothing is cached that could go stale. It is
+// cheaper than /_smoke, which is the precedent for a fixed-cost path here.
+//
+// The alternative shapes were considered and are worse: /_api/v1/openapi.json would need a nested
+// public/_api/v1/ directory for the asset binding to answer it, and would carve an exception into
+// "an unrecognised path under /_api/v1 is a plain 404", which docs/API.md tells consumers to rely
+// on. /openapi.json is where tooling looks first.
+const SITE_PATHS = new Set(['/', '/index.html', '/favicon.ico', '/robots.txt', '/og.jpg', '/openapi.json'])
 
 /**
  * Root tokens we claim as escape hatches (e.g. /x/status/123 forces the X interpretation).
