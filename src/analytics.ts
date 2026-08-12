@@ -122,14 +122,21 @@ export type Outcome2 =
    * the post surfaces from datacenter egress between 2026-08-01 and 2026-08-08 — and the way it was
    * discovered was the owner pasting a link. The service had no opinion about its own health.
    *
-   * A scheduled check now renders one known post per platform through this worker's own handler and
-   * asks whether a real card came back, asserting on CONTENT because every interesting failure here
-   * answers HTTP 200. See src/smoke.ts.
+   * A scheduled check now renders known posts through this worker's own handler and asks whether a
+   * real card came back, asserting on CONTENT because every interesting failure here answers HTTP
+   * 200. See src/smoke.ts.
    *
    * READ IT PER PLATFORM. One platform failing while the others pass is either that platform's
    * upstream or a rotted check url, and both want a human. All of them failing at once is this
    * service. `smoke_fail` sitting at zero forever is also a signal: it means the checks are not
    * running, which is indistinguishable from health if nobody asks.
+   *
+   * ONE PAIR IS NOT ONE CHECK, since 2026-08-12. `bs` carries TWO rows — the profile route and a post
+   * — and this blob is the PLATFORM, so they sum here: a Bluesky pair reading 1 and 1 means one of
+   * the two broke, and nothing in the dataset says which. That is a deliberate trade against widening
+   * blob1 beyond the platform enum; `/_smoke` and the cron's log line carry the check's name for the
+   * reader who needs it. Two platforms (`dm`, `st`) emit neither counter on purpose — see
+   * SMOKE_UNCHECKED — so their silence here is not an outage.
    */
   | 'smoke_ok' | 'smoke_fail'
 

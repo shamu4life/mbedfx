@@ -60,15 +60,23 @@
   "preview_urls": true,
   // THE OUTAGE DETECTOR'S SCHEDULE. Facebook embeds were broken for up to a week (Meta walled the post
   // surfaces from datacenter egress between 2026-08-01 and 2026-08-08) and the way anyone found out
-  // was the owner pasting a link. src/smoke.ts renders one known post per platform through this
-  // worker's own handler and counts the verdict; see the smoke_ok / smoke_fail pair in
-  // src/analytics.ts and the query in docs/METRICS.md.
+  // was the owner pasting a link. src/smoke.ts renders a list of known posts through this worker's
+  // own handler and counts the verdict; see the smoke_ok / smoke_fail pair in src/analytics.ts and
+  // the query in docs/METRICS.md.
   //
-  // EVERY 30 MINUTES, which is a deliberate floor rather than a shrug. The checks are five renders
-  // that each may reach an upstream, and the thing being detected is a platform changing its rules —
-  // measured in DAYS, not seconds. Running it per-minute would spend real upstream requests to learn
-  // nothing new, and this project has already watched an unattended per-minute probe get pointed at
-  // YouTube. Half-hourly finds a break inside the hour, which is the difference that mattered.
+  // EVERY 30 MINUTES, which is a deliberate floor rather than a shrug. The checks are sixteen serial
+  // renders that each may reach an upstream, and the thing being detected is a platform changing its
+  // rules — measured in DAYS, not seconds. Running it per-minute would spend real upstream requests
+  // to learn nothing new, and this project has already watched an unattended per-minute probe get
+  // pointed at YouTube. Half-hourly finds a break inside the hour, which is the difference that
+  // mattered.
+  //
+  // THE INTERVAL ALSO SETS THE CPU CEILING, which is not obvious and is worth knowing before anyone
+  // moves it: Cloudflare gives a Cron Trigger under an hour 30s of CPU and one at an hour or more 15
+  // minutes (limits page, read 2026-08-12). Waiting on a fetch is not CPU, and these checks are
+  // almost entirely waiting, so 30s is not close — but a future check that PARSES something large
+  // would feel it. The wall clock is 15 minutes either way, and src/smoke.ts bounds the run well
+  // under that on purpose.
   "triggers": { "crons": ["*/30 * * * *"] },
   // PHASE-2 VIDEO PLAYBACK. The media-resolver container (ffmpeg + yt-dlp) and its R2 mux cache. A
   // `wrangler deploy` from here on builds the container image, so a Docker-compatible CLI (Docker

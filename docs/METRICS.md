@@ -284,9 +284,17 @@ Facebook embeds were broken for up to a week — Meta walled the post surfaces f
 between 2026-08-01 and 2026-08-08 — and the way it was found was the owner pasting a link. The
 counters would have shown it to anyone who went looking. Nobody had a reason to look.
 
-A cron runs every thirty minutes and renders one known post per platform through this worker's own
-handler, then counts whether a real card came back. `src/smoke.ts` holds the list and the assertion;
-`/_smoke` runs the same checks on demand and answers JSON.
+A cron runs every thirty minutes and renders a list of known posts through this worker's own handler,
+then counts whether a real card came back. `src/smoke.ts` holds the list and the assertion; `/_smoke`
+runs the same checks on demand and answers JSON.
+
+Sixteen checks across fifteen of the seventeen platforms, as of 2026-08-12. It was six for the first
+day, which left eleven platforms with no detector at all — the same position Facebook was in, and
+nobody would have known which eleven without rendering all seventeen by hand. Two platforms are
+deliberately unchecked and say so in `SMOKE_UNCHECKED`: Dailymotion and Streamable return the failure
+card on a COLD first render (measured 2026-08-12), and a cron is always cold, so a row for either
+would alarm most ticks while the platform works. A platform that is neither checked nor excused fails
+the test suite.
 
 It asserts on CONTENT. Every interesting failure on this service answers HTTP 200 — the failure card,
 Meta's login wall, TikTok's 404 page — so a monitor watching status codes would have reported perfect
@@ -313,6 +321,11 @@ platforms.
 running" looks like, and the two are indistinguishable from the counters alone. Check that `smoke_ok`
 is climbing, not merely that `smoke_fail` is flat.
 
+`bs` is TWO checks — the profile route and a post — and the query above groups by platform, so a
+Bluesky row reading `ok 1, fail 1` per tick means one of the two broke and the counters cannot say
+which. `/_smoke` names them (`bs:profile`, `bs:post`), and so does the cron's `wrangler tail` line.
+Every other platform is one check, so its pair is 1 and 0 or 0 and 1.
+
 ### What it cannot tell you
 
 It runs inside the worker it is checking, so it cannot report that the worker is unreachable: DNS, the
@@ -322,7 +335,29 @@ worse mistake than not having it.
 
 The check urls are a permanent list of real posts. When one is deleted, that platform fails forever
 until somebody swaps the entry — the counter names the platform, which is the signal to go and look.
-Each entry records the date it was last seen working.
+Each entry records the date it was last seen working. Three of them are noted in `src/smoke.ts` as
+likelier than the rest to disappear (Imgur's anonymous album, a Pinterest pin, a Lemmy post); read
+that block before treating one of those as an outage.
+
+### What a run costs
+
+Measured 2026-08-12 by timing production from outside: a `/_smoke` run whose caches were all cold took
+10.4s for the six checks that existed that morning, and 0.10-0.13s once they were warm. The ten checks
+added the same day sum to 6.4s cold, 0.14-2.7s each. A full tick is therefore fifteen to twenty
+seconds, and a tick is always the cold number — `POST_TTL` and `RESP_TTL` are 900s against a 30-minute
+schedule, and `caches.default` is per-colo besides, so the entries a tick writes are rarely the ones
+the next tick would read.
+
+Facebook is the slowest single check at 4.0s cold, which is the number to compare against if one of
+these ever needs a budget of its own.
+
+The run is SERIAL and stays that way. `/_smoke` reports its own elapsed `ms`, and each check reports
+its own, so the next person to widen the list can read the cost instead of inheriting a number that
+was true once. Each check has a 20s budget; a check that overruns it is reported as `timeout` and
+counted as `smoke_fail`, which bounds a whole run at 16 x 20s = 320s against Cloudflare's 15-minute
+ceiling on a scheduled invocation. That bound is not decoration: an individual subrequest has no time
+limit of its own, so without it one hung upstream could consume the invocation and every check behind
+it would go uncounted — which looks exactly like the "cron is not running" case above.
 
 
 ## Diagnosing "the card never appeared"
