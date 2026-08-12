@@ -879,21 +879,47 @@ test('EVERY INDIRECT POST-YIELDING ROUTE KIND IS UNWRAPPED — the sweep that st
     // 'api' added 2026-08-03 with /_api/v1. It can NEVER yield a post through a network hop: like
     // 'card' and 'prep' it carries an opaque target that it re-routes through route() itself, and the
     // route that comes back is what unwrapToPost is then handed. Listing it here is the whole change.
+    //
+    // 'profile' added 2026-08-11 with /profile/{handle}. See NOT_A_POST below: it is the first kind
+    // that carries a `canonical` and still cannot yield a post, so it needed more than a line here.
     'activity', 'ambiguous', 'api', 'badid', 'card', 'media', 'metashare', 'notfound',
-    'oembed', 'post', 'prep', 'redditshare', 'shortlink', 'site',
+    'oembed', 'post', 'prep', 'profile', 'redditshare', 'shortlink', 'site',
   ]
   assert.deepEqual(arms.map(a => a.kind).sort(), ALL_KINDS,
     'A Route kind was added or removed. If it can resolve to a post through a network hop, teach '
     + 'unwrapToPost in src/worker.ts as well as adding it here; if it can never yield a post, adding '
     + 'it to ALL_KINDS is the whole change.')
 
+  /**
+   * KINDS THAT CARRY A `canonical` AND STILL CANNOT YIELD A POST — the one hole in the derivation
+   * above, opened 2026-08-11 by the profile route and closed by NAMING it rather than by loosening
+   * the assertion.
+   *
+   * The derivation reads "carries a canonical" as "names something a resolver can hop to and route()
+   * can turn into a post ref". That was true of all three indirect kinds when it was written
+   * (metashare, redditshare, shortlink), and it is false of 'profile': its canonical is
+   * bsky.app/profile/{handle}, which names an ACCOUNT. Routing it again returns the same profile
+   * route, forever — teaching unwrapToPost a 'profile' branch would be a loop that resolves nothing.
+   *
+   * THIS LIST IS STILL A DECISION, which is the property the original test was built around: a new
+   * kind fails the ALL_KINDS assertion above until someone classifies it, and putting one HERE is a
+   * claim — "no network hop turns this into a post" — that a reader can check. It is not an escape
+   * hatch for a kind somebody could not be bothered to unwrap.
+   */
+  const NOT_A_POST = ['profile']
+
   // Every derived kind must be one the ROUTER actually mints, or the derivation is over-reporting
   // and this test would start demanding an unwrap for a shape no url can reach.
   const router = readFileSync(new URL('../src/router.ts', import.meta.url), 'utf8')
   const indirect = arms
-    .filter(a => a.kind !== 'post' && /canonical\s*:/.test(a.fields))
+    .filter(a => a.kind !== 'post' && !NOT_A_POST.includes(a.kind) && /canonical\s*:/.test(a.fields))
     .map(a => a.kind)
     .sort()
+  // The exclusions must still be REAL arms of the union, or a stale entry here would silently stop
+  // demanding an unwrap for a kind that was renamed rather than reclassified.
+  for (const kind of NOT_A_POST) {
+    assert.ok(arms.some(a => a.kind === kind), `NOT_A_POST names ${kind}, which the Route union does not`)
+  }
   assert.ok(indirect.length >= 3, `the derivation found ${indirect.length} indirect kinds, expected at least 3`)
   for (const kind of indirect) {
     assert.ok(router.includes(`kind: '${kind}'`), `src/router.ts must actually mint ${kind}`)

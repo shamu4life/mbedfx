@@ -51,6 +51,22 @@ export const SMOKE_CHECKS: readonly { platform: string, path: string, verifiedOn
   { platform: 'yt', path: '/jNQXAC9IVRw', verifiedOn: '2026-08-09' },
   // Verified 2026-08-10: a Threads video, now proxied rather than redirected.
   { platform: 'th', path: '/@bisniscom/post/DbkwmbMEt6u', verifiedOn: '2026-08-10' },
+  /**
+   * THE PROFILE ROUTE, and this row is here for the ROUTE rather than for the platform — the one
+   * entry in this list that is not about a fragile upstream.
+   *
+   * Bluesky is the least fragile of the six: a public, documented, unauthenticated API with no UA
+   * gate and no anti-bot. What this checks is that OUR profile path still produces a card at all —
+   * a shape change in the appview's response, a normalizer that starts refusing every payload, a
+   * router arm that stops matching. Every other row detects a platform breaking; this one detects
+   * us breaking, which is the failure the rest of the list cannot see because a post card and a
+   * profile card share no code below render().
+   *
+   * bsky.app's own account, chosen for the reason "Me at the zoo" was: as close to undeletable as
+   * this list gets. Verified 2026-08-11 from Cloudflare egress — og:title "Bluesky (@bsky.app)",
+   * og:image on cdn.bsky.app, counts and join date in og:description.
+   */
+  { platform: 'bs', path: '/profile/bsky.app', verifiedOn: '2026-08-11' },
 ]
 
 /**
