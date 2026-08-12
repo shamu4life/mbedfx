@@ -378,25 +378,38 @@ serialisation (`test/api.test.mjs:325`).
 | `XLATE_MAX_WAIT_MS` | **1500 ms** | the translation's share of the budget |
 | `XLATE_WAIT_FLOOR_MS` | **300 ms** | the floor under the translation's wait |
 | `META_WAIT_API_MS` | **8000 ms** | **YouTube only**: the metadata extract, awaited after the two above |
+| `META_TIMEOUT_API_MS` | **8700 ms** | **Facebook, Dailymotion, Streamable, Imgur only**: the container metadata extract, which on those four *is* the upstream fetch |
 
-All five are in `src/worker.ts`. The mux and the translation race concurrently (the `Promise.all` in
+All six are in `src/worker.ts`. The mux and the translation race concurrently (the `Promise.all` in
 `describeTarget`), costing `max(300, 9000 − elapsed)` between them rather than the sum. The YouTube
 metadata warm runs after them, only when the post has no known date yet: up to 8000 ms on a first
 YouTube link, nothing thereafter.
 
-The upstream fetch is unbounded. Nothing in `src/` sets an `AbortSignal` (verified by grep), and
-Cloudflare places no wall-clock limit on an HTTP-triggered Worker ([Workers
-limits](https://developers.cloudflare.com/workers/platform/limits/): "No limit … as long as the
-client remains connected"). Only CPU time is capped, and this endpoint spends almost none.
+The upstream fetch is unbounded on thirteen of the seventeen platforms. Nothing in `src/` sets an
+`AbortSignal` (verified by grep), and Cloudflare places no wall-clock limit on an HTTP-triggered
+Worker ([Workers limits](https://developers.cloudflare.com/workers/platform/limits/): "No limit …
+as long as the client remains connected"). Only CPU time is capped, and this endpoint spends almost
+none.
+
+Facebook, Dailymotion, Streamable and Imgur are the four exceptions, and they are exceptions because
+their "upstream fetch" is a `yt-dlp` extract inside our own container rather than a request to the
+site. That call is bounded, because the container's own process timeout is 120 s and a wedged
+instance would otherwise hold the whole response. Past `META_TIMEOUT_API_MS` this endpoint answers
+`fetch_fail` for a post that may be perfectly fine — the extract keeps running and lands in storage,
+so **asking again a few seconds later is the documented way to get the answer**, exactly as it is for
+a video still muxing. Until 2026-08-12 that bound was 4700 ms, borrowed from the crawler's 5 s
+ceiling, and a healthy Dailymotion extract measured 3.3 s to over 4.7 s from production — so this
+endpoint reported "couldn't load" about live posts.
 
 ```
 total ≈ upstream fetch + max(300 ms, 9000 ms − upstream fetch) + (YouTube only: up to 8000 ms)
 ```
 
 An upstream answering within 8.7 s gives 9.0 s, 17.0 s on a cold YouTube link; slower, the mux drops
-to its 300 ms floor and the total tracks the upstream. Set the client timeout to 20 s: the 17.0 s
-worst case plus roughly 3 s for connection setup and a slower upstream. 12 s covers a client that
-never sends YouTube links. 5 or 10 s cuts off requests about to answer.
+to its 300 ms floor and the total tracks the upstream — except on the four container platforms,
+where 8.7 s is also where the answer stops arriving at all. Set the client timeout to 20 s: the
+17.0 s worst case plus roughly 3 s for connection setup and a slower upstream. 12 s covers a client
+that never sends YouTube links. 5 or 10 s cuts off requests about to answer.
 
 Measured, each recorded in a comment beside the code it bounds in `src/worker.ts`: a cold video
 remux 6-9 s at ≤480p (2026-07-24), `yt-dlp -J` on YouTube 2.3-6.7 s over five runs (2026-07-26), a

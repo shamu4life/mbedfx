@@ -115,6 +115,35 @@ export type Outcome2 =
    */
   | 'translate_pending'
   /**
+   * `meta_timeout` — THE CONTAINER METADATA CALL RAN OUT OF **OUR** BUDGET, and it is `assert_fail`'s
+   * counterpart in the same way `translate_pending` is `translated`'s: the state was real, common and
+   * completely untraceable.
+   *
+   * IT WAS COUNTED AS assert_fail, WHICH SAYS THE OPPOSITE OF THE TRUTH. This file defines assert_fail
+   * as "upstream changed shape, blocked mbedfx, or served a decoy" and docs/METRICS.md tells the
+   * operator that a moving assert_fail/ok ratio means that platform's upstream changed shape. A lost
+   * meta deadline is none of those: the container is still extracting, it lands in R2 under waitUntil a
+   * moment later, and the very next unfurl of the same post is a warm hit. Filing it under assert_fail
+   * pointed the one available signal at the wrong system.
+   *
+   * ADDED AFTER AN AUDIT FOUND WHAT NO COUNTER COULD, 2026-08-12. Dailymotion and Streamable each
+   * answered a Discord crawler with the bare failure card on a cold first request and healed on a
+   * retry, and the only reason anyone knew was that all seventeen platforms happened to be rendered by
+   * hand that day. Both upstreams were independently healthy at that moment. See META_TIMEOUT_API_MS in
+   * worker.ts for the measurement.
+   *
+   * WHERE IT FIRES: the yt-dlp tier (dm/st/im) only — the platforms where the container IS the card, so
+   * a lost deadline is immediately the generic "couldn't load". Facebook takes the same budget but
+   * falls through to three more surfaces on a miss, so its null is not this event and is left alone.
+   *
+   * READ IT AGAINST assert_fail ON THE SAME PLATFORM. It REPLACES assert_fail rather than stacking on
+   * it (the precedent is `notfound` on ms/mk/pt, counted separately so a deleted post does not inflate
+   * assert_fail); the route-level `fetch_fail` still fires either way, so only the attribution moves.
+   * A rise here is OURS to fix — a slower upstream extract, a cold container, or a budget that no
+   * longer covers a healthy call. A rise in assert_fail beside a flat one here is still theirs.
+   */
+  | 'meta_timeout'
+  /**
    * `smoke_ok` / `smoke_fail` are the OUTAGE DETECTOR, and they are a pair like the translate ones:
    * a raw count means nothing, a RATIO per platform means everything.
    *

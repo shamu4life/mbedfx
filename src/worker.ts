@@ -110,9 +110,17 @@ export interface Deps {
    * own failure. See cachedMeta's waitUntil. Optional and last for `report`'s reason: every existing
    * stub declares fewer parameters and JS ignores the extras, and a fetcher that does no container
    * work (every other platform) never reads it.
+   *
+   * `metaBudgetMs` is the CALLER'S ceiling for the container metadata call, and it is a parameter
+   * because getPost is the same function on every surface while the surfaces are not the same: the
+   * crawler head has 5s and the converter preview has 9s. Omitted means the crawler's, which is what
+   * shipped — see META_TIMEOUT_API_MS for the measurement that made the single number wrong. Optional
+   * and last for `report`'s reason: every existing stub declares fewer parameters, JS ignores the
+   * extras, and a fetcher with no container upstream never reads it.
    */
   fetchPost(
     ref: PostRef, env: Env, client: ClientClass, report?: FetchReport, ctx?: ExecutionContext,
+    metaBudgetMs?: number,
   ): Promise<Post | null>
   /**
    * Resolve a /t/{code} short link. Separate from fetchPost because the INPUT is not a PostRef —
@@ -242,6 +250,7 @@ export async function liveFetchProfile(
 
 export async function liveFetchPost(
   ref: PostRef, env: Env, client: ClientClass, report?: FetchReport, ctx?: ExecutionContext,
+  metaBudgetMs?: number,
 ): Promise<Post | null> {
   switch (ref.p) {
     case 'bs': {
@@ -708,7 +717,15 @@ export async function liveFetchPost(
       //
       // The fall-through below is what actually renders a photo: the plugin fragment. Measured
       // 2026-08-11 from Cloudflare egress over eleven photo permalinks on four pages — all eleven.
-      const meta = await cachedFacebookMeta(ref, env, ctx)
+      //
+      // `metaBudgetMs` RIDES THROUGH HERE TOO, and it buys Facebook something different from what it
+      // buys the yt-dlp tier. There a lost meta deadline IS the failure card; here it is worse than a
+      // slow card and better than no card — the arm falls through to up to three MORE upstream fetches
+      // (page, plugin fragment, caption) that begin with the whole response budget already spent, so a
+      // preview that ran out of clock here reliably had nothing left for the surface that would have
+      // answered. Not measured live: Meta walls these surfaces from this egress, so a fresh probe would
+      // confound rather than settle it. Read off the code path and stated as such.
+      const meta = await cachedFacebookMeta(ref, env, ctx, metaBudgetMs)
       if (!meta) {
         /**
          * NOT A VIDEO — so try the POST surface before giving up. Facebook's share sheet hands out one
@@ -954,9 +971,24 @@ export async function liveFetchPost(
       // from the container (see platforms/ytdlp/normalize.ts). Grouped because they differ only in a
       // page-url template; the normalizers stay separate so each refuses a foreign ref by type.
       // `ctx` so the extract survives the response — see cachedMeta's waitUntil.
-      const meta = await cachedYtdlpMeta(ref, env, ctx)
+      /**
+       * THE COUNTER MUST NOT BLAME THE UPSTREAM FOR OUR OWN BLOWN DEADLINE, and for years it did.
+       *
+       * docs/METRICS.md defines assert_fail as "the page didn't answer: upstream changed shape, blocked
+       * mbedfx, or served a decoy", and tells the operator that a moving assert_fail/ok ratio means that
+       * platform's upstream changed shape. A lost META_TIMEOUT_MS is none of those — the container is
+       * still extracting, and it lands in R2 under waitUntil a moment later — yet it landed in the same
+       * bucket, so the one signal that exists pointed at the wrong system. That is why the 2026-08-12
+       * cold-path defect had to be found by an audit rather than by a counter.
+       *
+       * REPLACES assert_fail rather than stacking on it, which is `notfound`'s precedent on ms/mk/pt
+       * ("counted here so a deleted post does not inflate assert_fail"). The route-level fetch_fail
+       * still fires either way, so the total failure count is unchanged and only its attribution moves.
+       */
+      const mreport: MetaReport = {}
+      const meta = await cachedYtdlpMeta(ref, env, ctx, metaBudgetMs, mreport)
       if (!meta) {
-        count(env, ref.p, 'assert_fail', client)
+        count(env, ref.p, mreport.timedOut ? 'meta_timeout' : 'assert_fail', client)
         return null
       }
       return ref.p === 'dm' ? normalizeDailymotion(meta, ref) : normalizeStreamable(meta, ref)
@@ -982,9 +1014,12 @@ export async function liveFetchPost(
         count(env, 'im', 'assert_fail', client)
         return null
       }
-      const meta = await cachedYtdlpMeta(ref, env, ctx)
+      // The SAME attribution split the dm/st arm documents at length — Imgur reaches this arm only when
+      // its own API missed, so from here on the container is its whole card too.
+      const mreport: MetaReport = {}
+      const meta = await cachedYtdlpMeta(ref, env, ctx, metaBudgetMs, mreport)
       if (!meta) {
-        count(env, 'im', 'assert_fail', client)
+        count(env, 'im', mreport.timedOut ? 'meta_timeout' : 'assert_fail', client)
         return null
       }
       return normalizeImgur(meta, ref)
@@ -1100,9 +1135,14 @@ export async function liveResolveRedditShare(
  * the Post), so the richer failure reason must ride a closure rather than the return. On a cache
  * HIT the loader never runs and `report.reason` stays undefined — correct, a hit is a success; a
  * failure is never cached. A thrown fetch leaves it undefined too, degrading to the generic failure.
+ *
+ * `metaBudgetMs` IS THE ONE THING THIS FUNCTION CANNOT DERIVE, which is why it is passed rather than
+ * read from a constant. Every other budget in this file is `ceiling - elapsed`, computed by the route
+ * that owns the ceiling; this one was a single module constant shaped by the CRAWLER's and spent
+ * unchanged on /_card and /_api/v1, which have their own and a bigger one. Omitted means the crawler's.
  */
 function getPost(
-  ref: PostRef, d: Deps, env: Env, client: ClientClass, ctx: ExecutionContext,
+  ref: PostRef, d: Deps, env: Env, client: ClientClass, ctx: ExecutionContext, metaBudgetMs?: number,
 ): Promise<{ post: Post | null; cached: boolean; failReason?: GateReason }> {
   const report: FetchReport = {}
   // `ctx` rides through to the fetchers whose upstream is the container (fb, dm/st/im), which need it
@@ -1110,7 +1150,7 @@ function getPost(
   // three call sites are in this file and every one of them has a ctx, so there is no reason to let a
   // future fourth one silently drop it. It stays optional at the Deps/liveFetchPost boundary, which is
   // the injected, .mjs-stubbed one.
-  return loadPost(postCacheKey(ref), () => d.fetchPost(ref, env, client, report, ctx), d)
+  return loadPost(postCacheKey(ref), () => d.fetchPost(ref, env, client, report, ctx, metaBudgetMs), d)
     .then(r => ({ post: r.post ? withResolver(r.post, env) : null, cached: r.cached, failReason: report.reason }))
 }
 
@@ -1693,8 +1733,49 @@ function prewarmable(ref: PostRef): { index: number; source: NonNullable<Media['
  * platform this budget exists for. Deriving it makes the two bounds consistent by construction rather
  * than by somebody remembering to move both — a meta call that runs to its ceiling still leaves exactly
  * MUX_WAIT_FLOOR_MS, which is enough to observe a warm R2 mux.
+ *
+ * THE "GENEROUS" ABOVE IS STALE FOR THE yt-dlp TIER, and the correction is the whole reason
+ * META_TIMEOUT_API_MS exists below. 2.4-3.1s was measured on FACEBOOK. Measured 2026-08-12 from
+ * production against ten previously-unseen Dailymotion ids, a SUCCESSFUL `yt-dlp -J` costs 3.3s to
+ * over 4.7s: every one of the ten landed its whole response at the 5.0s ceiling, and one blew this
+ * deadline outright and returned the 258-byte failure card. The steady-state warm cost already sits
+ * inside the last ~30% of this budget, so a cold container is not a special case — it is simply the
+ * reliable way to push it over.
+ *
+ * THIS NUMBER STAYS 4700 ANYWAY, and that is a decision rather than an omission. It is DERIVED from
+ * HTML_DEADLINE_MS, and that derivation is still right: 5000 bounds how long a CRAWLER holds the
+ * connection, so raising the meta ceiling past it reintroduces exactly the "6000 was larger than the
+ * budget it spends from" defect recorded above. If the crawler head needs more, it is HTML_DEADLINE_MS
+ * that has to move, and that is a separate measurement about Discord's tolerance that nobody has taken.
  */
 const META_TIMEOUT_MS = HTML_DEADLINE_MS - MUX_WAIT_FLOOR_MS
+
+/**
+ * THE SAME CALL, ON A SURFACE THAT IS NOT A CRAWLER — and the bug is that there was only one number.
+ *
+ * `getPost` is one function on every surface, so the container metadata call — the one that decides
+ * whether there is a card AT ALL on fb/dm/st/im — was capped at the CRAWLER's 4700ms even on /_card and
+ * /_api/v1, which race the mux and the translation on CARD_DEADLINE_MS (9000). A step given a smaller
+ * budget than the response it is a step of is the identical mistake META_WAIT_API_MS = 4000 was, which
+ * describeTarget's own comment calls a monument.
+ *
+ * WHAT IT COST, and why this surface is the one worth fixing first. CLAUDE.md names the converter
+ * preview as the seam with NO NEXT RENDER: a degraded card heals on the next unfurl and a late
+ * translation lands in R2 for the next reader, but /_card is fetched once per typing-settle and drawn,
+ * and nobody re-pastes to heal it. So on this surface a lost meta deadline is not "slow", it is a
+ * permanent "couldn't load" for a Dailymotion or Streamable link that is completely fine — reproduced
+ * as ~1 in 10 fresh first-pastes on 2026-08-12 (see META_TIMEOUT_MS for the measurement).
+ *
+ * DERIVED THE SAME WAY, from the ceiling this surface actually spends: a meta call that runs to this
+ * ceiling still leaves exactly MUX_WAIT_FLOOR_MS, which is what describeTarget's settleMux floors at.
+ * So the two bounds stay consistent by construction, exactly as they do on the crawler head.
+ *
+ * NOT APPLIED TO THE ACTIVITY/oEMBED CALLBACK, deliberately, and for MUX_WAIT_BOT_MS's stated reason:
+ * that document is fetched by Discord immediately after the head, so its ceiling is the second half of
+ * a budget already spent, and how much a crawler will tolerate there is unmeasured. It keeps
+ * META_TIMEOUT_MS. Widening it wants its own measurement, not this one.
+ */
+const META_TIMEOUT_API_MS = CARD_DEADLINE_MS - MUX_WAIT_FLOOR_MS
 
 /**
  * Race a promise against a deadline, returning null if the deadline wins. The TIMER IS CLEARED when the
@@ -2061,6 +2142,20 @@ function metaAttempt<T>(
 }
 
 /**
+ * WHY A META CALL CAME BACK EMPTY — a mutable OUT-parameter, FetchReport's shape and for FetchReport's
+ * reason: the answer stays `T | null` (that null is what every caller branches on) while the one detail
+ * it hides rides out beside it.
+ *
+ * ONE FIELD, because there is one distinction worth counting: `timedOut` means the container was still
+ * working when our budget ran out, which is a fact about US. Every other null — no binding, a refused
+ * dispatch, or the extract's own "no title" — is left unflagged. Optional and last, so the callers that
+ * do not count (the mux paths, the tests that call these directly) are untouched.
+ */
+interface MetaReport {
+  timedOut?: boolean
+}
+
+/**
  * THE GATE CHAIN FOR A CARD-CRITICAL META CALL — Facebook and the yt-dlp tier, which unlike YouTube get
  * their WHOLE card from the container.
  *
@@ -2090,6 +2185,7 @@ function metaAttempt<T>(
 async function cachedMeta<T>(
   ref: PostRef, env: Env, ctx: ExecutionContext | undefined, ttlMs: number, budgetMs: number,
   failTtlMs: number, valid: (j: unknown) => boolean, work: () => Promise<T | null>,
+  report?: MetaReport,
 ): Promise<T | null> {
   const hit = await readCachedMeta<T>(ref, env, ttlMs, valid)
   if (hit) return hit
@@ -2111,7 +2207,21 @@ async function cachedMeta<T>(
    * A deadline is not an abort: nothing is cancelled by losing the race, only waited for less.
    */
   ctx?.waitUntil(attempt)
-  return await deadline(attempt, budgetMs)
+  /**
+   * WHICH KIND OF NULL THIS WAS, for the counter — and the flag is set from whether the ATTEMPT had
+   * settled, not from what `deadline` returned, because deadline answers null for BOTH cases: the
+   * extract's own "this page is gone" and our budget running out underneath a container that is still
+   * working. Those are opposite claims about who is broken, and the single `assert_fail` they used to
+   * share told the operator the upstream had changed shape. See the counting site in liveFetchPost.
+   *
+   * `answered` is flipped in a .then on the same promise the race awaits, so it is already true by the
+   * time the await below resumes on the work's value — a later microtask cannot make a real answer look
+   * like a timeout. metaAttempt never rejects (it attaches its own handler), so there is no second arm.
+   */
+  let answered = false
+  const got = await deadline(attempt.then(v => { answered = true; return v }), budgetMs)
+  if (!got && !answered && report) report.timedOut = true
+  return got
 }
 
 /**
@@ -2129,12 +2239,16 @@ const metaHasTitle = (j: unknown): boolean => {
   return typeof t === 'string' && t.length > 0
 }
 
+/**
+ * `budgetMs` DEFAULTS TO THE CRAWLER'S, so a caller that says nothing gets exactly the behaviour that
+ * shipped. Only the surfaces with a bigger ceiling of their own pass one — see META_TIMEOUT_API_MS.
+ */
 function cachedFacebookMeta(
-  ref: Extract<PostRef, { p: 'fb' }>, env: Env, ctx?: ExecutionContext,
+  ref: Extract<PostRef, { p: 'fb' }>, env: Env, ctx?: ExecutionContext, budgetMs = META_TIMEOUT_MS,
 ): Promise<FacebookMeta | null> {
   return cachedMeta<FacebookMeta>(
     // FB_FAIL_TTL_MS is 0 — Facebook does NOT negative-cache, deliberately; see the constant.
-    ref, env, ctx, FB_META_TTL_MS, META_TIMEOUT_MS, FB_FAIL_TTL_MS, metaHasTitle,
+    ref, env, ctx, FB_META_TTL_MS, budgetMs, FB_FAIL_TTL_MS, metaHasTitle,
     () => resolveFacebookMeta(ref, env),
   )
 }
@@ -2226,13 +2340,15 @@ const YTDLP_TTL: Record<'dm' | 'st' | 'im', number> = {
  */
 function cachedYtdlpMeta(
   ref: Extract<PostRef, { p: 'dm' | 'st' | 'im' }>, env: Env, ctx?: ExecutionContext,
+  budgetMs = META_TIMEOUT_MS, report?: MetaReport,
 ): Promise<YtdlpMeta | null> {
   // The slot is the POST (refKey), never the operation, so this call and the video mux for one ref
   // land on ONE container instance — see RESOLVER_SLOTS for the 74% measurement.
   const page = ytdlpPageUrl(ref)
   return cachedMeta<YtdlpMeta>(
-    ref, env, ctx, YTDLP_TTL[ref.p], META_TIMEOUT_MS, META_FAIL_TTL_MS, metaHasTitle,
+    ref, env, ctx, YTDLP_TTL[ref.p], budgetMs, META_FAIL_TTL_MS, metaHasTitle,
     () => resolveYtdlpMeta(page, refKey(ref), env),
+    report,
   )
 }
 
@@ -3207,7 +3323,24 @@ async function describeTarget(
       : { ok: false, reason: inner.kind }
   }
 
-  const got = await getPost(inner.ref, d, env, client, ctx)
+  /**
+   * THE METADATA CALL GETS THIS SURFACE'S CEILING, NOT THE CRAWLER'S — the fix for a /_card and
+   * /_api/v1 answering "couldn't load" about a Dailymotion or Streamable post that is completely fine.
+   * See META_TIMEOUT_API_MS for the production measurement and for why this seam is the one that had to
+   * move first: it is the one CLAUDE.md names as having no next render.
+   *
+   * REMAINING, NOT FRESH — the same discipline as the settleMux and translation budgets below, and the
+   * reason `started` is taken at the top of this function. unwrapToPost above can spend a real network
+   * hop on a share code, and a step that took a fresh budget after it would push the whole answer past
+   * the ceiling it is supposed to be bounded by.
+   *
+   * FLOORED AT META_TIMEOUT_MS, which is what makes this strictly a widening: however slow the unwrap
+   * was, this call still gets at least the budget it had before the change, so no link that previewed
+   * yesterday can preview worse today. Above the floor it is derived exactly as the crawler's is — run
+   * to the ceiling and MUX_WAIT_FLOOR_MS is left, which is what settleMux floors at.
+   */
+  const metaBudget = Math.max(META_TIMEOUT_MS, META_TIMEOUT_API_MS - (Date.now() - started))
+  const got = await getPost(inner.ref, d, env, client, ctx, metaBudget)
   if (!got.post) {
     // renderGate is the ONE place the fetcher's gate vocabulary becomes render's, so a wall says the
     // same thing on the card, in the preview and in the API. `undefined` in, `undefined` out, and
