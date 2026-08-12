@@ -995,9 +995,18 @@ function mbedfxConvert(input, host) {
       paths: ['pin/66287425756772418'], note: 'Every regional domain works.' },
     { name: 'Dailymotion', host: 'dailymotion.com · dai.ly', icon: 'dailymotion', rail: MONO,
       // x8ocv9e is Fortune's, i.e. publisher-owned rather than a reupload, because the id this row
-      // shipped with (xaqwy7q) went HTTP 410 Gone and sat on the page dead. Verified 2026-08-12 from
-      // Cloudflare egress: the page is 125 KB carrying og:video, and /_api/v1 answers ok with one
-      // media. Prefer a publisher account here — a random reupload is the thing that 410s next.
+      // shipped with (xaqwy7q) went HTTP 410 Gone and sat on the page dead.
+      //
+      // TWO READINGS, TWO CLIENTS, AND THE DIFFERENCE MATTERS. Verified 2026-08-12 FROM CLOUDFLARE
+      // EGRESS: mbedfx.app/_api/v1 answers ok with one media for this id. That is the reading that
+      // counts, because it is the client this row's links are actually served to.
+      // Separately, FROM A LAPTOP: the dailymotion.com page is 125 KB carrying og:video and
+      // og:image 1280x720. That one is residential and is NOT evidence for this project — it is
+      // recorded only because it is how the replacement was found. This worker never fetches that
+      // page at all: platforms/dailymotion/fetch.ts has NO platform egress by design, and both the
+      // metadata and the video come from the container's yt-dlp.
+      //
+      // Prefer a publisher account here — a random reupload is the thing that 410s next.
       paths: ['video/x8ocv9e', 'dm/x8ocv9e'], note: '' },
     { name: 'Streamable', host: 'streamable.com', icon: 'play', rail: '#0F90FA',
       paths: ['e/moo', 'st/moo'], note: '' },
