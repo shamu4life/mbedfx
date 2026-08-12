@@ -3805,21 +3805,39 @@ export async function handle(req: Request, env: Env, ctx: ExecutionContext, d: D
    * nothing a caller can point it at. A version of this that accepted `?url=` would be an open relay
    * wearing a monitoring badge.
    *
-   * IT COSTS WHAT IT LOOKS LIKE. Five renders, serial, each of which may reach an upstream — so it is
-   * deliberately not linked from anywhere and not cached. It answers JSON rather than a card because
-   * nothing should ever unfurl it.
+   * IT COSTS WHAT IT LOOKS LIKE. One render per entry in SMOKE_CHECKS, serial, each of which may
+   * reach an upstream — so it is deliberately not linked from anywhere and not cached. It answers
+   * JSON rather than a card because nothing should ever unfurl it.
+   *
+   * IT REPORTS ITS OWN ELAPSED TIME, in `ms` here and per check in `results`, because the serial
+   * loop's safety is an arithmetic claim about how long a run takes and that claim has to stay
+   * checkable. Measured through production 2026-08-12: a run whose caches are all cold takes ~10s
+   * for the six checks that existed that morning, and ~0.1s when they are warm — a difference big
+   * enough that a number remembered from the wrong run would be off by two orders of magnitude.
+   * See SMOKE_BUDGET_MS.
+   *
+   * WHAT IT IS NOT, now that the list is sixteen entries rather than five: an amplifier somebody can
+   * point at the upstreams. Each render goes through the ordinary response and post caches, so a
+   * second call within RESP_TTL costs no upstream fetch at all — measured 2026-08-12, a cold run took
+   * 10.4s and the two behind it took 0.10s and 0.13s. The floor a caller can force is therefore about
+   * one fetch per path per 15 minutes per colo, whatever they do to this endpoint, and only the JSON
+   * itself is uncached.
    */
   if (url.pathname === '/_smoke') {
+    const started = Date.now()
     const results = await runSmoke(url.origin, u => handle(new Request(u, {
       // Rendered as a crawler, because that is the reader whose experience is being checked.
       headers: { 'user-agent': 'Mozilla/5.0 (compatible; Discordbot/2.0; +https://discordapp.com)' },
     }), env, ctx, d))
-    for (const r of results) count(env, r.platform as never, smokeOutcome(r.verdict), SMOKE_CLIENT)
+    for (const r of results) count(env, r.platform, smokeOutcome(r.verdict), SMOKE_CLIENT)
     const failed = results.filter(r => r.verdict !== 'ok')
     return Response.json({
       ok: failed.length === 0,
       checked: results.length,
-      failed: failed.map(f => ({ platform: f.platform, verdict: f.verdict })),
+      ms: Date.now() - started,
+      // `name`, not `platform`: bs has two rows, and a failure list that named only the platform
+      // would leave the reader unable to tell the profile route from the post route.
+      failed: failed.map(f => ({ name: f.name, verdict: f.verdict })),
       results,
     }, { headers: { 'cache-control': 'no-store' } })
   }
@@ -4803,12 +4821,14 @@ export default {
     const results = await runSmoke('https://mbedfx.app', u => handle(new Request(u, {
       headers: { 'user-agent': 'Mozilla/5.0 (compatible; Discordbot/2.0; +https://discordapp.com)' },
     }), env, ctx, d))
-    for (const r of results) count(env, r.platform as never, smokeOutcome(r.verdict), SMOKE_CLIENT)
-    // One console line per FAILING platform and nothing else. It carries a platform code and a
+    for (const r of results) count(env, r.platform, smokeOutcome(r.verdict), SMOKE_CLIENT)
+    // One console line per FAILING check and nothing else. It carries the check's name and a
     // verdict — no url, no reader, nothing that identifies anybody — so it stays inside the boundary
-    // wrangler.jsonc draws, and it is visible to `wrangler tail` when somebody is watching.
+    // wrangler.jsonc draws, and it is visible to `wrangler tail` when somebody is watching. The NAME
+    // rather than the platform, because bs has two rows and the counter cannot tell them apart; this
+    // line is the only place a reader learns which of the two went.
     for (const r of results) {
-      if (r.verdict !== 'ok') console.error(`smoke ${r.platform} ${r.verdict}`)
+      if (r.verdict !== 'ok') console.error(`smoke ${r.name} ${r.verdict}`)
     }
     if (results.length !== SMOKE_CHECKS.length) console.error('smoke incomplete')
   },
