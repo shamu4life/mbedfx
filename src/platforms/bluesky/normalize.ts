@@ -1,4 +1,4 @@
-import type { Media, Post, PostRef } from '../../types.ts'
+import type { Media, Post, PostRef, Profile, ProfileRef } from '../../types.ts'
 
 type Any = Record<string, any>
 
@@ -118,6 +118,84 @@ function build(p: Any, ref: Extract<PostRef, { p: 'bs' }>, record: Any, embed: A
  * a Post, because a half-built Post renders as a broken embed.
  * Quote and replyTo are capped at depth 1 — build() never recurses.
  */
+/**
+ * A NON-NEGATIVE INTEGER COUNT, or undefined — never a coerced 0.
+ *
+ * The distinction is the whole honesty rule of a profile card: `0` is a real answer (a new account
+ * has no followers) and prints as one, while "the payload did not carry this field" must print
+ * NOTHING. `Number(undefined)` is NaN and `undefined ?? 0` is 0, so both of the obvious spellings
+ * turn a missing field into a claim.
+ */
+function count(v: unknown): number | undefined {
+  return typeof v === 'number' && Number.isFinite(v) && v >= 0 ? Math.trunc(v) : undefined
+}
+
+/**
+ * THE AVATAR HOST ALLOWLIST, and it is what lets a Profile carry an ORIGIN url where a Post may
+ * only carry a /_media/ one.
+ *
+ * Media.url's rule exists because those urls "may be signed and expiring" — a TikTok avatar url
+ * carries x-expires and x-signature, and Discord caches an og:image BY URL, so an expiring one
+ * becomes a broken picture on a card that outlives it. Bluesky's CDN is the opposite, and that was
+ * measured rather than assumed: the avatar in the getProfile payload is
+ * `https://cdn.bsky.app/img/avatar/plain/{did}/{cid}@jpeg` — content-addressed, no query string, no
+ * signature, no expiry (2026-08-11, from Cloudflare egress). It is the url every Bluesky client
+ * hotlinks.
+ *
+ * SO THE PREFIX IS AN ASSERTION, not decoration. If the appview ever starts handing out signed urls
+ * on another host this drops the avatar and the card renders without a picture — the honest degrade
+ * — rather than shipping a link that 403s a week later inside Discord's cache.
+ */
+const BS_CDN = 'https://cdn.bsky.app/'
+
+/**
+ * getProfile -> Profile. PURE, and every field is either present in the payload or absent from the
+ * card; nothing here computes a plausible value.
+ *
+ * THE IDENTITY ASSERTION IS `handle`, NOT THE STATUS CODE. fetchBlueskyProfile already refuses a
+ * non-JSON body; this refuses a body with no handle in it, which is what an error envelope served
+ * at HTTP 200 would look like. Everything else may be missing — a card with a handle and nothing
+ * else is still true.
+ *
+ * `handle` COMES FROM THE PAYLOAD, not from the ref: a DID url resolves to the account's CURRENT
+ * handle, and a renamed account's old handle 400s. So the card names the account the way Bluesky
+ * does now, and `canonical` is rebuilt from that same handle — the "normalizer owns its canonical"
+ * split TikTok, Instagram and Threads already use.
+ *
+ * A HANDLE OF `handle.invalid` IS KEPT AS-IS. That is what the appview returns while an account's
+ * DNS or HTTPS handle verification is failing, and it is honest: the account really is unverifiable
+ * at that moment. Rewriting it to the DID would be tidier and would state something the payload
+ * does not.
+ */
+export function normalizeBlueskyProfile(raw: unknown, ref: ProfileRef): Profile | null {
+  if (ref.p !== 'bs') return null
+  const r = raw as Any
+  const handle = typeof r?.handle === 'string' && r.handle ? r.handle : ''
+  if (!handle) return null
+  const avatar = typeof r.avatar === 'string' && r.avatar.startsWith(BS_CDN) ? r.avatar : undefined
+  // A date the payload does not carry, or carries as junk, is ABSENT — never the epoch, which is the
+  // 1970 card this project has already shipped once. `new Date(junk)` is an Invalid Date, not a throw.
+  const created = typeof r.createdAt === 'string' ? new Date(r.createdAt) : null
+  const createdAt = created && !Number.isNaN(created.getTime()) ? created : undefined
+  const followers = count(r.followersCount)
+  const following = count(r.followsCount)
+  const posts = count(r.postsCount)
+  return {
+    ref,
+    canonical: `https://bsky.app/profile/${handle}`,
+    handle,
+    name: typeof r.displayName === 'string' ? r.displayName : '',
+    bio: typeof r.description === 'string' ? r.description : '',
+    ...(avatar ? { avatar } : {}),
+    ...(createdAt ? { createdAt } : {}),
+    counts: {
+      ...(followers === undefined ? {} : { followers }),
+      ...(following === undefined ? {} : { following }),
+      ...(posts === undefined ? {} : { posts }),
+    },
+  }
+}
+
 export function normalizeBluesky(raw: unknown, ref: PostRef): Post | null {
   if (ref.p !== 'bs') return null
   const r = raw as Any

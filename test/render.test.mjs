@@ -503,9 +503,18 @@ test('ambiguous: human gets a chooser; crawler is told plainly and given no dead
 
   const d = await body(render(a, 'discord', ORIGIN))
   assert.match(d, /ambiguous/i)
-  // Must NOT advise "/x/mrbeast": bare profiles are not a post shape in any phase,
-  // so that prefix 404s. Advice that doesn't work is worse than none.
+  /**
+   * Must NOT advise "/x/mrbeast", and the reason CHANGED on 2026-08-11 without the assertion
+   * changing. It used to be that no profile was a route at all; now one is — Bluesky's
+   * /profile/{handle} — but X's is still not, because a bare handle is Instagram's shape too and
+   * claiming it for either would serve a card from a site the reader never pasted (router.ts's
+   * profile() carries the measurement). So the prefix would still 404, and advice that does not
+   * work is worse than none.
+   */
   assert.ok(!/\/x\/mrbeast/.test(d), 'must not advise a prefix that 404s')
+  // And the copy no longer claims profiles are impossible, which stopped being true the same day.
+  assert.ok(!/bare profile links cannot/.test(d), 'the old absolute claim is gone')
+  assert.match(d, /names an account on both/, 'it says what is true of THIS row instead')
 })
 
 test('video dimensions are lied about on the plain-og path', async () => {

@@ -299,7 +299,22 @@ const THEME: Record<Platform, string> = {
  * observed rendering, and a corrupted ref should degrade to a verified embed, not a bare one.
  */
 export function themeColor(post: Post): string {
-  const v: unknown = THEME[(post?.ref as { p?: Platform } | undefined)?.p as Platform]
+  return themeOf((post?.ref as { p?: Platform } | undefined)?.p)
+}
+
+/**
+ * THE SAME TABLE, ASKED BY PLATFORM RATHER THAN BY POST — because the profile head has no Post to
+ * ask with, and a second copy of this table is the exact defect the docstring above records (one
+ * head with a colour, one without, for months).
+ *
+ * The string-RESULT guard moved here with the lookup and matters more, not less: `p` now arrives
+ * from a Profile as well as a Post, both of which are shaped by code rather than validated on
+ * read, and a raw lookup on an object literal inherits Object.prototype — 'constructor' resolves
+ * to a function, '__proto__' to an object, and neither is undefined, so `??` never fires and the
+ * source text of Object ships inside a meta tag.
+ */
+export function themeOf(p: unknown): string {
+  const v: unknown = THEME[p as Platform]
   return typeof v === 'string' ? v : '#0085ff'
 }
 

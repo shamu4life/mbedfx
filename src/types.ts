@@ -251,6 +251,74 @@ export type PostRef =
    */
   | { p: 'pn'; id: string }
 
+/**
+ * AN ACCOUNT, NOT A POST — and it is a separate type from PostRef rather than a new arm of it,
+ * which is the first of the two decisions this feature turns on.
+ *
+ * A PostRef names something that was published once and never changes. An account is a LIVE
+ * surface: its counts move every minute and its bio moves whenever the owner edits it. The
+ * machinery hung off PostRef assumes the first — the post cache stores a normalized Post for
+ * POST_TTL, /_media/ hands Discord a url whose bytes are expected to be stable, and the Mastodon
+ * spoof turns a refKey into a status id. None of that is right for a profile, and pretending
+ * otherwise is how a card ends up promising numbers that were true fifteen minutes ago.
+ *
+ * IT ALSO KEEPS refkey.ts ALONE. refKey/parseRefKey are the security boundary for what crosses
+ * the wire and comes back, and their kind lists are allowlists; a profile mints NO refKey at all
+ * (see render/profile.ts for why the avatar needs no /_media/ hop), so nothing new crosses that
+ * boundary and its allowlists are untouched. A profile arm on PostRef would have had to be added
+ * there, and forgetting it is silent — the `fb:group:` scar.
+ *
+ * ONE PLATFORM TODAY, spelled as a literal so a second is a deliberate type change rather than a
+ * widening nobody reviews. See router.ts's profile() for the measurement that made Bluesky the
+ * only member.
+ */
+export type ProfileRef = { p: 'bs'; handle: string }
+
+/**
+ * WHAT A PROFILE CARD IS ALLOWED TO SAY. Every field is either measured from the platform's own
+ * payload or ABSENT — there is no field here whose value can be inferred, and that is the second
+ * decision this feature turns on.
+ *
+ * WHY IT IS NOT A `Post` WITH THE HOLES FILLED IN. Post makes two demands a profile cannot meet
+ * honestly:
+ *   - `createdAt: Date` is REQUIRED, and a profile has no post date. Reusing the field would put
+ *     either the account's join date (a different thing, mislabelled) or `new Date()` (a
+ *     fabrication) on every card.
+ *   - `counts` is {likes, reposts, replies, views} — engagement on ONE post. Followers, follows
+ *     and post totals are none of those, and mapping followers onto `likes` to reuse the renderer
+ *     would print a number under an emoji that means something else.
+ * Both are the kind of "plausible value filling a hole" this project forbids on the card, so the
+ * type refuses to have the holes.
+ *
+ * EVERY COUNT IS OPTIONAL, INDIVIDUALLY. A platform that publishes followers and not posts gets a
+ * card with followers and no posts line, rather than a zero. `0` is a real answer (a new account
+ * genuinely has 0 followers) and is rendered as one; `undefined` means nobody told us.
+ */
+export type Profile = {
+  ref: ProfileRef
+  canonical: string
+  /** The handle as the PLATFORM spells it, which is not always what the url carried (a DID resolves). */
+  handle: string
+  /** The display name. Empty string when the account has none — never backfilled from the handle. */
+  name: string
+  /** The bio, plain text. Empty when the account has none. */
+  bio: string
+  /**
+   * The avatar, as an ORIGIN url rather than a /_media/ one — the only place in this codebase that
+   * does that, and it is admitted only under the allowlist in normalize (see there). Absent means
+   * the account has no avatar, never a placeholder.
+   */
+  avatar?: string
+  /**
+   * WHEN THE ACCOUNT WAS CREATED, and only when the platform states it. This is NOT a post date and
+   * is never rendered as one; the card says "joined". Absent on any platform that does not publish
+   * it, which is why it is optional rather than defaulted to the epoch — the 1970 card is a defect
+   * this project has already shipped once.
+   */
+  createdAt?: Date
+  counts: { followers?: number; following?: number; posts?: number }
+}
+
 export type Media = {
   kind: 'image' | 'video' | 'gif'
   /**
@@ -433,6 +501,19 @@ export type Route =
   | { kind: 'api'; target: string | null }
   | { kind: 'post'; ref: PostRef; canonical: string }
   /**
+   * AN ACCOUNT PAGE — `/profile/{handle}`, which is bsky.app's own permalink with the host swapped
+   * and nothing else edited.
+   *
+   * IT IS ITS OWN KIND, not a 'post' with a profile-shaped ref, because every consumer of 'post'
+   * (renderPostRoute's mux prewarm, the translation race, /_media/, the Mastodon spoof, the post
+   * cache) is written against a Post and would need a profile branch. One route kind keeps the
+   * profile path visible to a reader instead of hidden inside five `if`s.
+   *
+   * WHY ONLY THIS SHAPE IS UNFORCED, and why the other candidates are not here at all, is argued
+   * at router.ts's profile() — the shadowing analysis is the dangerous half of this feature.
+   */
+  | { kind: 'profile'; ref: ProfileRef; canonical: string }
+  /**
    * A short code that NAMES no post yet. Deliberately not a 'post' with a ref: a short code is
    * not a post id, and TikTok and Threads mint the identical /t/{code} shape — putting one into
    * a PostRef would be guessing, and every downstream consumer would then treat it as an id.
@@ -479,6 +560,12 @@ export type Route =
 
 export type Outcome =
   | { kind: 'post'; post: Post }
+  /**
+   * A rendered ACCOUNT. Separate from 'post' for the reason ProfileRef is separate from PostRef:
+   * render()'s post arm reaches renderPost/renderTelegram/renderSpoof, all of which read a Post,
+   * and the Mastodon spoof in particular exists to draw media attachments a profile does not have.
+   */
+  | { kind: 'profile'; profile: Profile }
   | { kind: 'ambiguous'; path: string; candidates: Platform[] }
   /**
    * `gate` marks a failure that is a known LIMIT rather than an error, and NAMES which limit — the
@@ -492,4 +579,14 @@ export type Outcome =
    * as the gate cards), NOT the old alarm-red "…extraction failed" that read as our bug. Optional, so
    * only the gated paths set it; its absence is the honest-hedged default (see render/index.ts).
    */
-  | { kind: 'failure'; canonical: string | null; platform: Platform | null; reason: string; gate?: 'age' | 'private' }
+  /**
+   * `subject` names WHAT could not be loaded, and exists because the default card says "post" in
+   * words. A profile route that fails would otherwise render "Couldn't load this Bluesky post" for
+   * a url that names an account and no post at all — a card that misdescribes what was asked for is
+   * the same class of small lie as an invented count. Optional, so every existing failure site is
+   * untouched and still means 'post'.
+   */
+  | {
+    kind: 'failure'; canonical: string | null; platform: Platform | null; reason: string
+    gate?: 'age' | 'private'; subject?: 'profile'
+  }

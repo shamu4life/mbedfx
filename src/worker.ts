@@ -1,4 +1,4 @@
-import type { ClientClass, Media, Platform, Post, PostRef, Route } from './types.ts'
+import type { ClientClass, Media, Platform, Post, PostRef, Profile, ProfileRef, Route } from './types.ts'
 import { classify } from './classify.ts'
 import { route } from './router.ts'
 import { render } from './render/index.ts'
@@ -14,10 +14,10 @@ import { runSmoke, smokeOutcome, SMOKE_CHECKS, SMOKE_CLIENT } from './smoke.ts'
 import { cookiesFor, jarAvailable, poolSetButUnused, twitterAccounts, type CredentialPlatform } from './credentials.ts'
 import {
   cacheUrl, deserializePost, postCacheKey, respCacheKey, shortPostCacheKey, shortRespCacheKey,
-  serializePost, POST_TTL, RESP_TTL, MEDIA_MAX_AGE,
+  serializePost, POST_TTL, PROFILE_TTL, RESP_TTL, MEDIA_MAX_AGE,
 } from './cache.ts'
-import { fetchBluesky } from './platforms/bluesky/fetch.ts'
-import { normalizeBluesky } from './platforms/bluesky/normalize.ts'
+import { fetchBluesky, fetchBlueskyProfile } from './platforms/bluesky/fetch.ts'
+import { normalizeBluesky, normalizeBlueskyProfile } from './platforms/bluesky/normalize.ts'
 import { fetchTikTok, resolveTikTokShortlink, withResolvedVideo } from './platforms/tiktok/fetch.ts'
 import { normalizeTikTok, tiktokGate, tiktokRefFrom, videoDetailScope } from './platforms/tiktok/normalize.ts'
 import {
@@ -140,6 +140,17 @@ export interface Deps {
    * Injected like its sibling so the .mjs suite can exercise the path without a network.
    */
   resolveMetaShare(code: string): Promise<string | null>
+  /**
+   * Fetch+normalize an ACCOUNT. Separate from fetchPost for the reason ProfileRef is separate from
+   * PostRef (see types.ts): the input is not a post id and the output is not a Post, so folding it
+   * in would mean a `Post | Profile` return that every existing caller has to narrow.
+   *
+   * REQUIRED, like resolveShortlink and for the same reason: optional would let a caller assemble a
+   * Deps without it and get "every profile link is a failure card" silently. The .mjs stubs that
+   * omit it are unaffected — tsconfig includes only `src` — unless a test exercises a profile path,
+   * which must inject it.
+   */
+  fetchProfile(ref: ProfileRef, env: Env, client: ClientClass): Promise<Profile | null>
 }
 
 /**
@@ -207,6 +218,27 @@ export function renderGate(reason: GateReason | undefined): 'age' | 'private' | 
  * COUNTS ON TOP of the worker's own fetch_fail rather than instead of it — the same layering
  * the activity/oembed case already does with api_miss, so the ratio is the readable signal.
  */
+/**
+ * THE ACCOUNT FETCHER, and it is one line per platform on purpose: everything that makes
+ * liveFetchPost long — the container, the credential seam, the gate vocabulary, the meta warm — is
+ * about POSTS. A profile is one unauthenticated GET.
+ *
+ * `env` and `client` are taken for liveFetchPost's reason (a fetcher counting a failure the worker
+ * cannot see) and are unused today, because the one platform here has no gate to attribute: Bluesky
+ * has no private accounts and answers a missing one with an explicit 400 rather than a decoy. A
+ * platform that DOES wall accounts must count here rather than in the route.
+ */
+export async function liveFetchProfile(
+  ref: ProfileRef, _env: Env, _client: ClientClass,
+): Promise<Profile | null> {
+  switch (ref.p) {
+    case 'bs': {
+      const raw = await fetchBlueskyProfile(ref)
+      return raw ? normalizeBlueskyProfile(raw, ref) : null
+    }
+  }
+}
+
 export async function liveFetchPost(
   ref: PostRef, env: Env, client: ClientClass, report?: FetchReport, ctx?: ExecutionContext,
 ): Promise<Post | null> {
@@ -3038,10 +3070,20 @@ async function describeTarget(
   inner = await unwrapToPost(inner, d, env, client)
 
   if (inner.kind !== 'post') {
-    // THE CANDIDATES RIDE ALONG even though the card ignores them. An ambiguous path is the one
-    // not-a-post answer a caller can DO something about — /_prep already expands it into a chooser —
-    // and computing it here rather than in one serialiser is what keeps the other from having to
-    // re-derive it later and get the list subtly different.
+    /**
+     * A PROFILE LANDS HERE AS `reason: 'profile'`, WHICH IS A KNOWN SCOPE BOUNDARY AND NOT AN
+     * ACCIDENT. Both callers — /_card, the converter page's preview, and /_api/v1, the published
+     * contract — are POST-SHAPED end to end: Described.post is a Post, toApiPost serialises a Post,
+     * and docs/API.md documents that object. Describing a profile means a second payload shape in
+     * the published API, which is a documented change of its own rather than a field added quietly
+     * on the way past.
+     *
+     * WHAT THAT COSTS, stated rather than left to be discovered: the converter page previews
+     * nothing for a profile link even though Discord draws a card for it. That is the third-seam
+     * trap CLAUDE.md names, so the page's copy says exactly that for this reason (see
+     * public/index.html's drawCard) instead of the generic "doesn't resolve to a post", which would
+     * be false.
+     */
     return inner.kind === 'ambiguous'
       ? { ok: false, reason: 'ambiguous', candidates: inner.candidates }
       : { ok: false, reason: inner.kind }
@@ -4126,6 +4168,57 @@ export async function handle(req: Request, env: Env, ctx: ExecutionContext, d: D
       return renderPostRoute(r.ref, r.canonical, d, env, ctx, client, origin)
     }
 
+    /**
+     * AN ACCOUNT — `/profile/{handle}`. Deliberately NOT renderPostRoute, and the list of what it
+     * would have brought with it is the reason: a container prewarm keyed on a refKey a profile has
+     * no way to mint, a settleMux deadline for a video that does not exist, a translation race for a
+     * body that is a bio, and a POST cache whose TTL assumes the thing it stores does not change. A
+     * profile is a live surface; the only cache it takes is the RESPONSE one, below.
+     *
+     * THE d. HOST IS NOT SPECIAL-CASED. That host exists to hand a media file straight to a client,
+     * and a profile has no media file — only an avatar, which is already a plain origin url on the
+     * card. So a d. profile link renders the same card, which is the honest answer rather than a
+     * 404 for a url somebody typed by habit.
+     */
+    case 'profile': {
+      if (client === 'human') return redirect(r.canonical)
+      // Keyed like every other rendered response: the client class (two clients get different
+      // markup) and the ORIGIN (the markup carries a hostname, and two zones are live), in a
+      // namespace that cannot collide with a refKey because refKey always starts with a Platform
+      // tag and 'profile' is not one. Same argument as cache.ts's `short:` infix.
+      const pkey = cacheUrl(`resp:profile:${r.ref.p}:${encodeURIComponent(r.ref.handle)}:${client}:${origin}`)
+      const hit = await d.cache.match(pkey)
+      if (hit) return hit
+      const profile = await d.fetchProfile(r.ref, env, client)
+      if (!profile) {
+        count(env, r.ref.p, 'fetch_fail', client)
+        // No `gate`: Bluesky has no private accounts and answers a missing one with an explicit
+        // error, so every null here is "we could not read it", which is what the hedged default
+        // card says. Inventing a gate would name a wall nobody measured.
+        return render(
+          {
+            kind: 'failure', canonical: r.canonical, platform: r.ref.p,
+            reason: 'could not fetch profile', subject: 'profile',
+          },
+          client, origin,
+        )
+      }
+      const res = render({ kind: 'profile', profile }, client, origin)
+      /**
+       * CACHED, and for a SHORTER life than a post card. RESP_TTL is 900s, which is right for a
+       * post: the thing it describes is finished and the only reason to re-render is our own code
+       * changing. A profile's counts move continuously, so the same TTL would serve a number that
+       * is fifteen minutes stale to every reader of a busy account. PROFILE_TTL is the compromise
+       * — long enough that a link pasted into three channels costs one fetch, short enough that
+       * "followers" means roughly now.
+       */
+      const toCache = new Response(res.clone().body, res)
+      toCache.headers.set('cache-control', `max-age=${PROFILE_TTL}`)
+      ctx.waitUntil(d.cache.put(pkey, toCache))
+      count(env, r.ref.p, 'ok', client)
+      return res
+    }
+
     case 'redditshare': {
       /**
        * The Reddit app's /r/{sub}/s/{code} "copy link". Humans cost us nothing — the /s/ link
@@ -4426,6 +4519,7 @@ export async function handle(req: Request, env: Env, ctx: ExecutionContext, d: D
 const liveDeps = (): Deps => ({
   cache: caches.default as unknown as CacheLike,
   fetchPost: liveFetchPost,
+  fetchProfile: liveFetchProfile,
   resolveShortlink: liveResolveShortlink,
   resolveRedditShare: liveResolveRedditShare,
   resolveMetaShare,
