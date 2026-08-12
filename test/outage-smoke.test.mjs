@@ -1,6 +1,10 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { cardVerdict, runSmoke, smokeOutcome, SMOKE_CHECKS } from '../src/smoke.ts'
+import { readFileSync } from 'node:fs'
+import {
+  cardVerdict, runSmoke, smokeOutcome, SMOKE_CHECKS, SMOKE_UNCHECKED,
+  SMOKE_BUDGET_MS, CRON_WALL_LIMIT_MS, smokeRunCeilingMs,
+} from '../src/smoke.ts'
 
 /**
  * THE OUTAGE NOBODY NOTICED, which is what this detector is for.
@@ -100,4 +104,176 @@ test('THE CHECK LIST TAKES NO INPUT, which is what makes the endpoint safe to ex
     assert.match(c.verifiedOn, /^\d{4}-\d{2}-\d{2}$/, 'each entry records when it was last seen working')
   }
   assert.ok(SMOKE_CHECKS.length >= 4, 'a detector covering one platform is not a detector')
+})
+
+test('EVERY PLATFORM IS EITHER CHECKED OR NAMED AS UNCHECKED, so "unwatched" cannot go unnoticed again', () => {
+  /**
+   * THE DEFECT THIS PREVENTS, which is the one that produced this test. SMOKE_CHECKS covered six of
+   * seventeen platforms for the first day of its life, and the way anybody found out was an audit
+   * rendering all seventeen through production by hand on 2026-08-12. Nothing in the repo said which
+   * platforms had no detector; you had to read the list and hold the seventeen in your head.
+   *
+   * DERIVED, NOT LISTED, for the same reason test/prep.test.mjs parses the Route union rather than
+   * copying it: a hand-written roll call here would be a second list to keep in step with the first,
+   * and CLAUDE.md's own account of parseRefKey is what happens when one of those two goes stale.
+   * The Platform union in src/types.ts is the source, so an eighteenth platform fails this test the
+   * moment it is declared — which forces a decision (write a check, or write down why not) instead
+   * of an oversight.
+   *
+   * IT SLICES TO THE NEXT DECLARATION RATHER THAN READING ONE LINE, and that is the difference
+   * between this guard working and only appearing to. The first version matched
+   * /export type Platform =([^\n]*)/ — a single line — and the union is already 150 characters, so
+   * the natural way to add an eighteenth platform is a continuation line. Reproduced: with `| 'zz'`
+   * on line 2 the parse still yields 17 names, `zz` is absent from the roll call, a `>= 17`
+   * assertion passes, and the new platform is silently unwatched. That is precisely the defect the
+   * paragraph above says is now impossible. test/prep.test.mjs, cited here as the precedent, was
+   * multi-line safe all along; this now does what that one does.
+   *
+   * AND THE COUNT IS EXACT, not `>= 17`. A floor cannot fail when the union GROWS, which is the only
+   * direction it ever moves — so the floor was unfalsifiable in practice. An exact count means
+   * adding a platform breaks this test on purpose.
+   */
+  const types = readFileSync(new URL('../src/types.ts', import.meta.url), 'utf8')
+  const start = types.indexOf('export type Platform =')
+  assert.notEqual(start, -1, 'src/types.ts still declares the Platform union')
+  const rest = types.slice(start + 'export type Platform ='.length)
+  // To the next top-level declaration, so a union spread over any number of lines is read whole.
+  const end = rest.search(/\n\s*(?:export |\/\*\*|type |const |interface )/)
+  const decl = end === -1 ? rest : rest.slice(0, end)
+  const all = [...decl.matchAll(/'([a-z]+)'/g)].map(m => m[1])
+  assert.equal(all.length, 17,
+    `the Platform union holds ${all.length} platforms; if that is deliberate, update this count AND `
+    + 'give the new platform a row in SMOKE_CHECKS or a reason in SMOKE_UNCHECKED')
+
+  const checked = new Set(SMOKE_CHECKS.map(c => c.platform))
+  const excused = new Set(SMOKE_UNCHECKED.map(u => u.platform))
+  const both = all.filter(p => checked.has(p) && excused.has(p))
+  assert.deepEqual(both, [], 'a platform cannot be both checked and excused — delete the SMOKE_UNCHECKED row')
+  const orphans = all.filter(p => !checked.has(p) && !excused.has(p))
+  assert.deepEqual(orphans, [],
+    `${orphans.join(', ')} has no smoke check and no reason on record. Verify a post for it through `
+    + 'production and add a row, or add it to SMOKE_UNCHECKED saying what would have to change first.')
+
+  for (const u of SMOKE_UNCHECKED) {
+    assert.ok(all.includes(u.platform), `${u.platform} is excused from a list it is not on`)
+    assert.ok(u.why.length > 20, 'an excuse with no reason in it is the thing this list exists to stop')
+  }
+})
+
+test('EVERY ROW HAS A UNIQUE NAME, because the counter cannot tell two rows on one platform apart', () => {
+  /**
+   * `bs` has two rows — the profile route and a post — and Analytics Engine's blob1 is the platform,
+   * so both sum into one `bs` pair in the query in docs/METRICS.md. `/_smoke` and the cron's log
+   * line report `name` for exactly that reason. Two rows sharing a name would put the reader back
+   * where the counter leaves them: told that something on this platform broke, and not which.
+   */
+  const names = SMOKE_CHECKS.map(c => c.name)
+  assert.equal(new Set(names).size, names.length, `duplicate check name in ${names.join(', ')}`)
+  for (const c of SMOKE_CHECKS) {
+    assert.ok(c.name === c.platform || c.name.startsWith(`${c.platform}:`),
+      `${c.name} should read as its platform or ${c.platform}:something, so a log line stays greppable`)
+  }
+})
+
+test('A CHECK THAT NEVER ANSWERS IS A TIMEOUT, AND THE CHECKS BEHIND IT STILL RUN', () => {
+  /**
+   * THE FAILURE THIS EXISTS FOR. Cloudflare's limits page (read 2026-08-12) says there is no time
+   * limit on an individual subrequest, and no platform fetcher in this repo passes an AbortSignal —
+   * so an upstream that accepts the connection and then says nothing stalls its render for as long
+   * as the invocation lives. A scheduled invocation is killed at 15 minutes. Without a per-check
+   * budget, one such upstream eats the rest of the list, every check behind it goes uncounted, and
+   * docs/METRICS.md says that reads exactly like "the cron is not running".
+   *
+   * The verdict is `timeout` rather than `threw` on purpose: both count as `smoke_fail`, and only
+   * one of them tells the reader the upstream is hanging rather than refusing.
+   */
+  const seen = []
+  const render = async (u) => {
+    seen.push(u)
+    if (u.includes('/WYFF4/')) return new Promise(() => {})
+    return new Response(REAL_MEDIA_CARD, { status: 200 })
+  }
+  return runSmoke('https://mbedfx.app', render, 20).then(results => {
+    assert.equal(seen.length, SMOKE_CHECKS.length, 'the hung check did not eat the ones behind it')
+    const fb = results.find(r => r.name === 'fb')
+    assert.equal(fb.verdict, 'timeout')
+    assert.equal(smokeOutcome(fb.verdict), 'smoke_fail', 'a hang is a failure, not a pass')
+    assert.ok(results.filter(r => r.name !== 'fb').every(r => r.verdict === 'ok'))
+  })
+})
+
+test('A RENDER THAT REJECTS AFTER LOSING THE RACE IS NOT AN UNHANDLED REJECTION', () => {
+  /**
+   * The abandoned half of the timeout race keeps running — a Worker cannot cancel a fetch in flight
+   * — so it can still reject, seconds after runSmoke stopped waiting for it. `Promise.race` attaches
+   * a rejection handler to both members, which is what keeps that late rejection handled; a spelling
+   * that unwound the race (an `await` with a bare `.then` beside it) would turn one slow upstream
+   * into a dead invocation, and the monitor would go quiet in exactly the outage it exists for.
+   */
+  const late = []
+  const onUnhandled = (err) => { if (String(err?.message).includes('late-reset')) late.push(err) }
+  process.on('unhandledRejection', onUnhandled)
+  const render = async (u) => u.includes('/WYFF4/')
+    ? new Promise((_, reject) => setTimeout(() => reject(new Error('late-reset')), 15))
+    : new Response(REAL_MEDIA_CARD, { status: 200 })
+  return runSmoke('https://mbedfx.app', render, 5)
+    .then(results => new Promise(done => setTimeout(() => done(results), 60)))
+    .then(results => {
+      assert.deepEqual(late, [], 'the late rejection escaped runSmoke')
+      assert.equal(results.find(r => r.name === 'fb').verdict, 'timeout')
+      assert.equal(results.length, SMOKE_CHECKS.length)
+    })
+    .finally(() => process.off('unhandledRejection', onUnhandled))
+})
+
+test('EVERY RESULT CARRIES ITS OWN ELAPSED TIME, so the budget can be re-measured instead of remembered', () => {
+  /**
+   * The serial loop is safe because of an arithmetic claim about how long a run takes, and this
+   * project's most repeated defect is a budget that was true when it was written and never checked
+   * again (META_WAIT_API_MS at 4000 against a 2.3-6.7s extract). `/_smoke` reports these so the next
+   * person to widen the list reads the real cost instead of inheriting a number.
+   *
+   * ONE RENDER IS DELIBERATELY SLOW, and that is what makes this a test rather than a shape check.
+   * The first version asserted only `Number.isFinite(r.ms) && r.ms >= 0` against renders that all
+   * resolve instantly, so a hardcoded `ms: 0` in runSmoke would have passed it — a field whose whole
+   * purpose is carrying a REAL duration, pinned by an assertion that cannot tell a duration from a
+   * constant. Holding exactly one check for ~30ms also pins that the timer is PER CHECK and not per
+   * run: the others must still report near zero, which a single run-level stopwatch could not do.
+   */
+  const SLOW = SMOKE_CHECKS[1].path
+  const render = async url => {
+    if (url.endsWith(SLOW)) await new Promise(r => setTimeout(r, 30))
+    return new Response(REAL_IMAGE_CARD, { status: 200 })
+  }
+  return runSmoke('https://mbedfx.app', render).then(results => {
+    assert.ok(results.every(r => Number.isFinite(r.ms) && r.ms >= 0), 'every check reports a duration')
+    assert.ok(results.every(r => typeof r.name === 'string' && r.name), 'and names itself')
+    const slow = results[1]
+    assert.ok(slow.ms >= 25, `the slow check must report its real cost, got ${slow.ms}ms`)
+    const others = results.filter((_, i) => i !== 1)
+    assert.ok(others.every(r => r.ms < 25),
+      'and the others must not inherit it — the timer is per check, not per run')
+  })
+})
+
+test('THE WORST-CASE RUN FITS INSIDE ONE SCHEDULED INVOCATION, with the whole list hung', () => {
+  /**
+   * The bound that makes "keep it serial" a decision rather than a hope: every check hanging until
+   * its budget expires, one after another, must still finish inside Cloudflare's 15-minute wall
+   * clock for a Cron Trigger. At sixteen checks and a 20s budget that is 320s, about a third of the
+   * ceiling.
+   *
+   * THIS IS THE TEST THAT FAILS when someone doubles the list or raises the budget without doing the
+   * arithmetic. Doing it in a test rather than in a comment is deliberate: a comment claiming a
+   * number cannot notice that the number stopped being true, and a run that overruns the ceiling
+   * fails SILENTLY — the invocation is killed and the checks after the kill simply never counted.
+   */
+  assert.ok(smokeRunCeilingMs() <= CRON_WALL_LIMIT_MS / 2,
+    `${SMOKE_CHECKS.length} checks x ${SMOKE_BUDGET_MS}ms = ${smokeRunCeilingMs()}ms, which leaves no `
+    + `margin under the ${CRON_WALL_LIMIT_MS}ms ceiling. Shorten the budget, split the list across `
+    + 'ticks, or measure again and say why this is still safe.')
+  assert.ok(SMOKE_BUDGET_MS >= 10_000,
+    'the budget is meant to catch a hung upstream, not a slow one — the slowest cold render measured '
+    + 'through production on 2026-08-12 was Facebook at 4.0s, and a budget close to that would turn '
+    + 'a slow day into a false alarm')
 })
