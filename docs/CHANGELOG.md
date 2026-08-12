@@ -5,6 +5,46 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [Unreleased]
+
+### Facebook post coverage, measured rather than assumed
+
+The whole platform was sampled from Cloudflare egress on 2026-08-12: 35 real public post urls across
+seven pages, four url shapes and at least twelve years of post ages, read through
+`wrangler dev --remote`. The og: page surface answers 17 of the 35, the embed plugin answers 33, and
+neither covers the platform alone — the plugin carries every `/photo/?fbid=` url, which the page
+surface meets with a 438 KB login wall, and the page surface carries the two posts Meta refuses to
+embed. Every url, both readings and the reproduction command are in
+`docs/research/2026-08-12-facebook-post-coverage-from-cloudflare-egress.md`.
+
+#### Fixed
+- A post with a caption and no picture drew the failure card on both surfaces at once. The reported
+  url is `/NASA/posts/1304655294363177`, a live public NASA post: its page carries `og:title` and
+  `og:description` and no `og:image`, and Meta's plugin answers "This Facebook post is no longer
+  available" for it. `facebookCaptionCard` reads that page for its words, runs after the plugin so it
+  can never take a picture card away from one, and is counted as `caption_recovered`. Two of the 35
+  sampled urls need it.
+- A five-photo post rendered one photo. The `<img>` tag bound was sized against the signed CDN query
+  at 1400 characters, and the tag is really sized by Facebook's auto-generated alt text, which
+  transcribes the words inside the picture and is emitted twice. Measured across the 37 photo tags in
+  the sample: 531 shortest, 1076 median, 1541 longest.
+- A photo whose size is spelled `style="width:364px;height:364px"` rather than in width and height
+  attributes shipped at 0x0, which `render/mastodon.ts` turns into an attachment with no
+  `meta.original` — a picture Discord has been observed not to draw at all. Two of the 37 tags, both
+  on single-picture posts.
+- Every card off the og: page read `Name (@Name)`. `fbAuthor` emptied `handle` only on the packed
+  `… | Facebook` title shape, and no og:title in the sample ended that way; on a reel-shaped title it
+  doubled a view count and a whole caption with it.
+
+#### Known
+- Twelve of the 33 plugin cards carry no picture, because the plugin puts a link share's preview
+  image on `external.*.fbcdn.net` and a video post's poster in the `t15.` bucket while the parser
+  accepts only the `t39.30808-6` photo bucket. Invisible today because the og: page supplies an
+  `og:image` for most of them and runs first; visible the next time Meta walls that surface, as it
+  did for a week in August. The research note records what it would take.
+
+---
+
 ## [1.9.1] — 2026-08-09
 
 Five merges shipped under 1.9.0 without a bump. Nothing

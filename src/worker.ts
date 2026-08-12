@@ -44,7 +44,8 @@ import {
   youtubeVouched,
 } from './platforms/youtube/normalize.ts'
 import {
-  facebookAgeGate, facebookPluginCard, facebookPostCard, fbPageUrl, fbPluginUrl, normalizeFacebook, type FacebookMeta,
+  facebookAgeGate, facebookCaptionCard, facebookPluginCard, facebookPostCard, fbPageUrl, fbPluginUrl,
+  normalizeFacebook, type FacebookMeta,
 } from './platforms/facebook/normalize.ts'
 import { fetchFacebookPage, fetchFacebookPageUrl } from './platforms/facebook/fetch.ts'
 import { fetchPinterest } from './platforms/pinterest/fetch.ts'
@@ -723,6 +724,21 @@ export async function liveFetchPost(
             count(env, 'fb', 'plugin_recovered', client)
             return viaPlugin
           }
+          /**
+           * A POST WITH WORDS AND NO PICTURE, which until now was a failure card on both surfaces at
+           * once — the page has no og:image so facebookPostCard refused it, and Meta's plugin refuses
+           * to embed it. `page` is already in hand, so this costs no request. See facebookCaptionCard
+           * for the measurement and for why it is LAST rather than folded into the call above.
+           *
+           * INSIDE THIS BRANCH, not after it, so a SHARE ref still reaches the resolution arm below:
+           * a share code's own page is a redirect stub, and letting a caption card off it win would
+           * pre-empt the richer card the resolved permalink can still produce.
+           */
+          const viaCaption = facebookCaptionCard(page, ref)
+          if (viaCaption) {
+            count(env, 'fb', 'caption_recovered', client)
+            return viaCaption
+          }
         }
         /**
          * NOT RENDERABLE — but say WHY when Facebook tells us. An 18+ post answers with a substantial
@@ -785,6 +801,14 @@ export async function liveFetchPost(
             if (sharePlugin) {
               count(env, 'fb', 'plugin_recovered', client)
               return sharePlugin
+            }
+            // The words-with-no-picture case again, on the RESOLVED permalink — the same last resort
+            // the non-share branch takes, in the same position relative to the plugin. Without it a
+            // pasted share code for a text post would be the one spelling that still fails.
+            const shareCaption = facebookCaptionCard(viaPermalink, ref)
+            if (shareCaption) {
+              count(env, 'fb', 'caption_recovered', client)
+              return shareCaption
             }
           }
         }

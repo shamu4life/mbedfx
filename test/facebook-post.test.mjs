@@ -1,7 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
-import { facebookAgeGate, facebookPostCard } from '../src/platforms/facebook/normalize.ts'
+import { facebookAgeGate, facebookCaptionCard, facebookPostCard } from '../src/platforms/facebook/normalize.ts'
 
 /**
  * FACEBOOK POSTS, which this project has never rendered — the platform was VIDEO-ONLY (watch / reel /
@@ -151,5 +151,92 @@ test('THE 18+ GATE IS READ FROM FACEBOOK\'S OWN ERROR ROUTE, not inferred from a
 test('facebookAgeGate is TOTAL and does not fire on incidental text', () => {
   for (const bad of [null, undefined, 42, '', {}, [], '<html></html>', 'age', 'inappropriate']) {
     assert.equal(facebookAgeGate(bad), undefined, `${JSON.stringify(bad)} is not a gate`)
+  }
+})
+
+/**
+ * A LIVE PUBLIC POST WITH WORDS AND NO PICTURE, which both Facebook surfaces refused at once.
+ *
+ * /NASA/posts/1304655294363177, captured through Cloudflare egress 2026-08-12. The ~950 KB body is
+ * dropped from the fixture (this parser reads the head and the preload links and nothing else) and
+ * two real preload links are kept, because their buckets — t39.1997-6 stickers, t39.30808-1 avatars —
+ * are the reason fbGallery correctly finds no gallery on it.
+ */
+const CAPTION_ONLY = readFileSync(new URL('./fixtures/facebook-page-caption-only.html', import.meta.url), 'utf8')
+
+test('A POST WITH A CAPTION AND NO PICTURE IS STILL A POST — but only when asked', () => {
+  /**
+   * REPORTED, AND THE PREMISE TURNED OUT TO BE WRONG IN A USEFUL WAY. This url was recorded as a post
+   * whose fragment "does not server-render at all, with the caption appearing only inside a ServerJS
+   * blob". Measured from Cloudflare egress 2026-08-12 it is neither walled nor unrendered:
+   *
+   *   the page   952,579 bytes, og:title, og:description, og:url — and NO og:image
+   *   the plugin  38,448 bytes, Meta's own "This Facebook post is no longer available"
+   *
+   * Both surfaces answered. The plugin refuses to EMBED the post, and the page card refused it for
+   * want of a picture — so the caption sat in og:description while the reader got a failure card.
+   *
+   * STRICT STAYS STRICT. facebookPostCard is what runs FIRST in worker.ts, ahead of the plugin
+   * fragment that carries real photos at real sizes; if it started accepting a page that merely lost
+   * its og:image, a picture card could become a text card. The relaxed read is a separate entry
+   * point, called last, where the alternative is the failure card.
+   */
+  assert.equal(facebookPostCard(CAPTION_ONLY, REF), null, 'the strict read still wants a picture')
+
+  const card = facebookCaptionCard(CAPTION_ONLY, REF)
+  assert.ok(card, 'and the relaxed one renders the post')
+  assert.equal(card.author.name, 'NASA - National Aeronautics and Space Administration')
+  assert.match(card.text, /Go, Comet 3I\/ATLAS, go/, 'og:description is the caption')
+  assert.equal(card.canonical, 'https://www.facebook.com/NASA/posts/1304655294363177/')
+  /**
+   * NO MEDIA AT ALL, rather than one entry holding the empty string. An attachment with no url is a
+   * picture-shaped hole in the card — the same defect as the `og:image=".../_media/undefined/avatar"`
+   * this project shipped once already — and it is reachable now only because the picture is optional.
+   */
+  assert.deepEqual(card.media, [], 'an absent picture is no attachment, not an empty one')
+})
+
+test('THE RELAXED READ IS STILL AN ASSERTION ON CONTENT — a wall is not a caption', () => {
+  /**
+   * The rule is og:title AND og:description, both present and both content, which is the same shape
+   * as facebookPluginCard's "a byline, and either a caption or a picture". What licenses it is a
+   * measurement rather than a hope: over the same 35 urls, sampled from Cloudflare egress 2026-08-12,
+   * every non-post answer carried NO og tags whatsoever — a login wall at 438,635 bytes on all
+   * fourteen /photo/?fbid= urls, a stripped 325,661-byte page, and a deleted post at 325,556.
+   *
+   * So the shapes that must never become a card are refused for the reason they were always refused:
+   * there is no byline in them to read.
+   */
+  const gated = readFileSync(new URL('./fixtures/facebook-age-gated.html', import.meta.url), 'utf8')
+  assert.equal(facebookCaptionCard(gated, REF), null, 'an 18+ page carries no og set and no card')
+  const wall = '<!DOCTYPE html><html><head><title>Facebook</title></head><body>'
+    + '<div id="loginform"><a href="https://www.facebook.com/login/?next=https%3A%2F%2Fwww.facebook.com%2FNASA">'
+    + 'Log in</a></div></body></html>'
+  assert.equal(facebookCaptionCard(wall, REF), null, 'a login wall has no byline to read')
+  // A title with nothing under it is not a post either — a caption is required when a picture is not.
+  const bare = CAPTION_ONLY.replace(/<meta property="og:description"[^>]*>/, '')
+  assert.equal(facebookCaptionCard(bare, REF), null, 'a byline alone is not a post')
+  for (const bad of [null, undefined, 42, '', {}, [], '<html></html>']) {
+    assert.equal(facebookCaptionCard(bad, REF), null, `${JSON.stringify(bad)} carries no post`)
+  }
+  assert.equal(facebookCaptionCard(CAPTION_ONLY, { p: 'ig', kind: 'p', code: 'x' }), null, 'not our ref')
+})
+
+test('THE BYLINE IS NOT PRINTED TWICE — there is no @-handle on the og: surface', () => {
+  /**
+   * fbAuthor emptied `handle` only on the packed `… | Facebook` shape and left it as the raw og:title
+   * otherwise — and og:title on an ordinary page post IS the page name, so name and handle were the
+   * same string and render/embed.ts's byline printed "Name (@Name)".
+   *
+   * Measured from Cloudflare egress 2026-08-12: of 35 sampled post urls, 17 rendered from this
+   * surface and not one og:title ended in ` | Facebook`, so every one of them carried the doubled
+   * byline. On a reel-shaped title it doubled a view count and a whole caption with it.
+   *
+   * This is the assertion the old behaviour never had, which is why nothing failed while it shipped.
+   */
+  for (const [html, who] of [[POST, 'InfoWars'], [CAPTION_ONLY, 'NASA - National Aeronautics and Space Administration']]) {
+    const card = facebookCaptionCard(html, REF)
+    assert.equal(card.author.name, who)
+    assert.equal(card.author.handle, '', 'no handle exists on this surface, so none is invented')
   }
 })

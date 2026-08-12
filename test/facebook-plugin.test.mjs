@@ -24,6 +24,21 @@ const PLUGIN = readFileSync(new URL('./fixtures/facebook-plugin-post.html', impo
  */
 const UNLINKED = readFileSync(new URL('./fixtures/facebook-plugin-unlinked-byline.html', import.meta.url), 'utf8')
 const NOCAPTION = readFileSync(new URL('./fixtures/facebook-plugin-photo-nocaption.html', import.meta.url), 'utf8')
+/**
+ * TWO MORE REAL CAPTURES, taken through Cloudflare egress on 2026-08-12 while measuring how much of
+ * this surface actually renders — 35 real public post urls across seven pages, four post shapes and
+ * fifteen years of post ages. 33 of the 35 produced a card, so the headline number was fine; both of
+ * these are cards that came out WRONG rather than absent, which no count of cards can see.
+ *
+ * MULTIPHOTO is NPR's five-photo post /photo/?fbid=1404157071581288, which shipped ONE picture.
+ * STYLE_DIMS is NPR's /photo/?fbid=1015656923764640, one picture, which shipped it at 0x0.
+ *
+ * Ids and the signed CDN query are scrubbed, as in the fixtures above — but the query is replaced
+ * CHARACTER FOR CHARACTER rather than dropped, because the <img> tag LENGTH is the thing MULTIPHOTO
+ * exists to pin, and a shorter fake would make this fixture pass under the bug it was captured for.
+ */
+const MULTIPHOTO = readFileSync(new URL('./fixtures/facebook-plugin-multiphoto.html', import.meta.url), 'utf8')
+const STYLE_DIMS = readFileSync(new URL('./fixtures/facebook-plugin-style-dims.html', import.meta.url), 'utf8')
 const REF = { p: 'fb', kind: 'post', id: 'WYFF4_1111111111111111' }
 const PHOTO_REF = { p: 'fb', kind: 'photo', id: '3333333333333333' }
 
@@ -184,4 +199,61 @@ test('THE PHOTO CARRIES ITS REAL SIZE — render/mastodon.ts drops meta.original
   const card = facebookPluginCard(PLUGIN, REF)
   assert.equal(card.media[0].w, 398)
   assert.equal(card.media[0].h, 498)
+})
+
+test('EVERY PHOTO ON A MULTI-PHOTO POST, including the ones whose <img> tag runs long', () => {
+  /**
+   * THE BOUND ON THE <img> TAG WAS SIZED FOR THE URL AND THE TAG IS SIZED BY THE ALT TEXT.
+   *
+   * Measured from Cloudflare egress 2026-08-12 across the 37 photo-bucket tags in 35 real fragments:
+   * 531 bytes shortest, 1076 median, 1541 longest. Four ran past the old 1400 and all four sat in
+   * THIS post, so a five-photo post rendered as a one-photo post — silently, because a regex that is
+   * too tight fails exactly like a feature nobody wrote.
+   *
+   * What makes them long is Facebook's own alt text, emitted twice (`alt=` and `caption=`) and
+   * carrying a transcription of every word in the picture, plus a `data-src` duplicating the src.
+   * None of that is bounded by the signed CDN query the old number was measured against.
+   *
+   * The lengths are asserted first: they are the property this fixture exists for, and a re-scrub
+   * that shortened them would leave the rest of this test passing while proving nothing.
+   */
+  const tags = [...MULTIPHOTO.matchAll(/<img\s[^>]*?t39\.30808-6[^>]*?>/g)].map(m => m[0].length)
+  assert.equal(tags.length, 5, 'the fixture really carries five photo tags')
+  assert.equal(tags.filter(n => n > 1400).length, 4, 'and four of them are past the old bound')
+
+  const card = facebookPluginCard(MULTIPHOTO, PHOTO_REF)
+  assert.equal(card.media.length, 5, 'all five, not just the one short-tagged photo')
+  assert.equal(new Set(card.media.map(m => m.url)).size, 5, 'five distinct urls, deduped by media id')
+  assert.ok(card.media.every(m => m.w > 0 && m.h > 0), 'each with its own size')
+  assert.ok(card.media.every(m => m.url.includes('t39.30808-6')), 'the bucket filter still holds')
+  assert.ok(!card.media.some(m => m.url.includes('t39.30808-1')), 'and the avatar is still not media')
+})
+
+test('A PHOTO SIZED IN `style` IS NOT A PHOTO SIZED AT ZERO', () => {
+  /**
+   * Facebook spells the size two ways and this parser read one. Measured from Cloudflare egress
+   * 2026-08-12: 35 of 37 photo tags carry width/height attributes, and two carry
+   * `style="width:364px;height:364px"` with no attributes at all. Both of those posts are a single
+   * picture, so the mis-sized photo IS the card.
+   *
+   * ZERO IS NOT COSMETIC. render/mastodon.ts drops `meta.original` the moment a dimension is 0, and
+   * an image attachment with no meta.original is one Discord has been observed to draw as nothing —
+   * so the card looked like it worked and carried an invisible picture.
+   */
+  assert.ok(!/\swidth="/.test(STYLE_DIMS), 'the fixture really has no width attribute')
+  const card = facebookPluginCard(STYLE_DIMS, PHOTO_REF)
+  assert.equal(card.media.length, 1)
+  assert.deepEqual([card.media[0].w, card.media[0].h], [364, 364], 'read out of the style instead')
+})
+
+test('a style that is NOT a size cannot become one', () => {
+  /**
+   * The same fragments carry `style="left:-3px; top:0px;"` on other photos, so "there is a style
+   * attribute" is not "here is a size". Only `width:<n>px` / `height:<n>px` count, and a tag with
+   * neither spelling keeps the honest zero rather than inventing a number.
+   */
+  const positioned = STYLE_DIMS.replace('style="width:364px;height:364px"', 'style="left:-3px; top:0px;"')
+  const card = facebookPluginCard(positioned, PHOTO_REF)
+  assert.equal(card.media.length, 1, 'the photo is still the post')
+  assert.deepEqual([card.media[0].w, card.media[0].h], [0, 0], 'and its size is absent, not guessed')
 })

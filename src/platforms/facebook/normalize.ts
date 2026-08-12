@@ -294,24 +294,51 @@ function fbImage(url: string): boolean {
  * THE HANDLE IS NOT A COPY OF THE NAME. There is no @-handle on this surface — a group has an id,
  * not a username — so it is left EMPTY rather than duplicated, and the renderers already omit an
  * empty one instead of printing `(@)`.
+ *
+ * THAT LAST PARAGRAPH DESCRIBED ONE BRANCH AND THE CODE HAD TWO, which is how the defect it was
+ * written to fix survived everywhere except group posts. `handle` was emptied only on the packed
+ * ` | Facebook` shape and left as the raw og:title otherwise — and og:title on an ordinary page post
+ * IS the page name, so `name` and `handle` were the same string and every card read
+ *
+ *   "NASA - National Aeronautics and Space Administration
+ *    (@NASA - National Aeronautics and Space Administration)"
+ *
+ * MEASURED FROM CLOUDFLARE EGRESS 2026-08-12: of 35 sampled post urls, 17 rendered from this surface
+ * and NOT ONE og:title ended in ` | Facebook`, so all 17 carried the doubled byline. The reel shape
+ * doubled a whole caption and a view count with it.
+ *
+ * SO IT IS UNCONDITIONAL NOW. There is no @-handle anywhere on the og: surface — packed or not,
+ * page, group or reel — and emitting the name twice is not a smaller wrong answer than emitting it
+ * once. facebookPluginCard has always spelled the same field the same way.
  */
 export function fbAuthor(title: string, canonical: string): Post['author'] {
   const url = canonical.replace(/\/(?:posts|permalink)\/.*$/, '/') || 'https://www.facebook.com'
   const parts = title.split(' | ')
   const packed = parts.length > 1 && parts[parts.length - 1].trim() === 'Facebook'
   const name = packed ? (parts[0].trim() || title) : title
-  return { name, handle: packed ? '' : title, url }
+  return { name, handle: '', url }
 }
 
-export function facebookPostCard(html: unknown, ref: PostRef): Post | null {
+/**
+ * `captionOnly` ADMITS A POST WHOSE PAGE HAS WORDS BUT NO PICTURE, and it is off by default because
+ * the ORDER matters more than the rule — see facebookCaptionCard below, which is the only caller
+ * that turns it on and runs only after the plugin fragment has already declined.
+ */
+export function facebookPostCard(html: unknown, ref: PostRef, captionOnly = false): Post | null {
   if (ref.p !== 'fb') return null
   if (typeof html !== 'string' || !html) return null
 
   const image = FB_OG(html, 'image')
   const title = FB_OG(html, 'title')
-  // Both are required: a page that carries neither a picture nor a byline is the login/empty shell,
-  // and a card asserting an empty post is worse than an honest failure.
-  if (!title || !fbImage(image)) return null
+  const text = FB_OG(html, 'description')
+  const picture = fbImage(image)
+  // A BYLINE AND SOMETHING TO SAY. og:title is the byline on this surface, and a page carrying no
+  // byline at all is the login wall or the stripped shell — a card asserting an empty post is worse
+  // than an honest failure. Measured from Cloudflare egress 2026-08-12 over 35 real post urls: all
+  // three non-post shapes carry NO og tags whatsoever (a login wall at 438 KB, a stripped page at
+  // 325 KB, a deleted post at 325 KB), so this refuses every one of them on either setting.
+  if (!title) return null
+  if (!picture && !(captionOnly && text)) return null
 
   const canonical = FB_OG(html, 'url') || fbPageUrl(ref as Extract<PostRef, { p: 'fb' }>)
   const gallery = fbGallery(html)
@@ -320,7 +347,7 @@ export function facebookPostCard(html: unknown, ref: PostRef): Post | null {
     ref: { p: 'fb', kind: ref.kind, id: ref.id },
     canonical,
     author: fbAuthor(title, canonical),
-    text: FB_OG(html, 'description'),
+    text,
     // NO DATE ON THIS SURFACE. og carries none, and the resolved url's post id is not the snowflake
     // shape createdAtFromId-style decoding needs. The epoch is the established fallback here
     // (uploadDateOrEpoch does the same for the video path) rather than a guessed "now", which would
@@ -328,13 +355,54 @@ export function facebookPostCard(html: unknown, ref: PostRef): Post | null {
     createdAt: new Date(0),
     /**
      * THE GALLERY WHEN THE PAGE PRELOADS ONE, the og:image otherwise. og:image is the post's COVER and
-     * is always present, so it is the floor rather than an extra entry — appending it to a gallery it
+     * is usually present, so it is the floor rather than an extra entry — appending it to a gallery it
      * is already the first member of would ship a duplicate first picture.
+     *
+     * AN ABSENT og:image YIELDS NO MEDIA AT ALL, not one entry holding the empty string. That used to
+     * be unreachable because the guard above required a picture; under `captionOnly` it is the whole
+     * point, and an attachment with no url is a picture-shaped hole in the card — the same defect
+     * shape as the `og:image=".../_media/undefined/avatar"` this project shipped once already.
      */
-    media: (gallery.length ? gallery : [image]).map(url => ({ kind: 'image' as const, url, w: 0, h: 0 })),
+    media: (gallery.length ? gallery : picture ? [image] : [])
+      .map(url => ({ kind: 'image' as const, url, w: 0, h: 0 })),
     counts: {},
     sensitive: false,
   }
+}
+
+/**
+ * THE SAME PAGE, READ FOR ITS WORDS — a post that has a byline and a caption but no picture.
+ *
+ * REPORTED, AND MEASURED FROM CLOUDFLARE EGRESS 2026-08-12 with `wrangler dev --remote`. The url is
+ * /NASA/posts/1304655294363177, and it drew the generic failure card while being a perfectly ordinary
+ * live public post:
+ *
+ *   the page   952,579 bytes, og:title "NASA - National Aeronautics and Space Administration",
+ *              og:description "Go, Comet 3I/ATLAS, go! ☄️ …", og:url — and NO og:image
+ *   the plugin  38,448 bytes, "This Facebook post is no longer available"
+ *
+ * So BOTH Facebook surfaces answered, neither was walled, and the post was unrenderable anyway: the
+ * plugin refuses to embed it, and facebookPostCard's picture requirement refused the page. The
+ * caption was sitting in og:description the whole time.
+ *
+ * IT IS NOT A GUESS ABOUT AN EMPTY PAGE. The rule is og:title AND og:description, both present and
+ * both content — the identical shape of facebookPluginCard's "a byline, and either a caption or a
+ * picture", which was relaxed the same way on 2026-08-11 for a photo posted with no words. Measured
+ * over the same 35 urls: the login wall, the stripped page and a genuinely deleted post carry no og
+ * tags at all, so none of them reaches this.
+ *
+ * LAST, AFTER THE PLUGIN, and that ordering is the safety property rather than a preference. The
+ * plugin fragment carries real photos with real dimensions; this carries words. Running it before the
+ * plugin would let a page that merely FORGOT its og:image win over a fragment that has the pictures,
+ * turning a picture card into a text card. Placed here it can only run where the card was going to be
+ * a failure card, so it cannot regress anything that renders today.
+ *
+ * TWO OF THIRTY-FIVE SAMPLED URLS NEED IT, and both are ordinary text-with-a-link NASA posts —
+ * 1304655294363177 and 10150113094966772. That is the honest size of the win: small, and the
+ * difference between an honest failure card and the post.
+ */
+export function facebookCaptionCard(html: unknown, ref: PostRef): Post | null {
+  return facebookPostCard(html, ref, true)
 }
 
 /**
@@ -492,20 +560,75 @@ const FB_PLUGIN_TEXT = /<p>([\s\S]{0,4000}?)<\/p>/
  * image scraped in, and it sits EARLIER in the document than the post's own photo: measured on the
  * reported post, avatar at offset 46,200 and the photo at 47,703.
  */
-const FB_PLUGIN_IMG = /<img\s[^>]{0,1400}?>/g
+/**
+ * THE TAG BOUND IS SIZED FOR THE ALT TEXT, NOT FOR THE URL, and the previous 1400 was sized for the
+ * url — which is why a five-photo post shipped ONE photo.
+ *
+ * MEASURED FROM CLOUDFLARE EGRESS 2026-08-12 over the 37 photo-bucket <img> tags in 35 real
+ * fragments: 531 bytes at the shortest, 1076 median, 1541 at the longest. FOUR exceeded 1400 and all
+ * four were in one post — /photo/?fbid=1404157071581288, an NPR five-photo post whose card carried
+ * exactly one picture because the other four tags were never matched.
+ *
+ * WHAT MAKES A TAG LONG is Facebook's own alt text, emitted TWICE: `alt="May be an image of text
+ * that says '…'"` and an identical `caption="…"`, both containing a transcription of every word in
+ * the picture. A photo of a page of text therefore produces a tag whose length has nothing to do
+ * with the signed CDN query the old bound was measured against, and no ceiling worth guessing at.
+ * These four also carry `data-src` duplicating the `src`, which alone adds ~700.
+ *
+ * SO THE BOUND IS HEADROOM OVER THE ATTRIBUTE THAT GROWS, not a measured maximum, and it is stated
+ * that way rather than dressed up: two transcriptions of a dense picture can run past 1541 and
+ * nothing stops them. `[^>]` cannot cross the tag's own `>`, so the bound is a guard against a
+ * hostile document rather than the thing that ends the match — which is why widening it costs
+ * nothing and narrowing it silently deletes photos.
+ *
+ * NOTHING NEW GETS IN. The bucket filter, the dedupe by media id, the ten cap and fbImage's host
+ * range-check are all downstream of this and unchanged; a wider tag match can only find MORE of the
+ * post's own pictures.
+ */
+const FB_PLUGIN_IMG = /<img\s[^>]{0,4000}?>/g
 /** The photo bucket, and the media id inside it that dedupes one photo across its sizes. */
 const FB_PLUGIN_SRC = /src="(https:\/\/[^"]{20,200}?t39\.30808-6\/\d+_(\d+)_[^"]{0,900}?)"/
 /**
- * REAL DIMENSIONS, WHICH THE og: SURFACE NEVER HAD. The plugin prints width/height on the <img>, and
- * render/mastodon.ts drops `meta.original` entirely when either is 0 — so a card built without these
- * hands Discord an attachment with no size and no aspect ratio. Reading them is the difference
- * between the client sizing the photo correctly and it guessing.
+ * REAL DIMENSIONS, WHICH THE og: SURFACE NEVER HAD. The plugin prints width/height on the <img> —
+ * usually: 35 of 37 measured tags, with the other two putting the size in `style` instead, which is
+ * what FB_PLUGIN_STYLE_W below exists for. render/mastodon.ts drops `meta.original` entirely when
+ * either is 0 — so a card built without these hands Discord an attachment with no size and no aspect
+ * ratio. Reading them is the difference between the client sizing the photo correctly and it
+ * guessing.
  *
  * Attribute ORDER is not assumed: the whole tag is matched first and these are pulled out of it,
  * because width/height sit after `src` on the measured fragment and nothing promises they stay there.
  */
 const FB_PLUGIN_W = /\swidth="(\d{1,5})"/
 const FB_PLUGIN_H = /\sheight="(\d{1,5})"/
+/**
+ * THE OTHER PLACE FACEBOOK PUTS THE SIZE — `style="width:364px;height:364px"`, no width/height
+ * attributes anywhere on the tag.
+ *
+ * MEASURED FROM CLOUDFLARE EGRESS 2026-08-12: two of the 37 photo-bucket tags in the 35-url sample
+ * spell it this way, and in both the picture is the WHOLE card — /photo/?fbid=1015656923764640 and
+ * /photo/?fbid=1182307926599969, one image each. Both shipped w=0,h=0.
+ *
+ * ZERO IS NOT A COSMETIC LOSS HERE. render/mastodon.ts drops `meta.original` entirely when either
+ * dimension is 0 — deliberately, because "0x0" tells a client the image has no area — and an image
+ * attachment with no `meta.original` is one Discord has been observed to draw as NOTHING. So the
+ * card that looked like it worked was a card with an invisible picture.
+ *
+ * IT IS A FALLBACK, tried only when the attribute form is absent, so every tag that renders
+ * correctly today keeps the exact numbers it has.
+ *
+ * THE STYLE IS MATCHED NARROWLY, on `width:<n>px` inside the style attribute, because a style
+ * attribute is NOT reliably a size: the same fragment carries `style="left:-3px; top:0px;"` on other
+ * photos, and a looser read of it would hand the card a position as a dimension.
+ */
+const FB_PLUGIN_STYLE_W = /\sstyle="[^"]{0,300}?\bwidth:\s*(\d{1,5})px/
+const FB_PLUGIN_STYLE_H = /\sstyle="[^"]{0,300}?\bheight:\s*(\d{1,5})px/
+/** One <img> tag's pixel size: the attributes when it has them, the style when it does not. */
+function fbPluginDims(tag: string): [number, number] {
+  const w = Number(tag.match(FB_PLUGIN_W)?.[1] ?? tag.match(FB_PLUGIN_STYLE_W)?.[1] ?? 0)
+  const h = Number(tag.match(FB_PLUGIN_H)?.[1] ?? tag.match(FB_PLUGIN_STYLE_H)?.[1] ?? 0)
+  return [w, h]
+}
 /**
  * THE BYLINE FACEBOOK DOES NOT LINK — the avatar's own label, and the reason the anchor above is not
  * enough on its own.
@@ -598,11 +721,8 @@ export function facebookPluginCard(html: unknown, ref: PostRef): Post | null {
     // it is what makes the url fetchable; a raw one 403s on the signature.
     const url = src[1].replace(/&amp;/g, '&')
     if (!fbImage(url)) continue
-    byId.set(src[2], {
-      url,
-      w: Number(tag[0].match(FB_PLUGIN_W)?.[1] ?? 0),
-      h: Number(tag[0].match(FB_PLUGIN_H)?.[1] ?? 0),
-    })
+    const [w, h] = fbPluginDims(tag[0])
+    byId.set(src[2], { url, w, h })
   }
   if (!name && labelled) {
     name = labelled

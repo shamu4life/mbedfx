@@ -81,6 +81,13 @@ export type Outcome2 =
   // carries most Facebook posts, so it going to ZERO is not good news — it means Meta closed the
   // plugin too and every Facebook link is a failure card again.
   | 'plugin_recovered'
+  // `caption_recovered` is the THIRD Facebook post surface and the narrowest: a page whose og: set
+  // carries a byline and a caption but NO og:image, which both of the other two refuse — the picture
+  // requirement rejects it here and Meta's plugin answers "no longer available" for it. Measured
+  // 2026-08-12 from Cloudflare egress it is 2 of 35 sampled post urls, so it should stay SMALL. If it
+  // ever overtakes `plugin_recovered`, Meta has narrowed the plugin and most Facebook cards have
+  // quietly become captions with no picture — which no card will announce, since they all render.
+  | 'caption_recovered'
   | 'translated' | 'translate_fallback'
   /**
    * `translate_pending` is the THIRD member of that pair, and it exists because the state it names
