@@ -451,16 +451,35 @@ platforms mbedfx reads answer `200` with a login wall, or `500` with a good JSON
 | `ambiguous` | 200 | The path belongs to more than one site. Carries `candidates`. Every profile url, bare handle and unrecognised one-segment path lands here. |
 | `notfound` | 200 | A shape mbedfx routes for nobody, including a site prefix forced onto a path that site does not claim (`/x/jack`) and `/_prep` or `/_card` **without** their own `p` parameter. |
 | `bad_id` | 200 | A Mastodon-spoof-shaped path (`/users/{handle}/statuses/{id}`, `/api/v1/statuses/{id}`, `/_oembed/{id}`) whose id did not decode. Not reachable from an ordinary post url. |
-| `not_a_post` | 200 | Routes to something that is not a post: a site page (`/`, `/index.html`, `/robots.txt`), one of this service's own endpoints (`/_media/…`, `/_prep?p=…`, `/_card?p=…`, `/_api/v1`), or a share code or short link that did not resolve to one. |
+| `not_a_post` | 200 | Routes to something that is not a post: a site page (`/`, `/index.html`, `/robots.txt`), one of this service's own endpoints (`/_media/…`, `/_prep?p=…`, `/_card?p=…`, `/_api/v1`), or a **Meta or Reddit** share code that did not resolve to one. A TikTok `/t/{code}` never lands here; see below. |
 | `no_url` | 400 | No `url` parameter, **or an empty one**. `?url=` and no `url=` at all are the same answer. |
 | `unparseable` | 400 | `new URL(target, origin)` threw, `origin` being the mbedfx origin. Only a malformed **absolute** url does that; anything readable as a path resolves against that origin and gets a 200 instead. |
 | `method_not_allowed` | 405 | This endpoint reads. Use `GET`. |
 
-Both gate codes also answer a TikTok `/t/{code}` whose resolution reports the wall, since
-2026-08-11. Until then a walled share code answered `not_a_post` — a false statement about a post
-that demonstrably exists, and one the render path never made: it has drawn the 🔒/🔞 card for that
-resolution since 2026-07-21. `canonical` is the share url, the only one that exists before the code
-resolves.
+#### A TikTok `/t/{code}` answers what it renders
+
+A short code names no post until a network hop resolves it, and that hop has four outcomes. Each one
+is answered here with the code that matches the **card the same url draws**, which is the property
+worth relying on: one post does not get two answers depending on which url shape was pasted.
+
+| The resolution | This endpoint answers | `platform` / `canonical` |
+|---|---|---|
+| The post, resolved | the post | the post's |
+| Private or age-restricted | `private` / `age_restricted` | `tt`, the share url |
+| TikTok claims the code and cannot serve it | `fetch_fail` | `tt`, the share url |
+| TikTok does not claim the code | `ambiguous`, `candidates: ["tt","th"]` | absent |
+
+`canonical` is the share url on the middle two rows because it is the only one that exists before a
+code resolves: a deleted post has no id to build a permalink out of, and `/t/{code}` is a real link
+that lands on TikTok's own "video currently unavailable" page.
+
+The last row is `ambiguous` rather than a dead end because `tiktok.com/t/` and `threads.com/t/` are
+the same path on two different products, so a code TikTok disclaims may well be Threads'. The render
+arm has offered that chooser since the route was written.
+
+All four rows used to answer `not_a_post`. The walls were corrected on 2026-08-11 and the other two
+on 2026-08-12, each after measuring the same code through both surfaces — a false statement about a
+post that demonstrably exists, and one the render path never made.
 
 `platform` and `canonical` carry real values on `age_restricted`, `private` and `fetch_fail`, and
 are `null` whenever the request didn't get far enough to establish them. They are never guessed.

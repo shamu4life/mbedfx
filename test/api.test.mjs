@@ -576,9 +576,49 @@ test('A WALLED SHARE CODE IS A WALL ON EVERY SURFACE — the API says `private`,
   assert.deepEqual(await card.json(), { ok: false, reason: 'fetch_fail', gate: 'private' },
     'the converter page draws the same wall the card does, instead of "this is not a post"')
 
-  // UNCHANGED, and the reason this is a narrow fix rather than a rewrite of the failure mapping: a
-  // code that simply will not resolve still says `not_a_post`. Nothing was learned about a post, so
-  // there is nothing to claim about one.
+  /**
+   * CHANGED 2026-08-12, and this assertion used to read `not_a_post`.
+   *
+   * The narrow fix above was closed against its own siblings: it taught the JSON surfaces about
+   * {kind:'gated'} and left the other two resolutions answering the thing the gated one had just
+   * stopped saying. A code TikTok does not claim is not junk — `tiktok.com/t/` and `threads.com/t/`
+   * are the same path on two different products — and the render arm has offered that chooser since
+   * the route was written. `ambiguous` is the one not-a-post answer a caller can DO something about,
+   * and the shortlink arm was where it was least available.
+   */
   const unresolved = await handle(apiReq('https://www.tiktok.com/t/ZTSw2mYwQ'), envWith(), ctx, depsFor(null))
-  assert.equal((await unresolved.json()).error.code, 'not_a_post')
+  const unresolvedBody = await unresolved.json()
+  assert.equal(unresolvedBody.error.code, 'ambiguous',
+    'a code TikTok disclaims may be Threads’, which is a thing the caller can act on')
+  assert.deepEqual(unresolvedBody.error.candidates, ['tt', 'th'], 'the same pair the chooser offers')
+})
+
+test('A DELETED SHARE CODE IS A DEAD POST, NOT A NON-POST — the sibling the gated fix left behind', async () => {
+  /**
+   * THE SAME DIVERGENCE, ONE BRANCH OVER, found in review of the fix above on 2026-08-12.
+   *
+   * {kind:'gone'} means TikTok CLAIMED the code — the page carried a webapp.video-detail scope — and
+   * the post is not there: deleted, or region-blocked. The render arm answers that with the failure
+   * card and counts ('tt','fetch_fail'), and it deliberately does NOT degrade to the chooser, because
+   * offering threads.com for a code TikTok has claimed sends the click to a dead end.
+   *
+   * Both JSON surfaces answered `not_a_post` with `platform: null`. That null is the part that makes
+   * it a false statement rather than a vague one: the page proved whose post it is, and the render
+   * path refuses to make a claim it can't support in either direction.
+   */
+  const goneDeps = { ...depsFor(null), resolveShortlink: async () => ({ kind: 'gone' }) }
+
+  const res = await handle(apiReq('https://www.tiktok.com/t/ZTSw2mYwR'), envWith(), ctx, goneDeps)
+  const body = await res.json()
+  assert.equal(res.status, 200)
+  assert.equal(body.error.code, 'fetch_fail', 'the same code the permalink gives for a dead post')
+  assert.equal(body.error.platform, 'tt', 'the resolver proved which site it is; null would be a lie')
+  assert.equal(body.error.canonical, 'https://www.tiktok.com/t/ZTSw2mYwR',
+    'a deleted post has no id to build a permalink from, so the share url is the canonical')
+  assert.ok(!body.error.gate, 'gone is not a wall, and must not be dressed as one')
+  assert.equal(res.headers.get('cache-control'), 'no-store', 'a deleted post can come back as a repost')
+
+  const card = await handle(cardReq('/t/ZTSw2mYwR'), envWith(), ctx, goneDeps)
+  assert.deepEqual(await card.json(), { ok: false, reason: 'fetch_fail' },
+    'the converter preview says the same thing, with no gate invented')
 })
