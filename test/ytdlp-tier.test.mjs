@@ -557,3 +557,160 @@ test('THE META EXTRACT SURVIVES THE RESPONSE — waitUntil is what releases its 
   await assert.doesNotReject(Promise.all(waits))
   assert.equal(seen.meta, 3, 'a freed slot lets the next ids dispatch; a leaked one would refuse them')
 })
+
+// ── The metadata BUDGET. One container call, two surfaces, two ceilings.
+
+/**
+ * NO CRAWLER UA: /_card is an XHR from the converter page and is classified `human`. A browser
+ * fetching the converted url gets a 302 rather than an embed, which is the whole reason the endpoint
+ * exists — see card-muxing.test.mjs, which makes the same point about the same route.
+ */
+const cardReq = path => new Request(`https://mbedfx.app/_card?p=${encodeURIComponent(path)}`)
+
+/**
+ * envWith, plus the analytics points. `count` is the only way an outcome leaves the worker, so a test
+ * about WHO A FAILURE IS BLAMED ON has to read them: nothing else in the response distinguishes a lost
+ * deadline from an upstream that declined — both render the same failure card, which is exactly why
+ * this class of defect had to be found by a hand audit. TRANSLATE_GOOGLE off for
+ * translate-deadline.test.mjs's reason: Google is tried first and it is the live internet.
+ */
+const countingEnv = (resolver, r2 = fakeR2()) => {
+  const points = []
+  return {
+    points,
+    env: {
+      AE: { writeDataPoint(p) { points.push(p.blobs) } },
+      ASSETS: { async fetch() { return new Response('a') } },
+      MEDIA_RESOLVER: resolver, MEDIA_CACHE: r2,
+      TRANSLATE_GOOGLE: 'off',
+    },
+  }
+}
+const outcomes = points => points.map(b => b[1])
+
+test('THE PREVIEW OUTLIVES THE CRAWLER on one slow extract, and the two do not collapse into one', async () => {
+  /**
+   * THE DEFECT, MEASURED IN PRODUCTION 2026-08-12. Ten previously-unseen Dailymotion ids were rendered
+   * through https://mbedfx.app as a Discord crawler: nine came back at 4.93-5.50s and ONE came back as
+   * the 258-byte failure card, for a post that was fine — a healthy `yt-dlp -J` on that platform costs
+   * 3.3s to over 4.7s, against a META_TIMEOUT_MS of 4700. The same audit had already caught Dailymotion
+   * and Streamable doing it on a cold first request and healing on a retry.
+   *
+   * THE HALF THAT DOES NOT HEAL is this one. getPost is the same function on every surface, so /_card
+   * and /_api/v1 — which race the mux and the translation on CARD_DEADLINE_MS (9000) — were capping the
+   * call that decides whether there is a card AT ALL at the CRAWLER's 4700. Discord re-unfurls and a
+   * degraded card is deliberately uncached, so those surfaces get a next render; CLAUDE.md names the
+   * converter preview as the seam that does not. It is fetched once per typing-settle and drawn, and
+   * nobody re-pastes to heal it, so a cold Dailymotion link previewed as "couldn't load" permanently.
+   *
+   * BOTH HALVES ARE ASSERTED HERE, in one test, because the fix is a SPLIT and pinning only the new
+   * number would let the crawler's quietly follow it. 4700 is DERIVED from HTML_DEADLINE_MS, which
+   * bounds how long a crawler holds the connection; raising it there is the "6000 was larger than the
+   * budget it spends from" defect again, and would need a measurement of Discord's tolerance that
+   * nobody has taken.
+   *
+   * TWO IDS, NOT ONE: metaOnce and the post cache would collapse a shared id onto ONE attempt, and the
+   * surface with the smaller budget would then decide the answer for both — which is the thing under
+   * test, not a fixture detail.
+   *
+   * IT COSTS ~5 SECONDS OF WALL CLOCK, and there is no cheaper honest version: the whole claim is about
+   * a call that outlives one budget and not the other, and the two budgets are 4700 and 8700.
+   *
+   * WHAT THIS BODY CANNOT PIN, and where that is pinned instead. This test asserts the ORDERING —
+   * crawler loses, preview wins, one extract not two — and ordering survives either number moving.
+   * Setting META_TIMEOUT_MS to 6000 (the exact hand-picked value this file elsewhere calls a defect)
+   * leaves it green and merely 1.3s slower, because `release()` fires only after the crawler response
+   * resolves, so the crawler must lose for ANY budget below ~8450ms. The numbers themselves are pinned
+   * by 'THE TWO BUDGETS ARE DERIVED, NOT CHOSEN' below, which reads them out of the source.
+   */
+  let release
+  const hold = new Promise(r => { release = r })
+  const { binding } = fakeResolver(DM_META, hold)
+  const { env, points } = countingEnv(binding)
+  const d = await liveDeps()
+
+  // The preview is STARTED FIRST so its deadline timer is armed no later than the crawler's. Before the
+  // fix both are META_TIMEOUT_MS and fire in the same batch, and two timers set microseconds apart is a
+  // coin flip; arming this one first makes "the preview lost too" the guaranteed pre-fix outcome.
+  const preview = handle(cardReq('/video/xbudget1'), env, ctx, d)
+  const crawler = handle(req('/video/xbudget2'), env, ctx, d)
+
+  const html = await (await crawler).text()
+  assert.match(html, /couldn't load/i,
+    'the crawler head loses the extract that the preview outlives — the whole point of the split')
+  assert.ok(outcomes(points).includes('meta_timeout'),
+    'and our own blown deadline is counted as ours')
+  assert.ok(!outcomes(points).includes('assert_fail'),
+    'never assert_fail: docs/METRICS.md defines that as the UPSTREAM changing shape, and this upstream ' +
+    'is still extracting — it lands in R2 under waitUntil moments later, which is why a retry heals')
+
+  // A margin past the crawler's deadline before the container is allowed to answer, so an unfixed
+  // preview has certainly lost its own race by now. Still far inside META_TIMEOUT_API_MS (8700).
+  await new Promise(r => setTimeout(r, 250))
+  release()
+
+  const card = await (await preview).json()
+  assert.equal(card.ok, true,
+    'the PREVIEW gets the answer: an extract that outlives the crawler\'s ceiling is inside its own')
+  assert.equal(card.author.name, 'Winter.Desire', 'and it is the real container dict, not a placeholder')
+  assert.equal(card.text, 'Zero to Alpha: Return of the Wolf King')
+})
+
+test('A CONTAINER THAT ANSWERS WITH NOTHING IS STILL THE UPSTREAM\'S FAULT, not a timeout', async () => {
+  /**
+   * THE CONTROL FOR THE COUNTER SPLIT ABOVE, and the reason `timedOut` is read off whether the ATTEMPT
+   * SETTLED rather than off what `deadline()` returned: deadline answers null for BOTH cases. A
+   * container that replies promptly with an unusable dict is the id's own verdict — a gone page, a
+   * playlist, a wall — and that is exactly what assert_fail is for. Collapsing the two in either
+   * direction loses the only signal that says which system to go and look at.
+   */
+  const { binding } = fakeResolver({ title: '' })
+  const { env, points } = countingEnv(binding)
+  const html = await (await handle(req('/video/xblame01'), env, ctx, await liveDeps())).text()
+  assert.match(html, /couldn't load/i)
+  assert.ok(outcomes(points).includes('assert_fail'), 'a real decline is still assert_fail')
+  assert.ok(!outcomes(points).includes('meta_timeout'), 'and it must not be blamed on our budget')
+})
+
+
+test('THE TWO BUDGETS ARE DERIVED, NOT CHOSEN — and a hand-picked number here is the defect itself', () => {
+  /**
+   * THE TIMING TEST ABOVE DOES NOT PIN THESE, and its name used to say it did. It asserts that the
+   * crawler loses an extract the preview survives, which stays true for any crawler budget under
+   * ~8450ms — so META_TIMEOUT_MS could be quietly retuned to anything in that range and the suite
+   * would stay green while the comment claiming 4700 rotted.
+   *
+   * THE NUMBERS ARE NOT THE POINT; THE DERIVATION IS. Both budgets are a whole-response deadline
+   * minus the floor left for picking up a video already in storage, which is what makes them
+   * defensible. A literal in either place would be the "6000 was larger than the budget it spends
+   * from" defect: a number that looks measured, is not, and outlives the response it was supposed to
+   * fit inside. This reads the source rather than importing, because none of these are exported —
+   * the same technique test/prep.test.mjs uses on the Route union.
+   *
+   * RAISING META_TIMEOUT_MS MEANS RAISING HTML_DEADLINE_MS, which bounds how long a crawler holds
+   * the connection, and nobody has measured Discord's tolerance. That measurement is the gate, not
+   * this test — but this test is what makes skipping it visible.
+   */
+  const src = readFileSync(new URL('../src/worker.ts', import.meta.url), 'utf8')
+  const num = name => {
+    const m = src.match(new RegExp(`^(?:export )?const ${name} = (\\d+)$`, 'm'))
+    assert.ok(m, `${name} must be a plain literal in src/worker.ts`)
+    return Number(m[1])
+  }
+  const html = num('HTML_DEADLINE_MS')
+  const mux = num('MUX_WAIT_API_MS')
+  const floor = num('MUX_WAIT_FLOOR_MS')
+
+  // Both budgets, and the deadline the second leans on, must be SPELLED as derivations.
+  assert.match(src, /^const CARD_DEADLINE_MS = MUX_WAIT_API_MS$/m,
+    'the preview deadline is the mux wait itself, not a second number that can drift from it')
+  assert.match(src, /^const META_TIMEOUT_MS = HTML_DEADLINE_MS - MUX_WAIT_FLOOR_MS$/m,
+    'the crawler budget must be DERIVED from the crawler deadline, never written as a literal')
+  assert.match(src, /^const META_TIMEOUT_API_MS = CARD_DEADLINE_MS - MUX_WAIT_FLOOR_MS$/m,
+    'the preview budget must be DERIVED from the preview deadline, never written as a literal')
+
+  // The values the rest of this file's comments, and docs/API.md's published table, both quote.
+  assert.equal(html - floor, 4700, 'the crawler budget is 4700ms; docs/API.md publishes this')
+  assert.equal(mux - floor, 8700, 'the preview budget is 8700ms; docs/API.md publishes this')
+  assert.ok(mux > html, 'the preview may outlive the crawler, never the reverse')
+})

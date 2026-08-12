@@ -80,7 +80,7 @@ env.AE?.writeDataPoint({ blobs: [platform, outcome, client], doubles: [1] })
 | Column | Holds | Values |
 |---|---|---|
 | `blob1` | platform | `x` `tt` `ig` `th` `rd` `bs` `yt` `fb` `dm` `st` `im` `tw` `lm` `pn` `ms` `mk` `pt`, or `none` |
-| `blob2` | outcome | one of the 19 in `Outcome2` (`src/analytics.ts:54`) |
+| `blob2` | outcome | one of the values in the `Outcome2` union (`src/analytics.ts:54`) |
 | `blob3` | client class | `discord` `telegram` `other-bot` `human` |
 | `double1` | the literal `1` | always |
 | `timestamp` | set by the runtime | `DateTime`, always UTC |
@@ -191,7 +191,8 @@ Most mean nothing as an absolute number, and several mislead alone.
 | Counter | What a rise means | Read against |
 |---|---|---|
 | `ok` | A card was rendered and served. The health denominator. | — |
-| `assert_fail` | The page didn't answer: upstream changed shape, blocked mbedfx, or served a decoy. Not "the post is gone". On `ig`, the only way to see the 599 KB HTTP-200 decoy. | `fetch_fail`; on `yt`, `ok` (the ratio is the oembed-miss rate) |
+| `assert_fail` | The page didn't answer: upstream changed shape, blocked mbedfx, or served a decoy. Not "the post is gone". On `ig`, the only way to see the 599 KB HTTP-200 decoy. | `fetch_fail`; on `yt`, `ok` (the ratio is the oembed-miss rate); on `dm`/`st`/`im`, `meta_timeout` |
+| `meta_timeout` | **Ours, not theirs.** The container metadata call was still extracting when our budget ran out. Fires on `dm`/`st`/`im`, where that call *is* the card, so the reader got the generic "couldn't load" for a post that is fine. It lands in R2 under `waitUntil` a moment later, so the next unfurl is a warm hit and a re-paste heals — a first paste does not. | `assert_fail` on the same platform: this one is a budget to fix, that one an upstream that moved |
 | `fetch_fail` | The generic failure card was served. Subtract the named failures to leave the ones with no name. | everything below that stacks on it |
 | `age_restricted` | An age wall (🔞). Every emitter reads a positive signal out of the platform's payload; none infers a wall from missing tags. | `pool_unused`, same platform |
 | `private` | A login or private wall (🔒). Instagram's is the one inferential emitter, and has produced a false 🔒 from datacenter egress once. | `fullpage_recovered`, which must move the opposite way |
@@ -425,6 +426,7 @@ A platform can also be missing for falling below the `LIMIT 200` cut.
 SELECT blob1 AS platform,
        SUM(_sample_interval * (blob2 = 'ok')) AS ok,
        SUM(_sample_interval * (blob2 = 'assert_fail')) AS assert_fail,
+       SUM(_sample_interval * (blob2 = 'meta_timeout')) AS meta_timeout,
        SUM(_sample_interval * (blob2 = 'fetch_fail')) AS fetch_fail
 FROM mbedfx_counters
 WHERE timestamp > NOW() - INTERVAL '1' DAY
@@ -433,6 +435,13 @@ ORDER BY assert_fail DESC
 ```
 
 A moving `assert_fail`/`ok` ratio means that platform's upstream changed shape.
+
+`meta_timeout` IS IN THIS QUERY BECAUSE LEAVING IT OUT IS HOW A DEFECT HID FOR WEEKS. It is the same
+failure card to the reader and the opposite answer to "who is broken": the container was still
+extracting when our own budget ran out. Before it existed those requests were counted as
+`assert_fail`, so on `dm`, `st` and `im` this query answered "their upstream changed shape" about a
+Dailymotion that was healthy at that instant. A rise in `meta_timeout` with `assert_fail` flat is a
+budget or a cold container, and it is ours; the reverse is theirs. Both together is a slow upstream.
 
 ### Are the account pools working
 
