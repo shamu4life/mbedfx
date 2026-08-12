@@ -10,6 +10,7 @@ import { statParts } from './render/text.ts'
 import { proxyableVideoUrl, serveDirectVideo } from './mediaproxy.ts'
 import { refKey } from './refkey.ts'
 import { count, type Env, type GateReason } from './analytics.ts'
+import { runSmoke, smokeOutcome, SMOKE_CHECKS, SMOKE_CLIENT } from './smoke.ts'
 import { cookiesFor, jarAvailable, poolSetButUnused, twitterAccounts, type CredentialPlatform } from './credentials.ts'
 import {
   cacheUrl, deserializePost, postCacheKey, respCacheKey, shortPostCacheKey, shortRespCacheKey,
@@ -3499,6 +3500,34 @@ async function serveDirectMedia(
 export async function handle(req: Request, env: Env, ctx: ExecutionContext, d: Deps): Promise<Response> {
   const url = new URL(req.url)
 
+  /**
+   * `/_smoke` — the same checks the cron runs, on demand, so a human can ask "is anything broken?"
+   * without waiting for a schedule or querying Analytics Engine.
+   *
+   * IT IS NOT A FETCH PROXY, and that is a property of its design rather than a promise. It takes NO
+   * input: the paths are constants in src/smoke.ts and the origin is the request's own, so there is
+   * nothing a caller can point it at. A version of this that accepted `?url=` would be an open relay
+   * wearing a monitoring badge.
+   *
+   * IT COSTS WHAT IT LOOKS LIKE. Five renders, serial, each of which may reach an upstream — so it is
+   * deliberately not linked from anywhere and not cached. It answers JSON rather than a card because
+   * nothing should ever unfurl it.
+   */
+  if (url.pathname === '/_smoke') {
+    const results = await runSmoke(url.origin, u => handle(new Request(u, {
+      // Rendered as a crawler, because that is the reader whose experience is being checked.
+      headers: { 'user-agent': 'Mozilla/5.0 (compatible; Discordbot/2.0; +https://discordapp.com)' },
+    }), env, ctx, d))
+    for (const r of results) count(env, r.platform as never, smokeOutcome(r.verdict), SMOKE_CLIENT)
+    const failed = results.filter(r => r.verdict !== 'ok')
+    return Response.json({
+      ok: failed.length === 0,
+      checked: results.length,
+      failed: failed.map(f => ({ platform: f.platform, verdict: f.verdict })),
+      results,
+    }, { headers: { 'cache-control': 'no-store' } })
+  }
+
   // Always the request's own origin — never a constant. A hardcoded prod origin
   // would make staging embeds point Discord's media proxy at the live prod worker.
   const origin = url.origin
@@ -4394,14 +4423,45 @@ export async function handle(req: Request, env: Env, ctx: ExecutionContext, d: D
   }
 }
 
+const liveDeps = (): Deps => ({
+  cache: caches.default as unknown as CacheLike,
+  fetchPost: liveFetchPost,
+  resolveShortlink: liveResolveShortlink,
+  resolveRedditShare: liveResolveRedditShare,
+  resolveMetaShare,
+})
+
 export default {
   async fetch(req: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
-    return handle(req, env, ctx, {
-      cache: caches.default as unknown as CacheLike,
-      fetchPost: liveFetchPost,
-      resolveShortlink: liveResolveShortlink,
-      resolveRedditShare: liveResolveRedditShare,
-      resolveMetaShare,
-    })
+    return handle(req, env, ctx, liveDeps())
+  },
+
+  /**
+   * THE CRON, which exists because this service had no opinion about its own health. Facebook was
+   * broken for up to a week and the detector was the owner pasting a link. See src/smoke.ts.
+   *
+   * IT CHECKS ITSELF THROUGH ITS OWN FRONT DOOR — the same `handle()` a crawler reaches — so it sees
+   * what a reader sees, including the render, the caches and the deadlines. What that CANNOT catch is
+   * anything outside the worker: DNS, the route binding, a Cloudflare incident, or the deploy having
+   * failed entirely. A check that runs inside the thing it is checking cannot report that the thing
+   * is unreachable, and no amount of care here changes that. It is a platform-breakage detector, not
+   * an uptime monitor.
+   *
+   * THE ORIGIN IS A CONSTANT because a scheduled invocation has no request to take one from. It is
+   * the apex, which is the host readers actually paste.
+   */
+  async scheduled(_event: ScheduledController, env: Env, ctx: ExecutionContext): Promise<void> {
+    const d = liveDeps()
+    const results = await runSmoke('https://mbedfx.app', u => handle(new Request(u, {
+      headers: { 'user-agent': 'Mozilla/5.0 (compatible; Discordbot/2.0; +https://discordapp.com)' },
+    }), env, ctx, d))
+    for (const r of results) count(env, r.platform as never, smokeOutcome(r.verdict), SMOKE_CLIENT)
+    // One console line per FAILING platform and nothing else. It carries a platform code and a
+    // verdict — no url, no reader, nothing that identifies anybody — so it stays inside the boundary
+    // wrangler.jsonc draws, and it is visible to `wrangler tail` when somebody is watching.
+    for (const r of results) {
+      if (r.verdict !== 'ok') console.error(`smoke ${r.platform} ${r.verdict}`)
+    }
+    if (results.length !== SMOKE_CHECKS.length) console.error('smoke incomplete')
   },
 }
