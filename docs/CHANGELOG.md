@@ -5,6 +5,51 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [Unreleased]
+
+### Security
+- **An SSRF address guard in the Worker half** (`src/netguard.ts`), ported from the one
+  `container/server.py` has always had. The fediverse routes take an instance hostname from the URL
+  path and make it the origin of a fetch; on Cloudflare the surrounding clauses bound the worst case
+  to a blind GET, but off Cloudflare that same GET reaches `127.0.0.1`, the LAN and the cloud
+  metadata endpoint on `169.254.169.254`. The guard parses a host to BYTES and range-checks them, so
+  `127.0.0.1`, `127.1`, `2130706433`, `0177.0.0.1`, `::ffff:127.0.0.1`, `::ffff:7f00:1`,
+  `64:ff9b::7f00:1` and `2002:7f00:1::` all get one verdict — a prefix blocklist on the text form
+  passes six of those eight, and one of them is how a previous guard in this project was bypassed.
+  `env.RESOLVE_HOST` is the DNS seam a self-hosted runtime plugs a resolver into; on Cloudflare there
+  is none, and the literal check is the whole guard, which is stated rather than implied.
+- **Fediverse LAN names are refused.** `FEDI_HOST` rejects the bare label `localhost` and admits
+  `api.localhost`, `printer.local`, `db.internal` and `host.home.arpa` — found by running the regex
+  rather than reading a comment that claimed otherwise. Academic on Cloudflare, where they resolve to
+  nothing; the machine next door on a self-hosted box.
+- **`OWN_HOSTS` is configurable** (`env.OWN_HOSTS`), so a self-hoster can declare the domains their
+  instance is served from — the guard that stops the service being induced to fetch itself. The value
+  is ADDED to the built-in list and never substituted for it, so every way of getting it wrong is
+  "too strict", never "too open".
+
+### Fixed
+- **The Twitter guest token is reused off Cloudflare too.** The activation was cached with
+  `cf: { cacheEverything, cacheTtl }`, a Cloudflare-only fetch option that is silently ignored
+  elsewhere, so a self-hosted instance minted a fresh guest token on every cold card. A process-local
+  memo with a shared in-flight promise now collapses that to one activation per two hours, and a
+  concurrent burst on one tweet to a single activation. Failed and thrown activations are not
+  memoized, so one 503 cannot kill the guest path until the TTL lapses.
+- **The mux buffering fallback is bounded.** Without `FixedLengthStream` (i.e. anywhere but Workers)
+  every muxed video was read whole into memory; the container's own ceiling is a 375 MB output with
+  four pool slots, so the real bound was ~1.5 GB resident. Now: stream into a store that implements
+  the new optional `MEDIA_CACHE.putStream`, else buffer under `MUX_BUFFER_MAX` (64 MB default,
+  env-overridable), else refuse to store and degrade that view to the cover still.
+
+### Documentation
+- The `CacheLike` seam a self-hoster implements is now a written contract — honour
+  `cache-control: max-age`, hand back a readable body, be shared across processes, never reject, key
+  on the exact string — with a test that fails if the worker starts calling a third method.
+- `docs/SELF-HOSTING.md` rewritten around what landed, with the stale `src/` line citations corrected
+  (several predated this change) and the suite re-measured: 1343 tests, 0 failures, 30.6-34.7 s on a
+  residential macOS laptop, Node v26.5.0.
+
+---
+
 ## [1.10.0] - 2026-08-12
 
 ### Added

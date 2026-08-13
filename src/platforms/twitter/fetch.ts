@@ -151,11 +151,28 @@ const GUEST_UA =
 
 /**
  * The guest token is FREE and REUSABLE (~500-request budget, x-rate-limit-remaining: 499 per token),
- * so we reuse ONE activation for 2 hours (spec §Credentials) through the RUNTIME FETCH CACHE — the
- * FxEmbed form: `cf: { cacheEverything: true, cacheTtl }` on the activate.json fetch, so workerd serves
- * the cached activation until the TTL lapses. This is NOT caches.default: that is the Cache API
- * (match/put on Request/Response objects), a DIFFERENT mechanism you cannot "store with cf" into —
- * pick one, and this phase picks the cf fetch-cache. No KV binding.
+ * so we reuse ONE activation for 2 hours (spec §Credentials) rather than minting one per tweet.
+ *
+ * IT IS REUSED TWICE OVER, and the second mechanism is the one that works everywhere:
+ *
+ *   1. `cf: { cacheEverything: true, cacheTtl }` on the activate.json fetch — the FxEmbed form, so
+ *      workerd serves the cached activation until the TTL lapses. This is NOT caches.default: that
+ *      is the Cache API (match/put on Request/Response objects), a DIFFERENT mechanism you cannot
+ *      "store with cf" into. No KV binding.
+ *   2. `tokenMemo` below, an isolate-local memo. ADDED FOR SELF-HOSTING, and it is not belt-and-
+ *      braces: the `cf` option is a Cloudflare-only field on RequestInit, and off Cloudflare it is
+ *      SILENTLY IGNORED — no error, no warning, just a fresh guest-token activation on every single
+ *      cold card, which is a rate-limit source nobody would find until Twitter started answering
+ *      429. A cache that only exists on one of the two runtimes is not a cache; the memo is the half
+ *      that behaves the same on both, and on Workers it also saves the subrequest the `cf` cache
+ *      would still have cost.
+ *
+ * WHY NOT `Deps.cache` INSTEAD, which is genuinely shared and would survive an isolate. Because it
+ * is not reachable from here: fetchGuest is called by liveFetchPost, which is handed `env`, not
+ * `Deps` — and widening that seam to carry a cache into every platform fetcher, so one of eighteen
+ * can memoize one string, is a much larger change than the problem. The memo's weakness is exactly
+ * the weakness the `cf` cache already had: it is per isolate / per process, so N processes hold N
+ * tokens. At ~500 requests per token that is bounded and harmless.
  */
 const GUEST_TOKEN_TTL = 7200
 
@@ -333,8 +350,35 @@ function randomCsrf(): string {
 }
 
 /**
- * I/O: activate (or reuse) a guest token, or null. POST activate.json with the public bearer, caching
- * the activation for GUEST_TOKEN_TTL via the `cf` fetch cache (see GUEST_TOKEN_TTL).
+ * THE RUNTIME-INDEPENDENT HALF OF THE TOKEN REUSE (mechanism 2 under GUEST_TOKEN_TTL).
+ *
+ * `activation` is the token and when it lapses. `inFlight` is the SECOND thing this must do and the
+ * reason a bare value would not be enough: one pasted tweet is unfurled by three concurrent
+ * requests, and with only a value each of them sees an empty memo and activates its own token. The
+ * shared promise collapses a cold burst into ONE activation.
+ *
+ * A FAILED ACTIVATION IS NOT MEMOIZED, deliberately. Twitter answering 503 once must not turn into
+ * two hours of "no guest path" for every tweet on this isolate; the failure is per-attempt, and the
+ * next caller tries again. Only a real token is stored.
+ */
+let activation: { token: string; expires: number } | null = null
+let inFlight: Promise<string | null> | null = null
+
+/**
+ * TEST SEAM, and it exists for the rule CLAUDE.md states about module-level in-flight maps: this
+ * memo is module state shared by every test in the process, so one test's token would silently
+ * become another's answer and a test asserting "a fresh activation happens" would pass or fail
+ * depending on file order. Every test that touches the guest path calls this first.
+ */
+export function resetGuestToken(): void {
+  activation = null
+  inFlight = null
+}
+
+/**
+ * I/O: activate (or reuse) a guest token, or null. POST activate.json with the public bearer, reusing
+ * the activation for GUEST_TOKEN_TTL through the memo above and the `cf` fetch cache (see
+ * GUEST_TOKEN_TTL for why it takes both).
  *
  * ASSERT ON THE `guest_token` STRING, NOT on res.ok — a 200 carrying no token is still a failure (the
  * phase's assert-on-content rule). The body parse is guarded: a non-JSON body degrades to null (no
@@ -342,10 +386,25 @@ function randomCsrf(): string {
  * a future secret-store binding; the bearer is a public constant, so it is unused today.
  */
 export async function getGuestToken(_env: Env): Promise<string | null> {
+  const now = Date.now()
+  if (activation && activation.expires > now) return activation.token
+  if (inFlight) return inFlight
+  const work = activateGuestToken()
+  inFlight = work
+  // Cleared however it settles, INCLUDING on a throw: a rejected promise parked here would be
+  // handed to every later caller for the life of the isolate, turning one network blip into a
+  // permanently dead guest path. Attached to `work` rather than awaited so the clear cannot be
+  // skipped by an early return.
+  void work.catch(() => null).then(() => { if (inFlight === work) inFlight = null })
+  return work
+}
+
+async function activateGuestToken(): Promise<string | null> {
   const res = await fetch('https://api.x.com/1.1/guest/activate.json', {
     method: 'POST',
     headers: { authorization: GUEST_BEARER, 'user-agent': GUEST_UA },
-    // The cf fetch cache reuses the activation for the TTL — NOT caches.default (see GUEST_TOKEN_TTL).
+    // The cf fetch cache reuses the activation for the TTL on Workers — NOT caches.default, and NOT
+    // effective anywhere else, which is what the memo above is for (see GUEST_TOKEN_TTL).
     cf: { cacheEverything: true, cacheTtl: GUEST_TOKEN_TTL },
   })
   let body: unknown
@@ -355,7 +414,9 @@ export async function getGuestToken(_env: Env): Promise<string | null> {
     return null
   }
   const gt = (body as Any)?.guest_token
-  return typeof gt === 'string' && gt ? gt : null
+  if (typeof gt !== 'string' || !gt) return null
+  activation = { token: gt, expires: Date.now() + GUEST_TOKEN_TTL * 1000 }
+  return gt
 }
 
 /**

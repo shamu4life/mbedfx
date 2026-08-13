@@ -68,7 +68,39 @@ import { normalizeStreamable } from './platforms/streamable/normalize.ts'
 import { fetchImgur, imPageUrl } from './platforms/imgur/fetch.ts'
 import { normalizeImgur, normalizeImgurApi } from './platforms/imgur/normalize.ts'
 
-/** Minimal shape of the Cache API we use, so tests can inject an in-memory stand-in. */
+/**
+ * Minimal shape of the Cache API we use, so tests can inject an in-memory stand-in — and, since
+ * self-hosting became a real target, THE CONTRACT A SELF-HOSTER IMPLEMENTS. Two methods, and the
+ * whole seam: `caches.default` satisfies it on Cloudflare, a `Map` satisfies it in the suite, and
+ * anything shared satisfies it in production off Cloudflare. Nothing in this repo will ever depend
+ * on Redis, Memcached or a specific store; the point of a two-method interface is that the choice
+ * stays the operator's.
+ *
+ * WHAT AN IMPLEMENTATION MUST DO, because "a Map" is right for the tests and wrong for a deployment:
+ *
+ *   1. HONOUR `cache-control: max-age`. Every `put` carries one (POST_TTL 900 s for a post,
+ *      RESP_TTL 900 s for rendered markup, PROFILE_TTL 180 s for a profile). A store that ignores it
+ *      serves a post's counts and a profile's follower number forever, and the staleness is
+ *      invisible — the card renders, it is just wrong. Cloudflare's Cache API reads the header; a
+ *      Map does not, so a Map needs an expiry beside it.
+ *   2. RETURN A FRESHLY READABLE BODY from every `match`. Callers read it (`await hit.text()`); a
+ *      Response body is single-use, so handing the same object to two matches gives the second an
+ *      already-consumed stream, which deserializes to null and reads as a cache miss forever.
+ *   3. BE SHARED ACROSS PROCESSES, or be honest that it is not. A per-process Map on N workers is N
+ *      caches with a 1/N hit rate, and Discord fetches roughly three times per paste. Cloudflare's
+ *      own Cache API is already only per-datacenter, so a shared self-hosted store is arguably
+ *      better than what the public instance has — see docs/SELF-HOSTING.md.
+ *   4. NEVER REJECT. Most `put`s ride `ctx.waitUntil`, where a rejection is an unhandled one and,
+ *      depending on the runtime, takes the process with it. Swallow the store's errors inside the
+ *      implementation: a failed cache write is a performance event, never a correctness one.
+ *   5. BE KEYED ON THE STRING IT IS GIVEN, exactly. Keys are absolute urls minted by cacheUrl on a
+ *      synthetic origin, and they already carry every dimension that matters (the ref, the client
+ *      class, and the serving origin — see respCacheKey). Normalising, lowercasing or stripping the
+ *      query would merge entries that are deliberately distinct.
+ *
+ * Only these two methods are used. test/selfhost.test.mjs asserts that from the source, so a third
+ * call site cannot appear without this list being updated with it.
+ */
 export interface CacheLike {
   match(key: string): Promise<Response | undefined>
   put(key: string, res: Response): Promise<void>
@@ -878,10 +910,14 @@ export async function liveFetchPost(
       // is reported as such; every other error — couldnt_find_post, a removed post, a bad id — is the
       // generic "couldn't load", because Lemmy does not distinguish them in a way we can trust.
       //
-      // No `origin` is threaded in: fetchableInstance's own-zone refusal reads a module-level list of
-      // the hosts this Worker is served from, so the guard does not depend on a request field that
-      // every .mjs test stub would then have to supply.
-      const got = await fetchLemmy(ref)
+      // `env` IS THREADED IN, `origin` IS NOT, and the asymmetry is deliberate. The own-zone refusal
+      // reads a module-level list of the hosts this Worker is served from PLUS `env.OWN_HOSTS`, which
+      // is how a self-hosted instance declares a domain this repo cannot know — env is already a
+      // parameter here, so nothing new has to reach the fetcher and every existing .mjs stub is
+      // untouched. The request's own origin is a different matter: threading it would make the guard
+      // depend on a request field every stub would then have to supply, for a host the operator can
+      // simply declare. `env.RESOLVE_HOST` rides the same object (see fedihost.ts clause 7).
+      const got = await fetchLemmy(ref, { env })
       if (!got.ok) {
         count(env, 'lm', got.reason, client)
         if (got.reason === 'private' && report) report.reason = 'private'
@@ -896,15 +932,15 @@ export async function liveFetchPost(
       /**
        * THE MASTODON-API FAMILY — Mastodon, Pleroma, Akkoma, GoToSocial, Pixelfed, all through ONE
        * unauthenticated `GET /api/v1/statuses/{id}`. Like 'lm' this ref names the ORIGIN, so
-       * fetchMasto re-guards the host at the boundary via the shared fedihost.ts contract, and no
-       * `origin` is threaded in for the same reason given above.
+       * fetchMasto re-guards the host at the boundary via the shared fedihost.ts contract, taking
+       * the same `{ env }` guard and no `origin`, for the reasons given above.
        *
        * A 404/410 IS COUNTED AS 'notfound' RATHER THAN AS A FETCH FAILURE. Mastodon answers
        * `Record not found` for a deleted status and for one that never existed alike, so they cannot
        * be told apart — 'notfound' is the honest name for both, and keeps a deleted post from
        * inflating the assert_fail counter that exists to catch upstreams changing shape.
        */
-      const got = await fetchMasto(ref)
+      const got = await fetchMasto(ref, { env })
       if (!got.ok) {
         count(env, 'ms', got.reason, client)
         return null
@@ -918,7 +954,7 @@ export async function liveFetchPost(
        * `NO_SUCH_NOTE` is a deleted note, and `SIGNIN_REQUIRED` is an author-level privacy setting
        * that is reported as 'private', the same as a Lemmy private instance.
        */
-      const got = await fetchMisskey(ref)
+      const got = await fetchMisskey(ref, { env })
       if (!got.ok) {
         count(env, 'mk', got.reason, client)
         if (got.reason === 'private' && report) report.reason = 'private'
@@ -934,7 +970,7 @@ export async function liveFetchPost(
        * plain /_media/ 302 like Pinterest. A video with nothing inside the rendition ceilings, or a
        * live stream, degrades to its cover still rather than to a dead player.
        */
-      const got = await fetchPeerTube(ref)
+      const got = await fetchPeerTube(ref, { env })
       if (!got.ok) {
         count(env, 'pt', got.reason, client)
         return null
@@ -1437,7 +1473,10 @@ async function ensureMuxed(
     console.error('mux failed', key, muxed.status, (await muxed.text().catch(() => '')).slice(0, 200))
     return null
   }
-  await putMuxed(cache, key, muxed)
+  // A refused store is NOT an extraction verdict: the container produced a real video, we simply
+  // would not hold it in memory to save it (see MUX_BUFFER_MAX). Returning null degrades this view
+  // to the cover still, which is the same honest answer a failed mux gives.
+  if (!(await putMuxed(cache, key, muxed, env))) return null
   return await cache.head(key)
 }
 
@@ -2762,24 +2801,127 @@ async function youtubeMeta(
 }
 
 /**
- * Stream a muxed MP4 response into R2. R2's `put` needs a KNOWN LENGTH for a streamed body; a
- * subrequest response body is not always a fixed-length stream even when the origin sent
- * content-length, and `put(key, body)` then throws synchronously. So drive the length explicitly: a
- * FixedLengthStream when the container gave us content-length (the streaming path, no buffering), else
- * buffer to an ArrayBuffer (bounded by the container's own MAX_BYTES output cap).
+ * THE MEMORY CEILING ON THE BUFFERING FALLBACK IN putMuxed. 64 MB, overridable with
+ * `env.MUX_BUFFER_MAX`.
+ *
+ * THE REAL NUMBERS, from container/server.py, because "bounded by the container's own cap" was the
+ * previous claim and it is a bound of the wrong size: `MAX_BYTES` there is 393216000 — a 375 MB
+ * OUTPUT ceiling — beside `MAX_SECONDS` 1500, and the two move together because a `-c copy` mux
+ * produces source-bitrate times duration. RESOLVER_SLOTS is 4, so "buffer whatever the container
+ * produced" is up to 1.5 GB resident across a full pool, for four ordinary long videos and no
+ * attacker at all.
+ *
+ * ON WORKERS THIS IS UNREACHABLE IN PRACTICE and still worth having: the container always sends
+ * content-length (`self.send_header("content-length", str(size))` in server.py), so the
+ * FixedLengthStream branch takes every real mux, and an isolate has ~128 MB anyway — buffering 375 MB
+ * there does not risk a big allocation, it OOMs the isolate. Off Cloudflare, where FixedLengthStream
+ * does not exist, the fallback IS the path and this is the only thing standing between one long video
+ * and the host's memory.
+ *
+ * 64 MB is chosen against the isolate ceiling, not against a measured distribution of video sizes —
+ * nobody has measured that, and a guessed "typical size" would be exactly the invented value this
+ * project refuses. Above it the mux is not stored: the card degrades to its cover still (see
+ * ensureMuxed's null) rather than the process degrading. That is a real cost — an over-ceiling video
+ * re-muxes on every view — which is why the honest fix for a self-hoster is `putStream` below, and
+ * why this number is env-overridable for an operator who has memory to spend.
  */
-async function putMuxed(cache: R2Bucket, key: string, muxed: Response): Promise<void> {
-  const len = Number(muxed.headers.get('content-length'))
-  // FixedLengthStream is a Workers-runtime global; under `node --test` it is absent, so the buffer
-  // path below serves the unit tests while the streaming path serves production.
-  if (typeof FixedLengthStream !== 'undefined' && Number.isInteger(len) && len > 0) {
+const MUX_BUFFER_MAX = 64 * 1024 * 1024
+
+/** `env.MUX_BUFFER_MAX` if it parses to a positive integer, else the default. Total over junk. */
+function muxBufferMax(env: Env): number {
+  const n = Number(env.MUX_BUFFER_MAX)
+  return Number.isInteger(n) && n > 0 ? n : MUX_BUFFER_MAX
+}
+
+/**
+ * A STORE THAT CAN TAKE A STREAM, the seam that makes the ceiling above a fallback rather than a
+ * limit. R2 cannot: `put` needs a KNOWN LENGTH for a streamed body, and a subrequest response body is
+ * not always a fixed-length stream even when the origin sent content-length, so `put(key, body)`
+ * throws synchronously — which is why FixedLengthStream exists in the first place. A self-hosted
+ * store usually CAN (a file write, or an S3 multipart upload), so it may declare an optional
+ * `putStream` and never buffer a byte. Optional, and absent on R2, so the Workers path is untouched.
+ */
+type StreamingBucket = R2Bucket & {
+  putStream?: (key: string, body: ReadableStream, length: number | null) => Promise<void>
+}
+
+/**
+ * Stream a muxed MP4 response into R2. Returns false when the object was NOT stored, so the caller
+ * degrades to the cover still instead of reporting a video that is not there.
+ *
+ * Three paths, in order of how little memory they hold:
+ *   1. FixedLengthStream + content-length — the Workers production path. No buffering.
+ *   2. `cache.putStream` — a self-hosted store that accepts a stream. No buffering.
+ *   3. buffer, bounded by muxBufferMax. Anything larger is refused rather than held in memory.
+ */
+async function putMuxed(cache: R2Bucket, key: string, muxed: Response, env: Env): Promise<boolean> {
+  const raw = Number(muxed.headers.get('content-length'))
+  const len = Number.isInteger(raw) && raw > 0 ? raw : null
+  // FixedLengthStream is a Workers-runtime global; under `node --test` it is absent, so the paths
+  // below serve the unit tests and every self-hosted runtime while this one serves production.
+  if (typeof FixedLengthStream !== 'undefined' && len !== null) {
     const fixed = new FixedLengthStream(len)
     const pumped = muxed.body!.pipeTo(fixed.writable)
     await cache.put(key, fixed.readable)
     await pumped
-  } else {
-    await cache.put(key, await muxed.arrayBuffer())
+    return true
   }
+  const streaming = (cache as StreamingBucket).putStream
+  if (streaming && muxed.body) {
+    await streaming.call(cache, key, muxed.body, len)
+    return true
+  }
+  const cap = muxBufferMax(env)
+  if (len !== null && len > cap) {
+    // SERVER-SIDE ONLY, like the mux-failed log above it: from outside, a refused store and a failed
+    // mux both degrade to the poster still, and that ambiguity is what makes "it shows a frame and
+    // never plays" undiagnosable. `key` is the ref and carries no url.
+    console.error('mux not cached: over the buffer ceiling', key, len, cap)
+    void muxed.body?.cancel()
+    return false
+  }
+  const body = await readCapped(muxed, cap)
+  if (!body) {
+    // No content-length AND past the ceiling mid-read. Same refusal, reached the only other way.
+    console.error('mux not cached: over the buffer ceiling', key, 'unknown', cap)
+    return false
+  }
+  await cache.put(key, body)
+  return true
+}
+
+/**
+ * Read a body into memory, giving up the moment it passes `cap`. Null means "too big".
+ *
+ * IT EXISTS FOR THE HEADERLESS CASE, and that case is not hypothetical off Cloudflare: a store or a
+ * proxy in front of the resolver that answers chunked has no content-length, and `arrayBuffer()` on
+ * such a body is an unbounded allocation with a promise attached. Checking the header alone would
+ * bound the size we were TOLD and not the size we take.
+ */
+async function readCapped(res: Response, cap: number): Promise<Uint8Array | null> {
+  const reader = res.body?.getReader()
+  if (!reader) return new Uint8Array(0)
+  const chunks: Uint8Array[] = []
+  let total = 0
+  for (;;) {
+    const { done, value } = await reader.read()
+    if (done) break
+    if (value) {
+      total += value.byteLength
+      if (total > cap) {
+        void reader.cancel()
+        return null
+      }
+      chunks.push(value)
+    }
+  }
+  const out = new Uint8Array(total)
+  let at = 0
+  for (const c of chunks) {
+    out.set(c, at)
+    at += c.byteLength
+  }
+  return out
 }
 
 /** Serve an R2 object as video/mp4, honouring a single `bytes=` range so players can seek. */
