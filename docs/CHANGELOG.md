@@ -15,7 +15,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   metadata endpoint on `169.254.169.254`. The guard parses a host to BYTES and range-checks them, so
   `127.0.0.1`, `127.1`, `2130706433`, `0177.0.0.1`, `::ffff:127.0.0.1`, `::ffff:7f00:1`,
   `64:ff9b::7f00:1` and `2002:7f00:1::` all get one verdict — a prefix blocklist on the text form
-  passes six of those eight, and one of them is how a previous guard in this project was bypassed.
+  passes six of those eight.
   `env.RESOLVE_HOST` is the DNS seam a self-hosted runtime plugs a resolver into; on Cloudflare there
   is none, and the literal check is the whole guard, which is stated rather than implied.
 - **Fediverse LAN names are refused.** `FEDI_HOST` rejects the bare label `localhost` and admits

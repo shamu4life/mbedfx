@@ -79,11 +79,39 @@ export type HostResolver = (host: string) => Promise<string[]>
  * a real hostname's labels are not all numeric (a numeric TLD does not exist).
  */
 function intOf(part: string): number | null {
-  if (!part) return null
-  if (/^0[xX][0-9a-fA-F]{1,8}$/.test(part)) return parseInt(part.slice(2), 16)
-  if (/^0[0-7]{0,10}$/.test(part)) return parseInt(part, 8)
-  if (/^[1-9][0-9]{0,9}$/.test(part)) return Number(part)
-  return null
+  // BOUNDED FIRST, because the three patterns below are unanchored in length on purpose (see the
+  // zero-padding note) and this is the boundary a hostile string arrives at. No real spelling of a
+  // 32-bit value needs 64 characters; 11 octal digits is the longest that means anything.
+  if (!part || part.length > 64) return null
+  let n: number | null = null
+  if (/^0[xX][0-9a-fA-F]+$/.test(part)) n = parseInt(part.slice(2), 16)
+  else if (/^0[0-7]*$/.test(part)) n = parseInt(part, 8)
+  else if (/^[1-9][0-9]*$/.test(part)) n = Number(part)
+  /**
+   * THE DIGIT COUNT IS NOT THE BOUND; THE VALUE IS. The first version of this capped the patterns by
+   * LENGTH — `{0,10}` octal and `{1,8}` hex — and both caps were wrong in the direction that admits.
+   *
+   * A full 32-bit octal needs ELEVEN digits after the leading zero, so `{0,10}` rejected every
+   * address at or above 2^30 — which is all of 127/8, 169.254/16, 172.16/12 and 192.168/16, i.e.
+   * precisely the ranges this file exists to block. And `{1,8}` hex rejected zero-padded forms,
+   * which cost nothing to write. Both then returned null, meaning "not an address", and fell through
+   * to the hostname rules, which pass. Measured on Node v26.5.0 before the fix:
+   *
+   *   new URL('http://025177524776/').hostname     -> 169.254.169.254   guard said: null
+   *   new URL('http://0x00A9FEA9FE/').hostname     -> 169.254.169.254   guard said: null
+   *   new URL('http://017700000001/').hostname     -> 127.0.0.1         guard said: null
+   *   new URL('http://0x0000007f000001/').hostname -> 127.0.0.1         guard said: null
+   *
+   * 169.254.169.254 is the cloud metadata endpoint. Worse than any single miss, the same address got
+   * two different verdicts depending on padding (`0x0a000001` private, `0x00a000001` null), which
+   * breaks the one property this file claims: every spelling of one address gets one verdict.
+   *
+   * A VALUE CHECK CANNOT HAVE THAT SHAPE OF BUG. Anything that is not a whole number inside the
+   * 32-bit range is not an address, whatever it was written as, and `ipv4Bytes` re-checks the
+   * per-part range afterwards.
+   */
+  if (n === null || !Number.isSafeInteger(n) || n < 0 || n > 0xFFFFFFFF) return null
+  return n
 }
 
 /**
@@ -264,14 +292,125 @@ const PRIVATE_SUFFIXES = ['localhost', 'local', 'internal', 'intranet', 'lan', '
  * case — because normalising here is what stops a caller from doing it three different ways.
  */
 export function blockedHost(host: string): string | null {
-  const h = host.trim().toLowerCase().replace(/^\[|\]$/g, '').replace(/\.$/, '')
+  const raw = host.trim().toLowerCase()
+  if (!raw) return 'empty'
+  // userinfo, a path, whitespace: not a hostname, and whatever produced it is confused. Checked on
+  // the RAW input, before canonicalisation, so a smuggled authority cannot be normalised into
+  // something innocent-looking.
+  if (/[\s/@?#]/.test(raw)) return 'malformed'
+  /**
+   * FIRST, THE CLIENT'S OWN READING OF THE STRING — and this is the fix for a whole class of hole
+   * rather than three more spellings.
+   *
+   * Three independent bypass families were found against the hand-rolled version of this function,
+   * and all three had ONE root cause: it reimplemented PART of a URL host parser (case, brackets,
+   * port, trailing dot) and not the rest. Everything it skipped was an opening. Measured on Node
+   * v26.5.0, all confirmed to route somewhere private while the guard answered null:
+   *
+   *   127.0x.0.1                  -> 127.0.0.1        `0x` with an empty remainder is a legal ZERO
+   *                                                   octet to every WHATWG client; intOf wanted
+   *                                                   one or more hex digits. One `0x` anywhere
+   *                                                   disarmed the guard for the whole address.
+   *   １６９．２５４．１６９．２５４  -> 169.254.169.254  UTS-46 maps fullwidth digits and stops to
+   *                                                   ASCII before parsing. 11 codepoints map to
+   *                                                   each digit and 3 to '.', so one address has
+   *                                                   ~11^12 spellings this could not see.
+   *   169.254.169.%32%35%34       -> 169.254.169.254  the host is percent-decoded before IPv4
+   *                                                   parsing; '%' was not even in the reject class.
+   *   ⓁⓄⒸⒶⓁⒽⓄⓈⓉ            -> localhost        the same mapping defeats PRIVATE_SUFFIXES.
+   *
+   * SO WE ASK THE PARSER THE FETCH WILL USE. `new URL` is WHATWG on both runtimes — Node and
+   * workerd — and it performs IDNA mapping, percent-decoding and the IPv4 number parser in one go.
+   * Classifying ITS output means our opinion of a string cannot differ from the opinion of the
+   * client that is about to connect, which is the only property that actually closes this class.
+   * A new spelling invented next year is normalised for us for free.
+   */
+  const canon = canonicalHost(raw)
+  if (canon !== null) {
+    const viaClient = classifyHostText(canon)
+    if (viaClient) return viaClient
+  }
+  /**
+   * THE PORT HAS TO COME OFF BEFORE THE ADDRESS IS READ, and the first version did not take it off.
+   *
+   * It stripped brackets with `replace(/^\[|\]$/g, '')` and then refused `[\s/@?#]`, a class that
+   * contains no colon — so a port simply rode through into `blockedAddress`, which cannot parse an
+   * address with one and answered null, i.e. "nothing known against it". Measured before the fix:
+   * `blockedHost('127.0.0.1:8080')` -> null, `blockedHost('[::ffff:127.0.0.1]:8080')` -> null. The
+   * comment above the check claimed a port was refused; it was never tested for.
+   *
+   * ADDING ':' TO THAT CLASS IS NOT THE FIX — an IPv6 literal is nothing but colons. The authority
+   * has to be taken apart the way a URL parser takes it apart: a bracketed literal with an optional
+   * port, or a bare host with an optional port, and nothing else.
+   */
+  const viaOurs = classifyHostText(stripAuthority(raw))
+  if (viaOurs) return viaOurs
+  /**
+   * AND IF NEITHER PARSER COULD READ IT, IT IS NOT A HOSTNAME. `new URL` refusing a string is not
+   * evidence the string is safe — it is evidence we do not know what it is, and at a security
+   * boundary those are opposite conclusions. Failing closed here costs a request nobody could have
+   * made anyway, since the fetch that follows uses the same parser that just refused it.
+   */
+  if (canon === null) return 'malformed'
+  return null
+}
+
+/**
+ * The classification itself, over ONE already-normalised host string. Shared by both readings above
+ * so they cannot drift into disagreeing about what `127.0.0.1` is.
+ */
+function classifyHostText(text: string): string | null {
+  const h = text.replace(/^\[|\]$/g, '').replace(/\.$/, '')
   if (!h) return 'empty'
-  // userinfo, a port, a path, whitespace: not a hostname, and whatever produced it is confused.
-  if (/[\s/@?#]/.test(h)) return 'malformed'
+  // A bracket that survived the split is a malformed authority, not a hostname.
+  if (/[\s/@?#\[\]]/.test(h)) return 'malformed'
   const addr = blockedAddress(h)
   if (addr) return addr
   for (const s of PRIVATE_SUFFIXES) if (h === s || h.endsWith(`.${s}`)) return `private-name (${s})`
+  /**
+   * FAILS CLOSED ON ANYTHING STILL COLON-SHAPED. A DNS hostname cannot contain a colon, so if one
+   * survived the split and `blockedAddress` could not read it as an address either, the string is
+   * neither — and "I could not classify it" must not read as "nothing known against it" at a
+   * security boundary. `::ffff:127.0.0.1:8080` is the shape that motivates this: not a legal URL
+   * authority (IPv6 with a port needs brackets), not a hostname, and loopback to anything lenient.
+   */
+  if (h.includes(':')) return 'malformed'
   return null
+}
+
+/**
+ * Take the port and the IPv6 brackets off a raw authority, WITHOUT normalising anything else.
+ *
+ * This is the second reading, and it exists for the strings `new URL` refuses outright — an
+ * unbracketed IPv6 literal (`::ffff:127.0.0.1`) is the one that matters, since a URL authority
+ * requires brackets but every other layer will happily read it as loopback. Strictly ADDITIVE: it
+ * can only produce more verdicts, never fewer.
+ */
+function stripAuthority(raw: string): string {
+  const bracketed = raw.match(/^\[([^\[\]]*)\](?::\d{0,5})?$/)
+  if (bracketed) return bracketed[1]
+  // Exactly one colon with digits after it is a port on a bare host. Two or more colons is an
+  // unbracketed IPv6 literal, which has no port and must be left whole.
+  if (/^[^:\[\]]*:\d{0,5}$/.test(raw)) return raw.slice(0, raw.lastIndexOf(':'))
+  return raw
+}
+
+/**
+ * The host string the CLIENT will use, or null when the client's own parser refuses the input.
+ *
+ * `new URL` is WHATWG on both runtimes this project targets, so this is not an approximation of the
+ * fetch's behaviour — it is the fetch's behaviour. It applies IDNA/UTS-46 mapping, percent-decoding,
+ * lowercasing, and WHATWG's IPv4 number parser, and returns an IPv6 literal already bracketed.
+ *
+ * WRAPPED IN A TRY because `new URL` throws on input it cannot parse, and a throw out of a guard is
+ * a 500 on a public path rather than a refusal.
+ */
+function canonicalHost(raw: string): string | null {
+  try {
+    return new URL(`http://${raw}/`).hostname.toLowerCase()
+  } catch {
+    return null
+  }
 }
 
 /**

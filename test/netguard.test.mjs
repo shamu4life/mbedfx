@@ -9,9 +9,17 @@ import { blockedAddress, blockedHost, blockedResolvedHost } from '../src/netguar
  * WHY THIS FILE IS ADVERSARIAL BY DEFAULT. The guard's whole job is to survive the NEXT person, who
  * will read a byte-level parser guarding four obvious ranges and reasonably ask why it is not four
  * string comparisons. Every block below states the spelling that answer misses, so "simplify it"
- * turns red instead of quiet. This project has already been bitten by exactly that class of bug: a
- * previous private-address guard here was bypassed with IPv4-mapped IPv6 (`::ffff:127.0.0.1`), which
+ * turns red instead of quiet. The canonical example is IPv4-mapped IPv6 (`::ffff:127.0.0.1`), which
  * a prefix blocklist on the v6 text form passes without a fight.
+ *
+ * NO INCIDENT IN THIS REPO IS BEING CITED, and an earlier draft of this file claimed one. It said a
+ * previous guard here had been bypassed that way. Nothing in the history supports that — there is no
+ * such fix in `git log`, the only prior private-address guard is `container/server.py`'s `_safe_url`
+ * (which uses Python's `ipaddress` and catches the mapped form), and this repo's own design spec
+ * says the opposite: "It never parses IPs, so the IPv4-mapped-IPv6 SSRF class has no surface here."
+ * The lesson is real and general; the provenance was invented, and under this project's own
+ * do-not-guess rule a fabricated incident cited as the reason for a security design is worse than no
+ * reason at all. What justifies the byte parser is the measurement below, not a story.
  *
  * WHERE THE STAKES CHANGE. On Cloudflare a bypass buys a blind GET from Cloudflare's egress. Off
  * Cloudflare — the point of issue #27 — the same GET reaches 127.0.0.1, the LAN, and the cloud
@@ -36,7 +44,7 @@ test('the four spellings of loopback that a prefix blocklist passes are all refu
 })
 
 test('IPv4-mapped IPv6 is refused in every spelling, including the hex one', () => {
-  // THE BYPASS THIS PROJECT ALREADY PAID FOR. None of these starts with '127', '::1', 'fc' or
+  // THE CANONICAL BYPASS OF A TEXT-PREFIX GUARD. None of these starts with '127', '::1', 'fc' or
   // 'fe80', so a text-prefix guard admits all four; the second one additionally defeats the
   // half-fix (`::ffff:127.`) somebody reaches for after seeing the first.
   for (const spelling of [
@@ -212,4 +220,195 @@ test('the guard range-checks BYTES — a text-prefix rewrite of it cannot pass t
   const src = readFileSync('src/netguard.ts', 'utf8')
   assert.equal(src.match(/startsWith\(\s*['"`][0-9a-f:.]+['"`]/g), null,
     'netguard.ts must range-check parsed bytes, never string-prefix the address text')
+})
+
+
+/* ═══════════════ THE THREE HOLES REVIEW FOUND IN THE FIRST VERSION OF THIS GUARD ═══════════════
+ *
+ * All three were reproduced on Node v26.5.0 before the fix and are pinned here so the fix cannot be
+ * undone by a tidy-up. None was reachable through the fediverse routes at the time, because
+ * FEDI_HOST's letters-only final label refuses numeric hosts and ports — but this module is
+ * advertised as the boundary every FUTURE user-supplied fetch imports, and a guard whose thesis is
+ * "no spelling-shaped holes" does not get to have spelling-shaped holes.
+ */
+
+test('A FULL-WIDTH OCTAL OR PADDED HEX HOST IS STILL AN ADDRESS — the length caps admitted the metadata endpoint', () => {
+  /**
+   * The first version bounded the patterns by DIGIT COUNT: `/^0[0-7]{0,10}$/` and
+   * `/^0[xX][0-9a-fA-F]{1,8}$/`. A full 32-bit octal needs ELEVEN digits after the leading zero, so
+   * the octal cap rejected every value at or above 2^30 — which is all of 127/8, 169.254/16,
+   * 172.16/12 and 192.168/16, i.e. exactly the ranges this file exists to block. The hex cap
+   * rejected zero-padding, which costs an attacker nothing to add.
+   *
+   * A rejected parse returns null, meaning "not an address", and null falls through to the hostname
+   * rules, which pass. So the caps did not merely fail to classify these — they ADMITTED them.
+   */
+  for (const [spelling, expected] of [
+    ['025177524776', 'link-local'],      // 169.254.169.254, the cloud metadata endpoint
+    ['0x00A9FEA9FE', 'link-local'],      // the same address, zero-padded hex
+    ['017700000001', 'loopback'],        // 127.0.0.1 in full-width octal
+    ['0x0000007f000001', 'loopback'],    // 127.0.0.1, zero-padded hex
+  ]) {
+    const verdict = blockedHost(spelling)
+    assert.ok(verdict, `${spelling} resolves to ${new URL(`http://${spelling}/`).hostname} and must be refused`)
+    assert.match(verdict, new RegExp(expected), `${spelling} is ${expected}`)
+  }
+})
+
+test('PADDING DOES NOT CHANGE THE VERDICT — the property the whole file rests on', () => {
+  // The sharpest symptom of the length caps: the SAME address got two answers depending on how many
+  // leading zeros it wore. `0x0a000001` was refused as private and `0x00a000001` sailed through, and
+  // both are 10.0.0.1. Any future rewrite that reintroduces a length bound fails here first.
+  for (const [a, b] of [
+    ['0x0a000001', '0x00a000001'],
+    ['0xa000001', '0x000000000a000001'],
+    ['0177.0.0.1', '00177.0.0.1'],
+  ]) {
+    assert.equal(blockedHost(a), blockedHost(b),
+      `${a} and ${b} are one address and must get one verdict`)
+  }
+})
+
+test('AN ADDRESS WEARING A PORT IS STILL THAT ADDRESS — the port rode straight through', () => {
+  /**
+   * `blockedHost` stripped brackets and then refused the class `[\s/@?#]`, which contains no colon,
+   * so a port reached `blockedAddress` — which cannot parse one and answered null. The comment above
+   * that line claimed a port was refused. Measured before the fix: `blockedHost('127.0.0.1:8080')`
+   * -> null, and `blockedHost('[::ffff:127.0.0.1]:8080')` -> null.
+   *
+   * Adding ':' to that character class is NOT the fix, and this asserts the other half so nobody
+   * tries: an IPv6 literal is nothing but colons and must survive.
+   */
+  assert.match(String(blockedHost('127.0.0.1:8080')), /loopback/)
+  assert.match(String(blockedHost('[::ffff:127.0.0.1]:8080')), /loopback/)
+  assert.match(String(blockedHost('[::1]:443')), /loopback/)
+  assert.match(String(blockedHost('[::1]')), /loopback/, 'the bracketed literal still works')
+  assert.match(String(blockedHost('::ffff:127.0.0.1')), /loopback/, 'and the bare one does too')
+  assert.equal(blockedHost('example.com:443'), null, 'a real host with a port is still a real host')
+  assert.equal(blockedHost('example.com'), null)
+})
+
+test('A STRING THAT IS NEITHER A HOSTNAME NOR AN ADDRESS FAILS CLOSED', () => {
+  // A DNS hostname cannot contain a colon. If one survives the port/bracket split and the address
+  // parser could not read it either, the string is neither — and "I could not classify it" must not
+  // read as "nothing known against it" at a security boundary. `::ffff:127.0.0.1:8080` is the shape
+  // that motivates it: not a legal URL authority, not a hostname, and loopback to anything lenient.
+  for (const junk of ['::ffff:127.0.0.1:8080', '[::1]junk', '[::1', 'a:b:c:d']) {
+    assert.ok(blockedHost(junk), `${junk} is not classifiable and must not pass`)
+  }
+})
+
+
+/* ══════ THE THREE FAMILIES FOUR INDEPENDENT ATTACKERS FOUND AGAINST THE HAND-ROLLED VERSION ══════
+ *
+ * All three had ONE root cause: `blockedHost` reimplemented PART of a URL host parser (case,
+ * brackets, port, trailing dot) and not the rest. Everything it skipped was an opening, and the
+ * three below are just the openings somebody looked for. The fix is not three more special cases —
+ * it is asking `new URL` what the string means first, because that is the parser the fetch itself
+ * will use, so our opinion and the client's cannot differ.
+ *
+ * These stay as tests rather than as a comment because the tempting simplification is to delete the
+ * `canonicalHost` call ("we already parse addresses"), and that is precisely what reopens all three.
+ */
+
+test('0x IS A ZERO OCTET TO EVERY WHATWG CLIENT, and one of them disarmed the whole address', () => {
+  /**
+   * `intOf` required /^0[xX][0-9a-fA-F]+$/ — one or MORE hex digits. WHATWG's IPv4 number parser
+   * strips the `0x` prefix and, when the remainder is empty, yields 0. So `0x` is a legal zero
+   * octet to Node, undici, browsers and workerd, and was "not a number" to us — which made
+   * `ipv4Bytes` return null for the ENTIRE address, which read as "not an address", which passed.
+   *
+   * Measured: new URL('http://127.0x.0.1/').hostname === '127.0.0.1'.
+   */
+  for (const spelling of ['127.0x.0.1', '127.0x', '10.0x.0.1', '192.168.0x.1', '0x7f.0x.0x.0x']) {
+    const routed = new URL(`http://${spelling}/`).hostname
+    assert.ok(blockedHost(spelling), `${spelling} routes to ${routed} and must be refused`)
+  }
+  // A bare `0x` is 0.0.0.0, which connect(2) treats as localhost.
+  assert.ok(blockedHost('0x'), '0x is 0.0.0.0')
+  assert.ok(blockedHost('0X'), 'and the case does not save it')
+})
+
+test('UNICODE DIGITS ARE DIGITS after IDNA mapping, so an ASCII-only guard never sees the address', () => {
+  /**
+   * The URL host parser runs UTS-46 mapping BEFORE anything else. A sweep of U+0080..U+1FFFF found
+   * 11 codepoints mapping to each ASCII digit (superscripts, subscripts, circled, fullwidth, and
+   * four mathematical families) and 3 mapping to '.', so one address has on the order of 11^12
+   * spellings — none of which an ASCII `split('.')` and `[0-9]` character class can see.
+   *
+   * The same mapping walks straight through PRIVATE_SUFFIXES, which is the second assertion here.
+   */
+  const fullwidth = '\uFF11\uFF16\uFF19\uFF0E\uFF12\uFF15\uFF14\uFF0E\uFF11\uFF16\uFF19\uFF0E\uFF12\uFF15\uFF14'
+  assert.equal(new URL(`http://${fullwidth}/`).hostname, '169.254.169.254', 'the premise')
+  assert.ok(blockedHost(fullwidth), 'the metadata endpoint in fullwidth digits must be refused')
+
+  const circled = '\u2460\u2461\u2466.0.0.1'   // ①②⑦.0.0.1 -> 127.0.0.1
+  assert.ok(blockedHost(circled), `${circled} routes to ${new URL(`http://${circled}/`).hostname}`)
+
+  const localhost = '\u24C1\u24C4\u24B8\u24B6\u24C1\u24BD\u24C4\u24C8\u24C9'  // ⓁⓄⒸⒶⓁⒽⓄⓈⓉ
+  assert.ok(blockedHost(localhost), 'a circled-capital localhost is still localhost')
+})
+
+test('A PERCENT-ENCODED HOST IS DECODED BEFORE IT IS RESOLVED, and % was not even refused', () => {
+  // WHATWG percent-decodes the host of a special scheme before IDNA and IPv4 parsing. The old
+  // reject class was /[\s/@?#\[\]]/ — no '%' in it — so the string sailed past as an ordinary
+  // hostname and no address parse was ever attempted on what it actually meant.
+  for (const spelling of ['169.254.169.%32%35%34', '%31%32%37.0.0.1', '127%2e0%2e0%2e1']) {
+    const routed = new URL(`http://${spelling}/`).hostname
+    assert.ok(blockedHost(spelling), `${spelling} routes to ${routed} and must be refused`)
+  }
+  // And the suffix list is defeated the same way.
+  assert.ok(blockedHost('%6c%6f%63%61%6c%68%6f%73%74'), 'percent-encoded localhost')
+})
+
+test('THE GUARD AND THE CLIENT AGREE ON EVERY STRING — the property, not another spelling', () => {
+  /**
+   * The three families above were three symptoms of one thing, so the durable assertion is the
+   * INVARIANT rather than the cases. For any string the client can parse into a private, loopback,
+   * link-local or CGNAT address, the guard must refuse it. A differential of 178,746 generated
+   * candidates found zero divergences after the fix; this is a fast standing sample of it, so a
+   * future edit that reintroduces a hand-rolled shortcut fails here rather than in production.
+   */
+  const isPrivate = text => {
+    const h = text.replace(/^\[|\]$/g, '')
+    const parts = h.split('.')
+    if (parts.length === 4 && parts.every(p => /^\d{1,3}$/.test(p))) {
+      const b = parts.map(Number)
+      if (b.some(n => n > 255)) return false
+      return b[0] === 127 || b[0] === 10 || b[0] === 0
+        || (b[0] === 169 && b[1] === 254)
+        || (b[0] === 172 && b[1] >= 16 && b[1] <= 31)
+        || (b[0] === 192 && b[1] === 168)
+        || (b[0] === 100 && b[1] >= 64 && b[1] <= 127)
+    }
+    const l = h.toLowerCase()
+    return l === '::1' || l === '::' || l.startsWith('fc') || l.startsWith('fd')
+      || l.startsWith('fe80') || l.includes('::ffff:') || l.startsWith('64:ff9b') || l.startsWith('2002:')
+  }
+  const toks = ['0', '00', '0x', '0X', '0x7f', '0177', '127', '169', '254', '10', '192', '168',
+    '172', '16', '1', '0x1', '%31', '%2e', '2130706433', '025177524776', '']
+  let checked = 0
+  for (const a of toks) {
+    for (const b of toks) {
+      for (const shape of [`${a}.${b}`, `127.${a}.0.1`, `169.254.${a}.254`, `${a}.0.0.1`, a]) {
+        let routed
+        try { routed = new URL(`http://${shape}/`).hostname } catch { continue }
+        checked++
+        if (isPrivate(routed)) {
+          assert.ok(blockedHost(shape),
+            `"${shape}" routes to ${routed} and the guard let it through`)
+        }
+      }
+    }
+  }
+  assert.ok(checked > 1000, `the sweep must actually run; only ${checked} parsed`)
+})
+
+test('REAL FEDIVERSE HOSTS ARE NOT COLLATERAL — a guard that refuses everything is an outage', () => {
+  // Canonicalising through `new URL` could plausibly start refusing legitimate names; it must not.
+  // The punycode entry matters: IDN hosts are real, and the fix must map them rather than reject them.
+  for (const ok of ['lemmy.world', 'mstdn.social', 'misskey.io', 'framatube.org', 'tube.tchncs.de',
+    'example.com', 'example.com:443', 'xn--80ak6aa92e.com', 'sub.domain.co.uk', 'a-b.example', 'x0x.dev']) {
+    assert.equal(blockedHost(ok), null, `${ok} is a real instance host and must stay fetchable`)
+  }
 })
