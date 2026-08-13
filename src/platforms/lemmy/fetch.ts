@@ -1,6 +1,6 @@
 import type { PostRef } from '../../types.ts'
 import { LEMMY_ID } from '../../refkey.ts'
-import { MAX_BODY, fetchableInstance } from '../fedihost.ts'
+import { MAX_BODY, instanceFetchable, type InstanceGuard } from '../fedihost.ts'
 
 /**
  * I/O ONLY. Lemmy's v3 API, unauthenticated, ON THE HOST THE USER PASTED.
@@ -49,6 +49,10 @@ import { MAX_BODY, fetchableInstance } from '../fedihost.ts'
  * boundary kept in two copies is one that gets fixed in one copy. Clauses 4, 5 and 6 of the contract
  * documented there are enforced BELOW, in attempt(): manual redirects, the body cap, and the
  * content-shaped liveness assert.
+ *
+ * RE-EXPORTED AS THE SYNC PREDICATE, which is the half that answers "may this host be fetched at
+ * all" with no I/O. fetchLemmy itself calls `instanceFetchable`, the whole gate: this plus clause
+ * 7's DNS seam, which only a self-hosted runtime can supply.
  */
 export { fetchableInstance } from '../fedihost.ts'
 
@@ -125,9 +129,11 @@ async function attempt(host: string, path: string): Promise<LemmyFetch> {
  */
 export async function fetchLemmy(
   ref: Extract<PostRef, { p: 'lm' }>,
-  origin?: string,
+  guard?: InstanceGuard,
 ): Promise<LemmyFetch> {
-  if (!fetchableInstance(ref.host, origin) || !LEMMY_ID.test(ref.id)) return { ok: false, reason: 'assert_fail' }
+  if (!LEMMY_ID.test(ref.id) || !(await instanceFetchable(ref.host, guard))) {
+    return { ok: false, reason: 'assert_fail' }
+  }
   const id = encodeURIComponent(ref.id)
   let last: LemmyFetch = { ok: false, reason: 'assert_fail' }
   for (let i = 0; i < FLAVORS.length; i++) {

@@ -1,4 +1,5 @@
 import type { ClientClass, Platform } from './types.ts'
+import type { HostResolver } from './netguard.ts'
 
 /**
  * `api_hit`/`api_miss` are the Mastodon-spoof routes and are deliberately NOT folded into
@@ -196,6 +197,35 @@ export interface Env {
   // container has RESOLVER_SECRET set it rejects any call that does not present the match. Defence in
   // depth — the container is only reached over the internal DO binding, never a public route.
   RESOLVER_SECRET?: string
+  /**
+   * ===========================================================================================
+   * THE THREE SELF-HOSTING SETTINGS. Every one of them is unset on Cloudflare and MUST stay
+   * optional: this Worker's own deployment is the case where each default is already correct, and a
+   * required setting would be one more thing between a merge and a deploy. docs/SELF-HOSTING.md is
+   * where an operator is told which of them are mandatory for them (the first one is).
+   * ===========================================================================================
+   *
+   * THE DOMAINS THIS INSTANCE IS SERVED FROM, added to the built-in list in
+   * src/platforms/fedihost.ts, which is what stops a fediverse ref from naming US as its instance.
+   * Whitespace/comma separated, hostname or origin. ADDITIVE — see FediEnv there for why setting it
+   * can only ever make the guard stricter, and why leaving it unset is a misconfiguration rather
+   * than an open door.
+   */
+  OWN_HOSTS?: string
+  /**
+   * A DNS RESOLVER, so the fediverse fetchers can refuse a public hostname that resolves into your
+   * network. Not a wrangler binding and never will be: a Worker has no resolver, so on Cloudflare
+   * this is permanently undefined and the address guard runs on the hostname text alone. A
+   * self-hosted adapter assigns a function here when it builds this object literal. See
+   * src/netguard.ts.
+   */
+  RESOLVE_HOST?: HostResolver
+  /**
+   * The ceiling, in bytes, on buffering ONE muxed mp4 in memory before writing it to MEDIA_CACHE —
+   * the fallback taken when `FixedLengthStream` is absent, i.e. everywhere except Workers. See
+   * putMuxed in src/worker.ts for the numbers and for what a video above the ceiling degrades to.
+   */
+  MUX_BUFFER_MAX?: string
   /**
    * Imgur's API client id. OPTIONAL, and the fallback is the interesting part.
    *

@@ -1,6 +1,6 @@
 import type { PostRef } from '../../types.ts'
 import { MASTO_ID } from '../../refkey.ts'
-import { MAX_BODY, fetchableInstance } from '../fedihost.ts'
+import { MAX_BODY, instanceFetchable, type InstanceGuard } from '../fedihost.ts'
 
 /**
  * I/O ONLY. `GET /api/v1/statuses/{id}`, unauthenticated, ON THE HOST THE USER PASTED.
@@ -44,9 +44,9 @@ const obj = (v: unknown): Record<string, unknown> | null =>
  */
 export async function fetchMasto(
   ref: Extract<PostRef, { p: 'ms' }>,
-  origin?: string,
+  guard?: InstanceGuard,
 ): Promise<MastoFetch> {
-  if (!fetchableInstance(ref.host, origin) || !MASTO_ID.test(ref.id)) {
+  if (!MASTO_ID.test(ref.id) || !(await instanceFetchable(ref.host, guard))) {
     return { ok: false, reason: 'assert_fail' }
   }
   const res = await fetch(`https://${ref.host}/api/v1/statuses/${encodeURIComponent(ref.id)}`, {
