@@ -190,21 +190,21 @@ Most mean nothing as an absolute number, and several mislead alone.
 
 | Counter | What a rise means | Read against |
 |---|---|---|
-| `ok` | A card was rendered and served. The health denominator. | — |
+| `ok` | A card was rendered and served. The health denominator. | nothing |
 | `assert_fail` | The page didn't answer: upstream changed shape, blocked mbedfx, or served a decoy. Not "the post is gone". On `ig`, the only way to see the 599 KB HTTP-200 decoy. | `fetch_fail`; on `yt`, `ok` (the ratio is the oembed-miss rate); on `dm`/`st`/`im`, `meta_timeout` |
-| `meta_timeout` | **Ours, not theirs.** The container metadata call was still extracting when our budget ran out. Fires on `dm`/`st`/`im`, where that call *is* the card, so the reader got the generic "couldn't load" for a post that is fine. It lands in R2 under `waitUntil` a moment later, so the next unfurl is a warm hit and a re-paste heals — a first paste does not. | `assert_fail` on the same platform: this one is a budget to fix, that one an upstream that moved |
+| `meta_timeout` | **Ours, not theirs.** The container metadata call was still extracting when our budget ran out. Fires on `dm`/`st`/`im`, where that call *is* the card, so the reader got the generic "couldn't load" for a post that is fine. It lands in R2 under `waitUntil` a moment later, so the next unfurl is a warm hit and a re-paste heals. A first paste does not. | `assert_fail` on the same platform: this one is a budget to fix, that one an upstream that moved |
 | `fetch_fail` | The generic failure card was served. Subtract the named failures to leave the ones with no name. | everything below that stacks on it |
 | `age_restricted` | An age wall (🔞). Every emitter reads a positive signal out of the platform's payload; none infers a wall from missing tags. | `pool_unused`, same platform |
 | `private` | A login or private wall (🔒). Instagram's is the one inferential emitter, and has produced a false 🔒 from datacenter egress once. | `fullpage_recovered`, which must move the opposite way |
 | `pool_unused` | A credential pool is set and the gate held anyway. Means something different on each of three platforms, below. | `age_restricted`/`private`, same platform |
 | `media_hit` / `media_miss` | On `/_media/`, cache-hit vs an upstream fetch. The miss/hit ratio is the fetch-amplification alert. | each other |
 | `api_hit` / `api_miss` | The same for the Mastodon-spoof callbacks. Separate from `media_*`: a second traffic class in those counters would blind the amplification alert. | each other |
-| `api_bad_id` | A spoof-shaped callback whose `{id}` did not decode. Kept out of `notfound`, where domain-wide 404s are noise, because this one says Discord's callbacks are arriving mangled. Always `blob1='none'`. | — |
-| `ambiguous` | A chooser card was served. `blob1='none'` is the free router-level chooser, `blob1='tt'` one that cost an upstream fetch. The split separates a wave of Threads links from TikTok blocking mbedfx. | — |
-| `notfound` | `blob1='none'` is a domain-wide 404 (noise). `ms`/`mk`/`pt` is an upstream 404/410, counted here so a deleted post does not inflate `assert_fail`. | — |
+| `api_bad_id` | A spoof-shaped callback whose `{id}` did not decode. Kept out of `notfound`, where domain-wide 404s are noise, because this one says Discord's callbacks are arriving mangled. Always `blob1='none'`. | nothing |
+| `ambiguous` | A chooser card was served. `blob1='none'` is the free router-level chooser, `blob1='tt'` one that cost an upstream fetch. The split separates a wave of Threads links from TikTok blocking mbedfx. | nothing |
+| `notfound` | `blob1='none'` is a domain-wide 404 (noise). `ms`/`mk`/`pt` is an upstream 404/410, counted here so a deleted post does not inflate `assert_fail`. | nothing |
 | `copyright_gql` / `copyright_recovered` / `copyright_remux` | The three Instagram copyright recoveries, cheapest first. The signal is the ratio across all three. | each other, and `ig`/`ok` |
 | `fullpage_recovered` | The primary surface failed but the full page carried the whole post. On `ig`, every count is a post that would previously have shown a false 🔒. | `private` |
-| `plugin_recovered` / `caption_recovered` | The second and third Facebook post surfaces. `plugin_recovered` is Meta's embed fragment, which measured 33 of 35 sampled post urls on 2026-08-12 and carries every `/photo/?fbid=` url the page surface answers with a login wall. `caption_recovered` is the narrow last resort — a page with a byline and a caption and no `og:image` — answers 2 of those 35 and fires on 1 of them, because the plugin reaches the other first and returns before this read runs. Expect it small. | each other, and `fb`/`ok` |
+| `plugin_recovered` / `caption_recovered` | The second and third Facebook post surfaces. `plugin_recovered` is Meta's embed fragment, which measured 33 of 35 sampled post urls on 2026-08-12 and carries every `/photo/?fbid=` url the page surface answers with a login wall. `caption_recovered` is the narrow last resort (a page with a byline and a caption and no `og:image`), answers 2 of those 35 and fires on 1 of them, because the plugin reaches the other first and returns before this read runs. Expect it small. | each other, and `fb`/`ok` |
 | `translated` / `translate_fallback` | Which engine served a translation, Google or Workers AI as the fallback. Only the ratio means anything. | each other |
 | `smoke_ok` / `smoke_fail` | The scheduled self-check: did a known post on this platform still render a real card? Read per platform. | each other |
 | `translate_pending` | A translation that lost its deadline race. The card went out untranslated **and uncached**, so every unfurl of that post re-runs the full render until the R2 entry lands. | `translated` + `translate_fallback` |
@@ -259,7 +259,7 @@ A few percent is the design working: a post whose translation is cold defers it 
 and self-heals, which is exactly what `pending` suppressing the response cache is for.
 
 A large or rising share is the alarm, and it is not about translations. It means posts are **not**
-self-healing — the R2 write is failing, or the model's latency has outgrown `XLATE_MAX_WAIT_MS` —
+self-healing. Either the R2 write is failing, or the model's latency has outgrown `XLATE_MAX_WAIT_MS`, and
 and every affected unfurl is a full uncached render of a post that will never get cheaper.
 
 ```sql
@@ -273,7 +273,7 @@ WHERE timestamp > NOW() - INTERVAL '24' HOUR
 WHY IT EXISTS. A TikTok post rendered no Discord card at all on 2026-08-08. By the time it was
 looked at, its translation had landed and every url worked; the only measurable difference from a
 working post was this state, and nothing recorded whether it had been rare or constant. Workers Logs
-would have answered it and are off on purpose — they persist the pasted url, the IP and the
+would have answered it and are off on purpose, because they persist the pasted url, the IP and the
 geolocation, which is the one thing this whole file refuses to collect. A counter answers the same
 question without naming a single post.
 
@@ -281,8 +281,8 @@ question without naming a single post.
 
 ## The self-check
 
-Facebook embeds were broken for up to a week — Meta walled the post surfaces from datacenter egress
-between 2026-08-01 and 2026-08-08 — and the way it was found was the owner pasting a link. The
+Facebook embeds were broken for up to a week, because Meta walled the post surfaces from datacenter
+egress between 2026-08-01 and 2026-08-08, and the way it was found was the owner pasting a link. The
 counters would have shown it to anyone who went looking. Nobody had a reason to look.
 
 A cron runs every thirty minutes and renders a list of known posts through this worker's own handler,
@@ -290,15 +290,15 @@ then counts whether a real card came back. `src/smoke.ts` holds the list and the
 runs the same checks on demand and answers JSON.
 
 Sixteen checks across fifteen of the seventeen platforms, as of 2026-08-12. It was six for the first
-day, which left eleven platforms with no detector at all — the same position Facebook was in, and
+day, which left eleven platforms with no detector at all, the same position Facebook was in, and
 nobody would have known which eleven without rendering all seventeen by hand. Two platforms are
 deliberately unchecked and say so in `SMOKE_UNCHECKED`: Dailymotion and Streamable return the failure
 card on a COLD first render (measured 2026-08-12), and a cron is always cold, so a row for either
 would alarm most ticks while the platform works. A platform that is neither checked nor excused fails
 the test suite.
 
-It asserts on CONTENT. Every interesting failure on this service answers HTTP 200 — the failure card,
-Meta's login wall, TikTok's 404 page — so a monitor watching status codes would have reported perfect
+It asserts on CONTENT. Every interesting failure on this service answers HTTP 200, whether the failure
+card, Meta's login wall or TikTok's 404 page, so a monitor watching status codes would have reported perfect
 health for the whole week Facebook was down.
 
 ```sql
@@ -322,7 +322,7 @@ platforms.
 running" looks like, and the two are indistinguishable from the counters alone. Check that `smoke_ok`
 is climbing, not merely that `smoke_fail` is flat.
 
-`bs` is TWO checks — the profile route and a post — and the query above groups by platform, so a
+`bs` is TWO checks, the profile route and a post, and the query above groups by platform, so a
 Bluesky row reading `ok 1, fail 1` per tick means one of the two broke and the counters cannot say
 which. `/_smoke` names them (`bs:profile`, `bs:post`), and so does the cron's `wrangler tail` line.
 Every other platform is one check, so its pair is 1 and 0 or 0 and 1.
@@ -335,7 +335,7 @@ platform-breakage detector, not an uptime monitor, and treating it as the second
 worse mistake than not having it.
 
 The check urls are a permanent list of real posts. When one is deleted, that platform fails forever
-until somebody swaps the entry — the counter names the platform, which is the signal to go and look.
+until somebody swaps the entry. The counter names the platform, which is the signal to go and look.
 Each entry records the date it was last seen working. Three of them are noted in `src/smoke.ts` as
 likelier than the rest to disappear (Imgur's anonymous album, a Pinterest pin, a Lemmy post); read
 that block before treating one of those as an outage.
@@ -345,7 +345,7 @@ that block before treating one of those as an outage.
 Measured 2026-08-12 by timing production from outside: a `/_smoke` run whose caches were all cold took
 10.4s for the six checks that existed that morning, and 0.10-0.13s once they were warm. The ten checks
 added the same day sum to 6.4s cold, 0.14-2.7s each. A full tick is therefore fifteen to twenty
-seconds, and a tick is always the cold number — `POST_TTL` and `RESP_TTL` are 900s against a 30-minute
+seconds, and a tick is always the cold number, since `POST_TTL` and `RESP_TTL` are 900s against a 30-minute
 schedule, and `caches.default` is per-colo besides, so the entries a tick writes are rarely the ones
 the next tick would read.
 
@@ -358,7 +358,7 @@ was true once. Each check has a 20s budget; a check that overruns it is reported
 counted as `smoke_fail`, which bounds a whole run at 16 x 20s = 320s against Cloudflare's 15-minute
 ceiling on a scheduled invocation. That bound is not decoration: an individual subrequest has no time
 limit of its own, so without it one hung upstream could consume the invocation and every check behind
-it would go uncounted — which looks exactly like the "cron is not running" case above.
+it would go uncounted, which looks exactly like the "cron is not running" case above.
 
 
 ## Diagnosing "the card never appeared"
@@ -366,7 +366,7 @@ it would go uncounted — which looks exactly like the "cron is not running" cas
 Written 2026-08-08 from a report that took hours and self-healed before it could be caught. The order
 matters: each step rules out a layer, and the expensive one is last.
 
-The failure mode this is for is the worst one to chase — Discord shows nothing at all, this service
+The failure mode this is for is the worst one to chase. Discord shows nothing at all, this service
 answers HTTP 200, and the post often works again by the time anyone looks. Assume nothing self-evident
 and measure downward.
 
@@ -389,7 +389,7 @@ curl -s -o /tmp/card.html -w '%{http_code} %{size_download}B %{time_total}s\n' '
 
 A well-formed head is not proof: a post with media renders from the Mastodon-shaped document behind
 `<link rel="alternate" type="application/activity+json">`, not from the og: tags. Fetch that too, and
-check `media_attachments[].meta.original` is present — `render/mastodon.ts` drops it on a zero
+check `media_attachments[].meta.original` is present, because `render/mastodon.ts` drops it on a zero
 dimension, and an attachment with no size is a real cause of nothing being drawn.
 
 **3. Compare against a post that works.**
@@ -422,14 +422,14 @@ been reasoned about wrongly from a laptop. Preview URLs are behind Access and ar
 
 **6. Then read the counters.**
 
-They are the only record that survives the incident — Workers Logs are off on purpose and there is
+They are the only record that survives the incident, since Workers Logs are off on purpose and there is
 nothing to go back to. `ok` broken down by `client` says whether Discord was served at all; the gate
 counters say whether the post was walled rather than broken.
 
 What cannot be answered after the fact, so nobody wastes time looking: whether Discord requested a
 specific url, and what it did with the answer. That needs `event.request.url`, which is the pasted
 post, and collecting it is the line this service does not cross. Ask the reporter whether a re-paste
-still fails instead — Discord caches a failed unfurl per url, so a healed post can keep showing
+still fails instead. Discord caches a failed unfurl per url, so a healed post can keep showing
 nothing to the person who first hit it.
 
 
@@ -602,7 +602,7 @@ the suite for any comment naming it (`test/pipeline.test.mjs:2621`).
 
 Three tests read the tree. `:1515` and `:2656` fail if the route returns; `:2621` fails if a comment
 outlives the file it names, which is what catches a half-finished deletion. `:1515` is named
-"THE PROBE IS GONE — a debug egress endpoint must not ship to a public origin". `:2656` widened it
+"THE PROBE IS GONE: a debug egress endpoint must not ship to a public origin". `:2656` widened it
 beyond the three strings `_probe`, `PROBE_TOKEN` and `runProbe`, after an identical caller-driven
 egress endpoint added as `src/diag.ts` and mounted at `/_diag/` passed the whole suite green with no
 token gate. A fourth, `:1541`, drives `/_probe/t?code=AAAAAAAAAAA` through `handle()` with

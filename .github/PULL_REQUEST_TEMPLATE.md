@@ -6,10 +6,10 @@
 
 ## Type of change
 
-- [ ] Bug fix — a card was wrong or missing, or a link did not resolve `→ PATCH`
+- [ ] Bug fix: a card was wrong or missing, or a link did not resolve `→ PATCH`
 - [ ] New site or new path shape `→ MINOR`
 - [ ] Feature or behaviour change `→ MINOR`
-- [ ] Breaking change — a url shape or a rendered card changes for existing links `→ MAJOR`
+- [ ] Breaking change: a url shape or a rendered card changes for existing links `→ MAJOR`
 - [ ] Docs / internal only `→ no version bump`
 
 ## Where did you measure it?

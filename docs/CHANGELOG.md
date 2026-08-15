@@ -14,16 +14,16 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   to a blind GET, but off Cloudflare that same GET reaches `127.0.0.1`, the LAN and the cloud
   metadata endpoint on `169.254.169.254`. The guard parses a host to BYTES and range-checks them, so
   `127.0.0.1`, `127.1`, `2130706433`, `0177.0.0.1`, `::ffff:127.0.0.1`, `::ffff:7f00:1`,
-  `64:ff9b::7f00:1` and `2002:7f00:1::` all get one verdict — a prefix blocklist on the text form
+  `64:ff9b::7f00:1` and `2002:7f00:1::` all get one verdict. A prefix blocklist on the text form
   passes six of those eight.
   `env.RESOLVE_HOST` is the DNS seam a self-hosted runtime plugs a resolver into; on Cloudflare there
   is none, and the literal check is the whole guard, which is stated rather than implied.
 - **Fediverse LAN names are refused.** `FEDI_HOST` rejects the bare label `localhost` and admits
-  `api.localhost`, `printer.local`, `db.internal` and `host.home.arpa` — found by running the regex
+  `api.localhost`, `printer.local`, `db.internal` and `host.home.arpa`, found by running the regex
   rather than reading a comment that claimed otherwise. Academic on Cloudflare, where they resolve to
   nothing; the machine next door on a self-hosted box.
 - **`OWN_HOSTS` is configurable** (`env.OWN_HOSTS`), so a self-hoster can declare the domains their
-  instance is served from — the guard that stops the service being induced to fetch itself. The value
+  instance is served from, which is the guard that stops the service being induced to fetch itself. The value
   is ADDED to the built-in list and never substituted for it, so every way of getting it wrong is
   "too strict", never "too open".
 
@@ -41,9 +41,9 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   env-overridable), else refuse to store and degrade that view to the cover still.
 
 ### Documentation
-- The `CacheLike` seam a self-hoster implements is now a written contract — honour
+- The `CacheLike` seam a self-hoster implements is now a written contract. Honour
   `cache-control: max-age`, hand back a readable body, be shared across processes, never reject, key
-  on the exact string — with a test that fails if the worker starts calling a third method.
+  on the exact string, with a test that fails if the worker starts calling a third method.
 - `docs/SELF-HOSTING.md` rewritten around what landed, with the stale `src/` line citations corrected
   (several predated this change) and the suite re-measured: 1343 tests, 0 failures, 30.6-34.7 s on a
   residential macOS laptop, Node v26.5.0.
@@ -57,7 +57,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   derive-and-compare drift test that checks it against the code that answers rather than against the
   prose. It was the most conspicuous remaining gap against the rival embed fixers.
 - **Bluesky profile embeds.** `/profile/{handle}` renders an account card: display name, bio, avatar,
-  follower/following/post counts and the join month. Built for one platform on purpose — measured from
+  follower/following/post counts and the join month. Built for one platform on purpose, measured from
   Cloudflare egress, x.com and tiktok.com already hand a crawler a complete profile card, so a route
   for them would duplicate what Discord draws, and instagram.com is walled from this egress entirely
   (HTTP 429, zero bytes, against a same-minute post-page control at 254 KB). Bare `/{handle}` and
@@ -68,8 +68,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   embeds were broken for up to a week and the way it was found was the owner pasting a link.
 
 ### Fixed
-- **A walled TikTok share code was published as `not_a_post`** — "that url resolves to something other
-  than a post" — about a post that demonstrably exists, on both `/_api/v1` and the converter preview,
+- **A walled TikTok share code was published as `not_a_post`**, meaning "that url resolves to something
+  other than a post", about a post that demonstrably exists, on both `/_api/v1` and the converter preview,
   while Discord drew the correct 🔒/🔞 card. Its two siblings were closed in the same pass: a deleted
   post now answers `fetch_fail` with the platform it proved rather than `platform: null`, and a code
   TikTok does not claim answers `ambiguous` with the same chooser the render arm offers.
@@ -85,7 +85,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 The whole platform was sampled from Cloudflare egress on 2026-08-12: 35 real public post urls across
 seven pages, four url shapes and at least twelve years of post ages, read through
 `wrangler dev --remote`. The og: page surface answers 17 of the 35, the embed plugin answers 33, and
-neither covers the platform alone — the plugin carries every `/photo/?fbid=` url, which the page
+neither covers the platform alone. The plugin carries every `/photo/?fbid=` url, which the page
 surface meets with a 438 KB login wall, and the page surface carries the two posts Meta refuses to
 embed. Every url, both readings and the reproduction command are in
 `docs/research/2026-08-12-facebook-post-coverage-from-cloudflare-egress.md`.
@@ -103,7 +103,7 @@ embed. Every url, both readings and the reproduction command are in
   the sample: 531 shortest, 1076 median, 1541 longest.
 - A photo whose size is spelled `style="width:364px;height:364px"` rather than in width and height
   attributes shipped at 0x0, which `render/mastodon.ts` turns into an attachment with no
-  `meta.original` — a picture Discord has been observed not to draw at all. Two of the 37 tags, both
+  `meta.original`, a picture Discord has been observed not to draw at all. Two of the 37 tags, both
   on single-picture posts.
 - Every card off the og: page read `Name (@Name)`. `fbAuthor` emptied `handle` only on the packed
   `… | Facebook` title shape, and no og:title in the sample ended that way; on a reel-shaped title it
@@ -118,12 +118,12 @@ embed. Every url, both readings and the reproduction command are in
 
 ---
 
-## [1.9.1] — 2026-08-09
+## [1.9.1] - 2026-08-09
 
 Five merges shipped under 1.9.0 without a bump. Nothing
 forces one: `landing-convert.test.mjs` pins the site badge to package.json, so the four places the
 number lives cannot disagree, but a release that changes none of them still looks like the last one
-from the outside. Patch, because none of it is new public surface — the JSON API is unchanged.
+from the outside. Patch, because none of it is new public surface: the JSON API is unchanged.
 
 Two upstreams changed under the service inside eight days, and three of these five are the answer to
 that rather than to anything in the repo.
@@ -131,8 +131,8 @@ that rather than to anything in the repo.
 ### Facebook posts stopped rendering, and now read off the embed plugin
 
 #### Fixed
-- Every spelling of a post — `/share/p/{code}`, `story.php`, `/{page}/posts/{pfbid}` and
-  `/{ownerId}/posts/{id}` — answered the failure card. Meta began requiring a login for the post
+- Every spelling of a post (`/share/p/{code}`, `story.php`, `/{page}/posts/{pfbid}` and
+  `/{ownerId}/posts/{id}`) answered the failure card. Meta began requiring a login for the post
   surfaces from datacenter egress: measured 2026-08-08 from Cloudflare, the permalink returns 324,247
   bytes with NO og: tags in four different client shapes, and `/share/{code}` and `mbasic` both
   redirect to a login wall. The same urls from a residential IP built the full card, which is what
@@ -166,19 +166,19 @@ that rather than to anything in the repo.
 
 #### Fixed
 - YouTube links did not embed until they had been warmed on the converter page. Measured against
-  production on four cold videos: the card took 5.14–5.18s and the activity document 8.19–8.29s,
-  against a crawler that leaves at 3–4s. Every budget involved was individually argued — the head
+  production on four cold videos: the card took 5.14-5.18s and the activity document 8.19-8.29s,
+  against a crawler that leaves at 3-4s. Every budget involved was individually argued: the head
   spends `HTML_DEADLINE_MS` on the mux, the activity route spends `MUX_WAIT_API_MS` on the mux,
-  `META_WAIT_API_MS` on the date and a slice on the translation — and each was tuned to make the card
+  `META_WAIT_API_MS` on the date and a slice on the translation, and each was tuned to make the card
   right on the first paste. Together they made it absent.
 
   The wait bought nothing: a warm mux is a 300ms R2 head, and a cold one measured ~5s for a
   60-second Short, so no budget a crawler tolerates was going to catch it. `MUX_WAIT_BOT_MS` (1500)
-  now caps the crawler-facing seams; measured after, the card is 0.36–1.84s and the activity document
-  0.23–1.63s. `/_api/v1` and `/_card` keep the long budget: a human is watching a spinner there, and
+  now caps the crawler-facing seams; measured after, the card is 0.36-1.84s and the activity document
+  0.23-1.63s. `/_api/v1` and `/_card` keep the long budget: a human is watching a spinner there, and
   that surface is what warms a link deliberately.
 
-  A first paste now shows the thumbnail rather than a player, without counts, and dated the epoch —
+  A first paste now shows the thumbnail rather than a player, without counts, and dated the epoch,
   the Mastodon document always emits a `created_at`, so an unknown date renders as 1 January 1970.
   Every later view has all three. Suppressing the field is the real fix and is deliberately not
   attempted: a document missing a required field may be rejected outright, which reintroduces exactly
@@ -194,7 +194,7 @@ that rather than to anything in the repo.
 
   The reporter's own observation located it: ten other Instagram videos worked the same day, which
   rules out the account, the format and the egress and leaves age. An earlier reading of this as a
-  datacenter block was wrong and was discarded — a control reel from the SAME account renders video
+  datacenter block was wrong and was discarded, because a control reel from the SAME account renders video
   from production. Instagram's `/embed/captioned/` answers `EmbedBrokenMedia` for both that control
   and the reported reel, so the embed is not what separated them.
 
@@ -216,7 +216,7 @@ that rather than to anything in the repo.
 #### Added
 - `translate_pending` counts a translation that loses its deadline race. `translated` and
   `translate_fallback` fire only when one arrives, so the state that makes a post render uncached on
-  every unfurl left no trace — and Workers Logs are off on purpose, because they persist the pasted
+  every unfurl left no trace, and Workers Logs are off on purpose, because they persist the pasted
   url. Read as a ratio against its siblings; `docs/METRICS.md` carries the query.
 
 - `docs/METRICS.md` gained a runbook for a "no card" report, written after one that self-healed
@@ -231,14 +231,14 @@ that rather than to anything in the repo.
 
 #### Corrected
 - `tiktok/normalize.ts` recorded the aweme endpoint as serving datacenter egress 12,550,214 bytes of
-  video. Measured 2026-08-09 from Cloudflare, it returns 33,227 bytes of `text/html` — a 404 page at
-  HTTP 200 — byte-identical across three videos and both user agents, while residential still gets
+  video. Measured 2026-08-09 from Cloudflare, it returns 33,227 bytes of `text/html`, a 404 page at
+  HTTP 200, byte-identical across three videos and both user agents, while residential still gets
   the video. Discord's proxy is not Cloudflare and still plays these, so TikTok video is not broken;
   what it rules out is ever proxying or muxing that video through the Worker or the container.
 
 ---
 
-## [1.9.0] — 2026-08-04
+## [1.9.0] - 2026-08-04
 
 Five pieces of work in one release. Merging them back-to-back would have raced five Workers Builds
 deploys against each other, where the older commit can win. Only 1.9.0 ever existed as a version.
@@ -317,8 +317,8 @@ does not.
   quoting, and write-to-query visibility lag.
 
 - Workers Logs are off. With `observability` enabled, Cloudflare persisted an invocation log per
-  request for seven days, each carrying the whole request url — on this Worker, the post somebody
-  pasted — with the client IP, user agent and geolocation beside it. `src/analytics.ts` meanwhile
+  request for seven days, each carrying the whole request url (on this Worker, the post somebody
+  pasted) with the client IP, user agent and geolocation beside it. `src/analytics.ts` meanwhile
   says "no URLs, no post IDs, no IPs, no verbatim user agents… we have nothing to leak", and cites
   TwitFix dying over a public log of processed urls. Turning the setting off makes that claim true
   again, and the comment now records that the function and the deployment setting are one decision.
@@ -530,7 +530,7 @@ does not.
   measurement date is qualified, so mbedfx's own column can be kept current without re-dating
   anybody else's.
 
-## [1.8.0] — 2026-08-03
+## [1.8.0] - 2026-08-03
 
 ### Added
 - Account pools for age-gated posts, staged, and wired for two of the three platforms. Age gates are
@@ -584,7 +584,7 @@ does not.
 
 ---
 
-## [1.7.0] — 2026-08-03
+## [1.7.0] - 2026-08-03
 
 ### Added
 - The Workers Builds preview url is pinned on. It needed a commit, not a dashboard click.
@@ -621,7 +621,7 @@ does not.
   promises. Caught by the Dailymotion fixture, 4830s against a 1500s ceiling.
 
   The still shape is now one function, `stillOf`. The over-ceiling arm had hand-rolled its own with a
-  spread, which kept `remux` and lacked `posterOnly` — the combination that renders as nothing at all,
+  spread, which kept `remux` and lacked `posterOnly`, the combination that renders as nothing at all,
   and the defect `posterOnly` was introduced to fix.
 
 - `settleMux` armed a 9-second timer it never cleared, on every render that reached the race, even
@@ -635,7 +635,7 @@ does not.
 
 ---
 
-## [1.6.2] — 2026-08-03
+## [1.6.2] - 2026-08-03
 
 ### Fixed
 - A `youtu.be` link came back as `/watch?v=`. The converter page already turns that short form into a
@@ -652,7 +652,7 @@ does not.
 
 ---
 
-## [1.6.1] — 2026-08-03
+## [1.6.1] - 2026-08-03
 
 ### Fixed
 - Toggling media-only blanked the copyable link and the preview. Both causes were introduced with the
@@ -676,7 +676,7 @@ does not.
 
 ---
 
-## [1.6.0] — 2026-08-03
+## [1.6.0] - 2026-08-03
 
 Reported: a 24-minute YouTube video "still just pulling up as a frozen image". The still was correct.
 The video is past the mux ceiling, which the README and the site both already documented. Three
@@ -718,7 +718,7 @@ things around it were not.
 
 ---
 
-## [1.5.0] — 2026-08-03
+## [1.5.0] - 2026-08-03
 
 ### Fixed
 - `d.` did nothing on a share link. Reported on
@@ -785,7 +785,7 @@ things around it were not.
 
 ---
 
-## [1.4.0] — 2026-08-02
+## [1.4.0] - 2026-08-02
 
 ### Added
 - A "media only" checkbox on the converter, emitting the `d.` link from 1.3.0. It sits beside the
@@ -808,7 +808,7 @@ things around it were not.
 
 ---
 
-## [1.3.0] — 2026-08-02
+## [1.3.0] - 2026-08-02
 
 ### Added
 - A `d.` host that answers with the media itself, following fxTikTok's convention.
@@ -842,7 +842,7 @@ things around it were not.
 
 ---
 
-## [1.2.1] — 2026-08-02
+## [1.2.1] - 2026-08-02
 
 ### Fixed
 - The `fx` mark in the README banner still read as off centre. The previous fix baked it to a PNG so
@@ -855,7 +855,7 @@ things around it were not.
 
 ---
 
-## [1.2.0] — 2026-08-02
+## [1.2.0] - 2026-08-02
 
 A copyright-blocked Instagram reel now has three independent recoveries, tried cheapest first.
 Reported on `/reel/DX7byl-oyGR/`, which a competitor played and mbedfx drew as a photo.
@@ -913,11 +913,11 @@ Reported on `/reel/DX7byl-oyGR/`, which a competitor played and mbedfx drew as a
 - yt-dlp's success here was measured from a residential host and is not confirmed from Cloudflare's
   egress. It fails safe: no container, a refused extract or an oversized result all leave the cover
   still exactly as it is today. The one precedent for optimism is Facebook, where Meta decoys the
-  crawler from the datacenter and yt-dlp extracts the video anyway — precedent, not proof.
+  crawler from the datacenter and yt-dlp extracts the video anyway. That is precedent, not proof.
 
 ---
 
-## [1.1.1] — 2026-08-02
+## [1.1.1] - 2026-08-02
 
 ### Fixed
 - The footer only existed on `#nope`. It was written when the page was one long scroll, where "at the
@@ -951,7 +951,7 @@ Reported on `/reel/DX7byl-oyGR/`, which a competitor played and mbedfx drew as a
 
 ---
 
-## [1.1.0] — 2026-08-02
+## [1.1.0] - 2026-08-02
 
 The page borrowed Discord's chrome without borrowing its behaviour. Four reports, all the same
 observation from different angles.
@@ -988,7 +988,7 @@ observation from different angles.
 
 ---
 
-## [1.0.1] — 2026-08-02
+## [1.0.1] - 2026-08-02
 
 Three defects found in the first day of real use, all on the converter page or the seam behind it.
 Two of them share a shape: work that only ever got done by Discord unfurling a link, on a page where
@@ -1006,7 +1006,7 @@ nobody has unfurled anything yet.
 - Translations arrived unreliably on the preview. `/_card` awaited the mux and then asked for
   whatever was left of the deadline for the translation. A cold mux doesn't finish early. It spends
   whatever budget it is handed, so on any post with video the mux took the whole ceiling and the
-  translation fell to its 300ms floor. Google is measured at 217–798ms. A 300ms race wins some of the
+  translation fell to its 300ms floor. Google is measured at 217-798ms. A 300ms race wins some of the
   time, giving the same link two different answers. The two now run concurrently, on the preview's
   own ceiling.
 - The same defect on the OpenGraph seam. Found while measuring a live Instagram reel: the activity
@@ -1046,7 +1046,7 @@ nobody has unfurled anything yet.
 
 ---
 
-## [1.0.0] — 2026-08-01
+## [1.0.0] - 2026-08-01
 
 The first public release. Everything below already ran in production. This is where the repository,
 the licence and the release history caught up.
@@ -1122,7 +1122,7 @@ every one of these was reported as "the card looks wrong" and not as a stack tra
 
 ---
 
-## [0.11.0] — 2026-08-01
+## [0.11.0] - 2026-08-01
 
 ### Changed
 - The translation engine was chosen by measurement. A throwaway worker raced every candidate on
@@ -1145,7 +1145,7 @@ every one of these was reported as "the card looks wrong" and not as a stack tra
 - The card preview landed, then had to be taught the stat order, the poster frame, the quoted post
   and the footer date, each caught by a side-by-side against the real card. (#33, #34, #36, #43)
 
-## [0.10.0] — 2026-07-31
+## [0.10.0] - 2026-07-31
 
 ### Added
 - Translation. Non-English captions rendered in English beside the original. (#17, #25)
@@ -1164,10 +1164,10 @@ every one of these was reported as "the card looks wrong" and not as a stack tra
 - A quote-tweet lost its video (#28), and an image post drew nothing at all when a degraded still was
   addressed at the video's dimensions (#17).
 
-## [0.9.0] — 2026-07-30
+## [0.9.0] - 2026-07-30
 
 Renamed to mbedfx, on mbedfx.app. PeerTube joined as the fourth fediverse platform, YouTube
-learned to say when a video is age-restricted, and Facebook group posts became routable. (#5–#16)
+learned to say when a video is age-restricted, and Facebook group posts became routable. (#5-#16)
 
 The original zone is retained and still serves. A link already pasted into a Discord
 channel resolves only while its host does, so cutting over would break every message
@@ -1198,13 +1198,13 @@ anyone has already sent. Retiring it is a later, separate decision.
   what was designed and measured on specific days, including the literal commands run, so
   renaming inside them would falsify the record.
 
-## [0.8.0] — 2026-07-29
+## [0.8.0] - 2026-07-29
 
 ### Added
 - The fediverse family: Mastodon, Pleroma, Akkoma, Misskey, Sharkey, Iceshrimp and PieFed, any
   instance, no per-instance configuration. (#4)
 
-## [0.7.0] — 2026-07-27
+## [0.7.0] - 2026-07-27
 
 ### Added
 - Twitch clips, Lemmy and Pinterest. (#3)
@@ -1213,29 +1213,29 @@ anyone has already sent. Retiring it is a later, separate decision.
 - Instagram false-private and copyright-blocked reels, Facebook share links, the Twitter age
   gate (#1), and an Instagram carousel that served a square crop of a wider image (#2).
 
-## [0.6.0] — 2026-07-26
+## [0.6.0] - 2026-07-26
 
 ### Added
 - Dailymotion, Streamable and Imgur, the yt-dlp tier, where the platform hands out no useful
   metadata surface and the container does the extraction.
 
-## [0.5.0] — 2026-07-24
+## [0.5.0] - 2026-07-24
 
 ### Added
 - YouTube and Facebook.
 
-## [0.4.0] — 2026-07-21
+## [0.4.0] - 2026-07-21
 
 ### Added
 - Twitter, Threads and Reddit.
 
-## [0.3.0] — 2026-07-19
+## [0.3.0] - 2026-07-19
 
 ### Added
 - TikTok and Instagram, the first platforms needing a browser-shaped request, which is where
   "assert on content, never on status" was learned.
 
-## [0.2.0] — 2026-07-18
+## [0.2.0] - 2026-07-18
 
 All four images, formatted text, quote and reply context in one Discord embed, by
 advertising a Mastodon instance and letting Discord fetch the post as a Mastodon
@@ -1273,7 +1273,7 @@ clients, on desktop, Android and iOS. The embed debugger does not render these p
 faithfully. If the gallery does not appear, revert the gate's second operand in
 `src/render/discord.ts`; the plan's native-multi-og fallback was never built.
 
-## [0.1.0] — 2026-07-17
+## [0.1.0] - 2026-07-17
 
 The full request pipeline, proven end to end with the one non-adversarial platform.
 

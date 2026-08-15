@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>mbedfx — links that embed properly</title>
+<title>mbedfx: links that embed properly</title>
 <meta name="description" content="Paste a social post link, get one that actually unfurls in Discord. Twitter, TikTok, Instagram, YouTube, Bluesky, Reddit, the fediverse and more.">
 <meta name="theme-color" content="#5865F2">
 <!--
@@ -18,7 +18,7 @@
   The dimensions are declared because Discord will not draw a large image without them — the same
   rule this project already learned the hard way for post cards.
 -->
-<meta property="og:title" content="mbedfx — social links that embed properly">
+<meta property="og:title" content="mbedfx: social links that embed properly">
 <meta property="og:description" content="Paste a social post link, get one Discord can actually draw. 17 sites, native extraction, no accounts and nothing to install.">
 <meta property="og:type" content="website">
 <meta property="og:url" content="https://mbedfx.app/">
@@ -27,9 +27,9 @@
 <meta property="og:image:type" content="image/jpeg">
 <meta property="og:image:width" content="1200">
 <meta property="og:image:height" content="630">
-<meta property="og:image:alt" content="mbedfx.app — social links that embed properly">
+<meta property="og:image:alt" content="mbedfx.app: social links that embed properly">
 <meta name="twitter:card" content="summary_large_image">
-<meta name="twitter:title" content="mbedfx — social links that embed properly">
+<meta name="twitter:title" content="mbedfx: social links that embed properly">
 <meta name="twitter:description" content="Paste a social post link, get one Discord can actually draw. 17 sites, native extraction, no accounts.">
 <meta name="twitter:image" content="https://mbedfx.app/og.jpg">
 <link rel="icon" href="/favicon.ico">
@@ -781,7 +781,7 @@ function mbedfxConvert(input, host) {
       'No subreddit in a bare Reddit link, so the card comes out a bit thinner than usual.', 'rd');
   }
   if (bare === 'vm.tiktok.com' || bare === 'vt.tiktok.com') {
-    return no('TikTok’s app shortener hides the post behind a random code. Open it once, then paste the /@user/video/… link it lands on. (tiktok.com/t/… links work fine.)');
+    return no("TikTok's app shortener hides the post behind a random code. Open it once, then paste the /@user/video/… link it lands on. (tiktok.com/t/… links work fine.)");
   }
   if (bare === 'fb.watch') return no('fb.watch hides the post behind a random code with no site in the path. Open it once and paste where it lands.');
   if (bare === 'pin.it') return no('pin.it hides the pin behind a random code. Open it once and paste the full /pin/… link.');
@@ -831,10 +831,10 @@ function mbedfxConvert(input, host) {
       }
     }
     if (platform === 'Instagram' && seg[0] === 'stories') {
-      return no('Instagram stories aren’t routed. They expire, so there’s no stable post to draw.');
+      return no("Instagram stories aren't routed. They expire, so there's no stable post to draw.");
     }
     if (platform === 'Twitch') {
-      if (seg[0] === 'videos') return no('Twitch VODs aren’t supported. Clips only.');
+      if (seg[0] === 'videos') return no("Twitch VODs aren't supported. Clips only.");
       if (seg[0] === 'embed' && u.searchParams.get('clip')) {
         return out('/embed?clip=' + u.searchParams.get('clip'), 'Twitch', '', 'tw');
       }
@@ -872,7 +872,7 @@ function mbedfxConvert(input, host) {
       var v = u.searchParams.get('v');
       if (v) return out('/watch?v=' + v, 'YouTube', '', 'yt');
     }
-    if (seg.length === 0) return no('That’s the site’s front page, not a post.');
+    if (seg.length === 0) return no("That's the site's front page, not a post.");
     return out(path, platform, '', pcode);
   }
 
@@ -880,11 +880,11 @@ function mbedfxConvert(input, host) {
 
   // Matches the worker's own host rule: 2+ labels, alphabetic TLD, no port, no IP literal.
   if (!/^[a-z0-9.-]+$/.test(h) || !/\.[a-z]{2,}$/.test(h) || /^\d+(\.\d+)*$/.test(h)) {
-    return no('That doesn’t look like a link to a post.');
+    return no("That doesn't look like a link to a post.");
   }
-  if (seg.length === 0) return no('That’s a server’s front page, not a post.');
+  if (seg.length === 0) return no("That's a server's front page, not a post.");
   return out('/' + h + path, 'Fediverse',
-    'Unrecognised host, treated as a fediverse instance. That’s the right guess for Mastodon, Misskey, Lemmy, PieFed and PeerTube.');
+    "Unrecognised host, treated as a fediverse instance. That's the right guess for Mastodon, Misskey, Lemmy, PieFed and PeerTube.");
 }
 </script>
 
@@ -1160,7 +1160,7 @@ function mbedfxConvert(input, host) {
     } else {
       result.style.display = 'none'; copy.style.display = 'none';
       note.className = 'msgline bad';
-      var why = r.why || (r.kind === 'unparseable' ? 'That doesn’t parse as a link.' : 'Nothing mbedfx can fix.');
+      var why = r.why || (r.kind === 'unparseable' ? "That doesn't parse as a link." : 'Nothing mbedfx can fix.');
       /**
        * A REFUSAL STILL OFFERS THE OVERRIDE, as long as there is a path to force. Every refusal here
        * is a JUDGEMENT — "that looks like a channel rather than a clip", "stories aren't routed",
@@ -1226,7 +1226,7 @@ function mbedfxConvert(input, host) {
         if (!j.ok && j.reason === 'ambiguous' && j.candidates && j.candidates.length) {
           result.style.display = 'none'; copy.style.display = 'none';
           note.className = 'msgline';
-          note.textContent = 'More than one site has that path, so mbedfx won’t guess.';
+          note.textContent = "More than one site has that path, so mbedfx won't guess.";
           showPicker(j.candidates.map(function (c) { return { code: c.platform, name: c.name }; }),
             'Which site?');
           return;
@@ -1336,7 +1336,7 @@ function mbedfxConvert(input, host) {
       // the preview cannot show it yet, and saying so beats implying the link is broken.
       var noPost = j && j.reason === 'profile'
         ? 'No preview for a profile link yet. Discord still draws the card.'
-        : 'No preview. This link doesn’t resolve to a post.';
+        : "No preview. This link doesn't resolve to a post.";
       preview.innerHTML = '<div class="sentrow"><span class="sent" id="sentline"></span></div>'
         + '<div class="pv"><div class="body">' + esc2(j && j.gate ? j.gate : noPost) + '</div></div>';
       preview.className = 'preview show';

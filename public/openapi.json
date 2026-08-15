@@ -202,7 +202,7 @@
             }
           },
           "400": {
-            "description": "No `url`, or one that is not a url. The same request-level failures `GET` has, and the body is `ErrorEnvelope` on a `GET` — a `HEAD` carries the status and the headers alone."
+            "description": "No `url`, or one that is not a url. The same request-level failures `GET` has, and the body is `ErrorEnvelope` on a `GET`, while a `HEAD` carries the status and the headers alone."
           }
         }
       },
@@ -290,7 +290,7 @@
               "age_restricted": { "status": 200, "means": "The post exists behind an age gate. Also reached by a TikTok share code whose resolution reports the gate." },
               "private": { "status": 200, "means": "The post exists behind a private account or a login wall. Also reached by a TikTok share code whose resolution reports the gate." },
               "fetch_fail": { "status": 200, "means": "Not loadable: deleted, or the platform did not answer. Several platforms answer HTTP 200 with a login wall or 500 with a good JSON error, so this is a judgement about content rather than about a status. Also reached by a TikTok share code TikTok claims and cannot serve, where `platform` and `canonical` are populated because the page proved whose post it is." },
-              "ambiguous": { "status": 200, "means": "The path belongs to more than one site; `candidates` names them. Every profile url, bare handle and unrecognised one-segment path lands here, including a short link whose code is a bare single segment such as `redd.it/haucpf`, and a `/t/{code}` that TikTok did not claim — `tiktok.com/t/` and `threads.com/t/` are the same path on two products." },
+              "ambiguous": { "status": 200, "means": "The path belongs to more than one site; `candidates` names them. Every profile url, bare handle and unrecognised one-segment path lands here, including a short link whose code is a bare single segment such as `redd.it/haucpf`, and a `/t/{code}` that TikTok did not claim, since `tiktok.com/t/` and `threads.com/t/` are the same path on two products." },
               "notfound": { "status": 200, "means": "A shape this service routes for nobody, including a site prefix forced onto a path that site does not claim (`/x/jack`) and `/_prep` or `/_card` without their own parameter." },
               "bad_id": { "status": 200, "means": "A path shaped like one of this service's own JSON endpoints (`/users/{handle}/statuses/{id}`, `/api/v1/statuses/{id}`, `/_oembed/{id}`) whose id did not decode. Not reachable from an ordinary post url." },
               "not_a_post": { "status": 200, "means": "Routes to something that is not a post: a site page (`/`, `/index.html`, `/robots.txt`), this service's own `/_media/`, `/_prep?p=`, `/_card?p=` or `/_api/v1`, or a Meta or Reddit share code that could not be resolved to a post. A TikTok `/t/{code}` never lands here: its three non-post resolutions answer `age_restricted`, `private`, `fetch_fail` or `ambiguous`, matching what the same code renders as a card." },
@@ -377,7 +377,7 @@
       },
       "Counts": {
         "type": "object",
-        "description": "Public interaction counts. An absent key means unknown, and it is the only place in v1 where an absent key carries meaning. A zero is never published: upstreams report zero both for an uninteracted post and for a count the platform withholds — a hidden like count, comments switched off — and nothing tells them apart by the time the value gets here. v1 cannot encode a count known to be zero. Which of the four keys exist varies by site.",
+        "description": "Public interaction counts. An absent key means unknown, and it is the only place in v1 where an absent key carries meaning. A zero is never published: upstreams report zero both for an uninteracted post and for a count the platform withholds, such as a hidden like count or comments switched off, and nothing tells them apart by the time the value gets here. v1 cannot encode a count known to be zero. Which of the four keys exist varies by site.",
         "properties": {
           "likes": { "type": "integer", "minimum": 1 },
           "reposts": { "type": "integer", "minimum": 1 },
@@ -405,7 +405,7 @@
           },
           "width": {
             "type": ["number", "null"],
-            "description": "The width of the bytes at `url`, not of the original video: a `still` entry reports the poster frame's size. `0` is far more common than `null` and means the platform reported no size — a remuxed video deliberately carries 0 so a player reads the real dimensions out of the file. `null` means the cached value was not a finite number. Both mean unknown; divide by neither."
+            "description": "The width of the bytes at `url`, not of the original video: a `still` entry reports the poster frame's size. `0` is far more common than `null` and means the platform reported no size. A remuxed video deliberately carries 0 so a player reads the real dimensions out of the file. `null` means the cached value was not a finite number. Both mean unknown; divide by neither."
           },
           "height": {
             "type": ["number", "null"],
