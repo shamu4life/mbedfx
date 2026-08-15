@@ -50,6 +50,30 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [1.10.1] - 2026-08-14
+
+### Changed
+- Every word a reader sees was rewritten to drop the tells of machine-written
+  prose: em and en dashes, curly quotes, boldface applied out of habit, and
+  headings in Title Case. This covers the converter page's on-screen copy and
+  its card metadata, the README, `CLAUDE.md`, `NOTICE.md`, the container README,
+  all five `docs/` files, the published OpenAPI document, and the contributor
+  docs, issue templates and both social-preview cards.
+- Three rendered card notes lost their em dash, because they are copy rather
+  than comments: the YouTube length note, the YouTube age note and the PeerTube
+  live note. Each is pinned by a test that matches on a prefix, so the wording
+  ahead of the dash is unchanged.
+- The 27 changelog version headings now use the hyphen form Keep a Changelog
+  specifies rather than an em dash, numeric ranges use a hyphen or the word
+  "to", and the `METRICS.md` "Read against" column says `nothing` where it used
+  a bare em dash to mean it.
+
+Untouched on purpose: the curly quotes in the character class at
+`src/translate.ts:315`, which strip a model's surrounding quotes off a
+translation and are a matcher rather than copy; the em dash in the translation
+prompt below it, since editing a prompt is a behaviour change; and every
+source-code comment, which is an engineering record.
+
 ## [1.10.0] - 2026-08-12
 
 ### Added
