@@ -8,7 +8,7 @@ What HAS landed, 2026-08-12, is the set of corrections that would make exposing 
 instance safe rather than the adapter that would run one: the private-address guard the Worker half
 never had (`src/netguard.ts`), a configurable `OWN_HOSTS`, a guest-token cache that works on both
 runtimes, a bound on the mux buffering fallback, and the `CacheLike` contract written down. All of
-it is code with offline tests and none of it is a deployment report — see
+it is code with offline tests and none of it is a deployment report. See
 [Before a public deployment](#before-a-public-deployment).
 
 The audit reads the code and finds no *known* blocker in it: a claim about the code, not a
@@ -53,12 +53,12 @@ bundler, no `wrangler`, no network. Node strips the TypeScript types and imports
 written.
 
 Re-measured on this tree 2026-08-12: 1343 tests, 0 failures, 30.6-34.7 s across runs, on Node
-v26.5.0 on a residential macOS laptop — replacing 1207 tests in 19.3-20.1 s measured 2026-08-05, and
+v26.5.0 on a residential macOS laptop, replacing 1207 tests in 19.3-20.1 s measured 2026-08-05, and
 1185 tests in 19.9 s on 2026-08-04. The +136 are this phase's self-hosting corrections and the
 suite's own growth; the wall-clock difference is a different machine as much as a bigger suite, so
 read the run time as "still well under a minute", not as a regression anybody measured. CI pins Node
-22.18.0 (`.node-version`) and runs the same command, commented "No network, no container, no R2 —
-the whole suite runs on captured bytes and fake bindings" (`.github/workflows/ci.yml:44`).
+22.18.0 (`.node-version`) and runs the same command, commented "No network, no container, no R2.
+The whole suite runs on captured bytes and fake bindings" (`.github/workflows/ci.yml:44`).
 
 Thirteen test files import the production handler itself (`import { handle } from
 '../src/worker.ts'`) and drive the media/mux path, the translation deadline, the YouTube date path,
@@ -128,7 +128,7 @@ if (typeof FixedLengthStream !== 'undefined' && len !== null) {
 ```
 
 `FixedLengthStream` is absent under `node --test`. The streaming path serves production; below the
-check are the two paths that serve the unit tests and every self-hosted runtime — `putStream` if the
+check are the two paths that serve the unit tests and every self-hosted runtime: `putStream` if the
 store implements it, else a buffer bounded by `MUX_BUFFER_MAX`. See
 [the mux buffering fallback](#the-mux-buffering-fallback-bounded).
 
@@ -140,9 +140,9 @@ runtime API: no `HTMLRewriter` or `WebSocketPair`, no `caches` inside `handle`, 
 
 > THE ONLY FILE THAT IMPORTS @cloudflare/containers. That package pulls in `cloudflare:workers`, a
 > module that exists only in the Workers runtime, so importing it under `node --test` throws. Keeping
-> it here — reached solely through the deploy entry src/index.ts, never through the test-imported
-> worker.ts — is what lets the suite keep running in plain Node.
-> — `src/container.ts`
+> it here, reached solely through the deploy entry src/index.ts and never through the test-imported
+> worker.ts, is what lets the suite keep running in plain Node.
+> Source: `src/container.ts`
 
 A Node port needs the same boundary: nothing on the request path may import that file.
 
@@ -247,7 +247,7 @@ the failure is otherwise silent (`src/analytics.ts`).
 | Surface | Where it is declared | What the code calls | Replace with | Without it |
 |---|---|---|---|---|
 | `ASSETS` | `src/analytics.ts:184` | one call: `env.ASSETS.fetch(req)` (`src/worker.ts:3999`) | any static file server over `public/`, taking a `Request` and returning a `Response` | Required, about six lines of Node. Only the landing and converter pages touch it; both throw without it. |
-| `MEDIA_CACHE` (R2) | `src/analytics.ts:189` | `head(key)`, `get(key)`, `get(key, {range:{offset,length}})`, `put(key, stream\|ArrayBuffer\|string)`, and OPTIONALLY `putStream(key, stream, length\|null)` | any S3-compatible store, or a directory on disk. The test fake is a `Map` in 15 lines (`test/media-resolver.test.mjs`) | Optional. The mux is never cached: remux videos re-mux forever or get stripped, the card falls back to its cover still on every view, translations lose their cross-request cache, and yt-dlp metadata is re-extracted every time (2.4-3.1 s per Facebook video). Implement `putStream` if your store takes a stream — without it, muxes are buffered in memory up to `MUX_BUFFER_MAX` and refused above it. |
+| `MEDIA_CACHE` (R2) | `src/analytics.ts:189` | `head(key)`, `get(key)`, `get(key, {range:{offset,length}})`, `put(key, stream\|ArrayBuffer\|string)`, and OPTIONALLY `putStream(key, stream, length\|null)` | any S3-compatible store, or a directory on disk. The test fake is a `Map` in 15 lines (`test/media-resolver.test.mjs`) | Optional. The mux is never cached: remux videos re-mux forever or get stripped, the card falls back to its cover still on every view, translations lose their cross-request cache, and yt-dlp metadata is re-extracted every time (2.4-3.1 s per Facebook video). Implement `putStream` if your store takes a stream. Without it, muxes are buffered in memory up to `MUX_BUFFER_MAX` and refused above it. |
 | `MEDIA_RESOLVER` (Durable Object) | `src/analytics.ts:188` | `resolver.getByName(name).fetch(url, init)` and nothing else | an object whose `getByName(name)` returns `{ fetch }` pointed at the container. The name is a pooling slot (`resolver-{generation}-{0..N}`), one container or several | Optional. Without it or without `MEDIA_CACHE`, `withResolver` strips every `remux` video and those platforms render a cover still (`src/worker.ts`). |
 | `AE` (Analytics Engine) | `src/analytics.ts:183` | one call: `env.AE?.writeDataPoint({ blobs: [platform, outcome, client], doubles: [1] })` (`src/analytics.ts`) | anything with a `writeDataPoint` method: a Prometheus counter, a StatsD client, a log line. The full schema is in `docs/METRICS.md` | Optional. Every card still renders, and the one signal that would report a refused egress is gone. |
 | `AI` (Workers AI) | `src/analytics.ts:195` | `ai.run(model, input)`, `FALLBACK_MODEL = '@cf/google/gemma-4-26b-a4b-it'` (`src/translate.ts:276`) | any model behind a `run(model, input)` shim | Optional. Translation falls back to Google's endpoint alone; if that is also refused from your egress, translation stops and every card renders untranslated. |
@@ -256,7 +256,7 @@ the failure is otherwise silent (`src/analytics.ts`).
 | `OWN_HOSTS` | `src/analytics.ts` | added to the built-in own-zone list in `src/platforms/fedihost.ts` | every domain you serve from, comma- or whitespace-separated, hostname or origin | **Set it.** Unset, the fediverse routes will fetch your own domain if somebody asks them to. Additive, so a wrong value can only make the guard stricter. |
 | `RESOLVE_HOST` | `src/analytics.ts` | `blockedResolvedHost` in `src/netguard.ts`, before every fediverse fetch | `async (host) => (await dns.lookup(host, { all: true })).map(a => a.address)` | Optional, strongly recommended off Cloudflare. Without it the address guard is literal-only, which is all a Worker can ever do, so `evil.example.com IN A 127.0.0.1` is not caught. |
 | `MUX_BUFFER_MAX` | `src/analytics.ts` | `putMuxed` in `src/worker.ts` | bytes, as a string. Default 64 MB | Optional. Raise it if you have memory and no `putStream`; a video above it is not cached and its card degrades to the cover still. |
-| `cf: { cacheEverything, cacheTtl }` | `src/platforms/twitter/fetch.ts` | reuses one Twitter guest-token activation for `GUEST_TOKEN_TTL` = 7200 s | nothing to supply any more: a process-local memo with a shared in-flight promise does the same job on both runtimes | Was silently ignored off Cloudflare, so every cold card minted a fresh guest token — a token has roughly a 500-request budget, so the cost was one extra request to Twitter per cold card and a source of rate-limiting invisible from the code. Now bounded to one activation per process per two hours. |
+| `cf: { cacheEverything, cacheTtl }` | `src/platforms/twitter/fetch.ts` | reuses one Twitter guest-token activation for `GUEST_TOKEN_TTL` = 7200 s | nothing to supply any more: a process-local memo with a shared in-flight promise does the same job on both runtimes | Was silently ignored off Cloudflare, so every cold card minted a fresh guest token. A token has roughly a 500-request budget, so the cost was one extra request to Twitter per cold card and a source of rate-limiting invisible from the code. Now bounded to one activation per process per two hours. |
 
 Secrets are plain strings on `Env` and map straight onto environment variables: `RESOLVER_SECRET`,
 `IMGUR_CLIENT_ID`, `TRANSLATE_GOOGLE`, `IG_GRAPHQL_DOC_ID`, `X_ACCOUNTS`, `IG_ACCOUNTS`,
@@ -270,14 +270,14 @@ values sit in a plain file, the threat model FxEmbed's encrypted-bundle design w
 ## Before a public deployment
 
 A private instance runs without any of this; a public one does not. Everything in this section is
-code that is now in the tree — what is left is the settings you have to fill in and the one thing
+code that is now in the tree. What is left is the settings you have to fill in and the one thing
 that still cannot be fixed from inside a Worker.
 
 Nothing below has been measured against a running self-hosted instance, because there is not one.
 It is code with offline tests (`test/netguard.test.mjs`, `test/selfhost.test.mjs`), not a deployment
 report.
 
-### `OWN_HOSTS` — set it
+### `OWN_HOSTS`, and setting it
 
 The fediverse routes take an instance hostname straight from the URL path and make it the origin of
 a fetch. `fetchableInstance` (`src/platforms/fedihost.ts`) refuses mbedfx's own zones:
@@ -322,7 +322,7 @@ IPv4-mapped/-compatible forms of all of the above. It also refuses `localhost`, 
 `.internal`, `.lan`, `.home.arpa` and `.arpa` names, which `FEDI_HOST` admits as soon as they carry
 a dot (`api.localhost` passes that regex; `localhost` does not).
 
-**The DNS half is yours to wire.** `env.RESOLVE_HOST` is a function, not a wrangler binding — a
+**The DNS half is yours to wire.** `env.RESOLVE_HOST` is a function, not a wrangler binding. A
 Worker has no resolver, so on Cloudflare it is permanently undefined and the literal check is the
 whole guard. In a Node adapter it is three lines:
 
@@ -332,13 +332,13 @@ env.RESOLVE_HOST = async (host) => (await dns.lookup(host, { all: true })).map(a
 ```
 
 With it wired, `evil.example.com IN A 127.0.0.1` is refused **before** the request is made, and a
-name with one public address and one private one is refused too — every address is checked, as
+name with one public address and one private one is refused too, because every address is checked, as
 `getaddrinfo` is in the container. A resolver that throws or answers with nothing fails closed.
 
 What it still cannot promise: DNS rebinding. Between the resolution and the fetch's own, a record
 with a one-second TTL can change; closing that needs pinning the connection to the address that was
-checked, which neither `fetch()` nor Workers exposes. The bound on the residual is unchanged — no
-credential is attached, the body is capped, the response must be the right shape — so the worst case
+checked, which neither `fetch()` nor Workers exposes. The bound on the residual is unchanged: no
+credential is attached, the body is capped, and the response must be the right shape, so the worst case
 stays a blind GET.
 
 ### The Twitter guest token
@@ -346,8 +346,8 @@ stays a blind GET.
 `getGuestToken` kept its `cf: { cacheEverything, cacheTtl }` and gained a process-local memo with a
 shared in-flight promise (`src/platforms/twitter/fetch.ts`). The `cf` option is a Cloudflare-only
 field and is silently ignored elsewhere; without the memo, every cold card off Cloudflare minted a
-fresh guest token. A token has roughly a 500-request budget, so the symptom was never an outage —
-it was Twitter rate-limiting an instance for a reason invisible from the code. N processes still
+fresh guest token. A token has roughly a 500-request budget, so the symptom was never an outage.
+It was Twitter rate-limiting an instance for a reason invisible from the code. N processes still
 hold N tokens, which is the same weakness the `cf` cache had (it is per-colo) and is bounded.
 
 ### The mux buffering fallback, bounded
@@ -356,15 +356,15 @@ hold N tokens, which is the same weakness the `cf` cache had (it is per-colo) an
 MP4 into R2 without buffering. Off Cloudflare it does not exist, so every mux took the fallback:
 `cache.put(key, await muxed.arrayBuffer())`, the whole video in memory. The comment called that
 "bounded by the container's own MAX_BYTES output cap", which is true and is a bound of the wrong
-size — `MAX_BYTES` is 393216000, a **375 MB** output ceiling, beside `MAX_SECONDS` 1500
+size. `MAX_BYTES` is 393216000, a **375 MB** output ceiling, beside `MAX_SECONDS` 1500
 (`container/server.py`), and `RESOLVER_SLOTS` is 4. Four ordinary long videos, no attacker: 1.5 GB
 resident.
 
 Three paths now, in order of how little memory they hold:
 
-1. `FixedLengthStream` plus a `content-length` — the Workers production path, unchanged. The
+1. `FixedLengthStream` plus a `content-length` is the Workers production path, unchanged. The
    container always sends the header (`send_header("content-length", str(size))`).
-2. `MEDIA_CACHE.putStream(key, stream, length)` — **implement this** if your store can take a
+2. `MEDIA_CACHE.putStream(key, stream, length)`: **implement this** if your store can take a
    stream (a file write, an S3 multipart upload). R2 cannot, which is why `FixedLengthStream` exists
    at all. A store that implements it never buffers and is not subject to the ceiling.
 3. Buffering, capped at `MUX_BUFFER_MAX` (default 64 MB, env-overridable). Bodies with no
@@ -373,7 +373,7 @@ Three paths now, in order of how little memory they hold:
    exactly as a failed mux does, and a line goes to stderr.
 
 64 MB is chosen against the ~128 MB Workers isolate ceiling, not against a measured distribution of
-video sizes — nobody has measured that. The cost of the refusal is real: an over-ceiling video
+video sizes, and nobody has measured that. The cost of the refusal is real: an over-ceiling video
 re-muxes on every view. `putStream` is the fix; raising `MUX_BUFFER_MAX` is the workaround for an
 operator with memory to spend.
 

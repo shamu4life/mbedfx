@@ -1,4 +1,4 @@
-# media-resolver — the mbedfx video remux/resolve container
+# media-resolver: the mbedfx video remux/resolve container
 
 A small ffmpeg + yt-dlp service, a single-purpose Cobalt run in-house so nobody else's uptime or
 extractor drift sits in the path. It turns a DASH/HLS video, or any yt-dlp-supported page, into one
@@ -17,9 +17,9 @@ yt-dlp knows. Those posts are cover stills without it.
 { "page": "<url>", "meta": true }            // METADATA ONLY (yt-dlp -J, no download) — see below
 ```
 
-- **200 `video/mp4`** — the muxed file, streamed. The Worker pipes it straight into R2 and serves
+- **200 `video/mp4`** is the muxed file, streamed. The Worker pipes it straight into R2 and serves
   range reads from there, so each video is muxed at most once.
-- **4xx/5xx `application/json` `{"error"}`** — the Worker falls back to the cover still.
+- **4xx/5xx `application/json` `{"error"}`** means the Worker falls back to the cover still.
 - `GET /health` → `200 ok`.
 
 ### Meta mode (`{"page": …, "meta": true}`)

@@ -144,7 +144,7 @@ export function normalizePeerTube(
   const desc = capBody(str(video.description).trim())
   const chan = str(channel?.displayName)
   const text = [
-    live ? '🔴 Live — no preview' : '',
+    live ? '🔴 Live, no preview' : '',
     chan ? `📺 ${chan}` : '',
     desc,
   ].filter(Boolean).join('\n\n')

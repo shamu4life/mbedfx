@@ -8,7 +8,7 @@ body:
       label: The link
       description: >
         The mbedfx link that misbehaved, and the original if it differs. This is the single
-        most useful thing in the report — most bugs here are one specific post, not a whole site.
+        most useful thing in the report, since most bugs here are one specific post, not a whole site.
       placeholder: "https://mbedfx.app/@user/video/7660566211100511518"
     validations:
       required: true
@@ -17,7 +17,7 @@ body:
     id: what-happened
     attributes:
       label: What happened
-      description: What did the card show — or not show?
+      description: What did the card show, or not show?
     validations:
       required: true
 
@@ -70,7 +70,7 @@ body:
       label: Does it still happen?
       description: >
         Cards are cached for about 15 minutes, and a cold video can take two or three
-        views before it plays — so a quick re-check separates a real bug from a warm-up.
+        views before it plays, so a quick re-check separates a real bug from a warm-up.
       options:
         - label: I waited a few minutes and tried again, and it still happens
           required: false
@@ -81,6 +81,6 @@ body:
       label: Anything else
       description: >
         A screenshot of the card is worth a lot. If the post is private, age-gated, or has
-        since been deleted, say so — that changes what the right answer is.
+        since been deleted, say so, because that changes what the right answer is.
     validations:
       required: false
