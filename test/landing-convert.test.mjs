@@ -351,6 +351,24 @@ test('IMGUR ALBUMS AND GALLERIES CONVERT — they used to be on the refusal list
   assert.equal(gallery.url, 'https://mbedfx.app/im/gallery/YcAQlkx')
   assert.deepEqual(routed('/im/gallery/YcAQlkx').ref, { p: 'im', kind: 'gallery', id: 'YcAQlkx' })
 
+  /**
+   * THE SHAPE IMGUR ACTUALLY HANDS OUT. Both surfaces above carry an SEO slug in front of the id
+   * (`{seo_title}-{id}`) — imgur.com's own og:url for gallery aZVXS is the slug form, from every
+   * request path, and the bare spellings this file used to pin are no longer PRODUCED by the site
+   * even though they still resolve. The page passes the segment through untouched, which is correct
+   * and stays correct; it was the router that refused it, and a live 7-image album unfurled as
+   * "Not found" in production (reported 2026-08-15). Pinned from the page's side as well as the
+   * router's because this is the journey that actually broke: paste, copy the offered link, get a
+   * failure card. Neither half is wrong alone.
+   */
+  const SLUG = 'black-lotus-magic-gathering-card-destroyed-accidentally-aZVXS'
+  assert.equal(convert(`https://imgur.com/gallery/${SLUG}`, 'mbedfx.app').url,
+    `https://mbedfx.app/im/gallery/${SLUG}`)
+  assert.deepEqual(routed(`/im/gallery/${SLUG}`).ref, { p: 'im', kind: 'gallery', id: 'aZVXS' })
+
+  assert.equal(convert(`https://imgur.com/a/${SLUG}`, 'mbedfx.app').url, `https://mbedfx.app/a/${SLUG}`)
+  assert.deepEqual(routed(`/a/${SLUG}`).ref, { p: 'im', kind: 'album', id: 'aZVXS' })
+
   // A still photo still needs the prefix — a bare id is undecidable against Dailymotion.
   assert.equal(convert('https://imgur.com/QAcLnaf', 'mbedfx.app').url, 'https://mbedfx.app/im/QAcLnaf')
   assert.deepEqual(routed('/im/QAcLnaf').ref, { p: 'im', kind: 'post', id: 'QAcLnaf' })

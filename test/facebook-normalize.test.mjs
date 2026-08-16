@@ -161,7 +161,7 @@ test('timestamp becomes createdAt; its absence keeps the epoch fallback', () => 
 
 test('THE NON-ATOMIC DEPLOY: the OLD {title, thumbnail, uploader} dict still makes a card', () => {
   // A pooled container instance keeps running the image it booted with until sleepAfter, so this dict
-  // is live for up to ~10 minutes after a redeploy. It must degrade to the old card, never throw.
+  // is live for up to ~5 minutes after a redeploy. It must degrade to the old card, never throw.
   const post = normalizeFacebook({ title: 'A funny clip', poster: THUMB, uploader: 'PhillyBanana' }, REF)
   assert.equal(post.author.name, 'PhillyBanana')
   assert.equal(post.text, 'A funny clip')

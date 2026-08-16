@@ -1357,6 +1357,52 @@ test('the /dm/ /st/ /im/ escape hatches force the tier — and are the ONLY way 
   assert.equal(r('/gallery/YcAQlkx').kind, 'ambiguous', 'unforced it stays the chooser')
 })
 
+test('AN IMGUR SEO SLUG IS DECORATION — the id is the last component, and the slug never enters the ref', () => {
+  /**
+   * MEASURED 2026-08-15 against imgur.com and api.imgur.com. Imgur's own og:url for gallery aZVXS is
+   * the SAME string whether you ask for /gallery/aZVXS, /t/funny/aZVXS or the slug form itself:
+   *
+   *   https://imgur.com/gallery/black-lotus-magic-gathering-card-destroyed-accidentally-aZVXS
+   *
+   * so `{seo_title}-{id}` is not one spelling among several, it is THE url the site hands out. The
+   * API confirms where the seam falls rather than leaving it to be guessed off a hyphen count:
+   * `post/v1/albums/aZVXS` returns `"seo_title":"black-lotus-magic-gathering-card-destroyed-
+   * accidentally"` beside `"id":"aZVXS"` — title first, id last, one '-' joining them.
+   *
+   * THE BARE FORM STILL RESOLVES, which is why this looked fine for so long: every fixture and every
+   * example url in this repo is bare, and imgur.com serves those. But nothing on the site PRODUCES a
+   * bare url any more, so the share button, the address bar and the chooser page all emitted the one
+   * shape route() refused. In production it rendered "Not found" on a live 7-image album.
+   *
+   * THE SLUG DOES NOT ENTER THE REF, for the reason twitch()'s channel does not: it is decoration.
+   * Holding the ref at `im:gallery:aZVXS` keeps ONE cache entry for both spellings, keeps parseRefKey
+   * and its allowlist untouched, and keeps IM_ID — which is interpolated into i.imgur.com urls — as
+   * tight as it was. A slug in the ref would have widened the security boundary to fix a router bug.
+   */
+  const SLUG = 'black-lotus-magic-gathering-card-destroyed-accidentally-aZVXS'
+  assert.deepEqual(r(`/im/gallery/${SLUG}`).ref, { p: 'im', kind: 'gallery', id: 'aZVXS' })
+  assert.deepEqual(r(`/im/a/${SLUG}`).ref, { p: 'im', kind: 'album', id: 'aZVXS' })
+  // 'a' is unforced (nothing competes for it), so its slug form must resolve unforced too.
+  assert.deepEqual(r(`/a/${SLUG}`).ref, { p: 'im', kind: 'album', id: 'aZVXS' })
+
+  // The canonical is the bare permalink, not the pasted slug: both spellings normalise to one url,
+  // and imgur.com serves it (measured — /gallery/aZVXS answers with the album).
+  assert.equal(r(`/im/gallery/${SLUG}`).canonical, 'https://imgur.com/gallery/aZVXS')
+
+  // Unforced /gallery/ stays the three-way chooser it was; the slug changes nothing about that row,
+  // it only makes the 'im' candidate the chooser offers a link that actually resolves.
+  assert.equal(r(`/gallery/${SLUG}`).kind, 'ambiguous')
+
+  // REGRESSION: the bare forms every fixture uses keep working.
+  assert.deepEqual(r('/im/gallery/YcAQlkx').ref, { p: 'im', kind: 'gallery', id: 'YcAQlkx' })
+  assert.deepEqual(r('/im/a/iX265HX').ref, { p: 'im', kind: 'album', id: 'iX265HX' })
+
+  // A slug whose last component is not an id shape is still notfound — the gate did not loosen, it
+  // moved to the component that actually carries the id.
+  assert.equal(r('/im/gallery/black-lotus-destroyed').kind, 'notfound', 'trailing word is 9 chars')
+  assert.equal(r('/im/a/some-title-abcd').kind, 'notfound', 'trailing word is 4, under the 5-7 bound')
+})
+
 test('THE ESCAPE BLOCK STILL FALLS THROUGH — /dm/videos/{id} is Facebook today and stays Facebook', () => {
   /**
    * MEASURED BEFORE AND AFTER. facebook()'s /{page}/videos/{id} arm claims these with seg[0] as the

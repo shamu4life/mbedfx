@@ -27,7 +27,28 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   is ADDED to the built-in list and never substituted for it, so every way of getting it wrong is
   "too strict", never "too open".
 
+### Changed
+- **The media container now sleeps after 5 minutes idle instead of 10.** Measured from the bill:
+  3.24M instance-seconds awake against 42.9k vCPU-seconds of work — a 5.3% duty cycle, so 94.7% of
+  what was billed was an instance with nothing to do. With one dispatch every ~4.3 minutes per pool
+  slot, a ten-minute idle timer could never fire, and the four slots stayed up ~43 hours a day
+  between them. Those seconds bill THREE times — container memory, container disk, and Durable
+  Objects compute duration, because a Container is a Durable Object underneath — which came to
+  $21.23 of a $21.63 cycle against $0.41 of actual work. This is instance DURATION and not the
+  instance COUNT the 2026-07-24 pooling fix was about: slots return to the pool sooner, so
+  exhaustion gets strictly less likely. The cost is more cold boots, concentrated in quiet hours
+  where the long gaps are.
+
 ### Fixed
+- **Imgur's own url shape rendered "Not found".** `imgur.com/gallery/{seo_title}-{id}` — the url the
+  share button, the address bar and our own converter page all produce — was matched against the
+  5-7 character id regex as a WHOLE path segment, so it never routed, and a live 7-image album
+  unfurled as a failure card. The id is the last `-` component, confirmed against
+  `post/v1/albums/{id}`'s own `seo_title` field rather than inferred from a hyphen count. Both
+  `/gallery/` and `/a/` take it, and the slug is dropped rather than carried, so the two spellings
+  share one cache entry and `IM_ID` stays as tight as it was. The bare form still resolves, which is
+  why every fixture here has one and why the suite stayed green while the shape people actually
+  paste was broken. `/t/{topic}/{slug}-{id}` remains unrouted.
 - **The Twitter guest token is reused off Cloudflare too.** The activation was cached with
   `cf: { cacheEverything, cacheTtl }`, a Cloudflare-only fetch option that is silently ignored
   elsewhere, so a self-hosted instance minted a fresh guest token on every cold card. A process-local

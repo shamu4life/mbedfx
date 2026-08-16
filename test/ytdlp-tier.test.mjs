@@ -456,7 +456,7 @@ test('A FAILING ID IS NOT A FREE CONTAINER TRIGGER — the negative cache', asyn
 test('A FLOOD OF DISTINCT IDS IS CAPPED — the bound the other two do not cover', async () => {
   /**
    * Rotating the id defeats both the dedupe and the negative cache, and that is the case that actually
-   * saturates the pool: RESOLVER_SLOTS is 4, an instance lingers ~10min, and "Maximum number of running
+   * saturates the pool: RESOLVER_SLOTS is 4, an instance lingers ~5min, and "Maximum number of running
    * container instances exceeded" degrades EVERY platform's card to a video-less still.
    * SPECULATIVE_META_CAP is the isolate-local bound on DISTINCT extracts in flight — the same constant,
    * and now the same gate, the YouTube date path uses, because they share one four-slot pool.
