@@ -25,7 +25,7 @@ body:
       label: An example link
       description: >
         If this is about a site or a post shape we do not handle yet, a real link is worth
-        more than a description of one — it is what the work gets tested against.
+        more than a description of one, and it is what the work gets tested against.
       placeholder: "https://example.com/some/post/123"
     validations:
       required: false
@@ -35,9 +35,9 @@ body:
     attributes:
       label: Scope notes
       description: >
-        Optional — flag anything that affects scope. Worth knowing: this project does NATIVE
+        Optional. Flag anything that affects scope. Worth knowing: this project does NATIVE
         extraction, so "route it to another fixer" is out of scope by design. Anything needing
-        an account, a login, or a paid API is very likely out too — the whole point is that a
+        an account, a login, or a paid API is very likely out too, because the whole point is that a
         reader pastes a link and it works, with nobody signed in to anything.
     validations:
       required: false

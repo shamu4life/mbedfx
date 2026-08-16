@@ -1,7 +1,7 @@
 <div align="center">
 
-<img src=".github/social-preview.svg#gh-dark-mode-only" alt="mbedfx — social links that embed properly" width="720" />
-<img src=".github/social-preview-light.svg#gh-light-mode-only" alt="mbedfx — social links that embed properly" width="720" />
+<img src=".github/social-preview.svg#gh-dark-mode-only" alt="mbedfx: social links that embed properly" width="720" />
+<img src=".github/social-preview-light.svg#gh-light-mode-only" alt="mbedfx: social links that embed properly" width="720" />
 
 [![License](https://img.shields.io/badge/license-MIT-5865f2?style=flat)](LICENSE)
 [![CI](https://img.shields.io/github/actions/workflow/status/shamu4life/mbedfx/ci.yml?branch=main&style=flat&label=CI&color=5865f2)](../../actions/workflows/ci.yml)
@@ -135,7 +135,7 @@ Non-Latin scripts (Japanese, Korean, Chinese, Russian, Arabic, Thai, Greek, Hebr
 curl -s 'https://mbedfx.app/_api/v1?url=https%3A%2F%2Fx.com%2Fjack%2Fstatus%2F20' | jq
 ```
 
-Branch on `ok` and `error.code`, never on the HTTP status. The contract is [docs/API.md](docs/API.md) in prose and [`/openapi.json`](https://mbedfx.app/openapi.json) ([source](public/openapi.json)) in OpenAPI 3.1 — every response shape, every error code, the nullability of every field — which a generator or a schema viewer reads directly.
+Branch on `ok` and `error.code`, never on the HTTP status. The contract is [docs/API.md](docs/API.md) in prose and [`/openapi.json`](https://mbedfx.app/openapi.json) ([source](public/openapi.json)) in OpenAPI 3.1, covering every response shape, every error code and the nullability of every field, which a generator or a schema viewer reads directly.
 
 ## Caveats
 

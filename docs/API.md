@@ -21,9 +21,9 @@ The machine-readable half of this contract is `public/openapi.json`, served at
 `https://mbedfx.app/openapi.json`: OpenAPI 3.1, every response shape, every error code and the exact
 nullability of every field, in the form a generator or a schema viewer reads. It is JSON rather than
 YAML because there is no YAML parser in this toolchain, and a spec the suite cannot read is a spec
-nothing checks. `test/openapi.test.mjs` derives what can be derived — the `Platform` union,
+nothing checks. `test/openapi.test.mjs` derives what can be derived (the `Platform` union,
 `API_COUNTS`, the error codes and their statuses read out of the `api` arm, the router's own answer
-for the documented path, `RESP_TTL` — and then validates real answers, driven offline through
+for the documented path, and `RESP_TTL`) and then validates real answers, driven offline through
 `handle()`, against the schemas with `additionalProperties: false`, so a field added to `toApiPost`
 and not to the document fails the build. Prose is not derivable and stays unguarded in both files;
 that test names what it does not cover.
@@ -190,7 +190,7 @@ What the card shows, the card's overlays composed in. v1 gives none of them a fi
 
 - a translation, followed by a `🌐 Translated from …` marker and then the original text;
 - `🔞 Age-restricted on …` on a gated YouTube video (`sensitive` is also `true`);
-- `🎬 Too long to play here — open it on …` on a video past the length ceiling for a remux.
+- `🎬 Too long to play here. Open it on …` on a video past the length ceiling for a remux.
 
 No v1 field carries the author's untouched words; splitting them out is additive and on the list.
 
@@ -306,8 +306,8 @@ That column records where a link came from. Routing never reads it.
   `?url=https://redd.it/haucpf` and `?url=https://dai.ly/x8ocv9e` answer `ambiguous` with candidates
   `["x","ig"]`, re-measured 2026-08-12: `/haucpf` is also the shape of an X or Instagram profile.
   The Dailymotion id here changed from `xaqwy7q`, which went HTTP 410 Gone. The answer does not
-  depend on it — the path shape decides ambiguity before anything is fetched, so both ids give the
-  same `["x","ig"]` — but a published example that 404s under a reader sends them debugging nothing.
+  depend on it, because the path shape decides ambiguity before anything is fetched, so both ids give
+  the same `["x","ig"]`. A published example that 404s under a reader sends them debugging nothing.
 - The ones that do work carry their own shape, each resolved with the hop a pasted link gets:
   `youtu.be/dQw4w9WgXcQ` (an 11-character segment is a YouTube id outright),
   `tiktok.com/t/ZTSw2mYwR`, `reddit.com/r/{sub}/s/{code}`, and Meta's `/share/…` codes.
@@ -398,7 +398,7 @@ Dailymotion, Streamable and Imgur are the three exceptions, and they are excepti
 "upstream fetch" is a `yt-dlp` extract inside our own container rather than a request to the site.
 That call is bounded, because the container's own process timeout is 120 s and a wedged instance
 would otherwise hold the whole response. Past `META_TIMEOUT_API_MS` this endpoint answers
-`fetch_fail` for a post that may be perfectly fine — the extract keeps running and lands in storage,
+`fetch_fail` for a post that may be perfectly fine. The extract keeps running and lands in storage,
 so **asking again a few seconds later is the documented way to get the answer**, exactly as it is for
 a video still muxing.
 
@@ -408,7 +408,7 @@ the arm falls through to the page and to Meta's embed-plugin fragment, and the f
 rendered 33 of 35 sampled post urls on 2026-08-12 (`plugin_recovered` in `docs/METRICS.md`). Those
 two surfaces carry no deadline of their own, so Facebook's answer is bounded by nothing this table
 names, and widening the container call would only make the fall-through start later. Until 2026-08-12 that bound was 4700 ms, borrowed from the crawler's 5 s
-ceiling, and a healthy Dailymotion extract measured 3.3 s to over 4.7 s from production — so this
+ceiling, and a healthy Dailymotion extract measured 3.3 s to over 4.7 s from production, so this
 endpoint reported "couldn't load" about live posts.
 
 ```
@@ -416,7 +416,7 @@ total ≈ upstream fetch + max(300 ms, 9000 ms − upstream fetch) + (YouTube on
 ```
 
 An upstream answering within 8.7 s gives 9.0 s, 17.0 s on a cold YouTube link; slower, the mux drops
-to its 300 ms floor and the total tracks the upstream — except on the four container platforms,
+to its 300 ms floor and the total tracks the upstream, except on the four container platforms,
 where 8.7 s is also where the answer stops arriving at all. Set the client timeout to 20 s: the
 17.0 s worst case plus roughly 3 s for connection setup and a slower upstream. 12 s covers a client
 that never sends YouTube links. 5 or 10 s cuts off requests about to answer.
@@ -501,7 +501,7 @@ the same path on two different products, so a code TikTok disclaims may well be 
 arm has offered that chooser since the route was written.
 
 All four rows used to answer `not_a_post`. The walls were corrected on 2026-08-11 and the other two
-on 2026-08-12, each after measuring the same code through both surfaces — a false statement about a
+on 2026-08-12, each after measuring the same code through both surfaces. It is a false statement about a
 post that demonstrably exists, and one the render path never made.
 
 `platform` and `canonical` carry real values on `age_restricted`, `private` and `fetch_fail`, and
@@ -519,7 +519,7 @@ That is a boundary rather than a failure: a profile is an account, not a post, s
 through the post payload would mean either omitting most of it or filling those fields with values
 nobody measured.
 
-Every other profile url — `x.com/{handle}`, `instagram.com/{handle}`, `tiktok.com/@{handle}` — is
+Every other profile url (`x.com/{handle}`, `instagram.com/{handle}`, `tiktok.com/@{handle}`) is
 `ambiguous` or `notfound`, unchanged: a bare handle names an account on more than one site, so the
 router does not resolve it at all. A profile payload will be a versioned addition when there is a
 second platform to shape it around.
@@ -571,8 +571,8 @@ end twice (`apiFailure`, `src/worker.ts`).
 `/rd/gallery/…` is the clearest case, Reddit's gallery links being deprecated upstream and
 deliberately unrouted. Expect a few `notfound`s while walking the list, and take the first success.
 On a profile url every candidate answers `notfound` (`?url=/x/jack` → `notfound`, verified
-2026-08-05). There is no BARE-HANDLE profile route — a bare handle names an account on more than one
-site — so a forced site prefix has nothing to resolve to. `/profile/{handle}` is a different shape and
+2026-08-05). There is no BARE-HANDLE profile route, because a bare handle names an account on more
+than one site, so a forced site prefix has nothing to resolve to. `/profile/{handle}` is a different shape and
 does route; see "Profile urls" above.
 
 A hostname never breaks the tie, even though it usually could. A hostname here is a thing the Worker

@@ -188,7 +188,7 @@ export function withDescription(post: Post, description: unknown): Post {
  * PREPENDED, like the age note, so it survives the body cap — the cap trims the END, and a note only a
  * short post can afford is not a note.
  */
-export const LENGTH_NOTE = '🎬 Too long to play here — open it on YouTube'
+export const LENGTH_NOTE = '🎬 Too long to play here. Open it on YouTube'
 
 export function withLengthNote(post: Post, duration: unknown, maxSeconds: number): Post {
   if (!post) return post
@@ -245,7 +245,7 @@ function uploadDate(got: YouTubeFetch): Date {
  *
  * 18 IS NOT HARDCODED. yt-dlp reports the uploader's actual threshold; anything above zero is a gate.
  */
-const AGE_NOTE = '🔞 Age-restricted on YouTube — sign-in required, so no preview here.'
+const AGE_NOTE = '🔞 Age-restricted on YouTube. Sign-in required, so no preview here.'
 
 /**
  * The description carried on the fetch, or ''. Total over junk for the same reason every other

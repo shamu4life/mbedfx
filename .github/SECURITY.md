@@ -12,11 +12,11 @@ There's no bug-bounty program. It's a hobby project. Credit in the advisory is g
 
 mbedfx is an edge Worker that fetches other people's pages and renders them into embed cards. The interesting surface is mostly what it can be made to fetch, serve, or leak:
 
-- **SSRF** — inducing the Worker to fetch an internal address, its own zone, or an arbitrary host. The fediverse routes are the hard case, since a fediverse ref legitimately names its own origin.
-- **Injection into a rendered card** — breaking out of `og:` markup, the Mastodon-shaped JSON, or the converter page's DOM.
-- **Cache poisoning** — one post's card, media, or translation comes back under another post's key.
-- **Leaking a reader** — anything that carries information about who is looking to an upstream. From its own egress, the Worker deliberately sends only the post's own public text.
-- **Serving unbounded bytes** — the media proxy streaming something it should have refused.
+- **SSRF.** Inducing the Worker to fetch an internal address, its own zone, or an arbitrary host. The fediverse routes are the hard case, since a fediverse ref legitimately names its own origin.
+- **Injection into a rendered card.** Breaking out of `og:` markup, the Mastodon-shaped JSON, or the converter page's DOM.
+- **Cache poisoning.** One post's card, media, or translation comes back under another post's key.
+- **Leaking a reader.** Anything that carries information about who is looking to an upstream. From its own egress, the Worker deliberately sends only the post's own public text.
+- **Serving unbounded bytes.** The media proxy streaming something it should have refused.
 
 ## What is not a vulnerability (by design)
 
