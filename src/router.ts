@@ -886,6 +886,38 @@ const imPost = (id: string, kind: 'post' | 'album' | 'gallery' = 'post'): Route 
   ({ kind: 'post', ref: { p: 'im', kind, id }, canonical: canonical(IM_CANONICAL[kind](id)) })
 
 /**
+ * AN IMGUR ID, WITH THE SEO SLUG THAT PRECEDES IT STRIPPED — `{seo_title}-{id}` → `{id}`.
+ *
+ * MEASURED 2026-08-15. imgur.com's og:url for gallery aZVXS is the same string from three different
+ * request paths (/gallery/aZVXS, /t/funny/aZVXS, and the slug form itself):
+ *
+ *   https://imgur.com/gallery/black-lotus-magic-gathering-card-destroyed-accidentally-aZVXS
+ *
+ * and `api.imgur.com/post/v1/albums/aZVXS` names the two halves separately — `seo_title` is the
+ * title-derived prefix, `id` is aZVXS — so the seam is the LAST '-', confirmed by the API rather
+ * than inferred from a hyphen count. The bare form still resolves, which is exactly why this went
+ * unnoticed: every fixture and example url in this repo is bare. Imgur no longer HANDS OUT a bare
+ * url, so the share button, the address bar and our own converter page all produced the one shape
+ * imgur() refused, and a live 7-image album rendered "Not found" in production.
+ *
+ * lastIndexOf('-') returns -1 on a slugless segment and slice(0) is then the whole string, so the
+ * bare id needs no separate arm — this is the same "strip the decoration, then apply the SHARED
+ * IM_ID" move the .gifv arm below makes, and for the same reason: a second copy of the id shape
+ * would go on reading {5,7} after the real one moved.
+ *
+ * WHAT THIS DELIBERATELY DOES NOT DO IS PUT THE SLUG IN THE REF. It is decoration, the way a Twitch
+ * clip's channel is: both spellings collapse onto one ref, so they share a cache entry, parseRefKey
+ * and its allowlist are untouched, and IM_ID stays as tight as it was — it is interpolated into
+ * i.imgur.com urls, and loosening it to admit a slug would have widened the security boundary to fix
+ * a recogniser bug. A wrong guess here costs a "couldn't load" card on a forced route, never a wrong
+ * post: the trailing component still has to pass ytdlpId(), shape and reserved-token both.
+ */
+const imId = (segment: string): string | null => {
+  const id = segment.slice(segment.lastIndexOf('-') + 1)
+  return ytdlpId(IM_ID, id) ? id : null
+}
+
+/**
  * /{id}.gifv — i.imgur.com's own video page, and the ONE claim in this tier that takes a path away
  * from something else. Today it is the bare-username ['x','ig'] chooser, which is a DEAD END: there
  * is no profile Route kind, so that page can only ever offer a human two links. Trading a dead end
@@ -926,8 +958,11 @@ function imgur(seg: string[], forced = false): Route | null {
    * more than the nothing they got before — while nobody's Reddit gallery link is silently stolen.
    */
   if (seg.length === 2) {
-    if (seg[0] === 'a' && ytdlpId(IM_ID, seg[1])) return imPost(seg[1], 'album')
-    if (forced && seg[0] === 'gallery' && ytdlpId(IM_ID, seg[1])) return imPost(seg[1], 'gallery')
+    const id = imId(seg[1])
+    if (id) {
+      if (seg[0] === 'a') return imPost(id, 'album')
+      if (forced && seg[0] === 'gallery') return imPost(id, 'gallery')
+    }
   }
   return null
 }
