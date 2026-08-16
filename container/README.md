@@ -58,7 +58,7 @@ fallback prefers the tallest entry at or under 720, matching the mux's own `heig
 > **Changing the meta-mode response shape above REQUIRES bumping `RESOLVER_GENERATION` in
 > `src/worker.ts`.** So does any other change to what the container does.
 
-Pooled instances have stable names and keep their booted image until `sleepAfter` (10m). Skip the
+Pooled instances have stable names and keep their booted image until `sleepAfter` (5m). Skip the
 bump and a redeploy under steady traffic keeps answering with the old dict, the new fields arrive
 `undefined`, and the change looks inert. The generation string is part of the instance name, so
 changing it forces the new image in immediately.
@@ -138,7 +138,7 @@ Running it anywhere else is [Running it standalone](#running-it-standalone) belo
 
 Instances are pooled onto `RESOLVER_SLOTS` keys, not minted per post. A deploy starts a gradual
 rollout that retires them over minutes, and an instance the rollout hasn't reached keeps the image
-it booted with until it sleeps (`sleepAfter`, 10m) or is otherwise recycled. A fresh post will most
+it booted with until it sleeps (`sleepAfter`, 5m) or is otherwise recycled. A fresh post will most
 likely land on an existing warm slot, so it's an unreliable way to reach a new image. The g10 block
 in `src/worker.ts` has the note on the rollout.
 

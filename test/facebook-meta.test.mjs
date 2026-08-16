@@ -145,7 +145,7 @@ test('THE CREATOR AND THE REAL DIMENSIONS SURVIVE the container -> Worker -> nor
 })
 
 test('THE OLD PRE-g3 DICT still renders: a non-atomic deploy degrades, never throws', async () => {
-  // A pooled instance keeps running the image it booted with until sleepAfter (10m), so this response
+  // A pooled instance keeps running the image it booted with until sleepAfter (5m), so this response
   // is live for minutes after a redeploy.
   const old = { title: 'A funny clip', thumbnail: 'https://scontent.xx.fbcdn.net/t.jpg', uploader: 'PhillyBanana' }
   const { binding } = fakeResolver({ meta: () => Response.json(old) })

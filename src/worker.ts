@@ -1284,7 +1284,8 @@ async function serveMuxed(
  *
  * THE DEFECT (found 2026-07-24, and the biggest cause of "the video doesn't play"): both call sites used
  * a per-item instance name (`mux/{ref}/{i}`, `meta/{ref}`), so EVERY distinct video woke its own container
- * instance. wrangler caps that (`max_instances`) and an instance lingers ~10min (`sleepAfter`), so after a
+ * instance. wrangler caps that (`max_instances`) and an instance lingered ~10min (`sleepAfter` was 10m then; it
+ * is 5m now, for reasons of cost argued at the field itself), so after a
  * handful of different videos in ten minutes EVERY mux failed with "Maximum number of running container
  * instances exceeded" — which the route then degraded, silently, into a video-less card. The per-item name
  * bought nothing: `container/server.py` is a ThreadingHTTPServer, so ONE instance serves many muxes
@@ -1499,7 +1500,7 @@ const muxInflight = new Map<string, Promise<{ size: number } | null>>()
  * The primary bound there is that the ref must already be in the post cache (so a real fetch+normalize
  * has vouched for it); this caps how many downloads ONE isolate will have outstanding before it adds
  * another one nobody has asked for yet. Deliberately small: RESOLVER_SLOTS is 4, an instance lingers
- * ~10min, and "Maximum number of running container instances exceeded" degrades every legitimate post
+ * ~5min, and "Maximum number of running container instances exceeded" degrades every legitimate post
  * on the pool to a video-less card. A skipped prewarm costs latency on one card; an exhausted pool
  * costs every card.
  *
@@ -1731,7 +1732,7 @@ async function settleMux(
  * Before it, the container was reachable only AFTER a successful fetch+normalize proved the ref named a
  * real post; with an unbounded prewarm, `GET /watch/?v=<any 11-char id>` boots an instance and runs
  * yt-dlp against an attacker-chosen page — and a loop over distinct ids saturates the pool
- * (RESOLVER_SLOTS 4, sleepAfter ~10min, PROC_TIMEOUT 120s, MAX_BYTES 300MB), which is exactly the
+ * (RESOLVER_SLOTS 4, sleepAfter ~5min, PROC_TIMEOUT 120s, MAX_BYTES 300MB), which is exactly the
  * documented "Maximum number of running container instances exceeded" failure that degrades EVERY
  * legitimate post to a video-less card. So the call site prewarms only for a ref the POST CACHE already
  * holds — i.e. one a real fetch+normalize has already vouched for, restoring the pre-prewarm
@@ -1977,7 +1978,7 @@ function metaWork<T>(ref: PostRef, env: Env, work: () => Promise<T | null>): Pro
 /**
  * SPECULATIVE_MUX_CAP's sibling, and the same argument. Isolate-local, and NOT a lock: two isolates can
  * exceed it together. It bounds how much container work ONE isolate will have outstanding for METADATA
- * before it starts another — RESOLVER_SLOTS is 4, instances linger ~10min, and an exhausted pool
+ * before it starts another — RESOLVER_SLOTS is 4, instances linger ~5min, and an exhausted pool
  * degrades EVERY post on it to a video-less card, which this file already documents as the biggest
  * single cause of "the video does not play".
  *
@@ -2377,7 +2378,7 @@ const YTDLP_TTL: Record<'dm' | 'st' | 'im', number> = {
  * cachedMeta — read that gate chain before touching this. It matters more on this tier than anywhere
  * else in the file: there is NO cheaper upstream to vouch for the id first (the container is the tier's
  * only source, by definition), and the ids are short, so `/e/{2-16 alnum}` enumerates cheaply. Without
- * the gate, a loop over distinct ids saturates a 4-slot pool whose instances linger ~10 minutes and
+ * the gate, a loop over distinct ids saturates a 4-slot pool whose instances linger ~5 minutes and
  * degrades EVERY platform's card to a video-less still.
  */
 function cachedYtdlpMeta(
