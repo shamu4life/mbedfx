@@ -109,11 +109,39 @@ function item(raw: unknown): ImgurItem | null {
   }
 }
 
-/** Which endpoints answer for a given ref kind, in the order they should be tried. */
+/**
+ * WHICH ENDPOINTS ANSWER FOR A GIVEN REF KIND, AND IN WHICH ORDER. The order is load-bearing, and
+ * the 2026-07-31 note that stood here was wrong in the one way that mattered: it said `media/{id}`
+ * 404s on an album id, so walking on from a miss looked free. It is not.
+ *
+ * RE-MEASURED 2026-08-16 against api.imgur.com. Each line is a real request, and each is quoted
+ * because the previous version of this comment was believed for two weeks:
+ *
+ *   media/{album_id} DOES NOT RELIABLY 404 — THE NAMESPACES COLLIDE. `aZVXS` names BOTH a 2013
+ *   seven-image album (albums/aZVXS, 200) AND an unrelated legacy image (media/aZVXS, 200,
+ *   is_album:false, image_count:1, 300x415). They share no content. Nothing on the wrong object is
+ *   malformed — every field validates — so no amount of response checking detects it. This is why
+ *   `albums` is FIRST and why a miss may not simply walk on; see the loop below.
+ *
+ *   albums/{single_id} DOES NOT ALWAYS 404 EITHER. `joNxn`, `sh0Z6` and `UwEpm` each answer 200 from
+ *   albums/ as an EMPTY album (is_album:true, image_count:0, no usable media) while media/ answers
+ *   200 with a real image. "albums/ cleanly refuses anything that is not an album" is the tempting
+ *   simplification and it is false.
+ *
+ * THE `media` LEG UNDER gallery IS LOAD-BEARING — DO NOT DELETE IT. It is tempting to conclude that
+ * a gallery post is always an album and drop the second entry. Two live counterexamples refuse that:
+ * `ck58rrX` ("Molly Carlson diving from 72") and `E7HlM3Q` ("Moving Castle") are real gallery posts
+ * where albums/ 404s and ONLY media/ answers. Removing the leg unroutes them.
+ *
+ * `posts/{id}` IS NOT A DROP-IN for albums/ and is not used: it knows only posts submitted to the
+ * gallery, so it 404s on album ids that albums/ resolves.
+ *
+ * MEASURED FROM A LAPTOP, NOT FROM CLOUDFLARE EGRESS. api.imgur.com is a plain JSON API with a
+ * client-id query parameter and showed no UA or egress sensitivity here, but this project has been
+ * caught by that difference three times, so it is stated as an untested assumption rather than a
+ * result. Re-measure from a Worker before relying on any of it for a new surface.
+ */
 const ENDPOINTS: Record<'post' | 'album' | 'gallery', readonly string[]> = {
-  // Measured 2026-07-31: `media/{id}` 404s on an album id and `albums/{id}` 404s on a single, so a
-  // /gallery/ link — which can legally be either — has to try both. There is no unified endpoint;
-  // `posts/{id}` behaves identically to `albums/`.
   post: ['media'],
   album: ['albums'],
   gallery: ['albums', 'media'],
@@ -137,18 +165,50 @@ export async function fetchImgur(
       `${API}/${endpoint}/${encodeURIComponent(ref.id)}` +
       `?client_id=${encodeURIComponent(clientId)}&include=media,account`
     const res = await fetch(url, { headers: { accept: 'application/json' } })
-    if (res.status !== 200) continue
+    /**
+     * ONLY A CLEAN 404 MAY ADVANCE TO THE NEXT ENDPOINT, and this is the whole fix. A 404 is the one
+     * answer that means "no object of THIS KIND carries that id" — the honest miss the two-entry
+     * gallery list exists to walk past. Every other outcome is us NOT KNOWING, and walking on from
+     * not-knowing is how a wrong post reaches a reader: for a 5-character id, media/ answers about a
+     * DIFFERENT REAL POST (see ENDPOINTS).
+     *
+     * WHAT THIS COST BEFORE, MEASURED END TO END 2026-08-16 through this Worker's own handler:
+     * `/im/gallery/joNxn`, `/im/gallery/sh0Z6` and `/im/gallery/UwEpm` each rendered a complete,
+     * validating HTTP 200 card for AN UNRELATED IMAGE. albums/ answered 200 with an empty album,
+     * `!items.length` sent the walk on, and media/ supplied a colliding legacy photo. Nothing
+     * anywhere reported it: the card had a picture, a byline and a link, and every one of them was
+     * about a post nobody had asked for. A neutral "couldn't load" is strictly better than that.
+     *
+     * A NON-200 IS NOT A 404. A throttle, a 5xx or a block tells us nothing about whether this id is
+     * an album, so it must not license asking a different endpoint — that turns a transient upstream
+     * problem into a permanently wrong card, and does it precisely when traffic is highest. The
+     * shared PUBLIC_CLIENT_ID an unconfigured deploy runs on is exactly where that pressure lands.
+     */
+    if (res.status !== 200) {
+      if (res.status === 404) continue
+      break
+    }
 
     let j: Record<string, unknown>
     try {
       j = await res.json() as Record<string, unknown>
     } catch {
-      continue
+      // A 200 that is not JSON is not an answer about anything, and it is not a 404, so by the rule
+      // above it does not license asking a different endpoint.
+      break
     }
 
     const media = Array.isArray(j.media) ? j.media : []
     const items = media.map(item).filter((x): x is ImgurItem => x !== null)
-    if (!items.length) continue
+    /**
+     * BREAK, NOT CONTINUE. A 200 here means this endpoint KNOWS this id, so "no usable media" is a
+     * fact about the post, not a reason to ask somebody else about a different one. TWO SEPARATE
+     * CASES land on this line and both must stop: the album is genuinely empty (`joNxn` and friends,
+     * above), or every item was REFUSED by item() — a non-https url, a host that is not
+     * i.imgur.com. The second is a security filter, and letting a filtered-out item fall through to
+     * another endpoint would let a malformed record recruit an unrelated post to stand in for it.
+     */
+    if (!items.length) break
 
     const account = (j.account ?? {}) as Record<string, unknown>
     return {
