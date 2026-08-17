@@ -40,6 +40,17 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   where the long gaps are.
 
 ### Fixed
+- **An Imgur gallery could render a complete card for somebody else's photo.** Measured end to end
+  2026-08-16: `/im/gallery/joNxn`, `/im/gallery/sh0Z6` and `/im/gallery/UwEpm` each returned a
+  validating HTTP 200 card for AN UNRELATED IMAGE. Imgur's album and legacy-image namespaces share
+  ids — `aZVXS` names both a 2013 seven-image album and an unrelated 300x415 jpeg — and the endpoint
+  walk advanced on any miss, so an album that answered 200 but empty fell through to whatever the
+  other namespace had under that id. Nothing reported it: the card had a picture, a byline and a
+  link, and every field validated. The walk now advances only on a clean 404, which is the one
+  answer meaning "no object of this kind carries that id"; an empty album, a throttle, a 5xx and an
+  unparseable 200 all stop and render the neutral "couldn't load" card instead. A 404 still advances,
+  because `ck58rrX` and `E7HlM3Q` are real gallery posts that only the `media` leg can answer — that
+  leg is load-bearing and the tests now say so.
 - **Imgur's own url shape rendered "Not found".** `imgur.com/gallery/{seo_title}-{id}` — the url the
   share button, the address bar and our own converter page all produce — was matched against the
   5-7 character id regex as a WHOLE path segment, so it never routed, and a live 7-image album

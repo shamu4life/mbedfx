@@ -320,3 +320,84 @@ test('AN UNPARSEABLE TIMESTAMP NEVER RENDERS AS "Invalid Date"', () => {
   const real = normalizeImgurApi({ id: 'x', mature: false, total: 1, items, createdAt: ALBUM.created_at }, REF)
   assert.equal(real.createdAt.toISOString(), new Date(ALBUM.created_at).toISOString())
 })
+
+/**
+ * THE ENDPOINT WALK MAY ONLY ADVANCE ON A CLEAN 404 — the fix for a live wrong-post defect.
+ *
+ * WHAT WAS BROKEN, measured 2026-08-16 end to end through this Worker's own handler:
+ * /im/gallery/joNxn, /im/gallery/sh0Z6 and /im/gallery/UwEpm each returned a complete, validating
+ * HTTP 200 card FOR AN UNRELATED IMAGE. api.imgur.com answers `albums/joNxn` with 200 and an EMPTY
+ * album (is_album:true, image_count:0, no usable media); the old `if (!items.length) continue` read
+ * that as "ask the next endpoint", and `media/joNxn` answers 200 with a colliding legacy photo,
+ * because the album and legacy-image namespaces SHARE ids. `aZVXS` is the same collision with the
+ * roles reversed: a real 7-image album on albums/, an unrelated 300x415 jpeg on media/.
+ *
+ * Nothing reported it. The card had a picture, a byline and a link, and every field validated —
+ * they were simply about a post nobody asked for. This suite is the only thing that can catch it,
+ * which is why the cases below assert on WHICH ENDPOINTS WERE ASKED and not just on the result.
+ *
+ * The two directions are genuinely different and both are pinned: a 404 MUST still advance (real
+ * gallery posts ck58rrX and E7HlM3Q 404 on albums/ and are served only by media/, so refusing to
+ * advance would unroute them), while every other outcome must stop.
+ */
+function stubApi(byEndpoint) {
+  const seen = []
+  const real = globalThis.fetch
+  globalThis.fetch = async (u, init) => {
+    const url = String(u)
+    if (!url.startsWith('https://api.imgur.com/')) return real(u, init)
+    const kind = url.match(/post\/v1\/(\w+)\//)[1]
+    seen.push(kind)
+    const r = byEndpoint[kind]
+    if (!r) return new Response('{"errors":[]}', { status: 404 })
+    return new Response(typeof r.body === 'string' ? r.body : JSON.stringify(r.body), { status: r.status })
+  }
+  return { seen, restore: () => { globalThis.fetch = real } }
+}
+const EMPTY_ALBUM = { id: 'joNxn', is_album: true, image_count: 0, title: '', account: {} }
+const COLLIDING = {
+  id: 'joNxn', is_album: false, image_count: 1, title: 'an unrelated legacy photo', account: {},
+  media: [{ id: 'joNxn', url: 'https://i.imgur.com/joNxn.jpeg', mime_type: 'image/jpeg', type: 'image', width: 300, height: 400, metadata: {} }],
+}
+
+test('AN EMPTY ALBUM STOPS THE WALK — it must not be answered with a colliding legacy image', async () => {
+  const api = stubApi({ albums: { status: 200, body: EMPTY_ALBUM }, media: { status: 200, body: COLLIDING } })
+  try {
+    const got = await fetchImgur({ p: 'im', kind: 'gallery', id: 'joNxn' }, { IMGUR_CLIENT_ID: 'test' })
+    assert.equal(got.ok, false, 'an empty album is a failure card, never somebody else’s photo')
+    assert.deepEqual(api.seen, ['albums'], 'media/ must NOT be asked: albums/ answered 200, so it KNOWS this id')
+  } finally { api.restore() }
+})
+
+test('A 404 STILL ADVANCES — ck58rrX and E7HlM3Q are real gallery posts only media/ can answer', async () => {
+  const api = stubApi({ media: { status: 200, body: { ...COLLIDING, id: 'ck58rrX', title: 'Molly Carlson diving from 72' } } })
+  try {
+    const got = await fetchImgur({ p: 'im', kind: 'gallery', id: 'ck58rrX' }, { IMGUR_CLIENT_ID: 'test' })
+    assert.equal(got.ok, true, 'a 404 from albums/ is an honest miss, and the media leg is load-bearing')
+    assert.deepEqual(api.seen, ['albums', 'media'], 'both legs, in order')
+  } finally { api.restore() }
+})
+
+test('A THROTTLE STOPS THE WALK — not-knowing must never license asking about a different post', async () => {
+  // The shared PUBLIC_CLIENT_ID an unconfigured deploy runs on is where this pressure lands, and a
+  // 429 says nothing about whether the id names an album. Under the old `status !== 200` test this
+  // fell straight into media/ and drew the colliding image — a permanently wrong card produced by a
+  // transient upstream problem, exactly when traffic is highest.
+  for (const status of [429, 500, 403]) {
+    const api = stubApi({ albums: { status, body: '{}' }, media: { status: 200, body: COLLIDING } })
+    try {
+      const got = await fetchImgur({ p: 'im', kind: 'gallery', id: 'joNxn' }, { IMGUR_CLIENT_ID: 'test' })
+      assert.equal(got.ok, false, `HTTP ${status} must not become a card`)
+      assert.deepEqual(api.seen, ['albums'], `HTTP ${status} must not advance to media/`)
+    } finally { api.restore() }
+  }
+})
+
+test('A 200 THAT IS NOT JSON STOPS THE WALK — it is not an answer about anything', async () => {
+  const api = stubApi({ albums: { status: 200, body: '<html>nope' }, media: { status: 200, body: COLLIDING } })
+  try {
+    const got = await fetchImgur({ p: 'im', kind: 'gallery', id: 'joNxn' }, { IMGUR_CLIENT_ID: 'test' })
+    assert.equal(got.ok, false)
+    assert.deepEqual(api.seen, ['albums'], 'unparseable is not a 404, so it grants no licence to ask elsewhere')
+  } finally { api.restore() }
+})
