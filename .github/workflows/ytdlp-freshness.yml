@@ -2,7 +2,7 @@
 #
 # THIS WORKFLOW DOES NOT DEPLOY, and must not learn how. Deploys belong to Cloudflare Workers Builds
 # watching main — ci.yml's header carries the full argument. This opens a PR; MERGING is what
-# deploys, and that stays a human decision for the reason under THE HONEST LIMIT below.
+# deploys, and that stays a human decision for the reason under WHAT A GREEN CHECK MEANS below.
 #
 # WHY IT EXISTS. container/Dockerfile pinned `yt-dlp>=2025.1.1`, which reads like "always current"
 # and does the opposite: a floor is resolved ONCE, when the layer is first built, and Docker reuses
@@ -12,33 +12,43 @@
 # date and counts, and not the outage monitor, which checks a CACHED video and accepts any card that
 # merely drew.
 #
+# IT TRACKS THE NIGHTLY CHANNEL, and that is the difference between doing what was asked and only
+# appearing to. The ask was the LATEST yt-dlp at least once a week. Measured on PyPI 2026-08-18:
+# stable shipped 2026.3.3, 2026.3.13, 2026.3.17, 2026.6.9, 2026.7.4 — an eleven-week gap between
+# March and June — while nightlies land most days. Pointed at stable, this job would have printed
+# "already current" every Monday for eleven weeks and been telling the truth. See the Dockerfile for
+# why nightly is also the only channel that can contain the fix for the outage above.
+#
 # WHY DEPENDABOT DOES NOT COVER THIS, since .github/dependabot.yml exists and looks like it should.
 # It watches `npm` and `github-actions`. yt-dlp is a pip package named inside a `RUN pip install`
 # line in a Dockerfile, and no dependabot ecosystem parses that — the `docker` ecosystem reads `FROM`
 # tags only. The repo LOOKED covered and was not, which is why this is a hand-written job rather than
 # four lines of config.
 #
-# THE HONEST LIMIT, written down so nobody reads a green check as validation: ci.yml is JS tests and
-# a typecheck. It never builds the image and never runs yt-dlp. A passing suite on a bump PR proves
-# only that the bump broke no TypeScript. Real verification happens after merge, against production,
-# on a video that has never been fetched — the PR body says so and gives the command.
+# WHAT A GREEN CHECK MEANS ON A BUMP PR: NOTHING, AND USUALLY THERE WILL NOT BE ONE. A pull request
+# opened with GITHUB_TOKEN does not trigger workflow runs, so ci.yml's `pull_request` job will not
+# fire on this job's PRs at all. Even when a check is forced by hand, ci.yml is JS tests and a
+# typecheck — it never builds the image and never runs yt-dlp. The only real verification is after
+# merge, against production, on a video that has never been fetched; the PR body gives the command.
 #
 # ON THE BOT IDENTITY, because CLAUDE.md locks this repo to the `shamu4life` account and this job is
-# the one sanctioned exception. The owner chose it deliberately on 2026-08-17, over an issue-only
-# variant and over a PAT: the commit and the PR here are authored by `github-actions[bot]`. The
-# exception is narrow by construction — this job only ever rewrites a version string in
+# the one sanctioned exception. The owner chose it on 2026-08-17, over an issue-only variant and over
+# adding a PAT. The exception is narrow by construction: the job only rewrites a version string in
 # container/Dockerfile on a side branch. It cannot merge, cannot deploy, and touches nothing else.
 name: yt-dlp-freshness
 
 on:
   schedule:
     # Mondays, 07:23 UTC. Off the hour deliberately: jobs scheduled on the hour queue behind
-    # everybody else's.
+    # everybody else's. NOTE that GitHub disables scheduled workflows after 60 days with no
+    # repository activity, so a dormant repo stops being checked — which is one more reason the
+    # failure path below has to be loud rather than a red run nobody opens.
     - cron: "23 7 * * 1"
   workflow_dispatch:
 
 permissions:
   contents: write
+  issues: write
   pull-requests: write
 
 jobs:
@@ -48,28 +58,43 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - name: Compare the pin against PyPI
+      - name: Compare the pin against the newest nightly on PyPI
         id: v
         run: |
           set -euo pipefail
-          current="$(sed -n 's/.*yt-dlp\[default,curl-cffi\]==\([0-9][0-9.]*\)".*/\1/p' container/Dockerfile)"
-          if [ -z "$current" ]; then
-            echo "::error::could not read the yt-dlp pin from container/Dockerfile. If that line was reworded, repair this extraction rather than deleting the step — a pin nobody reads silently becomes a stale one, which is the exact defect this job exists to prevent."
+          # ANCHORED TO THE INSTRUCTION, NOT LOOSE IN THE FILE. An unanchored match also reads the
+          # essay above the line — this Dockerfile quotes its own package spec in prose, and
+          # docs/SELF-HOSTING.md quotes it too. Two matches would make `current` a two-line string,
+          # make the equality test permanently false, and put a newline in a branch name.
+          matches="$(grep -c '^RUN pip install .*yt-dlp\[default,curl-cffi\]==' container/Dockerfile || true)"
+          if [ "$matches" != "1" ]; then
+            echo "::error::expected exactly one pinned yt-dlp install line in container/Dockerfile, found $matches. Repair this extraction rather than deleting the step — a pin nobody reads silently becomes a stale one, which is the exact defect this job exists to prevent."
             exit 1
           fi
-          # PyPI, not the GitHub tag: pip is what installs it, and the two spell one release
-          # differently (tag 2026.07.04 vs PyPI 2026.7.4). Comparing across the two spellings would
-          # report a bump every week, forever.
-          latest="$(curl -fsSL --retry 3 https://pypi.org/pypi/yt-dlp/json | python3 -c 'import json,sys; print(json.load(sys.stdin)["info"]["version"])')"
+          current="$(sed -n 's/^RUN pip install .*yt-dlp\[default,curl-cffi\]==\([0-9][0-9A-Za-z.]*\)".*/\1/p' container/Dockerfile)"
+          # NEWEST NIGHTLY BY UPLOAD TIME, not by string order: `2026.8.4...` sorts after
+          # `2026.8.17...` lexicographically, so sorting the version strings picks the wrong one.
+          # `info.version` is the newest STABLE and is deliberately not what we read.
+          latest="$(python3 - <<'PY'
+          import json, urllib.request
+          d = json.load(urllib.request.urlopen("https://pypi.org/pypi/yt-dlp/json", timeout=30))
+          dev = [
+              (f[0]["upload_time"], v)
+              for v, f in d["releases"].items()
+              if ".dev" in v and f and not f[0].get("yanked")
+          ]
+          print(sorted(dev)[-1][1] if dev else "")
+          PY
+          )"
           # SHAPE-CHECK THE UPSTREAM STRING BEFORE IT REACHES sed OR A BRANCH NAME. It is the one
-          # value here that comes from outside the repo, and it is interpolated into a sed expression
-          # — where a bare slash alone would corrupt the substitution — and into a git ref. Quoting
-          # stops it becoming shell; this stops it becoming anything else. A yt-dlp release is digits
-          # and dots, so anything else is a broken response rather than a version.
+          # value here from outside the repo, and it is interpolated into a sed expression — where a
+          # bare slash alone corrupts the substitution — and into a git ref.
           case "$latest" in
-            *[!0-9.]* | "" | *..* )
-              echo "::error::PyPI returned '$latest', which is not a version. Refusing to substitute it."
-              exit 1 ;;
+            [0-9]*.dev[0-9]) : ;;
+            *) echo "::error::PyPI returned '$latest', which is not a yt-dlp nightly version. Refusing to substitute it."; exit 1 ;;
+          esac
+          case "$latest" in
+            *[!0-9.dev]*) echo "::error::'$latest' carries characters a version cannot. Refusing."; exit 1 ;;
           esac
           echo "current=$current" >> "$GITHUB_OUTPUT"
           echo "latest=$latest"   >> "$GITHUB_OUTPUT"
@@ -98,24 +123,27 @@ jobs:
           git config user.name  "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git switch -c "$branch"
-          sed -i "s/yt-dlp\[default,curl-cffi\]==${CURRENT}/yt-dlp[default,curl-cffi]==${LATEST}/" container/Dockerfile
+          sed -i "s|^RUN pip install \(.*\)yt-dlp\[default,curl-cffi\]==${CURRENT}\"|RUN pip install \1yt-dlp[default,curl-cffi]==${LATEST}\"|" container/Dockerfile
           if git diff --quiet; then
             echo "::error::the pin did not change — extraction and substitution disagree about that line's shape"
             exit 1
           fi
           git commit -aqm "chore(container): yt-dlp ${CURRENT} -> ${LATEST}"
           git push -q origin "$branch"
-          # Built line by line into a file rather than inlined as one long argument: a multi-line
-          # string here has to stay indented past this block scalar or it silently ends the YAML
-          # block, which is a footgun that has already cost one broken workflow file.
+
+          # Built line by line into a file rather than inlined: a multi-line string here has to stay
+          # indented past this block scalar or it silently ends the YAML block, which has already
+          # cost one broken workflow file.
           {
             printf '%s\n' "Weekly yt-dlp bump, opened by \`.github/workflows/ytdlp-freshness.yml\`."
             printf '%s\n' ""
-            printf '%s\n' "\`${CURRENT}\` → \`${LATEST}\`"
+            printf '%s\n' "\`${CURRENT}\` → \`${LATEST}\` (nightly channel — see container/Dockerfile for why not stable)."
             printf '%s\n' ""
-            printf '%s\n' "**A green CI check does not validate this bump.** \`ci.yml\` runs JS tests and a typecheck; it never builds the container image and never runs yt-dlp. Passing means the bump broke no TypeScript, and nothing more."
+            printf '%s\n' "**There is probably no CI check on this PR, and it would not mean anything if there were.** A PR opened with \`GITHUB_TOKEN\` does not trigger workflow runs. Even forced by hand, \`ci.yml\` is JS tests and a typecheck — it never builds the image and never runs yt-dlp."
             printf '%s\n' ""
-            printf '%s\n' "**Merging deploys.** Workers Builds rebuilds the image on merge to main, and changing this pin is what invalidates the cached pip layer — so this PR is the whole mechanism, not paperwork around it."
+            printf '%s\n' "**Nightlies are not release-tested, and this binary serves every yt-dlp platform** — Dailymotion, Streamable, Imgur, Facebook, TikTok and YouTube. A bad one takes all of them out together. Rollback is editing the pin back to a known-good version and merging."
+            printf '%s\n' ""
+            printf '%s\n' "**Merging deploys.** Workers Builds rebuilds the image on merge to main, and changing this pin is what invalidates the cached pip layer."
             printf '%s\n' ""
             printf '%s\n' "**Verify after merge on a video that has never been fetched.** A cached one proves nothing, which is how the 2026-08-17 YouTube outage stayed invisible:"
             printf '%s\n' ""
@@ -125,8 +153,32 @@ jobs:
             printf '%s\n' "  'https://mbedfx.app/_media/yt%3A<NEVER_FETCHED_ID>/0.mp4'"
             printf '%s\n' '```'
             printf '%s\n' ""
-            printf '%s\n' "\`200\` with bytes is a working mux. \`503\` means YouTube is still refusing this egress and the bump was not the answer."
+            printf '%s\n' "\`200\` with bytes is a working mux. \`503\` means the mux still fails and this bump was not the answer."
           } > /tmp/pr-body.md
-          gh pr create --base main --head "$branch" \
-            --title "chore(container): yt-dlp ${CURRENT} -> ${LATEST}" \
-            --body-file /tmp/pr-body.md
+
+          # THE PR MAY BE REFUSED, AND A SILENT REFUSAL IS THE ORIGINAL DEFECT WEARING A HAT. If the
+          # repository setting "Allow GitHub Actions to create and approve pull requests" is off —
+          # it was off when this job was written — `gh pr create` fails with "GitHub Actions is not
+          # permitted to create or approve pull requests". The branch is already pushed by then, so
+          # the work is not lost; what would be lost is any signal that it happened. Falling back to
+          # an issue keeps the weekly heartbeat visible either way, and an issue needs no such
+          # setting. Turn the setting on to get the nicer path.
+          if gh pr create --base main --head "$branch" \
+               --title "chore(container): yt-dlp ${CURRENT} -> ${LATEST}" \
+               --body-file /tmp/pr-body.md; then
+            echo "opened a PR for $branch"
+          else
+            echo "::warning::could not open a PR (check Settings > Actions > 'Allow GitHub Actions to create and approve pull requests'). Falling back to an issue."
+            {
+              printf '%s\n' "The branch \`${branch}\` is pushed and ready, but this job could not open the pull request."
+              printf '%s\n' ""
+              printf '%s\n' "Enable **Settings → Actions → General → Allow GitHub Actions to create and approve pull requests**, or open it by hand:"
+              printf '%s\n' ""
+              printf '%s\n' "    gh pr create --base main --head ${branch}"
+              printf '%s\n' ""
+              cat /tmp/pr-body.md
+            } > /tmp/issue-body.md
+            gh issue create \
+              --title "yt-dlp ${CURRENT} -> ${LATEST} is ready on ${branch}, but the PR could not be opened" \
+              --body-file /tmp/issue-body.md
+          fi

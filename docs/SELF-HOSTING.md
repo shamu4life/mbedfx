@@ -153,8 +153,15 @@ A Node port needs the same boundary: nothing on the request path may import that
 entry point: `port = int(os.environ.get("PORT", "8080"))` under `if __name__ == "__main__":`, then
 `ThreadingHTTPServer(("0.0.0.0", port), Handler).serve_forever()`.
 
-`container/Dockerfile` is `python:3.12-slim` plus ffmpeg, `yt-dlp[default,curl-cffi]>=2025.1.1` and
-a static Deno binary, `EXPOSE 8080`, `CMD ["python", "server.py"]`. None of it needs porting. The
+`container/Dockerfile` is `python:3.12-slim` plus ffmpeg, `yt-dlp[default,curl-cffi]` pinned to an
+exact NIGHTLY version and a static Deno binary, `EXPOSE 8080`, `CMD ["python", "server.py"]`. None of
+it needs porting.
+
+The yt-dlp version is deliberately not repeated here. It is bumped weekly by
+`.github/workflows/ytdlp-freshness.yml`, so a number written into this page would be wrong within
+days and would send self-hosters to a build that cannot play YouTube — read the pin off
+`container/Dockerfile`, which is the only place it lives. The Dockerfile explains why the channel is
+nightly rather than stable, and why the pin is exact rather than a floor. The
 image has not been re-exercised outside Workers, though `server.py` itself has: it answered
 `/health`, enforced `X-Resolver-Secret` and refused every SSRF probe on a stock interpreter with no
 container at all, 2026-08-08 on macOS x86_64. `container/README.md` documents that path under
