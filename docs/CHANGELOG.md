@@ -28,14 +28,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   "too strict", never "too open".
 
 ### Changed
-- **yt-dlp is pinned to an exact NIGHTLY build and bumped weekly** (`container/Dockerfile`,
-  `.github/workflows/ytdlp-freshness.yml`). The channel is the point, not a detail: measured on PyPI,
-  stable shipped five releases this year with an eleven-week gap between March and June, so a weekly
-  job pointed at stable would have reported "already current" every Monday for eleven weeks and been
-  telling the truth. Nightlies land most days. It is also the only channel that can carry the fix for
-  the YouTube failure below, which merged 2026-07-20 into no stable release. The trade is that
-  nightlies are not release-tested and one binary serves every yt-dlp platform here — survivable only
-  because the pin is exact, so rollback is one string. It read `>=2025.1.1`, which looks like "always current"
+- **yt-dlp is pinned exactly, and a weekly job checks for a newer stable release**
+  (`container/Dockerfile`, `.github/workflows/ytdlp-freshness.yml`). Stable releases only, by
+  decision: one binary here serves Dailymotion, Streamable, Imgur, Facebook, TikTok and YouTube, so
+  an untested build is not one degraded platform but all of them. Expect most Mondays to be quiet —
+  stable ships sparsely (2026 gave five releases, with an eleven-week gap between March and June) —
+  and read that as the job working rather than failing. What it buys is that a release is picked up
+  within a week instead of never. A test refuses a pre-release pin, because the fix for the YouTube
+  failure below is nightly-only and that makes nightlies tempting to slip in. It read `>=2025.1.1`, which looks like "always current"
   and guarantees the opposite: a floor is resolved once, when the layer is first built, and Docker
   reuses that layer forever after because the instruction text never changes. The running version
   froze on the day the image was first built and nothing recorded which version that was. Dependabot

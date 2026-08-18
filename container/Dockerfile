@@ -40,27 +40,31 @@ RUN curl -fsSL https://github.com/denoland/deno/releases/latest/download/deno-x8
 # ideas: changing this string is what invalidates the layer, so the pin is not bureaucracy around the
 # update, it IS the update. It also makes the running version answerable from the repo alone.
 #
-# THE NIGHTLY CHANNEL, NOT STABLE, AND THAT IS THE WHOLE POINT OF THE EXERCISE. The ask was the
-# LATEST yt-dlp at least once a week, and stable cannot deliver that: measured on PyPI 2026-08-18,
-# stable shipped 2026.3.3, 2026.3.13, 2026.3.17, 2026.6.9, 2026.7.4 — an ELEVEN-WEEK gap between
-# March and June — while nightlies land most days. A weekly job pointed at stable would have printed
-# "already current" every Monday for eleven weeks and been telling the truth.
+# STABLE RELEASES ONLY. THIS IS A DECISION, NOT AN OVERSIGHT — owner, 2026-08-18: "nightly is not
+# acceptable for the pipeline releases only." Nightlies are not release-tested, and ONE binary here
+# serves Dailymotion, Streamable, Imgur, Facebook, TikTok and YouTube: a bad build does not degrade
+# one platform, it takes every yt-dlp platform out at once. The weekly job below therefore reads
+# PyPI's `info.version`, which is the newest STABLE, and must not be repointed at the `.dev` channel
+# without asking.
 #
-# It is also the channel that carries the fix for the outage this file describes. YouTube began
-# enforcing GVS PO tokens on the `android_vr` client — 2026.07.04's default — about two weeks AFTER
-# 2026.07.04 shipped. yt-dlp's handling for that merged 2026-07-20 (commit 69ea20006, "Since 2026.07,
+# WHAT THAT COSTS, WRITTEN DOWN SO NOBODY LATER READS THE QUIET AS A BROKEN JOB. Stable ships
+# sparsely: measured on PyPI 2026-08-18, this year gave 2026.3.3, 2026.3.13, 2026.3.17, 2026.6.9 and
+# 2026.7.4 — an ELEVEN-WEEK gap between March and June. So the weekly check will report "already
+# current" most Mondays and open nothing. That is the job working. What it buys is that when a stable
+# release does land, it is picked up within a week instead of never, which is the actual defect this
+# replaced.
+#
+# AND IT DOES NOT FIX YOUTUBE, which has to be said here rather than discovered later. YouTube began
+# enforcing GVS PO tokens on the `android_vr` client — 2026.07.04's own default — about two weeks
+# AFTER 2026.07.04 shipped. yt-dlp's handling merged 2026-07-20 (commit 69ea20006, "Since 2026.07,
 # intermittent/selective POT enforcement has been observed for non-HLS formats") and is in NO stable
-# release. Pinning stable here would have been pinning to the one channel that cannot contain the fix.
-#
-# THE TRADE, STATED: nightlies are not release-tested, and this container also serves Dailymotion,
-# Streamable, Imgur, Facebook, TikTok and YouTube through the same binary — a bad nightly can take all
-# of them out at once. That is survivable ONLY because the pin is exact: rollback is editing this one
-# string back to a known-good version and merging. Never point this at a floating tag; "nightly" as a
-# moving target would remove the one property that makes the risk acceptable.
+# release as of 2026-08-18. So no bump on this channel can resolve the outage described above; that
+# needs a PO-token provider, a different egress, or accepting the thumbnail-card degrade. Do not read
+# a future green bump here as having fixed it.
 #
 # yt-dlp[default,curl-cffi] — the extras are unchanged and argued above. Do not relax this to a
 # floor again; a floor here is indistinguishable from a pin that never moves.
-RUN pip install --no-cache-dir "yt-dlp[default,curl-cffi]==2026.8.17.73947.dev0"
+RUN pip install --no-cache-dir "yt-dlp[default,curl-cffi]==2026.7.4"
 
 WORKDIR /app
 COPY server.py .

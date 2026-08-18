@@ -12,12 +12,17 @@
 # date and counts, and not the outage monitor, which checks a CACHED video and accepts any card that
 # merely drew.
 #
-# IT TRACKS THE NIGHTLY CHANNEL, and that is the difference between doing what was asked and only
-# appearing to. The ask was the LATEST yt-dlp at least once a week. Measured on PyPI 2026-08-18:
-# stable shipped 2026.3.3, 2026.3.13, 2026.3.17, 2026.6.9, 2026.7.4 — an eleven-week gap between
-# March and June — while nightlies land most days. Pointed at stable, this job would have printed
-# "already current" every Monday for eleven weeks and been telling the truth. See the Dockerfile for
-# why nightly is also the only channel that can contain the fix for the outage above.
+# IT TRACKS STABLE RELEASES ONLY, by decision — owner, 2026-08-18: "nightly is not acceptable for
+# the pipeline releases only." One binary here serves every yt-dlp platform (Dailymotion, Streamable,
+# Imgur, Facebook, TikTok, YouTube), so an untested build does not degrade one of them, it takes them
+# all out together. This job reads PyPI's `info.version` — the newest stable — and REFUSES a `.dev`
+# string outright rather than trusting the query to have asked for the right thing.
+#
+# EXPECT MOST MONDAYS TO BE QUIET, and do not read that as the job being broken. Stable ships
+# sparsely: 2026 gave 2026.3.3, 2026.3.13, 2026.3.17, 2026.6.9 and 2026.7.4, an eleven-week gap
+# between March and June. The check still runs weekly; it simply has nothing to open most weeks. What
+# it buys is that a stable release is picked up within a week instead of never — which is the defect
+# it replaced, not a smaller version of it.
 #
 # WHY DEPENDABOT DOES NOT COVER THIS, since .github/dependabot.yml exists and looks like it should.
 # It watches `npm` and `github-actions`. yt-dlp is a pip package named inside a `RUN pip install`
@@ -72,29 +77,32 @@ jobs:
             exit 1
           fi
           current="$(sed -n 's/^RUN pip install .*yt-dlp\[default,curl-cffi\]==\([0-9][0-9A-Za-z.]*\)".*/\1/p' container/Dockerfile)"
-          # NEWEST NIGHTLY BY UPLOAD TIME, not by string order: `2026.8.4...` sorts after
-          # `2026.8.17...` lexicographically, so sorting the version strings picks the wrong one.
-          # `info.version` is the newest STABLE and is deliberately not what we read.
+          # `info.version` IS THE NEWEST STABLE, and that is exactly what is wanted here — see the
+          # header. Do not swap this for a scan of `releases`: that dict contains every nightly, and
+          # picking from it would silently move this pipeline onto untested builds.
           latest="$(python3 - <<'PY'
           import json, urllib.request
           d = json.load(urllib.request.urlopen("https://pypi.org/pypi/yt-dlp/json", timeout=30))
-          dev = [
-              (f[0]["upload_time"], v)
-              for v, f in d["releases"].items()
-              if ".dev" in v and f and not f[0].get("yanked")
-          ]
-          print(sorted(dev)[-1][1] if dev else "")
+          print(d["info"]["version"])
           PY
           )"
           # SHAPE-CHECK THE UPSTREAM STRING BEFORE IT REACHES sed OR A BRANCH NAME. It is the one
           # value here from outside the repo, and it is interpolated into a sed expression — where a
           # bare slash alone corrupts the substitution — and into a git ref.
+          #
+          # THE `.dev` REFUSAL IS A SECOND LOCK ON THE CHANNEL, not belt-and-braces on the parser.
+          # `info.version` should never be a pre-release, but if PyPI's notion of "latest" ever
+          # shifts, the failure mode is this pipeline silently adopting a nightly — the one outcome
+          # the owner ruled out. Better to fail the job loudly and leave the pin where it is.
           case "$latest" in
-            [0-9]*.dev[0-9]) : ;;
-            *) echo "::error::PyPI returned '$latest', which is not a yt-dlp nightly version. Refusing to substitute it."; exit 1 ;;
+            *dev*|*rc*|*a[0-9]*|*b[0-9]*)
+              echo "::error::PyPI reported '$latest' as latest, which is a pre-release. This pipeline is stable-only by decision (2026-08-18). Refusing to bump."
+              exit 1 ;;
           esac
           case "$latest" in
-            *[!0-9.dev]*) echo "::error::'$latest' carries characters a version cannot. Refusing."; exit 1 ;;
+            ""|*[!0-9.]*|*..*)
+              echo "::error::PyPI returned '$latest', which is not a version. Refusing to substitute it."
+              exit 1 ;;
           esac
           echo "current=$current" >> "$GITHUB_OUTPUT"
           echo "latest=$latest"   >> "$GITHUB_OUTPUT"
@@ -137,11 +145,11 @@ jobs:
           {
             printf '%s\n' "Weekly yt-dlp bump, opened by \`.github/workflows/ytdlp-freshness.yml\`."
             printf '%s\n' ""
-            printf '%s\n' "\`${CURRENT}\` → \`${LATEST}\` (nightly channel — see container/Dockerfile for why not stable)."
+            printf '%s\n' "\`${CURRENT}\` → \`${LATEST}\` (stable channel — this pipeline is stable-only by decision)."
             printf '%s\n' ""
-            printf '%s\n' "**There is probably no CI check on this PR, and it would not mean anything if there were.** A PR opened with \`GITHUB_TOKEN\` does not trigger workflow runs. Even forced by hand, \`ci.yml\` is JS tests and a typecheck — it never builds the image and never runs yt-dlp."
+            printf '%s\n' "**There is probably no CI check on this PR, and it would not mean anything if there were.** A pull request opened by the Actions token does not trigger workflow runs. Even forced by hand, \`ci.yml\` is JS tests and a typecheck — it never builds the image and never runs yt-dlp."
             printf '%s\n' ""
-            printf '%s\n' "**Nightlies are not release-tested, and this binary serves every yt-dlp platform** — Dailymotion, Streamable, Imgur, Facebook, TikTok and YouTube. A bad one takes all of them out together. Rollback is editing the pin back to a known-good version and merging."
+            printf '%s\n' "**One binary serves every yt-dlp platform here** — Dailymotion, Streamable, Imgur, Facebook, TikTok and YouTube — so a regression is not one broken platform, it is all of them. Rollback is editing the pin back to the previous version and merging."
             printf '%s\n' ""
             printf '%s\n' "**Merging deploys.** Workers Builds rebuilds the image on merge to main, and changing this pin is what invalidates the cached pip layer."
             printf '%s\n' ""

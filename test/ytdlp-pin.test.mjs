@@ -37,25 +37,31 @@ test('yt-dlp IS PINNED EXACTLY — a floor here is a pin that never moves', () =
     'a `>=` floor resolves once and then freezes behind Docker layer caching — that is the 2026-08-17 defect')
 })
 
-test('THE PIN IS ON THE NIGHTLY CHANNEL, because stable cannot deliver "latest weekly"', () => {
+test('THE PIN IS A STABLE RELEASE — this pipeline does not run nightlies', () => {
   /**
-   * MEASURED ON PyPI 2026-08-18. Stable shipped 2026.3.3, 2026.3.13, 2026.3.17, 2026.6.9 and
-   * 2026.7.4 — an ELEVEN-WEEK gap between March and June — while nightlies land most days. A weekly
-   * job pointed at stable would have reported "already current" every Monday for eleven weeks and
-   * been telling the truth, which is the difference between doing what was asked and appearing to.
+   * OWNER'S DECISION, 2026-08-18: "nightly is not acceptable for the pipeline releases only."
    *
-   * It is also the only channel that can carry the fix for the outage this file describes: YouTube
-   * began enforcing GVS PO tokens on `android_vr` — 2026.07.04's default client — about two weeks
-   * AFTER 2026.07.04 shipped, and yt-dlp's handling merged 2026-07-20 into no stable release.
+   * WHY IT NEEDS A TEST RATHER THAN A COMMENT. Nightlies are genuinely tempting here, and the
+   * temptation has a specific shape: the fix for the 2026-08 YouTube outage (GVS PO-token handling
+   * for `android_vr`, merged 2026-07-20) is in NO stable release, so anybody debugging that outage
+   * will find that the nightly channel appears to solve it and that PyPI serves nightlies under the
+   * same package name. One `.dev0` string in the Dockerfile is all it takes. This is the guard that
+   * makes that a red suite instead of a quiet change of risk posture.
    *
-   * If this ever has to move back to stable, delete this test WITH the reason, and change the
-   * workflow's PyPI query in the same commit — it reads the newest `.dev`, not `info.version`.
+   * WHAT IT COSTS, so the cost is not rediscovered as a bug: stable ships sparsely — 2026 gave
+   * 2026.3.3, 2026.3.13, 2026.3.17, 2026.6.9 and 2026.7.4, an eleven-week gap between March and
+   * June — so the weekly job will find nothing most Mondays. That is the job working, not failing.
+   *
+   * If this is ever revisited, change the Dockerfile, this test AND the workflow's PyPI query in one
+   * commit. They are three statements of one decision, and the workflow reads `info.version`.
    */
   const version = INSTALL.exec(DOCKERFILE)[1]
-  assert.match(version, /\.dev\d+$/,
-    `pinned to ${JSON.stringify(version)}, which is a stable release — stable ships too rarely to satisfy a weekly bump`)
-  assert.match(WORKFLOW, /\.dev" in v/,
-    'the workflow must still select from the nightly channel rather than info.version')
+  assert.doesNotMatch(version, /\.dev|rc|[ab]\d+$/,
+    `pinned to ${JSON.stringify(version)}, which is a pre-release — this pipeline is stable-only by decision`)
+  assert.match(WORKFLOW, /info"\]\["version"\]/,
+    'the workflow must read PyPI info.version (newest stable), not scan releases for nightlies')
+  assert.match(WORKFLOW, /is a pre-release/,
+    'and must refuse a pre-release outright rather than trusting the query to have asked correctly')
 })
 
 test('THE EXTRAS SURVIVE THE PIN — curl-cffi is what gives Vimeo an impersonation target', () => {
