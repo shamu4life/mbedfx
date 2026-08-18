@@ -21,7 +21,28 @@ RUN curl -fsSL https://github.com/denoland/deno/releases/latest/download/deno-x8
 # no impersonate target is available" (measured 2026-07-22; [default] alone does NOT pull curl_cffi).
 # yt-dlp auto-uses it for extractors that request impersonation. YouTube does not need it (Deno covers
 # that), so it is a long-tail robustness dep, not a YouTube one.
-RUN pip install --no-cache-dir "yt-dlp[default,curl-cffi]>=2025.1.1"
+# PINNED EXACTLY, AND BUMPED WEEKLY by .github/workflows/ytdlp-freshness.yml. The `>=2025.1.1` that
+# stood here read like "always current" and did the opposite. It is a FLOOR, not a target: pip
+# resolves it once, at the moment this layer is first built, and Docker then reuses that layer on
+# every later build because the instruction text never changed. The version therefore froze at
+# whatever was newest the day the image was first built and never moved again — and because nothing
+# records or reports it, NOBODY COULD TELL WHICH VERSION WAS RUNNING.
+#
+# WHAT THAT COST, measured 2026-08-17: every NEW YouTube video on the site was a thumbnail with no
+# player, while older ones kept playing from the R2 cache. Metadata was fine — title, channel, upload
+# date, view and like counts all correct — because the metadata call passes
+# `--ignore-no-formats-error` (see server.py, where it is what makes an age-gated video render at
+# all). So YouTube withheld the FORMATS, the meta call papered over it, and the mux had nothing to
+# select. Reproduced locally by forcing a client YouTube gates: `-J` returns a complete metadata
+# object while the same selector fails "Requested format is not available".
+#
+# AN EXACT PIN IS WHAT MAKES THE WEEKLY BUMP WORK, and the two are one mechanism rather than two
+# ideas: changing this string is what invalidates the layer, so the pin is not bureaucracy around the
+# update, it IS the update. It also makes the running version answerable from the repo alone.
+#
+# yt-dlp[default,curl-cffi] — the extras are unchanged and argued above. Do not relax this to a
+# floor again; a floor here is indistinguishable from a pin that never moves.
+RUN pip install --no-cache-dir "yt-dlp[default,curl-cffi]==2026.7.4"
 
 WORKDIR /app
 COPY server.py .

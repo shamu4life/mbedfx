@@ -1,0 +1,132 @@
+# Keep yt-dlp current, because YouTube breaks it on a scale of weeks and nothing else here notices.
+#
+# THIS WORKFLOW DOES NOT DEPLOY, and must not learn how. Deploys belong to Cloudflare Workers Builds
+# watching main — ci.yml's header carries the full argument. This opens a PR; MERGING is what
+# deploys, and that stays a human decision for the reason under THE HONEST LIMIT below.
+#
+# WHY IT EXISTS. container/Dockerfile pinned `yt-dlp>=2025.1.1`, which reads like "always current"
+# and does the opposite: a floor is resolved ONCE, when the layer is first built, and Docker reuses
+# that layer forever after because the instruction text never changes. Measured 2026-08-17: every NEW
+# YouTube video on the site rendered as a thumbnail with no player while previously-cached ones kept
+# playing, and nothing reported it — not the card, which showed the correct title, channel, upload
+# date and counts, and not the outage monitor, which checks a CACHED video and accepts any card that
+# merely drew.
+#
+# WHY DEPENDABOT DOES NOT COVER THIS, since .github/dependabot.yml exists and looks like it should.
+# It watches `npm` and `github-actions`. yt-dlp is a pip package named inside a `RUN pip install`
+# line in a Dockerfile, and no dependabot ecosystem parses that — the `docker` ecosystem reads `FROM`
+# tags only. The repo LOOKED covered and was not, which is why this is a hand-written job rather than
+# four lines of config.
+#
+# THE HONEST LIMIT, written down so nobody reads a green check as validation: ci.yml is JS tests and
+# a typecheck. It never builds the image and never runs yt-dlp. A passing suite on a bump PR proves
+# only that the bump broke no TypeScript. Real verification happens after merge, against production,
+# on a video that has never been fetched — the PR body says so and gives the command.
+#
+# ON THE BOT IDENTITY, because CLAUDE.md locks this repo to the `shamu4life` account and this job is
+# the one sanctioned exception. The owner chose it deliberately on 2026-08-17, over an issue-only
+# variant and over a PAT: the commit and the PR here are authored by `github-actions[bot]`. The
+# exception is narrow by construction — this job only ever rewrites a version string in
+# container/Dockerfile on a side branch. It cannot merge, cannot deploy, and touches nothing else.
+name: yt-dlp-freshness
+
+on:
+  schedule:
+    # Mondays, 07:23 UTC. Off the hour deliberately: jobs scheduled on the hour queue behind
+    # everybody else's.
+    - cron: "23 7 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  bump:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Compare the pin against PyPI
+        id: v
+        run: |
+          set -euo pipefail
+          current="$(sed -n 's/.*yt-dlp\[default,curl-cffi\]==\([0-9][0-9.]*\)".*/\1/p' container/Dockerfile)"
+          if [ -z "$current" ]; then
+            echo "::error::could not read the yt-dlp pin from container/Dockerfile. If that line was reworded, repair this extraction rather than deleting the step — a pin nobody reads silently becomes a stale one, which is the exact defect this job exists to prevent."
+            exit 1
+          fi
+          # PyPI, not the GitHub tag: pip is what installs it, and the two spell one release
+          # differently (tag 2026.07.04 vs PyPI 2026.7.4). Comparing across the two spellings would
+          # report a bump every week, forever.
+          latest="$(curl -fsSL --retry 3 https://pypi.org/pypi/yt-dlp/json | python3 -c 'import json,sys; print(json.load(sys.stdin)["info"]["version"])')"
+          # SHAPE-CHECK THE UPSTREAM STRING BEFORE IT REACHES sed OR A BRANCH NAME. It is the one
+          # value here that comes from outside the repo, and it is interpolated into a sed expression
+          # — where a bare slash alone would corrupt the substitution — and into a git ref. Quoting
+          # stops it becoming shell; this stops it becoming anything else. A yt-dlp release is digits
+          # and dots, so anything else is a broken response rather than a version.
+          case "$latest" in
+            *[!0-9.]* | "" | *..* )
+              echo "::error::PyPI returned '$latest', which is not a version. Refusing to substitute it."
+              exit 1 ;;
+          esac
+          echo "current=$current" >> "$GITHUB_OUTPUT"
+          echo "latest=$latest"   >> "$GITHUB_OUTPUT"
+          if [ "$current" = "$latest" ]; then
+            echo "stale=no" >> "$GITHUB_OUTPUT"
+            echo "yt-dlp is current at $current"
+          else
+            echo "stale=yes" >> "$GITHUB_OUTPUT"
+            echo "yt-dlp $current -> $latest"
+          fi
+
+      - name: Open the bump PR
+        if: steps.v.outputs.stale == 'yes'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CURRENT: ${{ steps.v.outputs.current }}
+          LATEST: ${{ steps.v.outputs.latest }}
+        run: |
+          set -euo pipefail
+          branch="chore/ytdlp-${LATEST}"
+          # Idempotent: a bump already open must not reopen every Monday until it is merged.
+          if git ls-remote --exit-code --heads origin "$branch" >/dev/null 2>&1; then
+            echo "$branch already exists; nothing to do."
+            exit 0
+          fi
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git switch -c "$branch"
+          sed -i "s/yt-dlp\[default,curl-cffi\]==${CURRENT}/yt-dlp[default,curl-cffi]==${LATEST}/" container/Dockerfile
+          if git diff --quiet; then
+            echo "::error::the pin did not change — extraction and substitution disagree about that line's shape"
+            exit 1
+          fi
+          git commit -aqm "chore(container): yt-dlp ${CURRENT} -> ${LATEST}"
+          git push -q origin "$branch"
+          # Built line by line into a file rather than inlined as one long argument: a multi-line
+          # string here has to stay indented past this block scalar or it silently ends the YAML
+          # block, which is a footgun that has already cost one broken workflow file.
+          {
+            printf '%s\n' "Weekly yt-dlp bump, opened by \`.github/workflows/ytdlp-freshness.yml\`."
+            printf '%s\n' ""
+            printf '%s\n' "\`${CURRENT}\` → \`${LATEST}\`"
+            printf '%s\n' ""
+            printf '%s\n' "**A green CI check does not validate this bump.** \`ci.yml\` runs JS tests and a typecheck; it never builds the container image and never runs yt-dlp. Passing means the bump broke no TypeScript, and nothing more."
+            printf '%s\n' ""
+            printf '%s\n' "**Merging deploys.** Workers Builds rebuilds the image on merge to main, and changing this pin is what invalidates the cached pip layer — so this PR is the whole mechanism, not paperwork around it."
+            printf '%s\n' ""
+            printf '%s\n' "**Verify after merge on a video that has never been fetched.** A cached one proves nothing, which is how the 2026-08-17 YouTube outage stayed invisible:"
+            printf '%s\n' ""
+            printf '%s\n' '```'
+            printf '%s\n' "curl -s -o /dev/null -w '%{http_code}\\n' \\"
+            printf '%s\n' "  -H 'User-Agent: Mozilla/5.0 (compatible; Discordbot/2.0)' \\"
+            printf '%s\n' "  'https://mbedfx.app/_media/yt%3A<NEVER_FETCHED_ID>/0.mp4'"
+            printf '%s\n' '```'
+            printf '%s\n' ""
+            printf '%s\n' "\`200\` with bytes is a working mux. \`503\` means YouTube is still refusing this egress and the bump was not the answer."
+          } > /tmp/pr-body.md
+          gh pr create --base main --head "$branch" \
+            --title "chore(container): yt-dlp ${CURRENT} -> ${LATEST}" \
+            --body-file /tmp/pr-body.md
