@@ -1397,7 +1397,24 @@ const RESOLVER_SLOTS = 4
 // descriptions and counts across yt, fb, dm, st and im to shorten a few minutes of ambiguity. If a
 // future container change persists a WRONG value rather than no value, that trade flips and it must
 // bump — the test is what a stale record would say, not whether container/ was touched.
-const RESOLVER_GENERATION = 'g10'
+//
+// g10 -> g11, 2026-08-18. THIS ONE MEETS THE TEST THAT PARAGRAPH SETS: the stale records say something
+// WRONG, not merely something old. container/server.py now asks YouTube with an explicit player-client
+// list (`web_embedded,tv_simply,mweb`) because the pinned yt-dlp's default client started getting HTTP
+// 403 from googlevideo — see YT_PLAYER_CLIENTS there for the measurements.
+//
+// A DIFFERENT CLIENT RETURNS A DIFFERENT FORMAT LADDER, and g4 exists precisely so that the width and
+// height on a record describe the format `_mux_page`'s selector will actually pick. Every g10 YouTube
+// record was written from the OLD client's ladder — and written during an outage in which no format
+// was downloadable at all — so those dimensions describe a format that either cannot be fetched or is
+// not the one the new client selects. A card sized from them advertises a shape nobody will deliver,
+// which is the disagreement g4 was added to end rather than a few minutes of ambiguity.
+//
+// It costs the usual 30 days of good dates and counts on the other four platforms, and that is the
+// right trade here rather than the wrong one: the alternative is leaving YouTube cards sized by a
+// broken generation for up to YT_META_TTL_MS (30 days) after the fix ships, which is most of the way
+// to the fix not having shipped.
+const RESOLVER_GENERATION = 'g11'
 /** `slotKey` is the POST (refKey), never the operation — see RESOLVER_SLOTS for the 74% measurement. */
 function resolverStub(resolver: NonNullable<Env['MEDIA_RESOLVER']>, slotKey: string) {
   let h = 2166136261

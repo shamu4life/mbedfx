@@ -50,6 +50,46 @@ MAX_BYTES = int(os.environ.get("MAX_BYTES", "393216000"))     # 375 MB output ce
 # byte ceiling would just move the refusal from the duration filter to the size filter for the
 # videos the duration change was meant to admit, and the symptom would be identical.
 PROC_TIMEOUT = int(os.environ.get("PROC_TIMEOUT", "120"))     # per-subprocess wall clock
+
+# THE YOUTUBE PLAYER CLIENTS, SPELLED OUT RATHER THAN LEFT TO yt-dlp's DEFAULT — and this is a
+# workaround for a live upstream/YouTube fight, not a preference. Re-measure before touching it.
+#
+# WHAT BROKE. yt-dlp 2026.7.4 (the pinned stable) defaults to `android_vr, web_safari`. YouTube began
+# enforcing GVS PO tokens on `android_vr` roughly two weeks AFTER 2026.7.4 shipped, so the default
+# client now gets format urls that googlevideo answers with HTTP 403. Metadata is unaffected, because
+# it comes from the Innertube `player` endpoint which needs no token — which is exactly why the cards
+# looked healthy (right title, channel, date, counts) with no video for weeks.
+#
+# MEASURED 2026-08-18 with this file's own argv, on a video uploaded eight days earlier:
+#   default (android_vr, web_safari)  -> 0 bytes, "unable to download video data: HTTP Error 403"
+#   player_client=web_embedded        -> 37,601,278 bytes
+# A members-only video failed on BOTH, which is the control: this changes which client asks, it does
+# not bypass a gate YouTube means to enforce.
+#
+# ORDER MATTERS, AND `default` MUST NEVER APPEAR IN IT. `player_client=default,web_embedded` still
+# 403s: android_vr's format 18 and web_embedded's format 18 are indistinguishable by format_id, so
+# selection lands on the poisoned one. The list REPLACES yt-dlp's default; it does not extend it.
+#
+# web_embedded IS FIRST BECAUSE IT IS THE ONLY WORKING CLIENT THAT KEEPS THE FULL FORMAT LADDER —
+# 19-23 video formats, the same count the old default returned. tv_simply and mweb expose exactly
+# ONE format, so they are usable fallbacks but leave no headroom if that format is throttled. They
+# follow web_embedded rather than replacing it. Upstream reached the same conclusion independently:
+# master promoted `web_embedded` into its own `_DEFAULT_AUTHED_CLIENTS`.
+#
+# DO NOT PICK A CLIENT FROM yt-dlp's TABLE. 2026.7.4's own GVS_PO_TOKEN_POLICY is stale in BOTH
+# directions: it says android_vr needs no token (it 403s) and that android/mweb/tv_simply do (they
+# work). Only measurement decides this, and the same goes for the next time it moves.
+#
+# THIS CANNOT AFFECT ANY OTHER PLATFORM. `--extractor-args` is keyed by extractor, and the `youtube:`
+# prefix scopes it to the YouTube extractor alone — Dailymotion, Streamable, Imgur and Facebook go
+# through the same binary and are untouched by construction, not by luck.
+#
+# THE EVIDENCE GAP, STATED. Every number above was measured from a RESIDENTIAL ip. Production egress
+# is Cloudflare's, which is the axis YouTube polices hardest, and no community report confirms this
+# override from a datacenter ip on 2026.7.4 — upstream's answer to that symptom is "use nightly".
+# So this is the best available fix, NOT a proven one. Confirm on a preview build before believing it.
+YT_PLAYER_CLIENTS = "web_embedded,tv_simply,mweb"
+
 RESOLVER_SECRET = os.environ.get("RESOLVER_SECRET")           # shared secret; enforced when set
 # ffmpeg protocols we permit: enough for http(s) media and HLS/DASH segment fetches, and NOTHING that
 # reaches the local filesystem (no file, concat, subfile, data, pipe).
@@ -178,6 +218,7 @@ def _mux_page(page: str, out: str, jar=None) -> None:
         # ordinary non-live videos pass. (There is no `|` operator inside a match-filter string —
         # `!duration | duration < 1200` is `ERROR: Invalid filter part`; OR exists only across
         # repeated --match-filter flags.)
+        "--extractor-args", f"youtube:player_client={YT_PLAYER_CLIENTS}",
         "--match-filter", f"duration<?{MAX_SECONDS} & !is_live",
         "--max-filesize", str(MAX_BYTES),
         # RESOLUTION CAP — the single biggest lever on mux LATENCY, which is a correctness issue, not a
@@ -228,7 +269,12 @@ def _meta_page(page: str, jar=None) -> dict:
     # genuinely unplayable without cookies): WITH the flag the same call returns _type=video,
     # title, uploader, thumbnail, duration=177, timestamp=1605871096 and age_limit=18, with
     # formats: 0. The post is still correctly unplayable -- it just stops being anonymous.
+    # THE SAME CLIENT LIST AS THE MUX, deliberately. RESOLVER_GENERATION g4 exists because the
+    # width/height this call reports have to describe the format `_mux_page`'s selector will pick;
+    # asking a different client here would reintroduce that disagreement, and a card would advertise
+    # dimensions for a format nobody downloads.
     cmd = ["yt-dlp", "-J", "--no-warnings", "--no-playlist", "--ignore-no-formats-error",
+           "--extractor-args", f"youtube:player_client={YT_PLAYER_CLIENTS}",
            "--", _safe_url(page)]
     # WITH A JAR THIS IS THE CALL THAT STOPS RETURNING `formats: 0`. The comment above records the
     # measurement anonymously (yt:G0sORVBL4kM, age_limit 18, formats: 0, "genuinely unplayable
