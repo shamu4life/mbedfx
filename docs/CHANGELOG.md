@@ -34,8 +34,9 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   an untested build is not one degraded platform but all of them. Expect most Mondays to be quiet —
   stable ships sparsely (2026 gave five releases, with an eleven-week gap between March and June) —
   and read that as the job working rather than failing. What it buys is that a release is picked up
-  within a week instead of never. A test refuses a pre-release pin, because the fix for the YouTube
-  failure below is nightly-only and that makes nightlies tempting to slip in. It read `>=2025.1.1`, which looks like "always current"
+  within a week instead of never. A test refuses a pre-release pin, because when the YouTube
+  failure below was first triaged the only known remedy looked nightly-only, which made nightlies
+  tempting to slip in. The fix that landed needs no nightly — see below. It read `>=2025.1.1`, which looks like "always current"
   and guarantees the opposite: a floor is resolved once, when the layer is first built, and Docker
   reuses that layer forever after because the instruction text never changes. The running version
   froze on the day the image was first built and nothing recorded which version that was. Dependabot
@@ -56,6 +57,32 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   where the long gaps are.
 
 ### Fixed
+- **Every new YouTube video was a card with no player.** yt-dlp 2026.7.4 defaults to the player
+  clients `android_vr, web_safari`, and YouTube began enforcing GVS PO tokens on `android_vr` roughly
+  two weeks after that release shipped, so googlevideo answered the format urls it handed back with
+  HTTP 403. Metadata was untouched, because it comes from the Innertube `player` endpoint which needs
+  no token — which is exactly why this hid for weeks. Right title, right channel, right upload date,
+  right view and like counts, and no video. `container/server.py` now names the clients rather than
+  leaving them to yt-dlp: `player_client=web_embedded,tv_simply,mweb`. `web_embedded` leads because it
+  is the only working client that keeps the full format ladder — 19-23 formats, the same count the old
+  default returned — while `tv_simply` and `mweb` expose exactly one each and follow as fallbacks. The
+  list REPLACES yt-dlp's default rather than extending it, so `default` or `android_vr` appearing
+  anywhere in it re-breaks this while looking like hardening; both are refused by name, with a test.
+  `--extractor-args` is keyed by extractor and this one is scoped `youtube:`, so Dailymotion,
+  Streamable, Imgur and Facebook go down untouched paths.
+- **The YouTube fix was verified on Cloudflare egress after it shipped**, which is the measurement the
+  change could not make beforehand and the reason it merged saying so. Container image 109 to 110: the
+  same video that returned HTTP 503 and 0 bytes on 109 returned HTTP 200 and 12,714,536 bytes of
+  `video/mp4` on 110, and two further never-muxed ids returned 3,862,327 and 32,347,122 bytes, each
+  with `ftypmp42` at the head and `og:video` on the card. The stable channel is enough; the nightly
+  question does not need reopening.
+
+  Two things about this cost most of a night and are worth carrying. A `container/` change does not
+  take effect until the image is rebuilt, and only `wrangler deploy` rebuilds it — promoting a branch
+  version to production ran the NEW Worker against a two-day-old container and looked exactly like the
+  fix failing. Confirm `wrangler containers info` reports a new image digest before believing any
+  result. And the FIRST request after a container deploy can 503 on a cold start: one id did precisely
+  that, then returned 32 MB on retry. Retry once before calling a mux failure.
 - **An Imgur gallery could render a complete card for somebody else's photo.** Measured end to end
   2026-08-16: `/im/gallery/joNxn`, `/im/gallery/sh0Z6` and `/im/gallery/UwEpm` each returned a
   validating HTTP 200 card for AN UNRELATED IMAGE. Imgur's album and legacy-image namespaces share
