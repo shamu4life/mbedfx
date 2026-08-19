@@ -43,8 +43,9 @@
   // spelled out below rather than left to a default.
   "observability": { "enabled": false },
   "workers_dev": false,
-  // PREVIEW URLS, kept on. <version>-mbedfx.<subdomain>.workers.dev is where a branch build is checked
-  // now that the staging custom domains are retired.
+  // PREVIEW URLS, kept on — but NOTHING SERVES AT THE PREVIEW HOSTNAMES, measured 2026-08-19. The
+  // setting is not the problem and this key is not the fix; see the routes comment below for what was
+  // measured, and for why a branch build could not test a container change even if previews worked.
   //
   // Spelled here because ABSENT DOES NOT MEAN UNCHANGED: wrangler applies its own default on every
   // deploy for any setting the config does not mention, so enabling this in the dashboard lasted only
@@ -170,10 +171,28 @@
   // would induce the Worker to fetch itself through the edge. The two lists are coupled and nothing
   // enforces it but this comment and the test that pins them together.
   "routes": [
-    // TESTING IS A WORKERS BUILDS PREVIEW NOW, not a staging custom domain. Every branch build
-    // gets its own *-mbedfx.<account>.workers.dev url, which costs no DNS, no route and no second
-    // set of certificates, and cannot be mistaken for a production host by someone reading a link.
-    // The two staging.* custom domains that used to sit here were retired 2026-08-03.
+    // The two staging.* custom domains that used to sit here were retired 2026-08-03 in favour of
+    // Workers Builds preview urls. THIS COMMENT USED TO SAY THAT IS WHERE TESTING HAPPENS. It is not,
+    // on two counts, and both cost a night on 2026-08-18.
+    //
+    // FIRST, THE PREVIEW HOSTNAMES SERVE NOTHING. Measured 2026-08-19: the versioned
+    // <version>-mbedfx.<subdomain>.workers.dev, the branch alias <branch>-mbedfx.<subdomain>, and the
+    // one belonging to the version LIVE IN PRODUCTION all return Cloudflare's "There is nothing here
+    // yet" page instead of this Worker. The settings read correct over the API — previews_enabled
+    // true, subdomain resolved, the aliased version present — so this is not a mistake in this file
+    // and flipping preview_urls does not fix it. Cause still unknown.
+    //
+    // SECOND, AND WORSE, A BRANCH BUILD CANNOT TEST A container/ CHANGE EVEN IF PREVIEWS WORKED.
+    // Workers Builds runs `wrangler versions upload` off a non-production branch, which ships the
+    // Worker script ALONE; only `wrangler deploy` — a merge to main — rebuilds the container image.
+    // A preview therefore always runs whatever image main last built. Promoting a branch version to
+    // production has the same hole: on 2026-08-19 that ran the new Worker against a two-day-old
+    // container and every measurement came back 503, which reads exactly like the fix failing.
+    //
+    // SO THERE IS NO PRE-MERGE TEST FOR A container/ CHANGE on Cloudflare egress. `wrangler dev` runs
+    // the container on your own machine, which is the wrong IP for anything YouTube gates. Merge it
+    // and measure production, and confirm `wrangler containers info` shows a NEW image digest before
+    // believing the result. See the YouTube 403 entry in docs/CHANGELOG.md.
     { "pattern": "mbedfx.app", "custom_domain": true },
     { "pattern": "megapenispoopenfarten.sex", "custom_domain": true },
     // forsen.sex, added 2026-08-03. IT WAS ALREADY LIVE and kept disappearing, which is the lesson
