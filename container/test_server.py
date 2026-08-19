@@ -85,6 +85,66 @@ class YtDlpArgv(unittest.TestCase):
         self.assertEqual(cmd[cmd.index("-o") + 1], OUT, "-o must be followed by the output path")
         self.assertEqual(cmd[-2:], ["--", PAGE], "the terminator and url stay last")
 
+    def test_the_youtube_client_override_is_on_both_calls_and_agrees(self):
+        """The player-client override, and the trap that makes a plausible version of it useless.
+
+        WHY IT EXISTS: yt-dlp 2026.7.4's default clients (android_vr, web_safari) get HTTP 403 from
+        googlevideo for anything recent, because YouTube began enforcing GVS PO tokens on android_vr
+        two weeks after that release shipped. Measured 2026-08-18 with this file's own argv on a video
+        uploaded eight days earlier: default -> 0 bytes and "HTTP Error 403", web_embedded -> 37.6 MB.
+
+        THE TRAP, and the reason this asserts on the VALUE and not just the flag's presence:
+        `player_client=default,web_embedded` still 403s. android_vr's format 18 and web_embedded's are
+        indistinguishable by format_id, so selection can land on the poisoned one. The list has to
+        REPLACE yt-dlp's default rather than extend it, and "default" appearing anywhere in it is the
+        single most likely way somebody re-breaks this while believing they made it more robust.
+
+        BOTH CALLS, deliberately: RESOLVER_GENERATION g4 exists because the dimensions the meta call
+        reports must describe the format the mux selector will pick. Different clients, different
+        ladder, and the card would advertise a shape nobody delivers.
+        """
+        srv._mux_page(PAGE, OUT, None)
+        srv._meta_page(PAGE, None)
+        self.assertEqual(len(self.rec.calls), 2, "one mux call and one meta call")
+
+        for label, cmd in (("mux", self.rec.calls[0]), ("meta", self.rec.calls[1])):
+            self.assertIn("--extractor-args", cmd, f"{label}: the override must be present")
+            value = cmd[cmd.index("--extractor-args") + 1]
+            self.assertTrue(
+                value.startswith("youtube:player_client="),
+                f"{label}: the arg must be scoped to the youtube extractor, got {value!r}",
+            )
+            clients = value.split("=", 1)[1].split(",")
+            self.assertNotIn(
+                "default", clients,
+                f"{label}: 'default' re-admits android_vr and the 403 comes back — replace the list, never extend it",
+            )
+            self.assertNotIn(
+                "android_vr", clients,
+                f"{label}: android_vr is the client YouTube is gating; naming it defeats the override",
+            )
+            self.assertEqual(
+                clients[0], "web_embedded",
+                f"{label}: web_embedded leads because it is the only working client that keeps the full "
+                f"format ladder (19-23 formats); tv_simply and mweb expose exactly one",
+            )
+
+        mux_value = self.rec.calls[0][self.rec.calls[0].index("--extractor-args") + 1]
+        meta_value = self.rec.calls[1][self.rec.calls[1].index("--extractor-args") + 1]
+        self.assertEqual(mux_value, meta_value, "the two calls must ask the same client, or g4's guarantee is void")
+
+    def test_the_client_override_is_scoped_so_other_platforms_cannot_be_touched(self):
+        """Dailymotion, Streamable, Imgur and Facebook go through this same binary.
+
+        `--extractor-args` is keyed by extractor name, so a `youtube:` prefix cannot reach them. This
+        asserts the prefix rather than trusting it, because an unprefixed value would silently apply
+        the client list everywhere and break platforms that have no such concept.
+        """
+        srv._mux_page(PAGE, OUT, None)
+        value = self.rec.calls[0][self.rec.calls[0].index("--extractor-args") + 1]
+        self.assertRegex(value, r"^youtube:", "an unprefixed extractor-arg would apply to every extractor")
+        self.assertNotIn(" ", value, "a space would split the arg and change which extractor it binds to")
+
     def test_the_jar_flag_carries_the_jar_path(self):
         with srv._CookieJar(JAR_TEXT) as jar:
             srv._mux_page(PAGE, OUT, jar)
