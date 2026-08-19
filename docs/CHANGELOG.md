@@ -28,6 +28,22 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   "too strict", never "too open".
 
 ### Changed
+- **yt-dlp is pinned exactly, and a weekly job checks for a newer stable release**
+  (`container/Dockerfile`, `.github/workflows/ytdlp-freshness.yml`). Stable releases only, by
+  decision: one binary here serves Dailymotion, Streamable, Imgur, Facebook, TikTok and YouTube, so
+  an untested build is not one degraded platform but all of them. Expect most Mondays to be quiet —
+  stable ships sparsely (2026 gave five releases, with an eleven-week gap between March and June) —
+  and read that as the job working rather than failing. What it buys is that a release is picked up
+  within a week instead of never. A test refuses a pre-release pin, because the fix for the YouTube
+  failure below is nightly-only and that makes nightlies tempting to slip in. It read `>=2025.1.1`, which looks like "always current"
+  and guarantees the opposite: a floor is resolved once, when the layer is first built, and Docker
+  reuses that layer forever after because the instruction text never changes. The running version
+  froze on the day the image was first built and nothing recorded which version that was. Dependabot
+  did not cover it and could not — it watches `npm` and `github-actions`, and no ecosystem parses a
+  pip package named inside a `RUN pip install` line. Rewriting the pin is what invalidates the cached
+  layer, so the exact version IS the update mechanism rather than paperwork around it. Four tests now
+  hold the pin exact, keep the `[default,curl-cffi]` extras through any bump, check that the
+  workflow's extraction still matches the line it edits, and refuse a deploy step in that job.
 - **The media container now sleeps after 5 minutes idle instead of 10.** Measured from the bill:
   3.24M instance-seconds awake against 42.9k vCPU-seconds of work — a 5.3% duty cycle, so 94.7% of
   what was billed was an instance with nothing to do. With one dispatch every ~4.3 minutes per pool

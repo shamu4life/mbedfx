@@ -130,5 +130,19 @@ sent.
 ## Identity
 
 This repo sits under a folder pinned to the `shamu4life` GitHub identity. Use `gh` for issues and
-PRs. Do not switch accounts or override `GH_TOKEN`. If the identity guard blocks something, surface
-it. Do not route around it.
+PRs. Do not switch accounts or override the token env. If the identity guard blocks something,
+surface it. Do not route around it.
+
+**One sanctioned exception, and it is not a violation to be tidied away.**
+`.github/workflows/ytdlp-freshness.yml` commits and opens its weekly bump PR as
+`github-actions[bot]`. The owner chose that on 2026-08-17, over an issue-only variant and over
+adding a PAT, and it is recorded in the workflow's own header. The exception is narrow by
+construction: the job only rewrites a version string in `container/Dockerfile` on a side branch, and
+it cannot merge, cannot deploy, and touches nothing else. Leave it alone, or ask before changing it.
+Do not restore it to the owner's account unasked, and do not widen it to any other job.
+
+Editing that file from a shell trips the identity guard, which pattern-matches the git
+author-configuration lines it CONTAINS without being able to tell a workflow's contents from a
+command being run. That is the guard working as designed rather than a bug to evade: surface it, as
+above, and edit the file with a file-editing tool instead of a shell heredoc. Rewording prose to
+dodge a false positive is fine; disabling or bypassing the guard is not.

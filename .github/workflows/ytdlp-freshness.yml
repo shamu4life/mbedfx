@@ -1,0 +1,192 @@
+# Keep yt-dlp current, because YouTube breaks it on a scale of weeks and nothing else here notices.
+#
+# THIS WORKFLOW DOES NOT DEPLOY, and must not learn how. Deploys belong to Cloudflare Workers Builds
+# watching main — ci.yml's header carries the full argument. This opens a PR; MERGING is what
+# deploys, and that stays a human decision for the reason under WHAT A GREEN CHECK MEANS below.
+#
+# WHY IT EXISTS. container/Dockerfile pinned `yt-dlp>=2025.1.1`, which reads like "always current"
+# and does the opposite: a floor is resolved ONCE, when the layer is first built, and Docker reuses
+# that layer forever after because the instruction text never changes. Measured 2026-08-17: every NEW
+# YouTube video on the site rendered as a thumbnail with no player while previously-cached ones kept
+# playing, and nothing reported it — not the card, which showed the correct title, channel, upload
+# date and counts, and not the outage monitor, which checks a CACHED video and accepts any card that
+# merely drew.
+#
+# IT TRACKS STABLE RELEASES ONLY, by decision — owner, 2026-08-18: "nightly is not acceptable for
+# the pipeline releases only." One binary here serves every yt-dlp platform (Dailymotion, Streamable,
+# Imgur, Facebook, TikTok, YouTube), so an untested build does not degrade one of them, it takes them
+# all out together. This job reads PyPI's `info.version` — the newest stable — and REFUSES a `.dev`
+# string outright rather than trusting the query to have asked for the right thing.
+#
+# EXPECT MOST MONDAYS TO BE QUIET, and do not read that as the job being broken. Stable ships
+# sparsely: 2026 gave 2026.3.3, 2026.3.13, 2026.3.17, 2026.6.9 and 2026.7.4, an eleven-week gap
+# between March and June. The check still runs weekly; it simply has nothing to open most weeks. What
+# it buys is that a stable release is picked up within a week instead of never — which is the defect
+# it replaced, not a smaller version of it.
+#
+# WHY DEPENDABOT DOES NOT COVER THIS, since .github/dependabot.yml exists and looks like it should.
+# It watches `npm` and `github-actions`. yt-dlp is a pip package named inside a `RUN pip install`
+# line in a Dockerfile, and no dependabot ecosystem parses that — the `docker` ecosystem reads `FROM`
+# tags only. The repo LOOKED covered and was not, which is why this is a hand-written job rather than
+# four lines of config.
+#
+# WHAT A GREEN CHECK MEANS ON A BUMP PR: NOTHING, AND USUALLY THERE WILL NOT BE ONE. A pull request
+# opened with GITHUB_TOKEN does not trigger workflow runs, so ci.yml's `pull_request` job will not
+# fire on this job's PRs at all. Even when a check is forced by hand, ci.yml is JS tests and a
+# typecheck — it never builds the image and never runs yt-dlp. The only real verification is after
+# merge, against production, on a video that has never been fetched; the PR body gives the command.
+#
+# ON THE BOT IDENTITY, because CLAUDE.md locks this repo to the `shamu4life` account and this job is
+# the one sanctioned exception. The owner chose it on 2026-08-17, over an issue-only variant and over
+# adding a PAT. The exception is narrow by construction: the job only rewrites a version string in
+# container/Dockerfile on a side branch. It cannot merge, cannot deploy, and touches nothing else.
+name: yt-dlp-freshness
+
+on:
+  schedule:
+    # Mondays, 07:23 UTC. Off the hour deliberately: jobs scheduled on the hour queue behind
+    # everybody else's. NOTE that GitHub disables scheduled workflows after 60 days with no
+    # repository activity, so a dormant repo stops being checked — which is one more reason the
+    # failure path below has to be loud rather than a red run nobody opens.
+    - cron: "23 7 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  issues: write
+  pull-requests: write
+
+jobs:
+  bump:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Compare the pin against the newest nightly on PyPI
+        id: v
+        run: |
+          set -euo pipefail
+          # ANCHORED TO THE INSTRUCTION, NOT LOOSE IN THE FILE. An unanchored match also reads the
+          # essay above the line — this Dockerfile quotes its own package spec in prose, and
+          # docs/SELF-HOSTING.md quotes it too. Two matches would make `current` a two-line string,
+          # make the equality test permanently false, and put a newline in a branch name.
+          matches="$(grep -c '^RUN pip install .*yt-dlp\[default,curl-cffi\]==' container/Dockerfile || true)"
+          if [ "$matches" != "1" ]; then
+            echo "::error::expected exactly one pinned yt-dlp install line in container/Dockerfile, found $matches. Repair this extraction rather than deleting the step — a pin nobody reads silently becomes a stale one, which is the exact defect this job exists to prevent."
+            exit 1
+          fi
+          current="$(sed -n 's/^RUN pip install .*yt-dlp\[default,curl-cffi\]==\([0-9][0-9A-Za-z.]*\)".*/\1/p' container/Dockerfile)"
+          # `info.version` IS THE NEWEST STABLE, and that is exactly what is wanted here — see the
+          # header. Do not swap this for a scan of `releases`: that dict contains every nightly, and
+          # picking from it would silently move this pipeline onto untested builds.
+          latest="$(python3 - <<'PY'
+          import json, urllib.request
+          d = json.load(urllib.request.urlopen("https://pypi.org/pypi/yt-dlp/json", timeout=30))
+          print(d["info"]["version"])
+          PY
+          )"
+          # SHAPE-CHECK THE UPSTREAM STRING BEFORE IT REACHES sed OR A BRANCH NAME. It is the one
+          # value here from outside the repo, and it is interpolated into a sed expression — where a
+          # bare slash alone corrupts the substitution — and into a git ref.
+          #
+          # THE `.dev` REFUSAL IS A SECOND LOCK ON THE CHANNEL, not belt-and-braces on the parser.
+          # `info.version` should never be a pre-release, but if PyPI's notion of "latest" ever
+          # shifts, the failure mode is this pipeline silently adopting a nightly — the one outcome
+          # the owner ruled out. Better to fail the job loudly and leave the pin where it is.
+          case "$latest" in
+            *dev*|*rc*|*a[0-9]*|*b[0-9]*)
+              echo "::error::PyPI reported '$latest' as latest, which is a pre-release. This pipeline is stable-only by decision (2026-08-18). Refusing to bump."
+              exit 1 ;;
+          esac
+          case "$latest" in
+            ""|*[!0-9.]*|*..*)
+              echo "::error::PyPI returned '$latest', which is not a version. Refusing to substitute it."
+              exit 1 ;;
+          esac
+          echo "current=$current" >> "$GITHUB_OUTPUT"
+          echo "latest=$latest"   >> "$GITHUB_OUTPUT"
+          if [ "$current" = "$latest" ]; then
+            echo "stale=no" >> "$GITHUB_OUTPUT"
+            echo "yt-dlp is current at $current"
+          else
+            echo "stale=yes" >> "$GITHUB_OUTPUT"
+            echo "yt-dlp $current -> $latest"
+          fi
+
+      - name: Open the bump PR
+        if: steps.v.outputs.stale == 'yes'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CURRENT: ${{ steps.v.outputs.current }}
+          LATEST: ${{ steps.v.outputs.latest }}
+        run: |
+          set -euo pipefail
+          branch="chore/ytdlp-${LATEST}"
+          # Idempotent: a bump already open must not reopen every Monday until it is merged.
+          if git ls-remote --exit-code --heads origin "$branch" >/dev/null 2>&1; then
+            echo "$branch already exists; nothing to do."
+            exit 0
+          fi
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git switch -c "$branch"
+          sed -i "s|^RUN pip install \(.*\)yt-dlp\[default,curl-cffi\]==${CURRENT}\"|RUN pip install \1yt-dlp[default,curl-cffi]==${LATEST}\"|" container/Dockerfile
+          if git diff --quiet; then
+            echo "::error::the pin did not change — extraction and substitution disagree about that line's shape"
+            exit 1
+          fi
+          git commit -aqm "chore(container): yt-dlp ${CURRENT} -> ${LATEST}"
+          git push -q origin "$branch"
+
+          # Built line by line into a file rather than inlined: a multi-line string here has to stay
+          # indented past this block scalar or it silently ends the YAML block, which has already
+          # cost one broken workflow file.
+          {
+            printf '%s\n' "Weekly yt-dlp bump, opened by \`.github/workflows/ytdlp-freshness.yml\`."
+            printf '%s\n' ""
+            printf '%s\n' "\`${CURRENT}\` → \`${LATEST}\` (stable channel — this pipeline is stable-only by decision)."
+            printf '%s\n' ""
+            printf '%s\n' "**There is probably no CI check on this PR, and it would not mean anything if there were.** A pull request opened by the Actions token does not trigger workflow runs. Even forced by hand, \`ci.yml\` is JS tests and a typecheck — it never builds the image and never runs yt-dlp."
+            printf '%s\n' ""
+            printf '%s\n' "**One binary serves every yt-dlp platform here** — Dailymotion, Streamable, Imgur, Facebook, TikTok and YouTube — so a regression is not one broken platform, it is all of them. Rollback is editing the pin back to the previous version and merging."
+            printf '%s\n' ""
+            printf '%s\n' "**Merging deploys.** Workers Builds rebuilds the image on merge to main, and changing this pin is what invalidates the cached pip layer."
+            printf '%s\n' ""
+            printf '%s\n' "**Verify after merge on a video that has never been fetched.** A cached one proves nothing, which is how the 2026-08-17 YouTube outage stayed invisible:"
+            printf '%s\n' ""
+            printf '%s\n' '```'
+            printf '%s\n' "curl -s -o /dev/null -w '%{http_code}\\n' \\"
+            printf '%s\n' "  -H 'User-Agent: Mozilla/5.0 (compatible; Discordbot/2.0)' \\"
+            printf '%s\n' "  'https://mbedfx.app/_media/yt%3A<NEVER_FETCHED_ID>/0.mp4'"
+            printf '%s\n' '```'
+            printf '%s\n' ""
+            printf '%s\n' "\`200\` with bytes is a working mux. \`503\` means the mux still fails and this bump was not the answer."
+          } > /tmp/pr-body.md
+
+          # THE PR MAY BE REFUSED, AND A SILENT REFUSAL IS THE ORIGINAL DEFECT WEARING A HAT. If the
+          # repository setting "Allow GitHub Actions to create and approve pull requests" is off —
+          # it was off when this job was written — `gh pr create` fails with "GitHub Actions is not
+          # permitted to create or approve pull requests". The branch is already pushed by then, so
+          # the work is not lost; what would be lost is any signal that it happened. Falling back to
+          # an issue keeps the weekly heartbeat visible either way, and an issue needs no such
+          # setting. Turn the setting on to get the nicer path.
+          if gh pr create --base main --head "$branch" \
+               --title "chore(container): yt-dlp ${CURRENT} -> ${LATEST}" \
+               --body-file /tmp/pr-body.md; then
+            echo "opened a PR for $branch"
+          else
+            echo "::warning::could not open a PR (check Settings > Actions > 'Allow GitHub Actions to create and approve pull requests'). Falling back to an issue."
+            {
+              printf '%s\n' "The branch \`${branch}\` is pushed and ready, but this job could not open the pull request."
+              printf '%s\n' ""
+              printf '%s\n' "Enable **Settings → Actions → General → Allow GitHub Actions to create and approve pull requests**, or open it by hand:"
+              printf '%s\n' ""
+              printf '%s\n' "    gh pr create --base main --head ${branch}"
+              printf '%s\n' ""
+              cat /tmp/pr-body.md
+            } > /tmp/issue-body.md
+            gh issue create \
+              --title "yt-dlp ${CURRENT} -> ${LATEST} is ready on ${branch}, but the PR could not be opened" \
+              --body-file /tmp/issue-body.md
+          fi
