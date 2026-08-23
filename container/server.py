@@ -90,6 +90,25 @@ PROC_TIMEOUT = int(os.environ.get("PROC_TIMEOUT", "120"))     # per-subprocess w
 # So this is the best available fix, NOT a proven one. Confirm on a preview build before believing it.
 YT_PLAYER_CLIENTS = "web_embedded,tv_simply,mweb"
 
+# THE FORMAT SELECTOR, HOISTED SO _meta_page AND _mux_page CANNOT DRIFT APART. It used to live inline
+# in _mux_page while _meta_page mirrored its `height<=?720` ceiling in PYTHON to guess the dimensions
+# the mux would produce. Two expressions of one rule is the bug shape that comment was apologising
+# for; now the meta call passes this string to yt-dlp and reads the answer instead of predicting it.
+#
+# RESOLUTION CAP — the single biggest lever on mux LATENCY, which is a correctness issue, not a
+# nicety: Discord's media proxy fetches og:video within seconds of reading the head and CACHES a
+# failure, so a slow first mux renders as "a still that never plays". Measured 2026-07-24: an
+# uncapped 4K source took 27s (Discord had long given up) — capping to <=720p cuts the download to a
+# fraction, and an embed is displayed far smaller than 720p anyway. `height<=?720` is NON-STRICT
+# (the `?`), so a format with no height still qualifies rather than failing the whole selection.
+YT_FORMAT_SELECTOR = (
+    "b[ext=mp4][height<=?720]"
+    "/bv*[ext=mp4][height<=?720]+ba[ext=m4a]"
+    "/b[height<=?720]"
+    "/bv*[height<=?720]+ba"
+    "/b[ext=mp4]/bv*[ext=mp4]+ba[ext=m4a]/bv*+ba/b"
+)
+
 RESOLVER_SECRET = os.environ.get("RESOLVER_SECRET")           # shared secret; enforced when set
 # ffmpeg protocols we permit: enough for http(s) media and HLS/DASH segment fetches, and NOTHING that
 # reaches the local filesystem (no file, concat, subfile, data, pipe).
@@ -221,19 +240,8 @@ def _mux_page(page: str, out: str, jar=None) -> None:
         "--extractor-args", f"youtube:player_client={YT_PLAYER_CLIENTS}",
         "--match-filter", f"duration<?{MAX_SECONDS} & !is_live",
         "--max-filesize", str(MAX_BYTES),
-        # RESOLUTION CAP — the single biggest lever on mux LATENCY, which is a correctness issue, not a
-        # nicety: Discord's media proxy fetches og:video within seconds of reading the head and CACHES a
-        # failure, so a slow first mux renders as "a still that never plays". Measured 2026-07-24: an
-        # uncapped 4K source took 27s (Discord had long given up) — capping to <=720p cuts the download to a
-        # fraction, and an embed is displayed far smaller than 720p anyway. `height<=?720` is NON-STRICT
-        # (the `?`), so a format with no height still qualifies rather than failing the whole selection.
-        "-f", (
-            "b[ext=mp4][height<=?720]"
-            "/bv*[ext=mp4][height<=?720]+ba[ext=m4a]"
-            "/b[height<=?720]"
-            "/bv*[height<=?720]+ba"
-            "/b[ext=mp4]/bv*[ext=mp4]+ba[ext=m4a]/bv*+ba/b"
-        ),
+        # The selector is YT_FORMAT_SELECTOR — see its definition for the resolution-cap argument.
+        "-f", YT_FORMAT_SELECTOR,
         # DASH/fragmented sources download serially by default; 4 parallel fragments is a large latency win
         # on exactly the long-video case the cap above does not fully solve.
         "--concurrent-fragments", "4",
@@ -258,6 +266,36 @@ def _mux_page(page: str, out: str, jar=None) -> None:
                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 
+def _mux_sources(d: dict) -> tuple[str | None, str | None]:
+    """The direct format urls `_mux_page` would resolve, or (None, None) to make the Worker use it.
+
+    WHY THIS RE-IMPLEMENTS AN ADMISSION RULE INSTEAD OF JUST FORWARDING A URL. The duration ceiling
+    is enforced by `_mux_page`'s `--match-filter duration<?MAX_SECONDS & !is_live`, which is a
+    yt-dlp flag. `_mux_tracks` is ffmpeg, and ffmpeg has no such filter — so handing the Worker a url
+    for a source that filter would REFUSE deletes the ceiling silently. A livestream would then run
+    until PROC_TIMEOUT burned a container slot, which is the exact failure the filter was added for.
+
+    DELIBERATELY STRICTER THAN THE FILTER IT MIRRORS. `duration<?N` is non-strict — a source with NO
+    duration passes it — because yt-dlp still stops such a download on `--max-filesize`. Here the
+    unknown-duration case returns (None, None) and takes the slow path instead, because the fast path
+    has no equivalent stop. Refusing to shortcut is always safe; the cost is one re-extraction.
+    """
+    if d.get("is_live"):
+        return None, None
+    duration = d.get("duration")
+    if not (isinstance(duration, (int, float)) and 0 < duration < MAX_SECONDS):
+        return None, None
+    # A SPLIT SELECTION ARRIVES AS requested_formats (video first, audio second) and a progressive one
+    # as a bare top-level `url` — the same two shapes `_mux_tracks(video, audio)` already takes.
+    requested = d.get("requested_formats")
+    if isinstance(requested, list) and requested:
+        video = requested[0].get("url") if isinstance(requested[0], dict) else None
+        audio = requested[1].get("url") if len(requested) > 1 and isinstance(requested[1], dict) else None
+        return (video, audio) if isinstance(video, str) and video else (None, None)
+    url = d.get("url")
+    return (url, None) if isinstance(url, str) and url else (None, None)
+
+
 def _meta_page(page: str, jar=None) -> dict:
     # Metadata ONLY (no download) — the title + thumbnail for the card, for platforms whose crawler/oembed
     # surface is gated from datacenter egress but whose video yt-dlp still resolves (Facebook: Meta decoys
@@ -273,7 +311,17 @@ def _meta_page(page: str, jar=None) -> dict:
     # width/height this call reports have to describe the format `_mux_page`'s selector will pick;
     # asking a different client here would reintroduce that disagreement, and a card would advertise
     # dimensions for a format nobody downloads.
+    # -f YT_FORMAT_SELECTOR IS WHAT LETS THE MUX SKIP A SECOND EXTRACTION. Without it this call
+    # returned yt-dlp's default pick and no url, so `_mux_page` re-ran the WHOLE extraction — measured
+    # 2026-08-22, ~5.0s of YouTube player-API round trips plus a Deno JS challenge, paid twice on
+    # every cold card (a 20.4s cold mux against a 1.8s download of the same bytes).
+    #
+    # IT DOES NOT BREAK THE AGE-GATED CASE, which is the thing --ignore-no-formats-error exists for.
+    # Measured 2026-08-22 on yt:G0sORVBL4kM (age_limit 18, formats: 0): WITH and WITHOUT -f the answer
+    # is identical — title present, formats 0, age_limit 18 — because the flag suppresses the "no
+    # formats" exit before selection is ever reached.
     cmd = ["yt-dlp", "-J", "--no-warnings", "--no-playlist", "--ignore-no-formats-error",
+           "-f", YT_FORMAT_SELECTOR,
            "--extractor-args", f"youtube:player_client={YT_PLAYER_CLIENTS}",
            "--", _safe_url(page)]
     # WITH A JAR THIS IS THE CALL THAT STOPS RETURNING `formats: 0`. The comment above records the
@@ -330,8 +378,14 @@ def _meta_page(page: str, jar=None) -> dict:
     # picture and a video url that resolves to nothing. It also keeps a playlist away from _mux_page,
     # which is untested on one and probably wrong (`-o out` + --force-overwrites means several entries
     # write over one path, and --no-playlist does not help — these are PURE playlists, not video+list).
+    mux_video, mux_audio = _mux_sources(d)
     return {
         "_type": d.get("_type"),
+        # THE TWO FIELDS THAT LET THE WORKER SKIP AN EXTRACTION. Absent/null means "no shortcut, mux
+        # from the page" — every caller must treat them as optional, because they are null for a
+        # livestream, an unknown duration, an age-gated source with no formats, and any older pooled
+        # instance still running a pre-g12 image.
+        "mux_video": mux_video, "mux_audio": mux_audio,
         "title": d.get("title"), "thumbnail": d.get("thumbnail"),
         "uploader": d.get("uploader"), "uploader_id": d.get("uploader_id"),
         "uploader_url": d.get("uploader_url"), "description": d.get("description"),

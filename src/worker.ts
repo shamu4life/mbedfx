@@ -1414,7 +1414,7 @@ const RESOLVER_SLOTS = 4
 // right trade here rather than the wrong one: the alternative is leaving YouTube cards sized by a
 // broken generation for up to YT_META_TTL_MS (30 days) after the fix ships, which is most of the way
 // to the fix not having shipped.
-const RESOLVER_GENERATION = 'g11'
+const RESOLVER_GENERATION = 'g12'
 /** `slotKey` is the POST (refKey), never the operation — see RESOLVER_SLOTS for the 74% measurement. */
 function resolverStub(resolver: NonNullable<Env['MEDIA_RESOLVER']>, slotKey: string) {
   let h = 2166136261
@@ -1471,24 +1471,65 @@ function withCookieJar<T extends object>(body: T, env: Env, platform: Credential
  * only input that decides whether a credential is sent, so it is passed as a value the compiler checks.
  */
 async function ensureMuxed(
-  env: Env, key: string, source: Media['remux'], slotKey: string, platform: CredentialPlatform | null,
+  env: Env, key: string, from: Media['remux'], slotKey: string, platform: CredentialPlatform | null,
 ): Promise<{ size: number } | null> {
   const { MEDIA_RESOLVER: resolver, MEDIA_CACHE: cache } = env
-  if (!resolver || !cache || !source) return null
+  if (!resolver || !cache || !from) return null
   const existing = await cache.head(key)
   if (existing) return existing
   const headers: Record<string, string> = { 'content-type': 'application/json' }
   if (env.RESOLVER_SECRET) headers['x-resolver-secret'] = env.RESOLVER_SECRET
-  const body = source.page ? withCookieJar(source, env, platform) : source
-  const muxed = await resolverStub(resolver, slotKey).fetch('http://media-resolver/resolve', {
-    method: 'POST', body: JSON.stringify(body), headers,
-  })
-  if (!muxed.ok || !muxed.body) {
+  /**
+   * TRACKS FIRST, PAGE AS THE FALLBACK — and the fallback is the load-bearing half.
+   *
+   * `{video, audio}` reaches the container's ffmpeg-from-urls path and skips yt-dlp entirely, which is
+   * the whole saving: measured 2026-08-22, extraction is ~5.0s of player-API round trips plus a Deno
+   * JS challenge, against a 1.8s download of the same 10 MB. A cold mux paid it TWICE — once for the
+   * card's metadata and once again here — which is most of a 20.4s cold mux.
+   *
+   * THE URLS GO STALE AND NOTHING HERE CAN SEE IT. A googlevideo url is bound to the egress IP that
+   * resolved it and expires in hours; slot affinity keeps that IP stable but nothing pins an instance
+   * forever. A stale url fails inside ffmpeg, so the only safe way to use one is to be able to give up
+   * and re-extract — hence two attempts rather than a cleverer cache. They are never persisted beyond
+   * the Post (POST_TTL, 900s); the 30-day yt record and the 24h dm/im records must never carry one,
+   * for exactly the reason ST_META_TTL_MS is 30 minutes.
+   *
+   * SENT AS A NARROWED OBJECT, not the whole remux source. The container checks `page` FIRST, so
+   * posting {video, audio, page} together would take the slow path every time and this would be dead
+   * code that still looked correct.
+   */
+  const attempts: Record<string, unknown>[] = []
+  if (from.video) {
+    attempts.push({ video: from.video, ...(from.audio ? { audio: from.audio } : {}) })
+  }
+  if (from.page) attempts.push(withCookieJar({ page: from.page }, env, platform))
+  // Neither field set is not reachable through prewarmable()/normalize, but a Post deserialized from an
+  // older cache entry is outside this file's control — fall back to the shape we were handed.
+  if (!attempts.length) attempts.push(from as Record<string, unknown>)
+
+  let muxed: Response | null = null
+  for (let i = 0; i < attempts.length; i++) {
+    const attempt = await resolverStub(resolver, slotKey).fetch('http://media-resolver/resolve', {
+      method: 'POST', body: JSON.stringify(attempts[i]), headers,
+    })
+    if (attempt.ok && attempt.body) { muxed = attempt; break }
+    // A failed SHORTCUT is not a verdict on the video — the page attempt still has to speak. Only the
+    // last failure is worth reporting, and the body of a discarded one has to be released.
+    void attempt.body?.cancel()
+    if (i === attempts.length - 1) {
+      // SERVER-SIDE ONLY (wrangler tail), never the client: a non-200 here is invisible otherwise — the
+      // route degrades to the poster still, so a failed mux and an exhausted container instance look
+      // identical from outside (both a 302), which is exactly the ambiguity that made "it shows a frame
+      // and never plays" hard to diagnose. `key` is the ref, and the body carries no url — safe to log.
+      console.error('mux failed', key, attempt.status)
+      return null
+    }
+  }
+  if (!muxed || !muxed.body) {
     // SERVER-SIDE ONLY (wrangler tail), never the client: a non-200 here is invisible otherwise — the
     // route degrades to the poster still, so a failed mux and an exhausted container instance look
     // identical from outside (both a 302), which is exactly the ambiguity that made "it shows a frame and
     // never plays" hard to diagnose. `key` is the ref, and the body carries no url — safe to log.
-    console.error('mux failed', key, muxed.status, (await muxed.text().catch(() => '')).slice(0, 200))
     return null
   }
   // A refused store is NOT an extraction verdict: the container produced a real video, we simply
