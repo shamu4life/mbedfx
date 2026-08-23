@@ -421,6 +421,41 @@ export type Media = {
  * by any consumer: `typeof === 'number'` and `=== 'avatar'` both stay total, and a `{poster}` that
  * reached a numeric path would be a type error rather than a silently-coerced index.
  */
+/**
+ * ONE VIDEO'S MUX, HANDED TO SOMETHING THAT IS ALLOWED TO TAKE LONGER THAN A REQUEST.
+ *
+ * WHY THIS TYPE EXISTS AT ALL — the defect it closes, measured 2026-08-23. Every mux was dispatched
+ * through `ctx.waitUntil`, and Cloudflare documents that as a HARD 30-SECOND ceiling, shared across
+ * every `waitUntil` in the same request: "If any Promises have not settled after 30 seconds, they are
+ * canceled." The container is allowed 180s (PROC_TIMEOUT + 60) and the duration filter admits 1500s
+ * of video, so there were THREE ceilings and only the smallest was ever real. Worse, a cancelled
+ * attempt left NOTHING behind — the container buffers the whole file before sending a byte, and it
+ * writes to a fresh `mkstemp` with `--force-overwrites` — so every re-paste restarted at byte zero.
+ * That is the reported "a 10-minute video took nearly ten minutes to warm": a repeated 30-second
+ * lottery, throwing away 100% of its bytes on every losing roll.
+ *
+ * A Durable Object alarm handler gets 15 MINUTES (Cloudflare's documented limit, the same as a cron
+ * trigger and a queue consumer), which is 30x the old budget and comfortably past the container's own
+ * 180s wall. This is what crosses that boundary, so it must be plain JSON.
+ *
+ * NO CREDENTIAL AND NO PLATFORM RIDE HERE, deliberately. Both are re-derived from `slotKey` at the
+ * far end (parseRefKey, then jarPlatform), because a cookie jar serialized into Durable Object
+ * storage is a session sitting at rest for the life of the job — and the pool is picked from at
+ * random per call anyway, so a stored one would also be stale.
+ */
+export type MuxJob = {
+  /** The R2 key the muxed mp4 lands at (`mux/{refKey}/{index}`), and the runner's own DO name. */
+  key: string
+  /** `refKey(ref)` — the container slot, and what the platform and credential pool are re-derived from. */
+  slotKey: string
+  /**
+   * What to mux from. A `page` is preferred over resolved track urls when both exist: those urls are
+   * bound to the egress IP that resolved them and expire in hours, and this job may not run for
+   * minutes. See Media.remux.
+   */
+  source: NonNullable<Media['remux']>
+}
+
 export type MediaIndex = number | 'avatar' | { poster: number }
 
 export type Post = {

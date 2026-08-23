@@ -1,5 +1,5 @@
 import type { Post, PostRef } from '../../types.ts'
-import { normalizeYtdlp, type YtdlpMeta, type YtdlpSite } from '../ytdlp/normalize.ts'
+import { normalizeYtdlp, type MuxShortcut, type YtdlpMeta, type YtdlpSite } from '../ytdlp/normalize.ts'
 import { dmPageUrl } from './fetch.ts'
 
 /**
@@ -10,7 +10,7 @@ import { dmPageUrl } from './fetch.ts'
  */
 const DM: YtdlpSite = { name: 'Dailymotion', handle: 'dailymotion', home: 'https://www.dailymotion.com' }
 
-export function normalizeDailymotion(meta: YtdlpMeta | null, ref: PostRef): Post | null {
+export function normalizeDailymotion(meta: YtdlpMeta | null, ref: PostRef, mux?: MuxShortcut): Post | null {
   if (ref.p !== 'dm') return null
-  return normalizeYtdlp(meta, ref, DM, dmPageUrl(ref))
+  return normalizeYtdlp(meta, ref, DM, dmPageUrl(ref), mux)
 }

@@ -1,4 +1,4 @@
-import type { ClientClass, Media, Platform, Post, PostRef, Profile, ProfileRef, Route } from './types.ts'
+import type { ClientClass, Media, MuxJob, Platform, Post, PostRef, Profile, ProfileRef, Route } from './types.ts'
 import { classify } from './classify.ts'
 import { route } from './router.ts'
 import { render } from './render/index.ts'
@@ -8,8 +8,8 @@ import { pickMedia, pickMediaEntry } from './media.ts'
 import { bytesIndex, byline, mediaOf, mediaUrl, str, themeColor, usable } from './render/embed.ts'
 import { statParts } from './render/text.ts'
 import { proxyableVideoUrl, serveDirectVideo } from './mediaproxy.ts'
-import { refKey } from './refkey.ts'
-import { count, type Env, type GateReason } from './analytics.ts'
+import { parseRefKey, refKey } from './refkey.ts'
+import { count, countMux, type Env, type GateReason, type MuxOutcome } from './analytics.ts'
 import { runSmoke, smokeOutcome, SMOKE_CHECKS, SMOKE_CLIENT } from './smoke.ts'
 import { cookiesFor, jarAvailable, poolSetButUnused, twitterAccounts, type CredentialPlatform } from './credentials.ts'
 import {
@@ -60,7 +60,7 @@ import { normalizeMisskey } from './platforms/misskey/normalize.ts'
 import { normalizeMasto } from './platforms/mastoapi/normalize.ts'
 import { fetchTwitchClip } from './platforms/twitch/fetch.ts'
 import { normalizeTwitchClip } from './platforms/twitch/normalize.ts'
-import { type YtdlpMeta } from './platforms/ytdlp/normalize.ts'
+import { type MuxShortcut, type YtdlpMeta } from './platforms/ytdlp/normalize.ts'
 import { dmPageUrl } from './platforms/dailymotion/fetch.ts'
 import { normalizeDailymotion } from './platforms/dailymotion/normalize.ts'
 import { stPageUrl } from './platforms/streamable/fetch.ts'
@@ -1025,12 +1025,18 @@ export async function liveFetchPost(
        * still fires either way, so the total failure count is unchanged and only its attribution moves.
        */
       const mreport: MetaReport = {}
-      const meta = await cachedYtdlpMeta(ref, env, ctx, metaBudgetMs, mreport)
+      /**
+       * THE MUX SHORTCUT — the format urls this very extraction resolved, so the /_media/ mux does
+       * not pay a second identical one. Empty unless the container answered THIS call (an R2 hit
+       * carries none, deliberately), and empty is the behaviour that shipped: a `{page}` mux.
+       */
+      const mux: MuxShortcut = {}
+      const meta = await cachedYtdlpMeta(ref, env, ctx, metaBudgetMs, mreport, mux)
       if (!meta) {
         count(env, ref.p, mreport.timedOut ? 'meta_timeout' : 'assert_fail', client)
         return null
       }
-      return ref.p === 'dm' ? normalizeDailymotion(meta, ref) : normalizeStreamable(meta, ref)
+      return ref.p === 'dm' ? normalizeDailymotion(meta, ref, mux) : normalizeStreamable(meta, ref, mux)
     }
     case 'im': {
       /**
@@ -1056,12 +1062,15 @@ export async function liveFetchPost(
       // The SAME attribution split the dm/st arm documents at length — Imgur reaches this arm only when
       // its own API missed, so from here on the container is its whole card too.
       const mreport: MetaReport = {}
-      const meta = await cachedYtdlpMeta(ref, env, ctx, metaBudgetMs, mreport)
+      // The shortcut, exactly as the dm/st arm above documents it. Only this CONTAINER fallback gets
+      // one — normalizeImgurApi's post came from Imgur's own API, which resolves no format urls.
+      const mux: MuxShortcut = {}
+      const meta = await cachedYtdlpMeta(ref, env, ctx, metaBudgetMs, mreport, mux)
       if (!meta) {
         count(env, 'im', mreport.timedOut ? 'meta_timeout' : 'assert_fail', client)
         return null
       }
-      return normalizeImgur(meta, ref)
+      return normalizeImgur(meta, ref, mux)
     }
     default:
       // Unreachable for a router-minted ref (every platform in the union dispatches above), but a ref can also
@@ -1470,6 +1479,57 @@ function withCookieJar<T extends object>(body: T, env: Env, platform: Credential
  * `platform` is threaded in EXPLICITLY rather than recovered from `slotKey` — see jarPlatform. It is the
  * only input that decides whether a credential is sent, so it is passed as a value the compiler checks.
  */
+/**
+ * WHICH FAILURE THIS WAS — the container's status plus a CLOSED ALLOWLIST of its own error strings,
+ * mapped to a counter name. This is the whole of the diagnosability fix's judgement, and it is a pure
+ * function so it can be tested without a container.
+ *
+ * TWO DIFFERENT 502s, and telling them apart is most of the point. container/server.py answers 502
+ * for BOTH a non-zero yt-dlp exit (`"mux failed"` — the upstream refused us: a 403, a PO-token
+ * demand, a sign-in wall) and a run that completed with nothing usable (`"empty or oversized
+ * result"`). The first is YouTube's verdict and the second is ours, and a single `mux_gate` covering
+ * both would point the next reader at the wrong system.
+ *
+ * MATCHED, NEVER ECHOED. The body is compared against fixed literals this repo owns; nothing from it
+ * is ever stored or logged. yt-dlp's stderr is suppressed inside the container because it can carry
+ * the source url, and reading a status code here must not quietly reopen that.
+ */
+function muxOutcomeOf(status: number, body: string): MuxOutcome {
+  if (status === 504) return 'mux_timeout'
+  if (status === 503) return 'mux_pool'
+  if (status === 400) return 'mux_badsource'
+  if (status === 502) return body.includes('empty or oversized result') ? 'mux_empty' : 'mux_gate'
+  return 'mux_error'
+}
+
+/**
+ * THE PLATFORM A MUX BELONGS TO, read back off the slot key rather than threaded through four
+ * signatures. `slotKey` is refKey(ref), and parseRefKey is this repo's existing allowlist for turning
+ * one back into a ref — so a platform that is not in that allowlist counts as `'none'` instead of
+ * inventing a blob1 value the dataset has never seen.
+ */
+function muxPlatformOf(slotKey: string): Platform | 'none' {
+  return parseRefKey(slotKey)?.p ?? 'none'
+}
+
+/**
+ * READING THE ERROR BODY IS THE FIX, and discarding it was the defect. This used to be
+ * `void attempt.body?.cancel()` on every failed attempt, so the container's own account of what went
+ * wrong — which it has always sent — was thrown away unread on the one path that needed it.
+ *
+ * BOUNDED, because a body is attacker-adjacent in the ordinary sense: it is whatever the container
+ * process wrote. 200 characters is far more than any of the fixed strings this repo matches on, and
+ * the read is caught, because a stream that errors must degrade to "no detail" rather than take the
+ * mux down with it. The body is released either way — an unread one leaks a connection.
+ */
+async function muxErrorBody(res: Response): Promise<string> {
+  try {
+    return (await res.text()).slice(0, 200)
+  } catch {
+    return ''
+  }
+}
+
 async function ensureMuxed(
   env: Env, key: string, from: Media['remux'], slotKey: string, platform: CredentialPlatform | null,
 ): Promise<{ size: number } | null> {
@@ -1477,6 +1537,13 @@ async function ensureMuxed(
   if (!resolver || !cache || !from) return null
   const existing = await cache.head(key)
   if (existing) return existing
+  /**
+   * THE CLOCK STARTS AFTER THE R2 HEAD, deliberately: a warm hit is not a mux and must not be counted
+   * as a fast one, or `mux_ok`'s duration becomes a mixture of "we already had it" and "we made it"
+   * and stops answering the only question it exists for.
+   */
+  const startedAt = Date.now()
+  const site = muxPlatformOf(slotKey)
   const headers: Record<string, string> = { 'content-type': 'application/json' }
   if (env.RESOLVER_SECRET) headers['x-resolver-secret'] = env.RESOLVER_SECRET
   /**
@@ -1514,13 +1581,17 @@ async function ensureMuxed(
     })
     if (attempt.ok && attempt.body) { muxed = attempt; break }
     // A failed SHORTCUT is not a verdict on the video — the page attempt still has to speak. Only the
-    // last failure is worth reporting, and the body of a discarded one has to be released.
-    void attempt.body?.cancel()
+    // last failure is worth reporting, and the body of a discarded one has to be released. Reading it
+    // to the end releases it exactly as cancel() did, and unlike cancel() it keeps the reason.
+    const detail = await muxErrorBody(attempt)
     if (i === attempts.length - 1) {
-      // SERVER-SIDE ONLY (wrangler tail), never the client: a non-200 here is invisible otherwise — the
-      // route degrades to the poster still, so a failed mux and an exhausted container instance look
-      // identical from outside (both a 302), which is exactly the ambiguity that made "it shows a frame
-      // and never plays" hard to diagnose. `key` is the ref, and the body carries no url — safe to log.
+      /**
+       * COUNTED **AND** LOGGED, which is the change. The console line is server-side only and needs
+       * somebody attached to `wrangler tail` at the moment it fires; the counter is what survives, and
+       * it is what turns "a video did not play last Tuesday" from an archaeology exercise into one
+       * query. `key` is the ref, the outcome is a fixed enum, and no part of the body is stored.
+       */
+      countMux(env, site, muxOutcomeOf(attempt.status, detail), Date.now() - startedAt)
       console.error('mux failed', key, attempt.status)
       return null
     }
@@ -1534,9 +1605,17 @@ async function ensureMuxed(
   }
   // A refused store is NOT an extraction verdict: the container produced a real video, we simply
   // would not hold it in memory to save it (see MUX_BUFFER_MAX). Returning null degrades this view
-  // to the cover still, which is the same honest answer a failed mux gives.
-  if (!(await putMuxed(cache, key, muxed, env))) return null
-  return await cache.head(key)
+  // to the cover still, which is the same honest answer a failed mux gives — but it must NOT be
+  // counted as one, or `mux_gate` starts blaming YouTube for our own buffer ceiling.
+  if (!(await putMuxed(cache, key, muxed, env))) {
+    countMux(env, site, 'mux_refused', Date.now() - startedAt)
+    return null
+  }
+  const stored = await cache.head(key)
+  // COUNTED ON THE WAY OUT, not at the 200: `mux_ok` means the bytes are IN R2 and the next view can
+  // play them, which is the claim anyone reading this counter actually cares about.
+  countMux(env, site, stored ? 'mux_ok' : 'mux_refused', Date.now() - startedAt)
+  return stored
 }
 
 /**
@@ -1574,6 +1653,58 @@ function muxOnce(
   const p = ensureMuxed(env, key, source, slotKey, platform).finally(() => muxInflight.delete(key))
   muxInflight.set(key, p)
   return p
+}
+
+/**
+ * HAND THIS VIDEO TO THE ALARM, which is allowed to take fifteen minutes where this request is
+ * allowed thirty seconds. See MuxJob for the measurement, and src/muxrunner.ts for the timing.
+ *
+ * FIRE AND FORGET, AND IT MUST NOT BE AWAITED ON THE RENDER PATH. This is one Durable Object RPC to
+ * arm an alarm — it does no container work and no download — but the whole reason it exists is that
+ * the render path has no time to spare, so blocking a card on it would spend the budget this is
+ * meant to protect. The caller hands it to `ctx.waitUntil`, where a few milliseconds is exactly the
+ * kind of work that ceiling was designed for.
+ *
+ * THE PAGE IS PREFERRED OVER THE RESOLVED TRACKS, and this is the one place that choice is made.
+ * `remux.video`/`remux.audio` are urls the metadata call already resolved, which is a real saving
+ * INSIDE a request (see ensureMuxed) — but they are bound to the egress IP that resolved them and
+ * expire in hours, and this job may not run for twenty minutes. Sending them would mean a guaranteed
+ * wasted container call followed by the page fallback anyway. A source with no page (Bluesky, Reddit)
+ * keeps its `video`: those are ordinary CDN manifest urls, not signed ones.
+ *
+ * NO BINDING MEANS NO CHANGE. Without MUX_RUNNER this is a no-op and the service behaves exactly as
+ * it did — the inline attempt still runs, still capped at thirty seconds.
+ */
+function scheduleMux(env: Env, key: string, slotKey: string, source: Media['remux']): Promise<void> {
+  if (!env.MUX_RUNNER || !source) return Promise.resolve()
+  const durable: NonNullable<Media['remux']> = source.page ? { page: source.page } : source
+  // The DO is addressed BY THE MUX KEY, which makes it one object per video worldwide — the global
+  // dedupe muxInflight has never been able to provide (it is isolate-local, and says so).
+  return env.MUX_RUNNER.getByName(key).schedule({ key, slotKey, source: durable })
+    // A failed RPC must never take down the render that scheduled it. The inline attempt is still
+    // running and the next paste will arm it again; this is a best-effort upgrade, not a dependency.
+    .catch(() => undefined)
+}
+
+/**
+ * THE ALARM'S HALF OF THE MUX — exported for src/muxrunner.ts, which cannot reach `muxOnce` itself.
+ *
+ * Deliberately thin. Everything that decides whether a mux is correct — the R2 head check that makes
+ * it at-most-once, the tracks-then-page attempts, the counters, the buffer ceiling — lives in
+ * ensureMuxed and is shared with the inline path, so the two can never drift into muxing differently.
+ * What this adds is only the re-derivation the job does not carry: the credential pool, which is
+ * picked at random per call and must not be serialized into Durable Object storage.
+ *
+ * `true` MEANS THE BYTES ARE IN R2, which is what the caller's retry decision turns on — not that a
+ * container answered.
+ */
+export async function runMuxJob(env: Env, job: MuxJob): Promise<boolean> {
+  const ref = parseRefKey(job.slotKey)
+  // An unparseable slotKey is a job from a build whose refKey allowlist has since changed. Refuse it
+  // rather than muxing with no credential and no platform attribution — see parseRefKey.
+  if (!ref) return false
+  const head = await muxOnce(env, job.key, job.source, job.slotKey, jarPlatform(ref))
+  return head !== null
 }
 
 /**
@@ -1754,8 +1885,24 @@ async function settleMux(
       return still
     }
     const key = `mux/${refKey(post.ref)}/${i}`
-    // The mux runs to completion regardless of who wins this race — waitUntil keeps it alive past the
-    // response, so a slow video is ready for the next render rather than being restarted from scratch.
+    /**
+     * THE ALARM IS ARMED BEFORE THE RACE, not after it, and that ordering is the fix.
+     *
+     * The comment that used to sit here said the mux "runs to completion regardless of who wins this
+     * race — waitUntil keeps it alive past the response". THAT WAS FALSE, and it is what the
+     * 2026-08-23 diagnosis turned on: Cloudflare cancels every unsettled `waitUntil` promise 30
+     * seconds after the response, on a budget SHARED with every other waitUntil in the same request.
+     * A video that needs longer was not "ready for the next render" — it was killed with nothing
+     * written, and the next render started it again from byte zero. See MuxJob.
+     *
+     * Armed FIRST because a render can be cancelled at any point after this line; arming after the
+     * race would mean the slowest videos — the only ones that need the alarm — are exactly the ones
+     * that never reach the arming code.
+     */
+    ctx.waitUntil(scheduleMux(env, key, refKey(post.ref), m.remux))
+    // The inline attempt is unchanged and is still the fast path: a warm R2 hit and a quick mux both
+    // finish well inside a request, and for those the alarm wakes at +35s, hits the R2 head check and
+    // does nothing. waitUntil still buys the sub-30s tail, which is most muxes.
     const work = muxOnce(env, key, m.remux, refKey(post.ref), jarPlatform(post.ref)).catch(() => null)
     ctx.waitUntil(work)
     // deadline(), not a bare Promise.race: an uncleared timer stays armed for the full budget even
@@ -2373,7 +2520,9 @@ function ytdlpPageUrl(ref: YtdlpRef): string {
  * video, and would ship a bare headline over a video url resolving to nothing. It is carried as an
  * OPTIONAL field so a pooled pre-g5 instance degrades to the old behaviour rather than failing.
  */
-async function resolveYtdlpMeta(page: string, slot: string, env: Env): Promise<YtdlpMeta | null> {
+async function resolveYtdlpMeta(
+  page: string, slot: string, env: Env, mux?: MuxShortcut,
+): Promise<YtdlpMeta | null> {
   const resolver = env.MEDIA_RESOLVER
   if (!resolver) return null
   try {
@@ -2395,6 +2544,33 @@ async function resolveYtdlpMeta(page: string, slot: string, env: Env): Promise<Y
     const s = (v: unknown) => (typeof v === 'string' && v ? v : undefined)
     const n = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) && v > 0 ? v : undefined)
     const http = (v: unknown) => (typeof v === 'string' && /^https?:\/\//.test(v) ? v : undefined)
+    /**
+     * THE MUX SHORTCUT LEAVES BY THE OUT-PARAMETER, and that is the entire reason it is one.
+     *
+     * The record built below is what metaWork PERSISTS — read back for 30 minutes on Streamable and
+     * 24 HOURS on Dailymotion and Imgur. A resolved format url is bound to the egress IP that
+     * resolved it and expires in hours, so a record carrying one would serve a dead shortcut for most
+     * of its life. Putting these two fields on YtdlpMeta instead would make that a `delete` somebody
+     * has to remember on the write path; assigning them HERE, to an object the cache never sees,
+     * makes it unreachable. The `mux_*` fields are OPTIONAL — a pre-g12 pooled instance omits them
+     * entirely, and the container itself returns null for a livestream, an unknown duration, and an
+     * age-gated source with no formats (see container/server.py's `_mux_sources`).
+     *
+     * A CALL THAT JOINS AN EXTRACT ALREADY IN FLIGHT GETS NO SHORTCUT — metaOnce hands it the first
+     * caller's promise, and this holder belongs to the caller that started the work. It muxes from
+     * the page, which is correct and merely slower; the shortcut is a cold-path optimisation and the
+     * request that pays the cold path is the one that gets it.
+     */
+    if (mux) {
+      const video = http(j.mux_video)
+      // ffmpeg maps `0:v:0` and `1:a:0`, so audio without video is a broken argv rather than half a
+      // shortcut. The normalizer refuses that pair too — this is the cheaper half of one rule.
+      if (video) {
+        mux.video = video
+        const audio = http(j.mux_audio)
+        if (audio) mux.audio = audio
+      }
+    }
     return {
       type: s(j._type), title: j.title, poster: http(j.thumbnail),
       uploader: s(j.uploader), uploaderUrl: http(j.uploader_url), description: s(j.description),
@@ -2441,14 +2617,21 @@ const YTDLP_TTL: Record<'dm' | 'st' | 'im', number> = {
  */
 function cachedYtdlpMeta(
   ref: Extract<PostRef, { p: 'dm' | 'st' | 'im' }>, env: Env, ctx?: ExecutionContext,
-  budgetMs = META_TIMEOUT_MS, report?: MetaReport,
+  budgetMs = META_TIMEOUT_MS, report?: MetaReport, mux?: MuxShortcut,
 ): Promise<YtdlpMeta | null> {
   // The slot is the POST (refKey), never the operation, so this call and the video mux for one ref
   // land on ONE container instance — see RESOLVER_SLOTS for the 74% measurement.
   const page = ytdlpPageUrl(ref)
+  /**
+   * `mux` IS AN OUT-PARAMETER AND IT RIDES PAST THE CACHE, NOT THROUGH IT — MetaReport's shape, for a
+   * variant of MetaReport's reason: the answer stays `YtdlpMeta | null`, which is what every caller
+   * branches on, while the volatile half travels beside it. Filled ONLY by a fresh container call
+   * (see resolveYtdlpMeta), so an R2 hit leaves it empty by construction and the mux falls back to
+   * the page — which is the honest answer for urls that are minutes to hours old.
+   */
   return cachedMeta<YtdlpMeta>(
     ref, env, ctx, YTDLP_TTL[ref.p], budgetMs, META_FAIL_TTL_MS, metaHasTitle,
-    () => resolveYtdlpMeta(page, refKey(ref), env),
+    () => resolveYtdlpMeta(page, refKey(ref), env, mux),
     report,
   )
 }
@@ -3850,8 +4033,15 @@ async function renderPostRoute(
    * pretends to survive in one place and not the other.
    */
   if (pre && muxInflight.size < SPECULATIVE_MUX_CAP && await d.cache.match(cacheUrl(postCacheKey(ref)))) {
+    const preKey = `mux/${refKey(ref)}/${pre.index}`
+    // The alarm gets the same job the prewarm is about to start, for settleMux's reason: this render
+    // may be cancelled, and the 30-second waitUntil ceiling means the videos most worth prewarming
+    // are precisely the ones the prewarm cannot finish. Both are bounded by the post-cache gate
+    // above, so this adds no new reachability — the container is still only reached for a ref a real
+    // fetch+normalize has already vouched for.
+    ctx.waitUntil(scheduleMux(env, preKey, refKey(ref), pre.source))
     ctx.waitUntil(
-      muxOnce(env, `mux/${refKey(ref)}/${pre.index}`, pre.source, refKey(ref), jarPlatform(ref))
+      muxOnce(env, preKey, pre.source, refKey(ref), jarPlatform(ref))
         .catch(() => null),
     )
   }

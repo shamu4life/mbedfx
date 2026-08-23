@@ -129,13 +129,30 @@
     // re-provisions every container instance. Not worth it for a string only the dashboard shows.
     { "name": "fxeverything-mediaresolver", "class_name": "MediaResolver", "image": "./container/Dockerfile", "max_instances": 10, "instance_type": "basic" }
   ],
+  // MUX_RUNNER is a PLAIN Durable Object, not a container — it holds no image and runs no process. Its
+  // whole job is to own an ALARM, because an alarm handler gets 15 minutes of wall clock where
+  // `ctx.waitUntil` gets 30 seconds (both are Cloudflare's documented limits, and the 30 is shared
+  // across every waitUntil in one request). Until 2026-08-23 every mux in this service ran under
+  // waitUntil, so the container's own 180s ceiling and the 1500s of video the duration filter admits
+  // were both unreachable — three ceilings, and only the smallest was ever real. A cancelled attempt
+  // also left nothing behind (the container buffers the whole file, writes to a fresh mkstemp and
+  // removes it), so every re-paste of a slow video restarted at byte zero. See src/muxrunner.ts.
+  //
+  // ONE OBJECT PER VIDEO, addressed by the mux key — which incidentally gives this path its first
+  // GLOBAL dedupe. muxInflight is isolate-local and says so; two isolates could always double-mux.
   "durable_objects": {
     "bindings": [
-      { "name": "MEDIA_RESOLVER", "class_name": "MediaResolver" }
+      { "name": "MEDIA_RESOLVER", "class_name": "MediaResolver" },
+      { "name": "MUX_RUNNER", "class_name": "MuxRunner" }
     ]
   },
+  // A NEW TAG, NEVER AN EDIT TO v1. Migrations are an append-only ledger: Cloudflare applies the tags
+  // it has not seen, so rewriting an applied one is either ignored or an error, and never the thing
+  // the editor meant. `new_sqlite_classes` matches MediaResolver's — the DO must have storage for
+  // setAlarm to exist at all, and SQLite-backed is the current default for new classes.
   "migrations": [
-    { "tag": "v1", "new_sqlite_classes": ["MediaResolver"] }
+    { "tag": "v1", "new_sqlite_classes": ["MediaResolver"] },
+    { "tag": "v2", "new_sqlite_classes": ["MuxRunner"] }
   ],
   // THE APEX CUTOVER (2026-07-25). fxeverything now serves megapenispoopenfarten.sex itself, not just
   // its staging subdomain — the Phase 3 step this file used to describe as pending.

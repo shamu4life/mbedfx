@@ -1,4 +1,4 @@
-import type { ClientClass, Platform } from './types.ts'
+import type { ClientClass, MuxJob, Platform } from './types.ts'
 import type { HostResolver } from './netguard.ts'
 
 /**
@@ -169,6 +169,34 @@ export type Outcome2 =
    * SMOKE_UNCHECKED — so their silence here is not an outage.
    */
   | 'smoke_ok' | 'smoke_fail'
+  /**
+   * THE MUX OUTCOMES — added 2026-08-23, and the reason is that the video half of this service had NO
+   * telemetry at all. Every failure reached the reader as the same bodiless `503 no-store` and the
+   * same unstored `console.error('mux failed', key, status)`, so our own blown clock, YouTube's gate,
+   * an oversized result and a cold container were one indistinguishable event. That is what made a
+   * reported "a 10-minute video took ten minutes to warm" cost a night of arithmetic to explain
+   * instead of one query, and it is why nothing here could be evaluated except by vibes.
+   *
+   * READ THEM AS A GROUP, per platform. The RATIO is the signal, exactly as with translate_* and
+   * smoke_*: `mux_ok` alone says nothing, and the interesting question is always which of the
+   * failures is carrying the weight.
+   *
+   *   mux_ok       the container produced bytes and R2 stored them. double2 is the elapsed ms.
+   *   mux_gate     502 + "mux failed" — yt-dlp exited non-zero. THEIRS: a 403, a PO-token demand, a
+   *                sign-in wall, an nsig solve failure. A rise here on `yt` alone is YouTube moving.
+   *   mux_timeout  504 — the container's own 180s wall (PROC_TIMEOUT + 60). OURS.
+   *   mux_empty    502 + "empty or oversized result" — it ran and produced nothing usable.
+   *   mux_pool     503 — a cold boot, or "Maximum number of running container instances exceeded".
+   *                A rise here degrades EVERY platform's card, not just the one in blob1.
+   *   mux_badsource 400 — the container's SSRF guard refused the url we sent it.
+   *   mux_error    500, or a status this mapping does not know. Should stay at zero.
+   *   mux_refused  the mux SUCCEEDED and we declined to store it (MUX_BUFFER_MAX). Not an
+   *                extraction verdict, and it must never be read as one.
+   *
+   * `blob3` IS `'none'` ON EVERY MUX ROW, deliberately — see countMux for why a mux has no client.
+   */
+  | 'mux_ok' | 'mux_gate' | 'mux_timeout' | 'mux_empty'
+  | 'mux_pool' | 'mux_badsource' | 'mux_error' | 'mux_refused'
 
 /**
  * The two analytics outcomes that are content GATES (walls a post sits behind) rather than fetch
@@ -187,6 +215,22 @@ export interface Env {
   // remux video to its cover still, exactly as before playback existed. See container/README.md.
   MEDIA_RESOLVER?: DurableObjectNamespace
   MEDIA_CACHE?: R2Bucket
+  /**
+   * THE MUX RUNNER — a Durable Object whose ALARM performs a mux, because an alarm handler gets 15
+   * minutes where `ctx.waitUntil` gets 30 seconds (both Cloudflare's documented limits). See MuxJob
+   * for the defect that makes the difference matter.
+   *
+   * TYPED STRUCTURALLY, NOT AS THE CLASS, and that is the same constraint src/container.ts exists
+   * for: the class extends `DurableObject` from `cloudflare:workers`, a module that does not exist
+   * under `node --test`, and worker.ts is the test-imported half. Naming only the method keeps the
+   * import out of every file but src/muxrunner.ts and the deploy entry.
+   *
+   * OPTIONAL exactly as MEDIA_RESOLVER is: a Worker deployed without it behaves precisely as this
+   * service did before the alarm existed — the inline attempt still runs, it is just still capped at
+   * 30 seconds. That is what makes this safe to ship ahead of the binding, and it is what a
+   * self-hosted deploy gets for free.
+   */
+  MUX_RUNNER?: { getByName(name: string): { schedule(job: MuxJob): Promise<void> } }
   /**
    * Workers AI, for translating a foreign-script post. OPTIONAL exactly as MEDIA_RESOLVER is:
    * absent means every card renders as it did before translation existed, so the binding can be
@@ -345,4 +389,30 @@ export interface Env {
  */
 export function count(env: Env, platform: Platform | 'none', outcome: Outcome2, client: ClientClass): void {
   env.AE?.writeDataPoint({ blobs: [platform, outcome, client], doubles: [1] })
+}
+
+/** The mux outcomes — the subset of Outcome2 that describes a video mux. Derived, so it cannot drift. */
+export type MuxOutcome = Extract<Outcome2, `mux_${string}`>
+
+/**
+ * A MUX OUTCOME, WITH ITS DURATION — the one row shape in this dataset that carries a second double.
+ *
+ * `double2` IS ELAPSED MILLISECONDS, and it is the field the reported incident had no answer for:
+ * nothing anywhere recorded how long a mux took, even when it SUCCEEDED, so "it took ten minutes"
+ * could only ever be reconstructed from arithmetic. docs/METRICS.md used to state flatly that
+ * `double1` is always 1 and that there are no durations in this dataset; both halves of that
+ * sentence are now qualified there rather than silently falsified here.
+ *
+ * `blob3` IS ALWAYS `'none'`, and that is a decision rather than a gap. A cold video is asked for by
+ * the prewarm, the HTML render and the activity render within ~2s of one paste, and muxOnce collapses
+ * all of them onto ONE piece of work — so there is no single client that the mux belongs to, and
+ * naming any one of them would be arbitrary. `'none'` is the sentinel blob1 already uses for a row
+ * with no platform, so the dataset gains no new vocabulary.
+ *
+ * NO URL EVER REACHES THIS. The outcome is a fixed enum member chosen from the container's STATUS and
+ * a closed allowlist of its own error strings — never its stderr, which is suppressed at the source
+ * precisely because it can carry the source url.
+ */
+export function countMux(env: Env, platform: Platform | 'none', outcome: MuxOutcome, ms: number): void {
+  env.AE?.writeDataPoint({ blobs: [platform, outcome, 'none'], doubles: [1, Math.max(0, Math.round(ms))] })
 }
