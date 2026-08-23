@@ -40,6 +40,7 @@ import { normalizeReddit } from './platforms/reddit/normalize.ts'
 import { fetchYouTube, ytPageUrl } from './platforms/youtube/fetch.ts'
 import {
   normalizeYouTube, uploadDateFrom, withAgeNote, withCounts, withDescription, withLengthNote,
+  withMuxDuration,
   withUploadDate,
   youtubeVouched,
 } from './platforms/youtube/normalize.ts'
@@ -717,7 +718,7 @@ export async function liveFetchPost(
       // link 5 of its gate chain), and the card renders 1 January 1970 for the whole POST_TTL — with a
       // correct timestamp sitting in R2 the entire time. Title and date come from two independent
       // sources; one missing must not suppress the other.
-      return normalizeYouTube(
+      const ytPost = normalizeYouTube(
         warm
           ? {
             ...got,
@@ -728,6 +729,26 @@ export async function liveFetchPost(
           }
           : got,
         ref)
+      /**
+       * THE DURATION IS STAMPED ON AFTERWARDS, and that is not squeamishness about the overlay above.
+       *
+       * settleMux already knows how to refuse a video the container will refuse — `m.duration >
+       * MUX_MAX_SECONDS` returns the still without spending a container call. On YouTube that arm has
+       * been DEAD CODE since it was written, because normalizeYouTube hardcodes `remux: { page }` and
+       * never carries a duration, so every over-ceiling video is dispatched to be told what the meta
+       * record already said. With the alarm landed that costs three container calls across a 22-minute
+       * horizon, out of a pool of four slots shared by ten platforms, for an answer that is final.
+       *
+       * NOT PUT IN THE OVERLAY OBJECT. `YouTubeFetch` is a closed union (platforms/youtube/fetch.ts),
+       * so `duration: warm.duration` there is a tsc error, and widening it would not help — normalize
+       * never reads the field. Stamping the built entry is the whole change, and it keeps the fetch
+       * type describing what youtube.com answered rather than what R2 remembered.
+       *
+       * COLD FIRST PASTE IS UNCHANGED: `warm` is a cache-only read, so the very first view of a long
+       * video still dispatches the doomed mux. POST_TTL is 900s and the record lives 30 days, so every
+       * view after the activity route fills it is covered.
+       */
+      return ytPost ? withMuxDuration(ytPost, warm?.duration) : ytPost
     }
     case 'fb': {
       // Facebook: BOTH the title/poster and the video come from the container's yt-dlp — Meta decoys the
@@ -1264,7 +1285,7 @@ function withResolver(post: Post, env: Env): Post {
 const notReady = () => new Response(null, { status: 503, headers: { 'cache-control': 'no-store' } })
 
 async function serveMuxed(
-  req: Request, env: Env, ref: PostRef, index: number, source: Media['remux'],
+  req: Request, env: Env, ctx: ExecutionContext, ref: PostRef, index: number, source: Media['remux'],
 ): Promise<Response> {
   const { MEDIA_RESOLVER: resolver, MEDIA_CACHE: cache } = env
   if (!resolver || !cache || !source) return notReady()
@@ -1278,7 +1299,31 @@ async function serveMuxed(
     // within ~2s of one paste, and three concurrent downloads of one video is the bandwidth that
     // decides whether the card gets a player. The slot key is the POST, so this call and the meta
     // call for the same ref land on one already-booted instance.
-    const head = await muxOnce(env, key, source, refKey(ref), jarPlatform(ref))
+    /**
+     * THE ONLY DURABLE MUX PATH BLUESKY AND REDDIT HAVE, which is why the alarm is armed HERE and not
+     * only in settleMux.
+     *
+     * settleMux returns before its arming loop for any post with no `{page}` remux, and prewarmable()
+     * answers null for `bs`/`rd` — so those two platforms had ZERO alarm coverage. Their single mux
+     * attempt is this line, running inside Discord's media-proxy request; when that request is
+     * cancelled the container's `finally: os.remove(out)` discards every byte and the next paste
+     * starts again from zero. Not slow — never, on repeat, forever.
+     *
+     * ARMED BEFORE THE AWAIT, for settleMux's reason: a request can be cancelled at any point after
+     * this line, so arming afterwards would skip exactly the slow videos the alarm exists for.
+     *
+     * NOT RESTRICTED TO bs/rd. A `{page}` platform reaches this route cold too — a degraded card is
+     * not response-cached, so /_media/{ref}/{i} re-derives the remux entry and retries — and the DO is
+     * addressed by the mux key, so a second arming for a video settleMux already armed is a no-op.
+     * A warm range request pays one cheap DO wake that finds the R2 head and deletes itself.
+     */
+    ctx.waitUntil(scheduleMux(env, key, refKey(ref), source))
+    // `.catch(() => null)` for waitUntil only — handing the runtime a rejecting promise is not the
+    // same as keeping the work alive. The awaited `work` is the UNcaught one, so a throw still reaches
+    // the console.error below rather than being swallowed into an indistinguishable 503.
+    const work = muxOnce(env, key, source, refKey(ref), jarPlatform(ref))
+    ctx.waitUntil(work.catch(() => null))
+    const head = await work
     if (!head) return notReady()
     return await r2Range(cache, key, head.size, req.headers.get('range'))
   } catch (err) {
@@ -1831,11 +1876,23 @@ function stillOf(m: Media): Media | null {
  * Returns the post to render and whether anything degraded (the caller must not cache a degraded card).
  */
 async function settleMux(
-  post: Post, env: Env, ctx: ExecutionContext, budgetMs: number,
+  post: Post, env: Env, ctx: ExecutionContext, budgetMs: number, client: ClientClass,
 ): Promise<{ post: Post; degraded: boolean }> {
   if (!env.MEDIA_RESOLVER || !env.MEDIA_CACHE) return { post, degraded: false }
   const own = Array.isArray(post.media) ? post.media : []
-  if (!own.some(m => m?.remux?.page)) return { post, degraded: false }
+  /**
+   * EVERY REMUX, NOT ONLY A `{page}` ONE — the guard used to read `m?.remux?.page`, and that single
+   * `?.page` is what left Bluesky and Reddit with no durable mux path at all. They carry `{video}`
+   * (an unsigned CDN HLS manifest) and never a page, so this function returned here before reaching
+   * the arming loop, and prewarmable() answers null for them as well. scheduleMux was BUILT to accept
+   * them — its own docstring reasons about "a source with no page (Bluesky, Reddit)" — and no caller
+   * ever handed it one, so that branch shipped dead.
+   *
+   * The RACE below is still `{page}`-only. A `{video}` entry is armed and returned untouched: waiting
+   * on it would start degrading cards that render fine today, which is a behaviour change with its own
+   * measurement to do. This change is strictly additive and cannot make a rendered card worse.
+   */
+  if (!own.some(m => m?.remux)) return { post, degraded: false }
 
   let degraded = false
   /**
@@ -1853,7 +1910,13 @@ async function settleMux(
    */
   let rewritten = false
   const media = await Promise.all(own.map(async (m, i) => {
-    if (!m?.remux?.page) return m
+    if (!m?.remux) return m
+    if (!m.remux.page) {
+      // ARM, DO NOT RACE. See the guard above: this is the whole of Bluesky's and Reddit's alarm
+      // coverage, and it deliberately does not touch the returned entry.
+      ctx.waitUntil(scheduleMux(env, `mux/${refKey(post.ref)}/${i}`, refKey(post.ref), m.remux))
+      return m
+    }
     /**
      * A VIDEO OVER THE CEILING IS NEVER MUXED, AND ITS CARD IS CACHEABLE.
      *
@@ -1910,6 +1973,24 @@ async function settleMux(
     // comment records that this cost the test suite 6 seconds before it was fixed there.
     const head = await deadline(work, budgetMs)
     if (head) return m
+    /**
+     * THE ONE OUTCOME A READER ACTUALLY SEES, and until now the only one counted nowhere.
+     *
+     * The card that reaches this line is the still — no player — and the render that produced it goes
+     * on to fire `ok`. So the dataset recorded the first-paste failure everyone is trying to fix as a
+     * SUCCESS, twice. That is worse than having no number: it is a number that points the wrong way.
+     *
+     * `card_degraded`, NOT `mux_degraded`. docs/METRICS.md fixes blob3 as `none` and double2 as elapsed
+     * ms on every `mux_*` row, and `MuxOutcome` is derived from that prefix — a `mux_`-named outcome
+     * emitted through plain count() would satisfy the type system while falsifying both columns and
+     * dragging every platform's avg_ms toward zero. This is also genuinely a different event: per
+     * RENDER, not per mux, so the real client is meaningful here where countMux's `none` is not. Only
+     * the Discord render is the one Discord then freezes forever.
+     *
+     * The over-ceiling rewrite above is deliberately NOT counted here. It never calls the container
+     * and can never succeed, so folding it in would put a permanent floor under the ratio.
+     */
+    count(env, post.ref.p, 'card_degraded', client)
     degraded = true
     return stillOf(m)
   }))
@@ -2971,7 +3052,17 @@ async function resolveYouTubeMeta(ref: Extract<PostRef, { p: 'yt' }>, env: Env):
     const views = ytCount(j.view_count)
     const likes = ytCount(j.like_count)
     const replies = ytCount(j.comment_count)
-    const duration = typeof j.duration === 'number' && Number.isFinite(j.duration) && j.duration > 0
+    /**
+     * AN UPPER SANITY BOUND, ADDED WHEN THIS FIELD GOT A SECOND JOB.
+     *
+     * It used to decide one sentence on the card ("too long to play here"). It now also decides
+     * whether settleMux dispatches a mux at all, and that verdict is response-cached — so a junk
+     * duration (a premiere, a live replay, an extractor quirk reporting a scheduled window) costs the
+     * PLAYER for the whole TTL rather than a wrong line of prose. A day is not a long video, it is a
+     * bad reading; refusing to store it keeps the old behaviour instead of inventing a new failure.
+     */
+    const duration = typeof j.duration === 'number' && Number.isFinite(j.duration)
+      && j.duration > 0 && j.duration < 86_400
       ? j.duration : undefined
     return {
       // `seconds`, not `j.timestamp` — the two differ on exactly the responses this fix is about, and
@@ -3173,8 +3264,19 @@ async function r2Range(cache: R2Bucket, key: string, size: number, range: string
   }
   const m = range ? /^bytes=(\d*)-(\d*)$/.exec(range) : null
   if (m) {
-    const start = m[1] ? Number(m[1]) : 0
-    const end = m[2] ? Math.min(Number(m[2]), size - 1) : size - 1
+    /**
+     * `bytes=-N` IS A SUFFIX RANGE — the LAST N bytes — and this used to answer with the FIRST N+1,
+     * labelled `bytes 0-N` as though that were what was asked for. The regex accepts an empty first
+     * group, so `bytes=-500` parsed as start=0, end=500: a 206 that is confidently wrong rather than
+     * a 416, which is the shape that costs an afternoon when a player finally sends one.
+     *
+     * The guard below is unchanged and gets the two edges right for free. `bytes=-0` -> start = size,
+     * end = size-1 -> start > end -> 416, which is what RFC 9110 requires for a zero-length suffix. An
+     * oversized suffix clamps to the whole representation, which is also what it requires.
+     */
+    const suffix = !m[1] && !!m[2]
+    const start = suffix ? Math.max(0, size - Number(m[2])) : (m[1] ? Number(m[1]) : 0)
+    const end = suffix ? size - 1 : (m[2] ? Math.min(Number(m[2]), size - 1) : size - 1)
     if (start > end || start >= size) {
       return new Response(null, { status: 416, headers: { ...base, 'content-range': `bytes */${size}` } })
     }
@@ -3752,7 +3854,7 @@ async function describeTarget(
    * than the thing it describes guarantees they disagree.
    */
   const [settled, xlate] = await Promise.all([
-    settleMux(got.post, env, ctx, Math.max(MUX_WAIT_FLOOR_MS, CARD_DEADLINE_MS - (Date.now() - started))),
+    settleMux(got.post, env, ctx, Math.max(MUX_WAIT_FLOOR_MS, CARD_DEADLINE_MS - (Date.now() - started)), client),
     // The ORIGINAL post, not the settled one: the mux replaces media urls and never touches `text`,
     // so there is nothing to wait for. Same ordering the activity arm uses.
     withTranslated(
@@ -4092,7 +4194,7 @@ async function renderPostRoute(
    * capping the translation would abandon it early to save time the response is spending regardless.
    */
   const [settled, xlate] = await Promise.all([
-    settleMux(post, env, ctx, Math.max(MUX_WAIT_FLOOR_MS, Math.min(MUX_WAIT_BOT_MS, HTML_DEADLINE_MS - (Date.now() - started)))),
+    settleMux(post, env, ctx, Math.max(MUX_WAIT_FLOOR_MS, Math.min(MUX_WAIT_BOT_MS, HTML_DEADLINE_MS - (Date.now() - started))), client),
     // The pre-mux post: the mux rewrites media urls and never touches `text`.
     withTranslated(
       post, env, ctx,
@@ -4276,7 +4378,7 @@ export async function handle(req: Request, env: Env, ctx: ExecutionContext, d: D
       // otherwise) is served as a muxed MP4 from R2/the container; everything else 302s to its url.
       const entry = post && typeof r.index === 'number' ? pickMediaEntry(post, r.index) : null
       if (entry?.remux && env.MEDIA_RESOLVER && env.MEDIA_CACHE) {
-        return serveMuxed(req, env, r.ref, r.index as number, entry.remux)
+        return serveMuxed(req, env, ctx, r.ref, r.index as number, entry.remux)
       }
       /**
        * A DIRECT (non-remux) VIDEO ON A CDN WE HAVE MEASURED IS STREAMED BY US, NEVER 302'd.
@@ -4397,7 +4499,7 @@ export async function handle(req: Request, env: Env, ctx: ExecutionContext, d: D
        */
       const botBudget = Math.min(MUX_WAIT_BOT_MS, MUX_WAIT_API_MS)
       const [settledApi, meta, xlate] = await Promise.all([
-        settleMux(post, env, ctx, botBudget),
+        settleMux(post, env, ctx, botBudget, client),
         r.kind === 'activity' ? deadline(youtubeMeta(r.ref, post, env, ctx), botBudget) : null,
         r.kind === 'activity' ? translationFor(post, env, ctx, botBudget) : null,
       ])

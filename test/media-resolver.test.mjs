@@ -76,6 +76,66 @@ test('a Range request is honoured with 206 + Content-Range', async () => {
   assert.equal(await res.text(), MP4.slice(0, 4))
 })
 
+test('A SUFFIX RANGE IS THE LAST N BYTES — `bytes=-N` used to answer with the FIRST N+1', async () => {
+  /**
+   * The range regex accepts an empty first group, so `bytes=-4` parsed as start=0/end=4 and the route
+   * returned a confident 206 labelled `bytes 0-4` containing the wrong bytes. A 416 would have been a
+   * bug someone noticed; this was a lie a player would believe. Discord's proxy has not been observed
+   * sending one, which is why it survived — an ordinary MP4 player looking for the moov atom at the
+   * tail is exactly who does.
+   */
+  const env = withResolver(async () => new Response(MP4, { headers: { 'content-type': 'video/mp4' } }))
+  const req = new Request(mediaReq().url, { headers: { 'user-agent': 'Discordbot/2.0', range: 'bytes=-4' } })
+  const res = await handle(req, env, ctx, { cache: fakeCache(), fetchPost: async () => remuxPost() })
+  assert.equal(res.status, 206)
+  assert.equal(res.headers.get('content-range'), `bytes ${MP4.length - 4}-${MP4.length - 1}/${MP4.length}`)
+  assert.equal(await res.text(), MP4.slice(-4))
+})
+
+test('`bytes=-0` IS A 416 — a zero-length suffix is unsatisfiable, and the existing guard already knew', async () => {
+  // start = size, end = size-1, so start > end. No special case was added for this; the point of the
+  // assertion is that none is NEEDED, so nobody adds one later.
+  const env = withResolver(async () => new Response(MP4, { headers: { 'content-type': 'video/mp4' } }))
+  const req = new Request(mediaReq().url, { headers: { 'user-agent': 'Discordbot/2.0', range: 'bytes=-0' } })
+  const res = await handle(req, env, ctx, { cache: fakeCache(), fetchPost: async () => remuxPost() })
+  assert.equal(res.status, 416)
+  assert.equal(res.headers.get('content-range'), `bytes */${MP4.length}`)
+})
+
+test('AN OVERSIZED SUFFIX IS THE WHOLE FILE, not a 416 — RFC 9110 says clamp', async () => {
+  const env = withResolver(async () => new Response(MP4, { headers: { 'content-type': 'video/mp4' } }))
+  const req = new Request(mediaReq().url, { headers: { 'user-agent': 'Discordbot/2.0', range: 'bytes=-99999999' } })
+  const res = await handle(req, env, ctx, { cache: fakeCache(), fetchPost: async () => remuxPost() })
+  assert.equal(res.status, 206)
+  assert.equal(res.headers.get('content-range'), `bytes 0-${MP4.length - 1}/${MP4.length}`)
+  assert.equal(await res.text(), MP4)
+})
+
+test('/_media/ ARMS THE ALARM — it is the only mux dispatcher Bluesky and Reddit ever reach', async () => {
+  /**
+   * THE HOLE THIS CLOSES. settleMux returns before its arming loop for any post with no `{page}`
+   * remux, and prewarmable() answers null for `bs`/`rd` — so the two platforms whose video is an
+   * ordinary CDN HLS manifest had ZERO alarm coverage. Their single attempt ran inside Discord's
+   * media-proxy request, and a cancelled request left the container deleting its temp file in a
+   * `finally`: zero bytes in R2, and the next paste starting again from zero. Not slow. Never.
+   */
+  const jobs = []
+  const env = {
+    ...withResolver(async () => new Response(MP4, { headers: { 'content-type': 'video/mp4' } })),
+    MUX_RUNNER: { getByName: (name) => ({ async schedule(job) { jobs.push({ name, job }) } }) },
+  }
+  const waited = []
+  const capturing = { waitUntil(p) { waited.push(Promise.resolve(p).catch(() => {})) } }
+  const res = await handle(mediaReq(), env, capturing, { cache: fakeCache(), fetchPost: async () => remuxPost() })
+  await Promise.all(waited)
+
+  assert.equal(res.status, 200, 'the bytes are still served inline — the alarm is an upgrade, not a detour')
+  assert.equal(jobs.length, 1, 'the /_media/ route must arm; it is the only durable path this platform has')
+  assert.equal(jobs[0].name, KEY, 'addressed by the mux key, which is the global dedupe')
+  assert.deepEqual(jobs[0].job.source, { video: 'https://cdn.bsky.app/v.m3u8' },
+    'the unsigned CDN manifest is the durable form — there is no page to fall back to')
+})
+
 test('a second hit serves from R2 without calling the container again', async () => {
   let calls = 0
   const env = withResolver(async () => { calls++; return new Response(MP4, { headers: { 'content-type': 'video/mp4' } }) })

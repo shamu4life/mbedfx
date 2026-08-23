@@ -25,6 +25,39 @@
 export const MUX_FIRST_ATTEMPT_MS = 35_000
 
 /**
+ * THE SAME DERIVATION, RUN AGAINST THE OTHER CEILING — because `{video}` track remuxes do not live
+ * inside `waitUntil` at all, and 35s is wrong for them by a factor of four.
+ *
+ * A `{page}` source is dispatched by settleMux/prewarm into `ctx.waitUntil`, so 30s is genuinely the
+ * moment its inline attempt stops existing. A `{video}` source (Bluesky, Reddit) has only ONE
+ * dispatcher — serveMuxed, running inside Discord's media-proxy request — and that attempt is
+ * ceilinged by the container instead: `container/server.py`'s `_mux_tracks` runs ffmpeg under
+ * `timeout=PROC_TIMEOUT` (120s). Firing at 35s would therefore wake the alarm while the ffmpeg pull
+ * is still going, in a DO isolate where `muxInflight` cannot dedupe (it is isolate-local and says so)
+ * and where ensureMuxed's R2 head still misses because nothing is written until the mux finishes.
+ *
+ * That is two concurrent HLS pulls of one video on ONE pooled instance — the exact double-mux
+ * MUX_FIRST_ATTEMPT_MS's own comment calls "the failure muxOnce was written to prevent, reintroduced
+ * by the fix" — and it would land on the slow videos this alarm exists for and nothing else.
+ *
+ * 140s = PROC_TIMEOUT (120) + slack for the container's own request overhead. Move it if PROC_TIMEOUT
+ * moves; they are one number expressed twice and that is the bug shape this repo keeps writing down.
+ */
+export const MUX_FIRST_ATTEMPT_TRACKS_MS = 140_000
+
+/**
+ * How long after arming the first attempt should fire, given the source that will be muxed.
+ *
+ * ONE FUNCTION SO THE CHOICE IS MADE ONCE. The two constants above are each derived from a DIFFERENT
+ * ceiling, and picking between them at the call site would mean the derivation and the choice living
+ * in different files — which is how the 35s constant came to be applied to a path that has no
+ * `waitUntil` in it at all.
+ */
+export function firstMuxDelayMs(hasPage: boolean): number {
+  return hasPage ? MUX_FIRST_ATTEMPT_MS : MUX_FIRST_ATTEMPT_TRACKS_MS
+}
+
+/**
  * BOUNDED RETRY, and the bound is the point.
  *
  * The complaint this was built for (2026-08-23) was a reader pressing the site's warm button for ten
@@ -55,6 +88,11 @@ export function nextMuxDelayMs(spent: number): number | null {
   return MUX_RETRY_MS[spent] ?? null
 }
 
-/** The horizon a reader is promised: one paste, and we keep trying for this long before giving up. */
+/**
+ * The horizon a reader is promised: one paste, and we keep trying for this long before giving up.
+ *
+ * STATED FOR THE SLOWEST SHAPE, not the common one. A `{page}` source's horizon is 105s shorter; this
+ * is the number to quote when the question is "how long before we have definitely stopped".
+ */
 export const MUX_TOTAL_HORIZON_MS =
-  MUX_FIRST_ATTEMPT_MS + MUX_RETRY_MS.reduce((a, b) => a + b, 0)
+  MUX_FIRST_ATTEMPT_TRACKS_MS + MUX_RETRY_MS.reduce((a, b) => a + b, 0)

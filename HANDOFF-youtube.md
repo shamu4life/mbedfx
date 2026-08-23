@@ -3,10 +3,15 @@
 Goal: replace Discord's built-in YouTube embed (ads regardless of length or Premium)
 with our own ad-free MP4. That needs the mux to succeed reliably and quickly.
 
-**State: uncommitted work sits in the tree on branch `perf/mux-without-re-extracting`.**
-Nothing is committed, no PR is open. `npm run build` is green (1388 Worker tests,
-tsc clean), `npm run test:container` green (29), and `npx wrangler deploy --dry-run
---containers-rollout=none` validates the new binding.
+**State, 2026-08-23: committed and in review.** `9e2a1dc` on
+`perf/mux-without-re-extracting` (PR #57, the alarm + telemetry) and
+`fix/mux-durability-and-bytes` stacked on top of it (PR #58, the four items below).
+Neither is merged, and merging is the deploy. Both are green.
+
+Its Workers Builds check is RED on both, benignly: branch builds run
+`wrangler versions upload`, which cannot apply a Durable Object migration (error
+10211). `main` runs `wrangler deploy`, which can. See the memory note
+`do-migrations-fail-branch-builds`.
 
 ---
 
@@ -91,27 +96,60 @@ the exact production argv, on `Qy2DltXI3Fc` (625 s — a 10-minute video):
   storing is the middle path if logs are wanted.
 - **Commit / PR.** Nothing committed. Branch `perf/mux-without-re-extracting`.
 
+## Done since (PR #58, `fix/mux-durability-and-bytes`)
+
+- ~~**Prefer the 360p DASH pair**~~ — DONE. `134+140` is the selector's first arm.
+  Re-measured on 2026-08-23 with this container's own player-client list:
+  `Qy2DltXI3Fc` 32,347,122 -> 20,164,682 (-37.7%), `hFQ-UPZ77kA` 6,011,494 ->
+  5,028,446 (-16.4%). The cause is the H.264 PROFILE, not the resolution: 18 is
+  `avc1.42001E` (Baseline), 134 is `avc1.4d401e` (Main).
+- ~~**Reconcile the ceilings**~~ — DONE, and the finding was smaller than expected. The
+  table above is CORRECT (1500 s of video, 180 s on the `{page}` mux). What was imprecise
+  was `container/README.md`'s 504 line, which named `PROC_TIMEOUT` without saying the
+  `{page}` path gets `PROC_TIMEOUT + 60`. Fixed. **Do NOT raise `PROC_TIMEOUT`** hoping it
+  helps: before the alarm it did nothing, and after the alarm it only matters for videos
+  needing >180 s of download.
+- **Bluesky and Reddit had NO alarm coverage** — found while checking the above, and
+  bigger than either. `settleMux` returns before its arming loop for any page-less remux
+  and `prewarmable()` is null for `bs`/`rd`, so their only dispatcher was `serveMuxed`,
+  inside Discord's request, with no `ExecutionContext`. Cancelled = zero bytes = every
+  paste restarting from nothing. Both dispatchers now arm, and the tracks path gets its
+  own first-attempt delay (`MUX_FIRST_ATTEMPT_TRACKS_MS = 140_000`) because 35 s is
+  derived from a `waitUntil` ceiling that path does not have.
+- **`card_degraded`** — the degrade was counted nowhere and the same render fired `ok`.
+- **The over-ceiling skip was dead code on yt** — `normalizeYouTube` carried no duration.
+
 ## Next, in order
 
 1. **PO token provider** (`bgutil-ytdlp-pot-provider`) — the only thing that changes what
-   googlevideo actually gives us. The alarm makes a slow mux FINISH; it cannot make a
-   throttled stream fast. Container-side, so it ships on merge to main or via
-   `wrangler dev --remote` with Docker running. **Docker was not running on 2026-08-23**,
-   so this could not be tested.
-2. **Prefer the 360p DASH pair** — 38% fewer bytes, no PO token needed, measured above.
-3. **Reconcile the three ceilings** in `container/server.py` and
-   `container/README.md:211` (which documents the `{page}` 504 as 120 s — it is 180 s).
-   Do NOT raise `PROC_TIMEOUT` hoping it helps; before the alarm it did nothing, and
-   after the alarm it only matters for videos that need >180 s of download.
+   googlevideo actually gives us. The alarm makes a slow mux FINISH and the DASH pair makes
+   it shorter; neither makes a throttled stream fast. Container-side, so it ships on merge
+   to main or via `wrangler dev --remote` with Docker running.
+2. **Settle whether Cloudflare's ~267 KB/s is per-CONNECTION or per-EGRESS.** This is the
+   highest-value unknown left and it is one measurement. googlevideo serves parallel Range
+   requests at full speed residentially. If the throttle is per-connection, N-way parallel
+   ranges inside the container collapse a 120 s download to ~15 s and every ceiling above
+   stops mattering. If it is per-egress, drop the idea. It cannot be answered from a laptop:
+   it needs a request issued from Cloudflare's egress, so it waits on a merge or on
+   `wrangler dev --remote`.
+3. **Read `card_degraded / ok` on `blob3='discord'`** once #57 and #58 are live. That is the
+   before/after this whole workstream has been arguing about without data.
 
 ## Do not re-derive
 
 - Both client sets pick the byte-identical format 18. Format choice is not a lever for
   ACCESS (it is for BYTES — see the DASH pair above). Client-list trimming saves 0.4s;
   yt-dlp's cache 0.2s.
-- YouTube gates/throttles Cloudflare egress; measured 2026-08-22 (4 fresh ids → 502 from
-  Workers, same ids fine residentially, Dailymotion 200/76.6 MB through the same
-  container the same day). PR #55's client switch bought hours, not a fix.
+- YouTube THROTTLES Cloudflare egress but does NOT block it — **corrected 2026-08-23**, and
+  the earlier "gates" reading was drawn from evidence that cannot carry it. Head-to-head on
+  same-day uploads, prod vs this same container code on a laptop: `hFQ-UPZ77kA` muxed cold
+  from production, HTTP 200, 6,011,494 bytes, byte-identical to the local run — but 22.5 s
+  against 7.1 s (3.2x), and two other short videos were refused 6/6 from Cloudflare while
+  muxing residentially in ~8 s. ~267 KB/s against a 30 s `waitUntil` ceiling is ~8 MB max
+  per attempt, which is why a 10-minute video could never finish. The 2026-08-22 inference
+  ("4 fresh ids -> 502, therefore gated") was read off `notReady()`, which returns the same
+  bodiless 503 for our own timeout, a cold container, a pool exhaustion and their gate
+  alike. That is what `card_degraded` and the `mux_*` counters exist to answer.
 - Preview URLs serve nothing, all three forms, despite `previews_enabled: true`.
 - Every merge rebuilds the container image, including docs-only ones.
 - A cold container start can 503 the first request. Retry once.

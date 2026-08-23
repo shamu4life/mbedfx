@@ -197,6 +197,32 @@ export type Outcome2 =
    */
   | 'mux_ok' | 'mux_gate' | 'mux_timeout' | 'mux_empty'
   | 'mux_pool' | 'mux_badsource' | 'mux_error' | 'mux_refused'
+  /**
+   * THE CARD DEGRADED TO A STILL — per RENDER, and deliberately outside the `mux_*` block.
+   *
+   * WHAT IT COUNTS: settleMux waited out its budget and returned the poster instead of the player.
+   * That is the outcome the reader sees, and it was counted NOWHERE. Worse than nowhere: the render
+   * that produced it goes on to fire `ok`, so the dataset affirmatively reported the exact first-paste
+   * failure this workstream exists to fix as a success. `mux_ok` can be high and every card still be a
+   * still, because a mux that finishes at T+40s finishes after the card is already frozen.
+   *
+   * WHY NOT `mux_degraded`. `MuxOutcome` is `Extract<Outcome2, \`mux_${string}\`>`, so that name would
+   * silently join the countMux domain while being emitted through plain `count()` — blob3 a real
+   * client where METRICS.md promises `none`, double2 unset where METRICS.md promises elapsed ms, and
+   * the operator's `WHERE blob2 LIKE 'mux\\_%'` average quietly poisoned. The type system would not
+   * have caught it. The name is the guard.
+   *
+   * WHY THE CLIENT IS REAL HERE. countMux writes `none` because muxOnce collapses three callers onto
+   * one piece of work, so no client owns a mux. A DEGRADE is owned: it happened to one render, for one
+   * audience. And the split is the whole point — Discord caches an embed permanently in the message,
+   * so `card_degraded/ok` on `blob3='discord'` IS the first-paste failure rate, and it is the single
+   * number that says whether the alarm moved anything.
+   *
+   * WHAT IT DELIBERATELY EXCLUDES: the over-ceiling rewrite. That path never calls the container and
+   * can never succeed, so counting it here would put a permanent floor under the ratio made of videos
+   * that are too long by design.
+   */
+  | 'card_degraded'
 
 /**
  * The two analytics outcomes that are content GATES (walls a post sits behind) rather than fetch

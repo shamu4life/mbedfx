@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import { handle, metaCacheKey } from '../src/worker.ts'
 import { refKey } from '../src/refkey.ts'
 import { encodeStatusId } from '../src/statusid.ts'
-import { normalizeYouTube } from '../src/platforms/youtube/normalize.ts'
+import { normalizeYouTube, withMuxDuration } from '../src/platforms/youtube/normalize.ts'
 import { readFileSync } from 'node:fs'
 
 /**
@@ -387,11 +387,58 @@ test('A VIDEO OVER THE MUX CEILING IS NEVER DISPATCHED, and says why on the card
     meta: () => Response.json({ timestamp: TS_RICK, duration: 1600 }),
   })
   const ref = ytRef('tooLong0001')
-  const res = await handle(req(activity(ref)), envWith(binding), ctx, deps(vouchedPost(ref)))
+  /**
+   * `muxWarm: false` IS LOAD-BEARING, and its absence made the dispatch assertion below vacuous for
+   * as long as it existed. fakeR2 answers `head()` with an object by DEFAULT so this file's other
+   * tests are not dominated by mux timing — but that head is exactly what muxOnce short-circuits on,
+   * so `seen.mux` read 0 whatever the duration said. Verified by re-running this shape with a
+   * 60-second video: also 0. The assertion proved nothing about the guard it was named for.
+   *
+   * AND THE GUARD DID NOT FIRE. Repaired, this dispatches. The reason is a seam, not the guard:
+   * settleMux and youtubeMeta run CONCURRENTLY (deliberately — serialising them costs every ordinary
+   * video ~3s), so the duration that produces the note arrives on the overlay AFTER settleMux has
+   * already decided. The post settleMux sees carries no duration at all, because normalizeYouTube
+   * hardcodes `remux: { page }`. So the card told the truth and the container was called anyway.
+   *
+   * This test now pins that honest cold state; the sibling below pins the fix.
+   */
+  const res = await handle(req(activity(ref)), envWith(binding, fakeR2([], false)), ctx, deps(vouchedPost(ref)))
   const content = await contentOf(res)
 
   assert.match(content, /Too long to play here/, 'the card says why it is a picture')
-  assert.equal(seen.mux, 0, 'and no mux was dispatched for a video the container would refuse')
+  assert.equal(seen.mux, 1,
+    'COLD, the mux is still dispatched — the duration reaches the card but not the decision. ' +
+    'See the sibling test: it is the warm meta record, stamped onto the remux entry at fetch time, ' +
+    'that closes this. If this ever reads 0 without that stamp, the seam changed and the comment above is stale.')
+})
+
+test('A POST THAT CARRIES ITS DURATION IS NEVER DISPATCHED — the guard, finally reachable', async () => {
+  /**
+   * THE ARM THIS COVERS HAD BEEN DEAD CODE ON YOUTUBE SINCE IT WAS WRITTEN. settleMux refuses to mux
+   * a video past MUX_MAX_SECONDS, reading `m.duration` off the remux entry — and normalizeYouTube
+   * never put one there. Every over-ceiling YouTube video was therefore dispatched to be told what
+   * the 30-day meta record already knew, and with the alarm landed that is THREE container calls
+   * across a 22-minute horizon, out of a pool of four slots shared by ten platforms, for an answer
+   * that is final and identical in thirty days.
+   *
+   * `withMuxDuration(post, 1600)` is exactly what liveFetchPost's yt arm now produces when the meta
+   * record is warm — the same function, called the same way. The record is filled by the activity
+   * route and lives 30 days, so this is the state of every view after the first.
+   *
+   * THE CARD IS BYTE-IDENTICAL EITHER WAY. This buys no pixels; it buys the container slots, and it
+   * flips /_card's `muxing` from true to false so the fixer page stops spinning for 25 seconds about
+   * a video it is simultaneously telling the reader is too long to play.
+   */
+  const { seen, binding } = fakeResolver({
+    meta: () => Response.json({ timestamp: TS_RICK, duration: 1600 }),
+  })
+  const ref = ytRef('tooLong0002')
+  const post = withMuxDuration(vouchedPost(ref), 1600)
+  const res = await handle(req(activity(ref)), envWith(binding, fakeR2([], false)), ctx, deps(post))
+  const content = await contentOf(res)
+
+  assert.match(content, /Too long to play here/, 'the card still says why it is a picture')
+  assert.equal(seen.mux, 0, 'and NOW no mux is dispatched for a video the container would refuse')
 })
 
 test('A VIDEO INSIDE THE CEILING IS UNTOUCHED — the guard must not swallow ordinary videos', async () => {
