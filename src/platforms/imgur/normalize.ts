@@ -1,5 +1,5 @@
 import type { Media, Post, PostRef } from '../../types.ts'
-import { normalizeYtdlp, type YtdlpMeta, type YtdlpSite } from '../ytdlp/normalize.ts'
+import { normalizeYtdlp, type MuxShortcut, type YtdlpMeta, type YtdlpSite } from '../ytdlp/normalize.ts'
 import { imPageUrl, imThumb, type ImgurItem, type ImgurPost } from './fetch.ts'
 
 /**
@@ -12,9 +12,9 @@ import { imPageUrl, imThumb, type ImgurItem, type ImgurPost } from './fetch.ts'
  */
 const IM: YtdlpSite = { name: 'Imgur', handle: 'imgur', home: 'https://imgur.com' }
 
-export function normalizeImgur(meta: YtdlpMeta | null, ref: PostRef): Post | null {
+export function normalizeImgur(meta: YtdlpMeta | null, ref: PostRef, mux?: MuxShortcut): Post | null {
   if (ref.p !== 'im') return null
-  return normalizeYtdlp(meta, ref, IM, imPageUrl(ref))
+  return normalizeYtdlp(meta, ref, IM, imPageUrl(ref), mux)
 }
 
 /**

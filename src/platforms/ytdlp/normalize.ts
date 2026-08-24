@@ -50,6 +50,23 @@ export type YtdlpMeta = {
   timestamp?: number
 }
 
+/**
+ * THE MUX SHORTCUT — the format urls the SAME container call already resolved, so the /_media/ mux can
+ * hand them to ffmpeg instead of paying a second, byte-identical yt-dlp extraction (measured
+ * 2026-08-22: ~5.0s of player-API round trips against a 1.8s download of the same bytes).
+ *
+ * NOT PART OF YtdlpMeta, and that separation is load-bearing rather than tidiness. A resolved format
+ * url is bound to the egress IP that resolved it and expires in hours; YtdlpMeta is the thing written
+ * to R2 and read back for 30 minutes (Streamable) or 24 hours (Dailymotion, Imgur). Two types means
+ * the volatile half cannot reach the durable one by a later edit that looks harmless — see worker.ts's
+ * cachedYtdlpMeta, where the shortcut rides beside the record instead of inside it.
+ *
+ * ALWAYS OPTIONAL. The container declines it for a livestream, an unknown duration and an age-gated
+ * source with no formats, a pooled instance on a pre-g12 image does not report it at all, and a cache
+ * hit has none by construction. Absent means "mux from the page", which is the behaviour that shipped.
+ */
+export type MuxShortcut = { video?: string; audio?: string }
+
 /** The per-platform half — a url template's worth of difference, named once. */
 export type YtdlpSite = {
   /** The byline when the extract names no uploader (Streamable and Imgur never do). */
@@ -74,6 +91,22 @@ function dims(w: unknown, h: unknown): [number, number] {
 }
 
 /**
+ * The shortcut's contribution to the remux entry — `{}` unless there is a real http VIDEO url, which
+ * is what makes "no shortcut" and "a shortcut the container declined" the same thing here.
+ *
+ * VALIDATED RATHER THAN TRUSTED, like every other field this file reads. The urls originate in a
+ * yt-dlp dict for an attacker-chosen page; the container re-checks them with its own SSRF guard before
+ * ffmpeg sees one, and this is the cheaper half of that — a non-http url is dropped where it costs a
+ * `{page}` mux rather than a rejected container call.
+ */
+function shortcut(mux: MuxShortcut | undefined): { video?: string; audio?: string } {
+  const video = http(mux?.video)
+  if (!video) return {}
+  const audio = http(mux?.audio)
+  return audio ? { video, audio } : { video }
+}
+
+/**
  * TOTAL: null meta, a junk meta, a foreign ref and a playlist all return null rather than throwing,
  * and every optional field degrades independently.
  *
@@ -81,7 +114,7 @@ function dims(w: unknown, h: unknown): [number, number] {
  * "couldn't load", which is the honest answer for a page the container could not extract.
  */
 export function normalizeYtdlp(
-  meta: YtdlpMeta | null, ref: PostRef, site: YtdlpSite, page: string,
+  meta: YtdlpMeta | null, ref: PostRef, site: YtdlpSite, page: string, mux?: MuxShortcut,
 ): Post | null {
   if (!meta || typeof meta !== 'object') return null
   const title = str(meta.title)
@@ -128,7 +161,16 @@ export function normalizeYtdlp(
     media: [{
       kind: 'video', url: page, w, h,
       ...(duration ? { duration } : {}),
-      remux: { page },
+      /**
+       * THE PAGE IS ALWAYS KEPT, and the shortcut only ever ADDS to it. ensureMuxed tries the tracks
+       * first and falls back to the page when they fail, which is the only safe way to use a url that
+       * can go stale between this normalize and the mux — dropping `page` here would delete that
+       * fallback and turn an expired signature into a card with no video at all.
+       *
+       * AUDIO ONLY RIDES WITH VIDEO. The container's `_mux_tracks` maps `0:v:0` and `1:a:0`, so audio
+       * on its own is not a degraded mux, it is a broken argv.
+       */
+      remux: { page, ...shortcut(mux) },
       ...(poster ? { poster } : {}),
     }],
     counts: {},

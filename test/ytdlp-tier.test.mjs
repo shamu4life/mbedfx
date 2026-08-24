@@ -714,3 +714,149 @@ test('THE TWO BUDGETS ARE DERIVED, NOT CHOSEN — and a hand-picked number here 
   assert.equal(mux - floor, 8700, 'the preview budget is 8700ms; docs/API.md publishes this')
   assert.ok(mux > html, 'the preview may outlive the crawler, never the reverse')
 })
+
+
+// ── THE MUX SHORTCUT — the format urls the METADATA call already resolved, muxed from directly
+//    instead of paying a second, identical extraction.
+//
+//    The container's `_meta_page` now asks yt-dlp with the SAME `-f` the mux uses and reports what it
+//    picked as `mux_video`/`mux_audio` (see container/test_server.py:MuxSources for the admission rule
+//    it applies first). Without the Worker half below those fields are simply dropped at the seam and
+//    every card pays the extraction twice — measured 2026-08-22, ~5.0s of player-API round trips
+//    against a 1.8s download of the same bytes.
+//
+//    THE URLS ARE VOLATILE AND THE META RECORD IS NOT. A resolved format url is bound to the egress IP
+//    that resolved it and expires in hours; the record it would ride in lives 30 minutes (st) or 24
+//    hours (dm/im). So the shortcut travels beside the record, never inside it, and the tests below pin
+//    both halves of that: it reaches the Post, and it never reaches R2.
+
+test('THE SHORTCUT RIDES THE remux ENTRY — page kept, because the shortcut is the half that can go stale', () => {
+  const post = normalizeStreamable(ST_META, ST_REF, {
+    video: 'https://cdn.example/v.m4s', audio: 'https://cdn.example/a.m4s',
+  })
+  assert.deepEqual(post.media[0].remux, {
+    page: 'https://streamable.com/moo',
+    video: 'https://cdn.example/v.m4s',
+    audio: 'https://cdn.example/a.m4s',
+  }, 'ensureMuxed tries the tracks and FALLS BACK to the page — dropping the page deletes the fallback')
+})
+
+test('A SHORTCUT IS EARNED, NOT ASSUMED — anything short of an http video url leaves the page path alone', () => {
+  const only = { page: 'https://streamable.com/moo' }
+  const cases = [
+    [undefined, 'no shortcut at all — a pre-g12 pooled instance'],
+    [{}, 'the container declined it (a livestream, an unknown duration, no formats)'],
+    [{ video: null, audio: null }, 'declined, spelled as the nulls the container actually sends'],
+    [{ video: 'ftp://cdn.example/v.m4s' }, 'a non-http url never reaches the container'],
+    [{ video: 'file:///etc/passwd' }, 'nor a local one'],
+    [{ video: '' }, 'nor an empty string'],
+    [{ video: 42 }, 'nor a non-string'],
+    // AUDIO ALONE IS NOT HALF A SHORTCUT. _mux_tracks maps `0:v:0` and `1:a:0`, so audio without
+    // video is not a degraded mux, it is a broken argv — and the page path already handles it.
+    [{ audio: 'https://cdn.example/a.m4s' }, 'audio with no video is not half a shortcut'],
+  ]
+  for (const [mux, why] of cases) {
+    assert.deepEqual(normalizeStreamable(ST_META, ST_REF, mux).media[0].remux, only, why)
+  }
+  // A video WITHOUT audio is the progressive case and is perfectly good — no `audio` key at all,
+  // rather than an explicit undefined that would serialize into the Post cache as `"audio":null`.
+  assert.deepEqual(normalizeStreamable(ST_META, ST_REF, { video: 'https://cdn.example/v.mp4' }).media[0].remux,
+    { page: 'https://streamable.com/moo', video: 'https://cdn.example/v.mp4' })
+})
+
+/**
+ * A resolver that records EVERY body, so the mux request can be inspected rather than assumed, and an
+ * R2 whose `head` misses — the file's shared fakeR2 keeps the mux permanently warm, which is right for
+ * the metadata tests above it and would skip the container call entirely here.
+ */
+function muxRecordingResolver(metaJson) {
+  const seen = { meta: 0, muxBodies: [] }
+  return {
+    seen,
+    binding: {
+      getByName: () => ({
+        async fetch(_url, init) {
+          const body = JSON.parse(init.body)
+          if (body.meta === true) { seen.meta++; return Response.json(metaJson) }
+          seen.muxBodies.push(body)
+          return new Response('MP4', { headers: { 'content-type': 'video/mp4', 'content-length': '3' } })
+        },
+      }),
+    },
+  }
+}
+const coldR2 = () => {
+  const r2 = fakeR2()
+  return { ...r2, async head() { return null } }
+}
+
+test('THE SHORTCUT CROSSES THE SEAM: the mux is asked for the TRACKS, and never with `page` beside them', async () => {
+  /**
+   * THE NARROWING IS THE WHOLE TEST. container/server.py's do_POST checks `page` FIRST, so a body
+   * carrying {video, audio, page} together takes the slow path every single time — the shortcut would
+   * be dead code that still read as correct on both sides. Asserting the KEYS, not just the values.
+   */
+  const meta = { ...ST_META, mux_video: 'https://cdn.example/v.m4s', mux_audio: 'https://cdn.example/a.m4s' }
+  const { seen, binding } = muxRecordingResolver(meta)
+  await handle(req('/e/mox0001'), envWith(binding, coldR2()), ctx, await liveDeps())
+
+  assert.equal(seen.muxBodies.length, 1, 'exactly one mux was dispatched')
+  assert.deepEqual(seen.muxBodies[0], { video: 'https://cdn.example/v.m4s', audio: 'https://cdn.example/a.m4s' },
+    'the tracks alone — `page` in the same body would silently reinstate the second extraction')
+  assert.equal(seen.meta, 1, 'and the extraction was paid exactly once')
+})
+
+test('A PRE-g12 CONTAINER STILL MUXES — the shortcut is optional at the seam, not required', async () => {
+  // A pooled instance running the old image reports no mux_video at all. It must degrade to the page
+  // path, which is the behaviour that shipped, rather than lose its video.
+  const { seen, binding } = muxRecordingResolver(ST_META)
+  await handle(req('/e/mox0002'), envWith(binding, coldR2()), ctx, await liveDeps())
+  assert.deepEqual(seen.muxBodies, [{ page: 'https://streamable.com/mox0002' }])
+})
+
+test('THE SHORTCUT IS NEVER WRITTEN TO THE META RECORD — the urls expire, the record does not', async () => {
+  /**
+   * A resolved format url is bound to the egress IP that resolved it and dies in hours. The record it
+   * would ride in is read back for 30 minutes on Streamable and 24 HOURS on Dailymotion and Imgur, so
+   * persisting one would serve a dead shortcut for most of its life — and invisibly, because the page
+   * fallback quietly repairs it while the whole saving is gone. Keeping it out of the record is what
+   * makes that unreachable rather than merely unlikely; the Post (POST_TTL, 900s) is as far as it goes.
+   */
+  const meta = { ...ST_META, mux_video: 'https://cdn.example/v.m4s', mux_audio: 'https://cdn.example/a.m4s' }
+  const { binding } = muxRecordingResolver(meta)
+  const r2 = coldR2()
+  await handle(req('/e/mox0003'), envWith(binding, r2), ctx, await liveDeps())
+
+  const records = [...r2.store].filter(([k]) => k.startsWith('meta/'))
+  assert.equal(records.length, 1, 'the extract was cached, so there is something to check')
+  const written = records[0][1]
+  assert.ok(!written.includes('cdn.example'), 'a volatile url was persisted: ' + written)
+  // THE KEYS, not a substring search for the url: a future rename of the field would slip past the
+  // line above while persisting exactly the same thing. This is the whitelist the record may carry.
+  const CARD_FIELDS = ['type', 'title', 'poster', 'uploader', 'uploaderUrl', 'description', 'w', 'h',
+    'duration', 'timestamp']
+  const extra = Object.keys(JSON.parse(written)).filter(k => !CARD_FIELDS.includes(k))
+  assert.deepEqual(extra, [], 'the record carries card fields and nothing else — see this test\'s comment')
+  // The control: the record is still the full card, so this is a narrowing and not a broken write.
+  assert.equal(JSON.parse(written).title, 'me irl')
+})
+
+test('A WARM META RECORD MUXES FROM THE PAGE — a cache hit carries no shortcut, by construction', async () => {
+  /**
+   * THE OTHER HALF OF THE RULE ABOVE, and the cost of it, stated as a test rather than left implicit:
+   * the second unfurl reads the record out of R2, the container is never asked, and so there is no
+   * shortcut to use. That is CORRECT — the urls would be minutes-to-hours old — and it is why this
+   * optimisation is a COLD-path one. Anyone who later "fixes" this test by caching the urls should
+   * read the test above it first.
+   */
+  const meta = { ...ST_META, mux_video: 'https://cdn.example/v.m4s' }
+  const { seen, binding } = muxRecordingResolver(meta)
+  const env = envWith(binding, coldR2())
+  await handle(req('/e/mox0004'), env, ctx, await liveDeps())
+  // A FRESH deps (so no response/post cache) against the SAME R2, which is the global half.
+  await handle(req('/e/mox0004'), env, ctx, await liveDeps())
+
+  assert.equal(seen.meta, 1, 'the second unfurl read the record rather than re-extracting')
+  assert.deepEqual(seen.muxBodies[0], { video: 'https://cdn.example/v.m4s' }, 'cold: the shortcut')
+  assert.deepEqual(seen.muxBodies[1], { page: 'https://streamable.com/mox0004' }, 'warm: the page, honestly')
+})

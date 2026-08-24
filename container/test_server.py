@@ -191,6 +191,22 @@ class YtDlpArgv(unittest.TestCase):
             self.assertEqual(cmd[-2], "--")
 
 
+    def test_meta_and_mux_ask_for_exactly_the_same_format(self):
+        """One rule, one expression.
+
+        The meta call used to pass no -f at all and MIRROR the mux's `height<=?720` ceiling in Python
+        to guess the dimensions the mux would produce. Two statements of one rule drift; this asserts
+        they cannot. It also guards the new shortcut: the Worker muxes from the url this call
+        resolved, so a meta call selecting a DIFFERENT format than the mux would is not a slow card,
+        it is the wrong bytes.
+        """
+        srv._mux_page(PAGE, OUT, None)
+        srv._meta_page(PAGE, None)
+        mux, meta = self.rec.calls[0], self.rec.calls[1]
+        self.assertEqual(mux[mux.index("-f") + 1], srv.YT_FORMAT_SELECTOR)
+        self.assertEqual(meta[meta.index("-f") + 1], srv.YT_FORMAT_SELECTOR)
+
+
 class CookieJar(unittest.TestCase):
     """The jar is a live session on disk. Its lifetime and permissions are the security surface."""
 
@@ -324,6 +340,69 @@ class Ceilings(unittest.TestCase):
         strict comparison and the video simply never exists as far as the card is concerned.
         """
         self.assertIn("duration<?", f"duration<?{srv.MAX_SECONDS} & !is_live")
+
+
+class MuxSources(unittest.TestCase):
+    """_mux_sources decides whether the Worker may skip a second extraction.
+
+    Saying "no" costs one re-extraction. Saying "yes" wrongly hands ffmpeg a source that yt-dlp's
+    --match-filter would have refused, and ffmpeg has no such filter — so every case here expecting
+    (None, None) is guarding a ceiling, not declining an optimisation.
+    """
+
+    def test_a_progressive_selection_yields_one_url_and_no_audio(self):
+        self.assertEqual(
+            srv._mux_sources({"duration": 120, "url": "https://cdn.example/v.mp4"}),
+            ("https://cdn.example/v.mp4", None),
+        )
+
+    def test_a_split_selection_yields_video_first_then_audio(self):
+        """_mux_tracks maps 0:v:0 and 1:a:0, so the order is load-bearing, not cosmetic."""
+        self.assertEqual(
+            srv._mux_sources({"duration": 120, "requested_formats": [
+                {"url": "https://cdn.example/v.m4s"}, {"url": "https://cdn.example/a.m4s"}]}),
+            ("https://cdn.example/v.m4s", "https://cdn.example/a.m4s"),
+        )
+
+    def test_a_livestream_is_refused(self):
+        """The filter this mirrors exists because a livestream downloads until PROC_TIMEOUT."""
+        self.assertEqual(
+            srv._mux_sources({"is_live": True, "duration": 60, "url": "https://cdn.example/v.mp4"}),
+            (None, None),
+        )
+
+    def test_a_duration_over_the_ceiling_is_refused(self):
+        self.assertEqual(
+            srv._mux_sources({"duration": srv.MAX_SECONDS + 1, "url": "https://cdn.example/v.mp4"}),
+            (None, None),
+        )
+
+    def test_an_unknown_duration_takes_the_slow_path(self):
+        """DELIBERATELY STRICTER than `duration<?N`, which admits an unknown duration.
+
+        yt-dlp still stops such a download on --max-filesize; ffmpeg reading a url has no equivalent
+        stop, so the shortcut declines and the slow path applies the real filter.
+        """
+        self.assertEqual(srv._mux_sources({"url": "https://cdn.example/v.mp4"}), (None, None))
+
+    def test_a_zero_or_negative_duration_is_refused(self):
+        for duration in (0, -1):
+            self.assertEqual(
+                srv._mux_sources({"duration": duration, "url": "https://cdn.example/v.mp4"}),
+                (None, None), f"duration={duration}",
+            )
+
+    def test_no_url_anywhere_is_a_declined_shortcut_rather_than_a_crash(self):
+        """An age-gated source parses to formats: 0 and reaches here with nothing to offer."""
+        self.assertEqual(srv._mux_sources({"duration": 10}), (None, None))
+        self.assertEqual(srv._mux_sources({}), (None, None))
+
+    def test_a_malformed_requested_formats_declines_rather_than_raising(self):
+        for bad in ([], [None], [{"no_url": 1}], "not-a-list"):
+            self.assertEqual(
+                srv._mux_sources({"duration": 10, "requested_formats": bad}),
+                (None, None), f"requested_formats={bad!r}",
+            )
 
 
 if __name__ == "__main__":

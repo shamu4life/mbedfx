@@ -27,7 +27,70 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   is ADDED to the built-in list and never substituted for it, so every way of getting it wrong is
   "too strict", never "too open".
 
+### Fixed
+- **A long video can now actually finish muxing.** Reported as "a 10-minute video took nearly ten
+  minutes to warm", and the cause was ours, not YouTube's. Every mux was dispatched through
+  `ctx.waitUntil` — `settleMux`, the prewarm, and the site's own warm button `/_prep` — and
+  Cloudflare documents that as a **hard 30-second ceiling**, shared across every `waitUntil` in the
+  same request: *"If any Promises have not settled after 30 seconds, they are canceled."* So the
+  container's own 180s wall (`PROC_TIMEOUT + 60`) and the 1500s of video the duration filter admits
+  were both unreachable. Three ceilings, and only the smallest was ever real — while `settleMux`'s
+  comment claimed the opposite, that the work "runs to completion regardless of who wins this race".
+  Worse, a cancelled attempt left **nothing**: the container buffers the whole file before sending a
+  byte, writes to a fresh `mkstemp` with `--force-overwrites`, and deletes it in a `finally`, so
+  there is no partial R2 object and no resumable `.part`. `/_prep` returns in 23 ms and then gets
+  exactly 30 seconds, so re-pressing it was a lottery that discarded 100% of its bytes every losing
+  roll. That is the ten minutes.
+  The mux now also goes to a **Durable Object alarm** (`src/muxrunner.ts`, `MUX_RUNNER`), whose
+  handler gets **15 minutes** — the same budget as a cron trigger or a queue consumer. It fires at
+  35s, deliberately after the inline attempt is dead: a mux that finished inline has already written
+  to R2, so the alarm's first act is an R2 head check that hits and does no container work at all.
+  Firing sooner would race a live attempt and mux one video twice on one pooled instance, which is
+  the failure `muxOnce` exists to prevent. Two bounded retries follow (+2 min, +20 min, ~22 minutes
+  total) so a reader pastes **once** instead of re-pressing; retrying forever would turn one
+  permanently gated video into a scheduled drain on four container slots shared by every platform.
+  Addressed by the mux key, so it is also the first **global** dedupe this path has had — `muxOnce`
+  is isolate-local and always said so. `MUX_RUNNER` is optional like `MEDIA_RESOLVER`: with no
+  binding, behaviour is exactly what shipped before.
+  Measured while diagnosing, with the pinned yt-dlp 2026.7.4 and the production argv: a 625 s
+  YouTube video selects format 18 as a **single progressive `https` stream, 32,347,090 bytes**. Two
+  things follow. `--concurrent-fragments 4` is **inert on YouTube** — there are no fragments — so the
+  one flag aimed at long-video latency does nothing on the platform that needs it most. And the same
+  360p is available as a DASH pair at **19.2 MiB, 38% fewer bytes**, which under a throughput
+  throttle is 38% less download. Neither is changed here; both are recorded so nobody re-derives them.
+
 ### Changed
+- **Mux outcomes are counted, with their duration** (`src/analytics.ts`, `src/worker.ts`,
+  `docs/METRICS.md`). The video half of this service had no telemetry at all: our own 180s timeout
+  (504), YouTube's gate (502 `"mux failed"`), an empty result (502, *same status*), a cold container
+  (503) and a refused store all reached the reader as one bodiless `503 no-store` and left one
+  unstored `console.error` behind. `ensureMuxed` read the container's status and then **cancelled its
+  error body unread**, throwing away the one account of what went wrong that already existed. Eight
+  `mux_*` outcomes now separate them — `mux_timeout` is ours, `mux_gate` is theirs — and `double2`
+  carries elapsed milliseconds, the field the incident had no answer for, since nothing recorded how
+  long a mux took even when it succeeded. No url ever reaches a counter: the outcome is a fixed enum
+  chosen from a closed allowlist of the container's own error strings, never its stderr.
+- **A cold Dailymotion, Streamable or Imgur card no longer extracts the same video twice**
+  (`container/server.py`, `src/worker.ts`, `RESOLVER_GENERATION` → `g12`). The card's metadata call
+  and the video mux were two independent `yt-dlp` runs over the same page, and the metadata one
+  already had the answer: it now asks with the same `-f` selector the mux uses — hoisted to
+  `YT_FORMAT_SELECTOR` so one rule cannot be written two ways — and reports the format urls it
+  picked as `mux_video` / `mux_audio`. The mux hands those straight to `ffmpeg`. Measured 2026-08-22
+  on YouTube, which is the worst case: extraction is ~5.0s of player-API round trips plus a Deno JS
+  challenge, against a 1.8s download of the same 10 MB.
+  The shortcut is **declined** rather than risked wherever `ffmpeg` could not enforce a ceiling
+  `yt-dlp` would have — a livestream, a duration over `MAX_SECONDS`, and, stricter than the
+  `duration<?N` filter it mirrors, an **unknown** duration (`yt-dlp` still stops such a download on
+  `--max-filesize`; `ffmpeg` reading a url has no equivalent stop, and a livestream would run until
+  `PROC_TIMEOUT` burned a container slot).
+  A resolved format url is bound to the egress IP that resolved it and dies in hours, so it travels
+  **beside** the cached metadata record and never inside it — that record is read back for 30
+  minutes on Streamable and 24 hours on Dailymotion and Imgur. A warm record therefore carries no
+  shortcut and muxes from the page, honestly; this is a cold-path optimisation by design. And the
+  mux falls back to the page whenever the tracks fail, which is what makes a url that goes stale
+  between the two calls a slower card rather than no video at all.
+  YouTube itself gets nothing from this: its cold card (1.70s) answers before the container is ever
+  asked, so it was already paying one extraction, not two.
 - **yt-dlp is pinned exactly, and a weekly job checks for a newer stable release**
   (`container/Dockerfile`, `.github/workflows/ytdlp-freshness.yml`). Stable releases only, by
   decision: one binary here serves Dailymotion, Streamable, Imgur, Facebook, TikTok and YouTube, so

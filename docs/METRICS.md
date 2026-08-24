@@ -81,15 +81,43 @@ env.AE?.writeDataPoint({ blobs: [platform, outcome, client], doubles: [1] })
 |---|---|---|
 | `blob1` | platform | `x` `tt` `ig` `th` `rd` `bs` `yt` `fb` `dm` `st` `im` `tw` `lm` `pn` `ms` `mk` `pt`, or `none` |
 | `blob2` | outcome | one of the values in the `Outcome2` union (`src/analytics.ts:54`) |
-| `blob3` | client class | `discord` `telegram` `other-bot` `human` |
+| `blob3` | client class | `discord` `telegram` `other-bot` `human`, or `none` on a `mux_*` row |
 | `double1` | the literal `1` | always |
+| `double2` | elapsed milliseconds | `mux_*` rows only; `0` on every other row |
 | `timestamp` | set by the runtime | `DateTime`, always UTC |
 
 Columns are 1-based: the first `blobs` element is `blob1`, and there is no `blob0`. `writeDataPoint`
 passes no `indexes` array, leaving no `index1` to filter or group on; `blob1`/`blob2`/`blob3` are the
-only dimensions. `double1` is always 1, and there are no durations, byte counts, latencies or cache
-ages. No urls, post ids, IPs or verbatim user agents either (`src/analytics.ts:207`). Adding a url
+only dimensions. No urls, post ids, IPs or verbatim user agents (`src/analytics.ts:207`). Adding a url
 column breaks what that constraint protects.
+
+`double1` is always 1. **`double2` is the one exception to "there are no durations here"**, added
+2026-08-23 with the `mux_*` outcomes: it carries the elapsed milliseconds of a video mux. Before it,
+nothing recorded how long a mux took even when it SUCCEEDED, so a report that a ten-minute video took
+ten minutes to warm could only be answered with arithmetic. Every non-`mux_*` row leaves it unset,
+which reads as `0` — so filter on `blob2 LIKE 'mux\_%'` before averaging it, or the zeros will drag
+every average to nothing.
+
+### The mux rows
+
+`blob3` is `'none'` on every one of them, deliberately. A cold video is asked for by the prewarm, the
+HTML render and the activity render within ~2s of a single paste and `muxOnce` collapses all three
+onto one piece of work, so no single client owns the mux and naming one would be arbitrary.
+
+The eight outcomes are documented at their definition (`src/analytics.ts`). The split that matters
+most: **`mux_timeout` is ours and `mux_gate` is theirs.** The container answers 502 for both a
+non-zero yt-dlp exit and an empty result, so those are separated here into `mux_gate` and `mux_empty`
+rather than left as one number that points at the wrong system.
+
+```sql
+-- Which half of the video pipeline is failing, per platform, and how slow the good ones are.
+SELECT blob1 AS platform, blob2 AS outcome,
+       SUM(_sample_interval) AS n,
+       SUM(_sample_interval * double2) / SUM(_sample_interval) AS avg_ms
+FROM mbedfx
+WHERE timestamp > NOW() - INTERVAL '24' HOUR AND blob2 LIKE 'mux\_%'
+GROUP BY platform, outcome ORDER BY platform, n DESC
+```
 
 ---
 

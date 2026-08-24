@@ -33,7 +33,9 @@ datacenter. Shape:
 { "_type": …, "title": …, "thumbnail": …, "uploader": …, "uploader_id": …, "uploader_url": …,
   "description": …, "width": …, "height": …, "duration": …, "timestamp": …,
   // added 2026-08-01, g8 — a record written before that has none, which is why the generation moved
-  "view_count": …, "like_count": …, "comment_count": …, "age_limit": … }
+  "view_count": …, "like_count": …, "comment_count": …, "age_limit": …,
+  // added 2026-08-22, g12 — the mux shortcut; see below
+  "mux_video": …, "mux_audio": … }
 ```
 
 Any field may be `null`; `src/worker.ts` treats every field but `title` as optional. Judgement lives
@@ -52,6 +54,41 @@ thumbnail, no dimensions, no duration, no timestamp.
 Both fall back to a sized entry in `formats` when the top level has none. A Facebook progressive
 `sd`/`hd` format carries no height, and the card would otherwise ship `og:video:width="0"`. The
 fallback prefers the tallest entry at or under 720, matching the mux's own `height<=?720` selector.
+
+Since g12 the meta call passes that selector itself (`YT_FORMAT_SELECTOR`, hoisted so `_meta_page`
+and `_mux_page` cannot state one rule two ways), so the top-level dimensions describe the format the
+mux will pick rather than yt-dlp's default. Verified not to break the age-gated case, which is what
+`--ignore-no-formats-error` exists for: measured 2026-08-22 on `yt:G0sORVBL4kM` (`age_limit` 18,
+`formats: 0`), with and without `-f` the answer is identical, because the flag suppresses the
+"no formats" exit before selection is reached.
+
+#### `mux_video` / `mux_audio`
+
+The direct format urls this same `-J` already resolved, so the Worker's `/_media/` mux can hand them
+to `ffmpeg` instead of paying a second, byte-identical extraction. Added 2026-08-22, g12. Measured
+2026-08-22 on YouTube: extraction is ~5.0s of player-API round trips plus a Deno JS challenge,
+against a 1.8s download of the same 10 MB — and a cold card paid it twice.
+
+A split selection reports both (video first, matching `_mux_tracks`' `0:v:0` / `1:a:0` mapping); a
+progressive one reports `mux_video` alone.
+
+**Both are `null` whenever the shortcut cannot be taken safely**, and `_mux_sources` decides that
+before yt-dlp's own filter would: a livestream, a duration at or over `MAX_SECONDS`, and — stricter
+than the `duration<?N` match filter it mirrors — an **unknown** duration. `duration<?N` admits an
+unknown duration because yt-dlp still stops that download on `--max-filesize`; `ffmpeg` reading a
+url has no equivalent stop, so handing one over would delete the ceiling silently and a livestream
+would run until `PROC_TIMEOUT` burned a container slot.
+
+The Worker treats them as optional at every step, so a pooled pre-g12 instance degrades to the
+`{"page": …}` mux that shipped. It must send the tracks **without** `page` beside them: `do_POST`
+checks `page` first, so a body carrying both takes the slow path every time.
+
+**These urls are volatile and the meta record is not.** A resolved format url is bound to the egress
+IP that resolved it and expires in hours, while the record it would ride in is read back for 30
+minutes (Streamable) to 24 hours (Dailymotion, Imgur). `src/worker.ts` carries them beside the
+record rather than inside it — see `cachedYtdlpMeta` — so a cache hit has no shortcut by
+construction and muxes from the page. The mux tries the tracks and falls back to the page, which is
+the only safe way to use a url that can go stale between the two calls.
 
 ## `RESOLVER_GENERATION`
 

@@ -1,5 +1,5 @@
 import type { Post, PostRef } from '../../types.ts'
-import { normalizeYtdlp, type YtdlpMeta, type YtdlpSite } from '../ytdlp/normalize.ts'
+import { normalizeYtdlp, type MuxShortcut, type YtdlpMeta, type YtdlpSite } from '../ytdlp/normalize.ts'
 import { stPageUrl } from './fetch.ts'
 
 /**
@@ -12,7 +12,7 @@ import { stPageUrl } from './fetch.ts'
  */
 const ST: YtdlpSite = { name: 'Streamable', handle: 'streamable', home: 'https://streamable.com' }
 
-export function normalizeStreamable(meta: YtdlpMeta | null, ref: PostRef): Post | null {
+export function normalizeStreamable(meta: YtdlpMeta | null, ref: PostRef, mux?: MuxShortcut): Post | null {
   if (ref.p !== 'st') return null
-  return normalizeYtdlp(meta, ref, ST, stPageUrl(ref))
+  return normalizeYtdlp(meta, ref, ST, stPageUrl(ref), mux)
 }
