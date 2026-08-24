@@ -127,12 +127,20 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   `YT_FORMAT_SELECTOR`). The selector's first arm is now the `134+140` DASH pair. It is the same
   640x360 as format 18 — the difference is the H.264 **profile**: 18 is `avc1.42001E` (Baseline, which
   it has always been, because it exists for players that predate everything else) and 134 is
-  `avc1.4d401e` (Main, with CABAC and B-frames). Measured 2026-08-23 with the pinned yt-dlp and this
-  file's own player-client list: `Qy2DltXI3Fc` (625s) 32,347,122 → 20,164,682 bytes (**-37.7%**);
-  `hFQ-UPZ77kA` (81s, portrait) 6,011,494 → 5,028,446 (**-16.4%**). Cloudflare's egress measured
-  ~267 KB/s against YouTube on the same day, and bytes are the only half of that throughput we
-  control, so this is the largest lever available short of a PO-token provider — and it is a
-  multiplier on the alarm, not a substitute for it.
+  `avc1.4d401e` (Main, with CABAC and B-frames). Re-measured 2026-08-24 across **27 real videos from
+  nine channels**, because the original justification rested on a single long landscape video and that
+  overstated it. It is **not a uniform win**: the pair is smaller on 6/7 videos in the 10-25 minute
+  band (**-30.6%** aggregate) and 5/7 in the 2-10 minute band (**-30.8%**), but short 202x360 news
+  clips run **+26% to +43%** — 1-4 MB files that finish in a second at any bitrate. One long
+  regression was measured (`J1WoNuemKOg`, 1365s, +8.4%). Cloudflare's egress measured ~267 KB/s
+  against YouTube, and bytes are the only half of that throughput we control, so ~31% off a 10-25
+  minute video is the largest lever available short of a PO-token provider — and it is a multiplier
+  on the alarm, not a substitute for it. Do **not** condition the arm on duration to claw back the
+  short-clip regression: `_mux_page` does not know the duration before it extracts. The honest form,
+  if per-video optimality is ever wanted, is a size-aware sort (`-S "res:360,+size"`), which would
+  change selection on all ten platforms and needs its own measurement.
+  **Verified live in production 2026-08-24** on `wmaB6rEQVRM`: prod served 1,483,540 bytes where
+  format 18 is 1,153,011 and the pair is 1,472,505.
   Deliberately **not** done: hoisting `bv*` selects AV1 at 720p and costs ~29% *more*; adding
   `height<=?360` breaks portrait video, where 360 is the width (see the 81s case above). The itag
   literal falls through on every other platform because 134/140 do not exist there — a measured fact,

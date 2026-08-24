@@ -102,12 +102,8 @@ YT_PLAYER_CLIENTS = "web_embedded,tv_simply,mweb"
 # fraction, and an embed is displayed far smaller than 720p anyway. `height<=?720` is NON-STRICT
 # (the `?`), so a format with no height still qualifies rather than failing the whole selection.
 #
-# BUT THE LEVER IS BYTES, NOT RESOLUTION — and at the SAME resolution there was still a third to give
-# back. Measured 2026-08-23 with the pinned yt-dlp and this file's own player-client list; the numbers
-# are yt-dlp's reported source filesizes, so the muxed output differs by a few tens of KB:
-#
-#   Qy2DltXI3Fc  625s, 640x360   18: 32,347,122 B  ->  134+140: 20,164,682 B   (-37.7%)
-#   hFQ-UPZ77kA   81s, 360x640   18:  6,011,494 B  ->  134+140:  5,028,446 B   (-16.4%)
+# BUT THE LEVER IS BYTES, NOT RESOLUTION — and at the SAME resolution there is a third to give back on
+# exactly the videos that need it.
 #
 # WHY THE SAME PICTURE COSTS LESS: it is the H.264 PROFILE, not the resolution. Format 18 is
 # `avc1.42001E` — BASELINE, which is what it has always been, because it exists for players that
@@ -115,9 +111,34 @@ YT_PLAYER_CLIENTS = "web_embedded,tv_simply,mweb"
 # spends far fewer bits on the same frames. 140's AAC is slightly larger than 18's muxed audio, and
 # that is the whole of the trade; it is written here rather than hidden behind "same resolution".
 #
-# WHAT IT BUYS. At the ~267 KB/s measured off Cloudflare's egress on 2026-08-23, a third fewer bytes
-# is a third less wall clock on the only axis that was ever binding. The saving is largest on long
-# videos, which is exactly where it is needed: the short clip above gains 16%, the ten-minute one 38%.
+# IT IS NOT A UNIFORM WIN, AND THAT IS THE PART WORTH KNOWING. Measured 2026-08-24 across 27 real
+# videos from nine channels (yt-dlp's reported source filesizes, pinned yt-dlp, this file's own
+# player-client list; the muxed output differs by tens of KB of container overhead):
+#
+#   duration          pair smaller on   aggregate bytes
+#   under 2 min           8 / 13            mixed, small either way
+#   2 - 10 min            5 / 7             -30.8%
+#   10 - 25 min           6 / 7             -30.6%     <- the band this exists for
+#
+#   Yid9cO7peXg  1008s  57,595,754 -> 34,783,673   (-39.6%)
+#   7Wiw42ZlBKs  1060s  62,122,070 -> 36,935,926   (-40.5%)
+#   I07RBedXRYA  1122s  67,125,390 -> 41,728,766   (-37.8%)
+#   J1WoNuemKOg  1365s  66,276,948 -> 71,861,868   (+8.4%)   <- the one long regression measured
+#
+# THE REGRESSIONS CLUSTER WHERE BYTES DO NOT MATTER: short 202x360 news clips run +26% to +43%, and
+# they are 1-4 MB files that finish in a second at any bitrate. Videos past MAX_SECONDS are excluded
+# from the table above because the match filter refuses them regardless — a 2873s sample ran +28.5%
+# and can never be muxed.
+#
+# SO DO NOT "FIX" THE SHORT-VIDEO REGRESSION by conditioning this arm on duration. `_mux_page` does
+# not know the duration before it extracts, and buying back a megabyte on a clip that already works
+# is not worth a second extraction on the videos that do not. If you want per-video optimality the
+# honest form is a size-aware sort (`-S "res:360,+size"`), which needs measuring across all ten
+# platforms this selector serves before it goes anywhere near here.
+#
+# WHAT IT BUYS. At the ~267 KB/s measured off Cloudflare's egress on 2026-08-23, ~31% fewer bytes on a
+# 10-25 minute video is ~31% less wall clock on the only axis that was ever binding — and those are
+# precisely the videos that could not finish at all.
 #
 # WHY ITAGS RATHER THAN A SORT KEY. `-S "res:360,vcodec:h264,acodec:aac"` is the principled form and
 # needs no literal — but it would change selection on all ten platforms this container serves, and

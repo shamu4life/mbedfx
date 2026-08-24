@@ -98,11 +98,19 @@ the exact production argv, on `Qy2DltXI3Fc` (625 s — a 10-minute video):
 
 ## Done since (PR #58, `fix/mux-durability-and-bytes`)
 
-- ~~**Prefer the 360p DASH pair**~~ — DONE. `134+140` is the selector's first arm.
-  Re-measured on 2026-08-23 with this container's own player-client list:
-  `Qy2DltXI3Fc` 32,347,122 -> 20,164,682 (-37.7%), `hFQ-UPZ77kA` 6,011,494 ->
-  5,028,446 (-16.4%). The cause is the H.264 PROFILE, not the resolution: 18 is
+- ~~**Prefer the 360p DASH pair**~~ — DONE and VERIFIED LIVE. `134+140` is the
+  selector's first arm. The cause is the H.264 PROFILE, not the resolution: 18 is
   `avc1.42001E` (Baseline), 134 is `avc1.4d401e` (Main).
+  **Confirmed running in production 2026-08-24** on `wmaB6rEQVRM`: prod served
+  1,483,540 bytes where format 18 is 1,153,011 and the pair is 1,472,505 (the ~11 KB
+  excess is ffmpeg's mp4 remux overhead). NOTE the trap that cost an hour: for ~15
+  minutes after the merge, cold muxes came back at format 18's EXACT byte count,
+  because old-image container instances were still serving. `wrangler containers list`
+  showed `provisioning`; wait for `active` AND for the digest in
+  `wrangler containers info` to change before concluding anything about a container change.
+  Re-measured across 27 videos: it is NOT a uniform win — -30.6% on 10-25 min (6/7),
+  -30.8% on 2-10 min (5/7), but +26% to +43% on short 202x360 clips. See the table in
+  `container/server.py` next to the selector.
 - ~~**Reconcile the ceilings**~~ — DONE, and the finding was smaller than expected. The
   table above is CORRECT (1500 s of video, 180 s on the `{page}` mux). What was imprecise
   was `container/README.md`'s 504 line, which named `PROC_TIMEOUT` without saying the
