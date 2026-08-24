@@ -53,7 +53,7 @@ thumbnail, no dimensions, no duration, no timestamp.
 
 Both fall back to a sized entry in `formats` when the top level has none. A Facebook progressive
 `sd`/`hd` format carries no height, and the card would otherwise ship `og:video:width="0"`. The
-fallback prefers the tallest entry at or under 720, matching the mux's own `height<=?720` selector.
+fallback prefers the tallest entry at or under 720, matching the selector's general `height<=?720` arms. On YouTube the selector's FIRST arm is the `134+140` itag pair (360p, avc1 Main — a third fewer bytes than format 18's Baseline for the same picture), so there the fallback is a looser bound than the truth; it can only over-state.
 
 Since g12 the meta call passes that selector itself (`YT_FORMAT_SELECTOR`, hoisted so `_meta_page`
 and `_mux_page` cannot state one rule two ways), so the top-level dimensions describe the format the
@@ -208,7 +208,9 @@ curl -s -X POST localhost:8080/resolve \
 
 A few MB of `video/mp4` with a valid `ftyp` means the whole path works. A JSON `{"error"}` body
 means it does not, and the code carries the reason: `401` the secret, `400` a source the SSRF gate
-refused, `502` a failed or empty mux, `504` the `PROC_TIMEOUT` wall clock.
+refused, `502` a failed or empty mux, `504` the wall clock — which is `PROC_TIMEOUT` (120s) on
+`{video}` and `{page, meta}`, and `PROC_TIMEOUT + 60` (180s) on the `{page}` mux, because yt-dlp
+has to extract before it can download.
 
 **Set `RESOLVER_SECRET`.** Without it, `/resolve` is an open fetch-anything remuxer: it will pull
 whatever url an anonymous caller names, from the host's own network position, and spend a

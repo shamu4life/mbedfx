@@ -81,7 +81,7 @@ env.AE?.writeDataPoint({ blobs: [platform, outcome, client], doubles: [1] })
 |---|---|---|
 | `blob1` | platform | `x` `tt` `ig` `th` `rd` `bs` `yt` `fb` `dm` `st` `im` `tw` `lm` `pn` `ms` `mk` `pt`, or `none` |
 | `blob2` | outcome | one of the values in the `Outcome2` union (`src/analytics.ts:54`) |
-| `blob3` | client class | `discord` `telegram` `other-bot` `human`, or `none` on a `mux_*` row |
+| `blob3` | client class | `discord` `telegram` `other-bot` `human`, or `none` on a `mux_*` row (`card_degraded` carries a real one — see below) |
 | `double1` | the literal `1` | always |
 | `double2` | elapsed milliseconds | `mux_*` rows only; `0` on every other row |
 | `timestamp` | set by the runtime | `DateTime`, always UTC |
@@ -117,6 +117,39 @@ SELECT blob1 AS platform, blob2 AS outcome,
 FROM mbedfx
 WHERE timestamp > NOW() - INTERVAL '24' HOUR AND blob2 LIKE 'mux\_%'
 GROUP BY platform, outcome ORDER BY platform, n DESC
+```
+
+### Reading `card_degraded`
+
+**`mux_ok` can be high while every card is still a picture.** The two answer different questions, and
+conflating them is the mistake this row exists to make impossible.
+
+`mux_ok` says the container produced bytes and R2 stored them. `card_degraded` says the render gave up
+waiting and served the poster still instead of the player. A mux that finishes at T+40s is *both* — a
+`mux_ok`, and a card that has already been frozen. Discord caches an embed permanently in the message
+it was pasted into, so for that reader the video never appears no matter what happens afterwards.
+
+Before this row existed the degrade was counted nowhere, and the render that produced it went on to
+fire `ok`. The dataset therefore reported the first-paste failure as a success. That is worse than a
+gap: it is a number that points the wrong way.
+
+It is **not** a `mux_*` row, on purpose. It carries a real `blob3` — unlike a mux, a degrade is owned
+by exactly one render for exactly one audience — and it leaves `double2` unset, so a `mux_`-prefixed
+name would have falsified both columns and silently poisoned the average in the query above.
+
+The over-ceiling rewrite (a video past `MUX_MAX_SECONDS`) is deliberately **excluded**. It never calls
+the container and can never succeed, so counting it would put a permanent floor under the ratio made
+entirely of videos that are too long by design.
+
+```sql
+-- The first-paste failure rate, per platform. This is the number the mux alarm has to move.
+SELECT blob1 AS platform,
+       SUM(IF(blob2 = 'card_degraded', _sample_interval, 0)) AS degraded,
+       SUM(IF(blob2 = 'ok', _sample_interval, 0)) AS ok
+FROM mbedfx
+WHERE timestamp > NOW() - INTERVAL '24' HOUR
+  AND blob3 = 'discord' AND blob2 IN ('card_degraded', 'ok')
+GROUP BY platform ORDER BY degraded DESC
 ```
 
 ---

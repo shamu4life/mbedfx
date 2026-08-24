@@ -2,7 +2,7 @@ import { DurableObject } from 'cloudflare:workers'
 import type { Env } from './analytics.ts'
 import type { MuxJob } from './types.ts'
 import { runMuxJob } from './worker.ts'
-import { MUX_FIRST_ATTEMPT_MS, nextMuxDelayMs } from './muxpolicy.ts'
+import { firstMuxDelayMs, nextMuxDelayMs } from './muxpolicy.ts'
 
 /**
  * THE MUX RUNNER — one Durable Object per video, whose ALARM does the work a request is not allowed
@@ -50,7 +50,10 @@ export class MuxRunner extends DurableObject<Env> {
   async schedule(job: MuxJob): Promise<void> {
     if (await this.ctx.storage.getAlarm() !== null) return
     await this.ctx.storage.put(JOB, job)
-    await this.ctx.storage.setAlarm(Date.now() + MUX_FIRST_ATTEMPT_MS)
+    // The delay depends on the SOURCE, not on the caller: a {page} job's inline attempt dies at the
+    // waitUntil ceiling, a {video} job's runs to the container's own 120s wall. firstMuxDelayMs holds
+    // both derivations so neither call site has to remember which ceiling it is under.
+    await this.ctx.storage.setAlarm(Date.now() + firstMuxDelayMs(!!job.source?.page))
   }
 
   /**

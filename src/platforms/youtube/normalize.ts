@@ -190,13 +190,38 @@ export function withDescription(post: Post, description: unknown): Post {
  */
 export const LENGTH_NOTE = '🎬 Too long to play here. Open it on YouTube'
 
-export function withLengthNote(post: Post, duration: unknown, maxSeconds: number): Post {
+/**
+ * THE DURATION, STAMPED ON THE REMUX ENTRY AND NOTHING ELSE — split out of withLengthNote so the
+ * fetch path can use it without dragging the note along.
+ *
+ * WHY THE SPLIT EXISTS. settleMux refuses to dispatch a mux for a video past MUX_MAX_SECONDS, which
+ * saves a container call that can only ever be refused — and with the alarm landed, three of them
+ * across a 22-minute horizon against a pool of four slots shared by ten platforms. That arm reads
+ * `m.duration`, and on YouTube it had been dead code since it was written, because normalizeYouTube
+ * hardcodes `remux: { page }` and carries no duration.
+ *
+ * THE NOTE MUST NOT COME WITH IT. withLengthNote also prepends LENGTH_NOTE into `post.text`, and
+ * withDescription refuses to write a body when one is already there ("A body already present wins").
+ * Calling the note version at fetch time would therefore silently blank the description on every long
+ * YouTube card — fixing a wasted container call by deleting the text the card exists to show.
+ *
+ * REGARDLESS OF LENGTH, deliberately: a video under the ceiling benefits from that decision being
+ * cheap too, and one rule with no threshold in it is one fewer place for the threshold to drift.
+ */
+export function withMuxDuration(post: Post, duration: unknown): Post {
   if (!post) return post
   if (typeof duration !== 'number' || !Number.isFinite(duration) || duration <= 0) return post
   const media = Array.isArray(post.media) ? post.media : []
-  // The duration rides along regardless of length: it is what lets the mux be SKIPPED rather than
-  // attempted and timed out, and a video under the ceiling benefits from that decision being cheap too.
-  const withDur = media.map(m => (m && m.remux ? { ...m, duration } : m))
+  return { ...post, media: media.map(m => (m && m.remux ? { ...m, duration } : m)) }
+}
+
+export function withLengthNote(post: Post, duration: unknown, maxSeconds: number): Post {
+  if (!post) return post
+  if (typeof duration !== 'number' || !Number.isFinite(duration) || duration <= 0) return post
+  // ONE SPELLING OF THE STAMP, shared with the fetch path — see withMuxDuration. Two expressions of
+  // "which media entries carry a duration" is the bug shape this file keeps apologising for.
+  const stamped = withMuxDuration(post, duration)
+  const withDur = Array.isArray(stamped.media) ? stamped.media : []
   if (duration <= maxSeconds) return { ...post, media: withDur }
   const cur = typeof post.text === 'string' ? post.text : ''
   if (cur.includes(LENGTH_NOTE)) return { ...post, media: withDur }

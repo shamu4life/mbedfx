@@ -207,6 +207,36 @@ class YtDlpArgv(unittest.TestCase):
         self.assertEqual(meta[meta.index("-f") + 1], srv.YT_FORMAT_SELECTOR)
 
 
+    def test_the_cheap_360p_pair_is_tried_first(self):
+        """The byte lever, pinned so a tidy-up cannot silently undo it.
+
+        Format 18 and the 134+140 pair are the SAME 640x360 picture, but 18 is avc1 Baseline and 134
+        is avc1 Main — CABAC and B-frames, so a third fewer bytes for the same frames. Measured
+        2026-08-23: 32,347,122 -> 20,164,682 on a 625s video. Cloudflare's egress throughput is the
+        binding constraint on whether a mux finishes at all, and bytes are the only half of that we
+        control, so the ORDER of these arms is a correctness property rather than a preference.
+
+        Asserted as a prefix, not as the whole string: the fallback chain behind it is free to change.
+        """
+        self.assertTrue(
+            srv.YT_FORMAT_SELECTOR.startswith("134+140/"),
+            "the cheap pair must be the FIRST arm, or every YouTube mux silently pays 60% more bytes",
+        )
+
+    def test_the_selector_still_falls_back_to_a_general_form(self):
+        """An itag literal must never be the ONLY thing offered.
+
+        134/140 are YouTube's numbering. Nine other platforms go through this same selector, and a
+        chain that ended at the itag arm would fail selection outright on every one of them.
+        """
+        arms = srv.YT_FORMAT_SELECTOR.split("/")
+        self.assertGreater(len(arms), 1, "an itag-only selector breaks every non-YouTube platform")
+        self.assertTrue(
+            any("ext=mp4" in a or a in ("b", "bv*+ba") for a in arms[1:]),
+            "a general fallback must survive behind the itag arm",
+        )
+
+
 class CookieJar(unittest.TestCase):
     """The jar is a live session on disk. Its lifetime and permissions are the security surface."""
 

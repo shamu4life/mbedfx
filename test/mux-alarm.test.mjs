@@ -2,7 +2,10 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { handle, runMuxJob } from '../src/worker.ts'
 import { refKey } from '../src/refkey.ts'
-import { MUX_FIRST_ATTEMPT_MS, MUX_RETRY_MS, MUX_TOTAL_HORIZON_MS, nextMuxDelayMs } from '../src/muxpolicy.ts'
+import {
+  MUX_FIRST_ATTEMPT_MS, MUX_FIRST_ATTEMPT_TRACKS_MS, MUX_RETRY_MS, MUX_TOTAL_HORIZON_MS,
+  firstMuxDelayMs, nextMuxDelayMs,
+} from '../src/muxpolicy.ts'
 
 /**
  * THE MUX ALARM — the fix for a defect that had been mis-stated in this file's own comments for a
@@ -125,7 +128,14 @@ test('A SOURCE WITH NO PAGE KEEPS ITS video — Bluesky and Reddit have no page 
   const d = { ...deps(), fetchPost: async () => stPost({ video: hls }) }
   await handle(cardReq(), envWith(binding), ctx, d)
 
-  if (jobs.length) assert.deepEqual(jobs[0].job.source, { video: hls })
+  /**
+   * UNCONDITIONAL, DELIBERATELY. This assertion used to read `if (jobs.length) assert...`, which is a
+   * test that passes when the feature is entirely absent — and it WAS entirely absent: settleMux
+   * returned at `!own.some(m => m?.remux?.page)` before it could arm anything without a page, so
+   * Bluesky and Reddit had no alarm coverage at all and this test said nothing about it.
+   */
+  assert.equal(jobs.length, 1, 'a page-less source must be armed, not skipped')
+  assert.deepEqual(jobs[0].job.source, { video: hls })
 })
 
 test('NO BINDING MEANS NO CHANGE — the service behaves exactly as it did before the alarm existed', async () => {
@@ -217,8 +227,33 @@ test('nextMuxDelayMs IS TOTAL OVER JUNK — the counter comes back from storage 
   }
 })
 
+test('THE FIRST ATTEMPT WAITS FOR THE RIGHT CEILING — 35s is wrong for a source with no page', () => {
+  /**
+   * THE BUG THIS PINS. MUX_FIRST_ATTEMPT_MS = 35s is derived from ONE fact: `waitUntil` is cancelled
+   * at 30s, so at 35s the inline attempt is certainly dead and the alarm cannot race it. That
+   * derivation only holds for a `{page}` source, which settleMux and the prewarm dispatch INTO
+   * waitUntil.
+   *
+   * A `{video}` source has exactly one dispatcher — serveMuxed, inside Discord's media-proxy request
+   * — and that attempt is ceilinged by the container instead, at `_mux_tracks`'s PROC_TIMEOUT of
+   * 120s. Firing at 35s would wake the alarm mid-pull, in a DO isolate where muxInflight cannot
+   * dedupe and the R2 head still misses because nothing is written until the mux finishes: two
+   * concurrent ffmpeg pulls of one video on one pooled instance, competing for the exact bandwidth
+   * that decides whether the card gets a player. Precisely the double-mux the 35s comment warns about,
+   * reintroduced by widening the alarm to the platforms that needed it most.
+   */
+  assert.equal(firstMuxDelayMs(true), MUX_FIRST_ATTEMPT_MS)
+  assert.equal(firstMuxDelayMs(false), MUX_FIRST_ATTEMPT_TRACKS_MS)
+  assert.ok(MUX_FIRST_ATTEMPT_TRACKS_MS > 120_000,
+    'it must outlast _mux_tracks\'s PROC_TIMEOUT (120s), or the alarm races a live ffmpeg')
+  assert.ok(MUX_FIRST_ATTEMPT_MS > 30_000,
+    'and the page form must outlast the waitUntil ceiling it is derived from')
+})
+
 test('THE HORIZON IS STATED, so nobody has to add the constants up to know what a reader is promised', () => {
-  assert.equal(MUX_TOTAL_HORIZON_MS, MUX_FIRST_ATTEMPT_MS + MUX_RETRY_MS.reduce((a, b) => a + b, 0))
+  // Quoted for the SLOWEST shape — the tracks path, whose first attempt waits out the container's own
+  // 120s wall rather than waitUntil's 30s. A {page} source's horizon is 105s shorter.
+  assert.equal(MUX_TOTAL_HORIZON_MS, MUX_FIRST_ATTEMPT_TRACKS_MS + MUX_RETRY_MS.reduce((a, b) => a + b, 0))
   // ~22 minutes. Long enough to outlast a throttle, short enough that a hard gate is established
   // quickly rather than proved all afternoon.
   assert.ok(MUX_TOTAL_HORIZON_MS > 15 * 60_000 && MUX_TOTAL_HORIZON_MS < 45 * 60_000)

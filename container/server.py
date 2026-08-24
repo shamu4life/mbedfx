@@ -95,14 +95,46 @@ YT_PLAYER_CLIENTS = "web_embedded,tv_simply,mweb"
 # the mux would produce. Two expressions of one rule is the bug shape that comment was apologising
 # for; now the meta call passes this string to yt-dlp and reads the answer instead of predicting it.
 #
-# RESOLUTION CAP — the single biggest lever on mux LATENCY, which is a correctness issue, not a
-# nicety: Discord's media proxy fetches og:video within seconds of reading the head and CACHES a
-# failure, so a slow first mux renders as "a still that never plays". Measured 2026-07-24: an
+# RESOLUTION CAP — for a long time the single biggest lever on mux LATENCY, which is a correctness
+# issue, not a nicety: Discord's media proxy fetches og:video within seconds of reading the head and
+# CACHES a failure, so a slow first mux renders as "a still that never plays". Measured 2026-07-24: an
 # uncapped 4K source took 27s (Discord had long given up) — capping to <=720p cuts the download to a
 # fraction, and an embed is displayed far smaller than 720p anyway. `height<=?720` is NON-STRICT
 # (the `?`), so a format with no height still qualifies rather than failing the whole selection.
+#
+# BUT THE LEVER IS BYTES, NOT RESOLUTION — and at the SAME resolution there was still a third to give
+# back. Measured 2026-08-23 with the pinned yt-dlp and this file's own player-client list; the numbers
+# are yt-dlp's reported source filesizes, so the muxed output differs by a few tens of KB:
+#
+#   Qy2DltXI3Fc  625s, 640x360   18: 32,347,122 B  ->  134+140: 20,164,682 B   (-37.7%)
+#   hFQ-UPZ77kA   81s, 360x640   18:  6,011,494 B  ->  134+140:  5,028,446 B   (-16.4%)
+#
+# WHY THE SAME PICTURE COSTS LESS: it is the H.264 PROFILE, not the resolution. Format 18 is
+# `avc1.42001E` — BASELINE, which is what it has always been, because it exists for players that
+# predate everything else. Format 134 is `avc1.4d401e` — MAIN, which has CABAC and B-frames and so
+# spends far fewer bits on the same frames. 140's AAC is slightly larger than 18's muxed audio, and
+# that is the whole of the trade; it is written here rather than hidden behind "same resolution".
+#
+# WHAT IT BUYS. At the ~267 KB/s measured off Cloudflare's egress on 2026-08-23, a third fewer bytes
+# is a third less wall clock on the only axis that was ever binding. The saving is largest on long
+# videos, which is exactly where it is needed: the short clip above gains 16%, the ten-minute one 38%.
+#
+# WHY ITAGS RATHER THAN A SORT KEY. `-S "res:360,vcodec:h264,acodec:aac"` is the principled form and
+# needs no literal — but it would change selection on all ten platforms this container serves, and
+# this change is meant to move YouTube only. The itag arm falls through everywhere else because 134
+# and 140 do not exist there. Note that is a MEASURED fact, not a structural one: Imgur emits
+# format_id '0', so the numeric namespace is not YouTube's alone. If a platform ever ships a format
+# literally called 134, this arm will take it.
+#
+# TWO THINGS DELIBERATELY NOT DONE. Hoisting `bv*` above `b` selects AV1 at 720p and costs ~29% MORE
+# bytes. Adding `height<=?360` breaks portrait video — see hFQ-UPZ77kA above, which is 360x640, so
+# the 360 is its WIDTH and a height cap would refuse it or drop it to something far smaller.
+#
+# ALREADY-CACHED OBJECTS KEEP THE OLD BYTES: the R2 key is `mux/{refKey}/{index}` and carries no
+# format, so this applies to new muxes only.
 YT_FORMAT_SELECTOR = (
-    "b[ext=mp4][height<=?720]"
+    "134+140"
+    "/b[ext=mp4][height<=?720]"
     "/bv*[ext=mp4][height<=?720]+ba[ext=m4a]"
     "/b[height<=?720]"
     "/bv*[height<=?720]+ba"
@@ -342,10 +374,17 @@ def _meta_page(page: str, jar=None) -> dict:
     # 'sd'/'hd' format carries no height at all, so fall back to a format that does.
     #
     # THE FALLBACK MIRRORS _mux_page's OWN SELECTOR, and that is the point of the `capped or sized`
-    # line rather than a bare max(): _mux_page asks for `height<=?720`, so picking the TALLEST format
-    # here with no ceiling could assert 1080x1920 on a card whose /_media/ url then serves 405x720.
-    # Prefer the tallest format at or under 720, and fall back to the tallest overall only when none
-    # qualifies — which is exactly what the mux's final `/b[ext=mp4]/…/b` arm does.
+    # line rather than a bare max(): the selector's general arms ask for `height<=?720`, so picking the
+    # TALLEST format here with no ceiling could assert 1080x1920 on a card whose /_media/ url then
+    # serves 405x720. Prefer the tallest format at or under 720, and fall back to the tallest overall
+    # only when none qualifies — which is exactly what the selector's final `/b[ext=mp4]/…/b` arm does.
+    #
+    # ON YOUTUBE THE MUX NOW TAKES 360p, not "the tallest under 720", because the first arm is the
+    # 134+140 itag pair. This fallback is therefore a LOOSER bound than the truth on that platform —
+    # it can only over-state, never under-state. Not a live bug: normalizeYouTube hardcodes w:0/h:0 for
+    # yt and this branch only runs when the top-level width/height are missing, so no YouTube card
+    # reads these numbers. Written down because the next person to widen the fallback needs to know
+    # the mirror is no longer exact.
     #
     # WHAT THESE NUMBERS DESCRIBE, stated exactly: the format we EXPECT the mux to select. It is not a
     # probe of the produced file. The residual gap is the `?` in `height<=?720`, which is non-strict —

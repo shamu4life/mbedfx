@@ -28,6 +28,33 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   "too strict", never "too open".
 
 ### Fixed
+- **Bluesky and Reddit videos had no durable mux path at all**, which the alarm above did not fix
+  because it never reached them (`src/worker.ts`, `src/muxpolicy.ts`, `src/muxrunner.ts`). `settleMux`
+  returned before its arming loop for any post whose remux carries no `page`, and `prewarmable()`
+  answers `null` for `bs`/`rd` — so the two platforms whose video is an ordinary CDN HLS manifest were
+  left with exactly one dispatcher: `serveMuxed`, running inside Discord's media-proxy request and
+  taking no `ExecutionContext`. When that request was cancelled the container deleted its temp file in
+  a `finally` and **zero bytes** reached R2, so the next paste started again from nothing, forever.
+  `scheduleMux` had been *built* for this case — its own comment reasons about "a source with no page
+  (Bluesky, Reddit)" — and no caller ever handed it one, so that branch shipped dead. Both dispatchers
+  now arm: `settleMux` arms a page-less entry and returns it untouched (waiting on it would start
+  degrading cards that render fine today), and `/_media/` arms before its own await.
+  **The 35s first-attempt delay is wrong for these**, and that is a second constant rather than a
+  tweak: 35s is derived from `waitUntil` being cancelled at 30s, which is only true of a `{page}`
+  source. A `{video}` attempt is ceilinged by the container's `_mux_tracks` wall of `PROC_TIMEOUT`
+  (120s) instead, so firing at 35s would wake the alarm mid-pull, in a DO isolate where `muxInflight`
+  cannot dedupe and the R2 head still misses — two concurrent `ffmpeg` pulls of one video on one
+  pooled instance, which is precisely the double-mux the 35s comment warns about. `firstMuxDelayMs`
+  now holds both derivations, and `MUX_FIRST_ATTEMPT_TRACKS_MS` is 140s.
+  The test that should have caught this read `if (jobs.length) assert.deepEqual(...)` — an assertion
+  that passes when the feature is entirely absent, which it was. It is unconditional now.
+- **A `bytes=-N` range returned the FIRST N+1 bytes** (`src/worker.ts`, `r2Range`). The range regex
+  accepts an empty first group, so a suffix range parsed as `start=0, end=N` and the route answered a
+  confident `206` labelled `bytes 0-N` containing the wrong bytes. A 416 would have been noticed; this
+  was a lie a player would believe. `bytes=-0` is now a 416 and an oversized suffix clamps to the whole
+  representation, both without a special case — the existing guard already got them right once the
+  arithmetic did. Discord's proxy has not been observed sending one, which is why it survived; an
+  ordinary MP4 player looking for a `moov` atom at the tail is exactly who does.
 - **A long video can now actually finish muxing.** Reported as "a 10-minute video took nearly ten
   minutes to warm", and the cause was ours, not YouTube's. Every mux was dispatched through
   `ctx.waitUntil` — `settleMux`, the prewarm, and the site's own warm button `/_prep` — and
@@ -57,9 +84,55 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   things follow. `--concurrent-fragments 4` is **inert on YouTube** — there are no fragments — so the
   one flag aimed at long-video latency does nothing on the platform that needs it most. And the same
   360p is available as a DASH pair at **19.2 MiB, 38% fewer bytes**, which under a throughput
-  throttle is 38% less download. Neither is changed here; both are recorded so nobody re-derives them.
+  throttle is 38% less download. The `--concurrent-fragments` finding is recorded only, so nobody
+  re-derives it; the DASH pair **is now the selector's first arm** — see below.
 
 ### Changed
+- **YouTube muxes 38% fewer bytes for the same picture** (`container/server.py`,
+  `YT_FORMAT_SELECTOR`). The selector's first arm is now the `134+140` DASH pair. It is the same
+  640x360 as format 18 — the difference is the H.264 **profile**: 18 is `avc1.42001E` (Baseline, which
+  it has always been, because it exists for players that predate everything else) and 134 is
+  `avc1.4d401e` (Main, with CABAC and B-frames). Measured 2026-08-23 with the pinned yt-dlp and this
+  file's own player-client list: `Qy2DltXI3Fc` (625s) 32,347,122 → 20,164,682 bytes (**-37.7%**);
+  `hFQ-UPZ77kA` (81s, portrait) 6,011,494 → 5,028,446 (**-16.4%**). Cloudflare's egress measured
+  ~267 KB/s against YouTube on the same day, and bytes are the only half of that throughput we
+  control, so this is the largest lever available short of a PO-token provider — and it is a
+  multiplier on the alarm, not a substitute for it.
+  Deliberately **not** done: hoisting `bv*` selects AV1 at 720p and costs ~29% *more*; adding
+  `height<=?360` breaks portrait video, where 360 is the width (see the 81s case above). The itag
+  literal falls through on every other platform because 134/140 do not exist there — a measured fact,
+  not a structural one, since Imgur emits `format_id '0'`. R2 keys carry no format
+  (`mux/{refKey}/{index}`), so already-cached objects keep the old bytes; this applies to new muxes.
+- **The degraded card is counted** (`card_degraded`, `src/analytics.ts`, `docs/METRICS.md`). The one
+  outcome a reader actually sees — the player swapped for a still — was recorded nowhere, and the
+  render that produced it went on to fire `ok`. So the dataset affirmatively reported the exact
+  first-paste failure this workstream exists to fix as a **success**, twice. `mux_ok` cannot stand in
+  for it either: a mux that finishes at T+40s is a `mux_ok` *and* a frozen card, because Discord
+  caches an embed permanently in the message it was pasted into. `card_degraded / ok` on
+  `blob3='discord'` is the first-paste failure rate, and it is the number that will say whether the
+  alarm moved anything — which is why it ships alongside the alarm rather than after it, since a
+  before/after with no "before" is not a measurement.
+  Named `card_degraded`, **not** `mux_degraded`: `MuxOutcome` is derived from the `mux_` prefix, so
+  that name would have joined the mux domain while being emitted through plain `count()` — a real
+  `blob3` where `METRICS.md` promises `none`, an unset `double2` where it promises elapsed ms, and the
+  operator's `LIKE 'mux\_%'` average quietly poisoned. The type system would not have caught it. The
+  over-ceiling rewrite is excluded on purpose: it never calls the container and can never succeed, so
+  counting it would put a permanent floor under the ratio.
+- **An over-ceiling YouTube video is no longer dispatched to be refused** (`src/worker.ts`,
+  `src/platforms/youtube/normalize.ts`). `settleMux` has always refused to mux a video past
+  `MUX_MAX_SECONDS`, reading `m.duration` off the remux entry — and on YouTube that arm was **dead
+  code**, because `normalizeYouTube` hardcodes `remux: { page }` and carried no duration. Every
+  over-ceiling video was dispatched to be told what the 30-day meta record already knew, and with the
+  alarm landed that is three container calls across a 22-minute horizon out of a pool of four slots
+  shared by ten platforms, for an answer that is final. `withMuxDuration` (split out of
+  `withLengthNote`, which also prepends a note that `withDescription` would then refuse to overwrite —
+  baking it in at fetch time would have blanked the description on every long card) stamps the warm
+  duration onto the entry. **The card is byte-identical**: same still, same "🎬 Too long to play here".
+  What it buys is the container slots, and `/_card`'s `muxing` flipping true → false so the fixer page
+  stops spinning for 25 seconds about a video it is simultaneously calling too long to play.
+  It does nothing on a **cold** first paste — `warm` is a cache-only read — and the duration now also
+  carries an upper sanity bound (24h), because a field that decided one sentence on a card now decides
+  whether a player exists, and that verdict is response-cached.
 - **Mux outcomes are counted, with their duration** (`src/analytics.ts`, `src/worker.ts`,
   `docs/METRICS.md`). The video half of this service had no telemetry at all: our own 180s timeout
   (504), YouTube's gate (502 `"mux failed"`), an empty result (502, *same status*), a cold container

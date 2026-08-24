@@ -79,14 +79,20 @@ function fakeR2() {
  * and it is the live internet. Nothing in this file is about the translation ENGINE, only about whether
  * its flag can be told apart from the mux's.
  */
-const envWith = ({ resolver, r2 = fakeR2(), ai } = {}) => ({
-  AE: { writeDataPoint() {} },
+const envWith = ({ resolver, r2 = fakeR2(), ai, ae } = {}) => ({
+  AE: ae ?? { writeDataPoint() {} },
   ASSETS: { async fetch() { return new Response('a') } },
   MEDIA_CACHE: r2,
   MEDIA_RESOLVER: resolver,
   AI: ai ? { run: ai } : undefined,
   TRANSLATE_GOOGLE: 'off',
 })
+
+/** Records every Analytics Engine row so a counter can be asserted rather than assumed. */
+const recordingAE = () => {
+  const rows = []
+  return { rows, writeDataPoint(d) { rows.push(d) } }
+}
 
 const depsFor = post => ({
   cache: fakeCache(),
@@ -424,6 +430,58 @@ test('A CRAWLER IS NOT MADE TO WAIT OUT A COLD MUX — the ceiling is the bot bu
     `the head must not spend the whole response budget on a mux that cannot finish (elapsed ${elapsed}ms)`)
   assert.ok(elapsed >= MUX_WAIT_BOT_MS - 100 || elapsed < MUX_WAIT_BOT_MS,
     'and the wait it does spend is the bot budget')
+})
+
+test('A DEGRADED CARD IS COUNTED — the one outcome a reader sees, and it used to be recorded as `ok`', async () => {
+  /**
+   * THE HOLE. settleMux swapping the player for a still is the exact failure this whole workstream is
+   * about, and nothing counted it. Worse than nothing: the render that produces it goes on to fire
+   * `ok`, so the dataset affirmatively reported it as a SUCCESS. `mux_ok` cannot stand in either — a
+   * mux that finishes at T+40s is a `mux_ok` and a frozen still, because Discord caches an embed
+   * permanently in the message it was pasted into. The first paste is the only paste.
+   *
+   * `card_degraded/ok` per platform, on the Discord client, IS the first-paste failure rate. It is the
+   * single number that will say whether the alarm moved anything, which is why it has to predate the
+   * alarm's traffic rather than follow it — a before/after with no "before" is not a measurement.
+   */
+  const ae = recordingAE()
+  const id = '2090000000000000021'
+  await handle(
+    cardReq(pathFor(id)),
+    envWith({ resolver: silentResolver(), ae }),
+    retainingCtx(),
+    depsFor(ref => videoPost(ref)),
+  )
+
+  const degraded = ae.rows.filter(r => r.blobs?.[1] === 'card_degraded')
+  assert.equal(degraded.length, 1, 'exactly one row per degraded entry')
+  assert.equal(degraded[0].blobs[0], 'x', 'blob1 is the platform, as on every other row')
+  assert.notEqual(degraded[0].blobs[2], 'none',
+    'blob3 is the REAL client — unlike a mux row, a degrade is owned by one render for one audience, ' +
+    'and discord-vs-human is the split the number exists to make')
+  assert.equal(degraded[0].doubles?.[1], undefined,
+    'and it carries no double2: METRICS.md reserves that column for `mux_*` rows, which is exactly ' +
+    'why this outcome is NOT named mux_degraded')
+})
+
+test('THE OVER-CEILING REWRITE IS NOT COUNTED AS A DEGRADE — it would be a permanent floor', async () => {
+  /**
+   * A video past MUX_MAX_SECONDS never calls the container and can never succeed. Folding it into
+   * card_degraded would put an immovable floor under the ratio, made entirely of videos that are too
+   * long by design — and the ratio is the whole point of the counter. Excluded deliberately; this
+   * test is what stops the exclusion being tidied away as an oversight.
+   */
+  const ae = recordingAE()
+  const id = '2090000000000000022'
+  await handle(
+    cardReq(pathFor(id)),
+    envWith({ resolver: silentResolver(), ae }),
+    retainingCtx(),
+    depsFor(ref => videoPost(ref, { duration: 99_999 })),
+  )
+
+  assert.equal(ae.rows.filter(r => r.blobs?.[1] === 'card_degraded').length, 0,
+    'too long is a final answer, not a degrade')
 })
 
 test('THE BOT BUDGET IS A FRACTION OF THE RESPONSE BUDGET, and stays one', () => {
