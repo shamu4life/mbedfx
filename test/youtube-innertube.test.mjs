@@ -175,6 +175,74 @@ test('A BOGUS VIDEO ID NEVER LEAVES THE PROCESS', async () => {
   assert.equal(asked, 0, 'the id guard runs before either fetch')
 })
 
+test('A REFUSED FIRST CLIENT FALLS THROUGH TO THE SECOND — they are gated independently', async () => {
+  /**
+   * WHY THERE IS A SECOND CLIENT AT ALL. Measured against live production 2026-08-27 on ten ids the
+   * service had never seen: WEB alone answered 5 of 10. The other five did not time out — hits and
+   * misses both came back at ~1700ms against a 2500ms budget — and every one of them answers WEB
+   * perfectly from a residential IP. The egress is what is refused, on some fraction of requests, and
+   * YouTube gates its clients independently (the container's own player_client list exists for that
+   * exact reason). So a refusal of WEB is not evidence that MWEB is refused.
+   */
+  const seen = []
+  const got = await fetchInnertube('dQw4w9WgXcQ', async (url, init) => {
+    const name = JSON.parse(init.body).context.client.clientName
+    seen.push(name)
+    if (name === 'WEB') return new Response('nope', { status: 403 })
+    return new Response(JSON.stringify(fixture('ordinary')), { headers: { 'content-type': 'application/json' } })
+  })
+  assert.deepEqual(seen, ['WEB', 'MWEB'], 'WEB first, then the fallback')
+  assert.equal(Date.parse(got.uploadedAt) / 1000, 1256453853, 'and the fallback answer is used')
+})
+
+test('A FIRST CLIENT THAT ANSWERS COSTS EXACTLY ONE ROUND TRIP', async () => {
+  // The fallback must be paid for only by the requests that need it. Firing both every time would
+  // double this endpoint's traffic to buy nothing on the half that already succeed.
+  const seen = []
+  const got = await fetchInnertube('dQw4w9WgXcQ', async (url, init) => {
+    seen.push(JSON.parse(init.body).context.client.clientName)
+    return new Response(JSON.stringify(fixture('ordinary')), { headers: { 'content-type': 'application/json' } })
+  })
+  assert.deepEqual(seen, ['WEB'], 'the second client is never asked when the first answers')
+  assert.ok(got.uploadedAt)
+})
+
+test('A THROW ON ONE CLIENT DOES NOT ABANDON THE OTHER', async () => {
+  const seen = []
+  const got = await fetchInnertube('dQw4w9WgXcQ', async (url, init) => {
+    const name = JSON.parse(init.body).context.client.clientName
+    seen.push(name)
+    if (name === 'WEB') throw new Error('connection reset')
+    return new Response(JSON.stringify(fixture('ordinary')), { headers: { 'content-type': 'application/json' } })
+  })
+  assert.deepEqual(seen, ['WEB', 'MWEB'])
+  assert.ok(got.uploadedAt, 'a throw on the first says nothing about the second')
+})
+
+test('A 200 CARRYING NOTHING USABLE ALSO FALLS THROUGH — not just a non-2xx', async () => {
+  // The specific failure mode a sibling client (ANDROID_VR) exhibits: HTTP 200 with videoDetails
+  // emptied. Treating that as success would be the quiet version of the bug this file exists to fix.
+  const seen = []
+  const got = await fetchInnertube('dQw4w9WgXcQ', async (url, init) => {
+    const name = JSON.parse(init.body).context.client.clientName
+    seen.push(name)
+    if (name === 'WEB') return new Response('{}', { headers: { 'content-type': 'application/json' } })
+    return new Response(JSON.stringify(fixture('ordinary')), { headers: { 'content-type': 'application/json' } })
+  })
+  assert.deepEqual(seen, ['WEB', 'MWEB'])
+  assert.ok(got.uploadedAt)
+})
+
+test('BOTH CLIENTS REFUSED IS STILL JUST NULL — the card is unchanged, never wrong', async () => {
+  const seen = []
+  const got = await fetchInnertube('dQw4w9WgXcQ', async (url, init) => {
+    seen.push(JSON.parse(init.body).context.client.clientName)
+    return new Response('nope', { status: 403 })
+  })
+  assert.deepEqual(seen, ['WEB', 'MWEB'], 'both are tried')
+  assert.equal(got, null)
+})
+
 test('fetchInnertube IS TOTAL — it answers null rather than throwing, whatever the transport does', async () => {
   assert.equal(await fetchInnertube('dQw4w9WgXcQ', async () => { throw new Error('boom') }), null)
   assert.equal(await fetchInnertube('dQw4w9WgXcQ', async () => new Response('', { status: 500 })), null)

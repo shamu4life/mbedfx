@@ -45,9 +45,41 @@ import { ytDescriptionOf } from './description.ts'
 
 /** The public web player's own client identity. No key, no auth — see the docstring. */
 const INNERTUBE_URL = 'https://www.youtube.com/youtubei/v1/player?prettyPrint=false'
-const INNERTUBE_CLIENT = { clientName: 'WEB', clientVersion: '2.20260101.00.00', hl: 'en', gl: 'US' }
-const BROWSER_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 ' +
-  '(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36'
+
+/**
+ * TWO CLIENTS, TRIED IN ORDER, AND THE SECOND ONE IS NOT REDUNDANCY FOR ITS OWN SAKE.
+ *
+ * Measured against live production on 2026-08-27, on ten ids the service had never seen: WEB alone
+ * answered 5 of 10. The other five did NOT time out — hits and misses both returned at ~1700ms
+ * against a 2500ms budget — so latency is not what is failing. And they are not bad videos: every one
+ * of those five answers WEB perfectly from a residential IP. What is failing is the EGRESS, on some
+ * fraction of requests.
+ *
+ * YouTube gates its clients independently — that is the entire premise of the container's own
+ * `player_client=web_embedded,tv_simply,mweb` list, which exists because the default client started
+ * getting 403s that the others did not. So a refusal of WEB is not evidence that MWEB is refused.
+ *
+ * WEB FIRST BECAUSE THEY ARE OTHERWISE EQUIVALENT, verified rather than assumed: across 8 ids,
+ * WEB and MWEB agreed on `publishDate` 8/8, and their latencies are indistinguishable (median 209ms
+ * each, residential). So the order costs nothing and the fallback costs one ~200ms round trip on
+ * exactly the requests that would otherwise render 1 January 1970.
+ *
+ * NOT A LOOP OVER EVERY CLIENT. TVHTML5 answers LOGIN_REQUIRED with no metadata at all and
+ * WEB_EMBEDDED_PLAYER answers ERROR; ANDROID and IOS refuse the request outright without the extra
+ * headers their apps send. Measured, all four, same day. Adding them would spend budget on clients
+ * that are known not to carry the fields this file exists to read.
+ */
+const INNERTUBE_CLIENTS = [
+  {
+    client: { clientName: 'WEB', clientVersion: '2.20260101.00.00', hl: 'en', gl: 'US' },
+    ua: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 ' +
+      '(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+  },
+  {
+    client: { clientName: 'MWEB', clientVersion: '2.20260101.00.00', hl: 'en', gl: 'US' },
+    ua: 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15',
+  },
+] as const
 
 /**
  * A HARD ABORT, NOT A RACE, AND THIS NUMBER WAS MEASURED IN PRODUCTION RATHER THAN DERIVED FROM THE
@@ -180,24 +212,38 @@ export async function fetchInnertube(
   id: string,
   fetchImpl: typeof fetch = fetch,
 ): Promise<InnertubeMeta | null> {
-  try {
-    const res = await fetchImpl(INNERTUBE_URL, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json', 'user-agent': BROWSER_UA, accept: 'application/json' },
-      body: JSON.stringify({
-        context: { client: INNERTUBE_CLIENT },
-        videoId: id,
-        // Both flags say "I have already confirmed this is fine to play". They do not defeat the age
-        // wall — G0sORVBL4kM still answers LOGIN_REQUIRED with them set — but they stop an ordinary
-        // sensitive-content interstitial from replacing the metadata we came for.
-        contentCheckOk: true,
-        racyCheckOk: true,
-      }),
-      signal: AbortSignal.timeout(INNERTUBE_TIMEOUT_MS),
-    })
-    if (!res.ok) return null
-    return parseInnertube(await res.json())
-  } catch {
-    return null
+  // SEQUENTIAL, NOT PARALLEL. The second client is only worth a round trip when the first produced
+  // nothing, and firing both every time would double this endpoint's traffic to buy nothing on the
+  // ~half of requests that already succeed. The shared deadline below is what bounds the pair.
+  const deadline = Date.now() + INNERTUBE_TIMEOUT_MS
+  for (const { client, ua } of INNERTUBE_CLIENTS) {
+    const left = deadline - Date.now()
+    // Below ~250ms there is not enough left for a round trip that measured 155-285ms residentially,
+    // and starting one anyway would only delay the card to reach the same null.
+    if (left < 250) break
+    try {
+      const res = await fetchImpl(INNERTUBE_URL, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', 'user-agent': ua, accept: 'application/json' },
+        body: JSON.stringify({
+          context: { client },
+          videoId: id,
+          // Both flags say "I have already confirmed this is fine to play". They do not defeat the
+          // age wall — G0sORVBL4kM still answers LOGIN_REQUIRED with them set — but they stop an
+          // ordinary sensitive-content interstitial from replacing the metadata we came for.
+          contentCheckOk: true,
+          racyCheckOk: true,
+        }),
+        signal: AbortSignal.timeout(left),
+      })
+      if (!res.ok) continue
+      const got = parseInnertube(await res.json())
+      if (got) return got
+    } catch {
+      // A throw on one client says nothing about the next: the whole reason there IS a next is that
+      // they are refused independently. Fall through rather than giving up here.
+      continue
+    }
   }
+  return null
 }
