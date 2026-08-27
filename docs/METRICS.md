@@ -119,6 +119,29 @@ WHERE timestamp > NOW() - INTERVAL '24' HOUR AND blob2 LIKE 'mux\_%'
 GROUP BY platform, outcome ORDER BY platform, n DESC
 ```
 
+### Reading `yt_innertube_ok` / `yt_innertube_fail`
+
+The YouTube date, description, duration and age status come from `POST youtubei/v1/player` rather than
+from the media container (see `src/platforms/youtube/innertube.ts`). Every timing behind that change
+was taken residentially — nobody can measure what that endpoint does from a Cloudflare Worker's egress
+without shipping it, because Access fronts the preview hosts and `npm run deploy` refuses on purpose.
+
+So the change was built to be indistinguishable from never having shipped if it fails, and **this pair
+is how you find out which happened.** Read it as a ratio, per the house rule for `translate_*` and
+`smoke_*`:
+
+```sql
+SELECT SUM(IF(blob2 = 'yt_innertube_ok', _sample_interval, 0)) AS ok,
+       SUM(IF(blob2 = 'yt_innertube_fail', _sample_interval, 0)) AS fail
+FROM mbedfx
+WHERE timestamp > NOW() - INTERVAL '1' HOUR AND blob1 = 'yt'
+```
+
+`ok` counts a usable **date**, not merely a 200 — a 200 carrying an empty `videoDetails` is the exact
+failure mode a sibling client (ANDROID_VR) already exhibits, and counting it as success would hide the
+one thing worth watching. `fail` climbing toward the total means the cards have silently gone back to
+1 January 1970, which is the state this counter exists to make loud.
+
 ### Reading `card_degraded`
 
 **`mux_ok` can be high while every card is still a picture.** The two answer different questions, and

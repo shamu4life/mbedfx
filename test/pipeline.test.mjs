@@ -1034,18 +1034,24 @@ test('rendering a {page} remux post PREWARMS the mux — Discord loses the race 
   assert.ok(called >= 1, 'the container was asked to mux during the render, not left for Discord to trigger')
 })
 
-test('fetchYouTube makes exactly ONE upstream request — the watch-page fetch is gone and stays gone', async () => {
+test('fetchYouTube NEVER fetches the watch page — the 1.58MB request is gone and stays gone', async () => {
   /**
    * THE PIN ON THE DELETED WATCH-PAGE FETCH. It read `<meta itemprop="datePublished">` out of the
    * first 64KB of a 1,575,509-byte page, inside fetchYouTube's own Promise.all — i.e. on the
    * first-paste critical path, spending the HTML_DEADLINE_MS budget settleMux needs — and from
    * Cloudflare egress it was right 1 TIME IN 3 on the field that actually renders (measured
    * 2026-07-26 against the apex with a Discordbot UA: 2 of 3 videos came back 1970 on their own
-   * activity callback). The date now comes from the container's `yt-dlp -J` timestamp, cached in R2
-   * for 30 days — see test/youtube-date.test.mjs.
+   * activity callback).
    *
-   * A request COUNT, because that is the property that matters and the only one a reinstated fetch
-   * cannot dodge: it does not care which url or which parser comes back.
+   * THIS ASSERTED A REQUEST *COUNT* UNTIL 2026-08-27, and the count was the wrong pin. The property
+   * that matters is that we never pull the watch page again; "exactly one request" was a proxy for it
+   * that happened to be true. It stopped being true when the date moved to `youtubei/v1/player`
+   * (see src/platforms/youtube/innertube.ts) — a ~10KB POST that is the fix for every YouTube card
+   * rendering 1 January 1970, and which a count-based pin would have blocked for the wrong reason.
+   *
+   * So: assert the SHAPE of what we ask for. No watch page, ever; and every request we do make is one
+   * of the two small JSON endpoints. That forbids the thing that was actually wrong without forbidding
+   * the thing that was actually right.
    */
   const real = globalThis.fetch
   const asked = []
@@ -1056,10 +1062,14 @@ test('fetchYouTube makes exactly ONE upstream request — the watch-page fetch i
   }
   try {
     const got = await liveFetchPost(YT_REF, fakeEnv(), 'discord')
-    assert.equal(asked.length, 1, `fetchYouTube must ask youtube.com exactly once: ${asked.join(', ')}`)
-    assert.match(asked[0], /\/oembed\?/, 'and the one request is oembed — never the 1.58MB watch page')
+    for (const u of asked) {
+      assert.doesNotMatch(u, /\/watch\?/, `the 1.58MB watch page must never be fetched: ${u}`)
+      assert.match(u, /\/oembed\?|\/youtubei\/v1\/player/, `unexpected upstream request: ${u}`)
+    }
+    assert.ok(asked.some(u => /\/oembed\?/.test(u)), 'oembed still owns the title')
     assert.equal(got.title, 'Never Gonna Give You Up')
-    // No date was known, so the epoch fallback stands. Honest, and now rare rather than usual.
+    // The stub answers the Innertube POST with the oembed body, which carries no date — so the epoch
+    // fallback still stands here. youtube-innertube.test.mjs is where a real body is asserted.
     assert.equal(got.createdAt.getTime(), 0)
   } finally {
     globalThis.fetch = real
