@@ -50,19 +50,35 @@ const BROWSER_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36
   '(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36'
 
 /**
- * A HARD ABORT, NOT A RACE, and 1200ms is derived rather than chosen.
+ * A HARD ABORT, NOT A RACE, AND THIS NUMBER WAS MEASURED IN PRODUCTION RATHER THAN DERIVED FROM THE
+ * RESIDENTIAL TIMINGS ABOVE — because deriving it from those was wrong the first time.
  *
- * This call sits in `fetchYouTube`'s `Promise.all` on the FIRST-PASTE critical path, inside
- * HTML_DEADLINE_MS (5000). The measurements above are 0.18-0.31s residential; 1200ms is roughly four
- * times the slowest of them, which leaves the render's remaining budget to `settleMux`, which is the
- * thing that actually needs it.
+ * It shipped at 1200ms: four times the slowest residential measurement (0.18-0.31s), chosen to leave
+ * the render's remaining budget to `settleMux`. Measured against live production immediately after
+ * that deploy, on nine ids the service had never seen:
+ *
+ *   innertube OK    n=3   min  281ms  median 1716ms  max 1723ms
+ *   innertube MISS  n=5   min 1661ms  median 1754ms  max 1912ms
+ *
+ * ONLY ABOUT A THIRD OF CARDS GOT A DATE. The shape of the failures is what identifies the cause: not
+ * one miss came back fast. A YouTube refusal from a datacenter IP is a prompt 403 and would have shown
+ * up as a FAST miss; every one of these sat at or above 1661ms, i.e. the call was still running when
+ * the 1200ms abort fired. Cloudflare's egress to YouTube was independently measured at ~3.2x slower
+ * than residential on 2026-08-23, which puts the tail of a 0.18-0.31s call straight through a 1200ms
+ * budget. The budget was the bug, not the endpoint.
+ *
+ * 2500ms, against a card that already takes ~1700ms end to end and an HTML_DEADLINE_MS of 5000. What
+ * this spends is `settleMux`'s share of the same budget, and on YouTube specifically that is the right
+ * trade rather than a regrettable one: a cold YouTube mux cannot finish inside a render at any budget
+ * (20-60MB through a throttled datacenter link), so the seconds settleMux would spend waiting buy
+ * nothing, while these buy the date, the description and the duration on the only paste that counts.
  *
  * `AbortSignal.timeout` rather than the `deadline()` helper used elsewhere in this repo: that one
  * deliberately leaves the loser running because the loser is doing work worth finishing. Here it is
  * not — a metadata answer that arrives after the card is rendered has nobody to give it to — so the
  * connection should be released rather than left to occupy the isolate.
  */
-const INNERTUBE_TIMEOUT_MS = 1200
+const INNERTUBE_TIMEOUT_MS = 2500
 
 /**
  * The fields this endpoint can tell us that the card actually renders. Every one is OPTIONAL and
