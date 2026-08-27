@@ -1,4 +1,5 @@
 import type { PostRef } from '../../types.ts'
+import { fetchInnertube } from './innertube.ts'
 
 /**
  * I/O ONLY, and the ONE call here is pure ENRICHMENT: normalize builds a complete card from the
@@ -61,24 +62,59 @@ export type YouTubeFetch =
   // `description` sits on BOTH arms for the reason the comment above gives about the date: it comes
   // from the container's meta extract, oembed knows nothing about it, and an oembed miss must not
   // suppress a body this worker is already holding.
-  | { ok: true; oembed: unknown; uploadedAt?: string | number | null; ageLimit?: number | null; description?: string | null; counts?: unknown }
-  | { ok: false; uploadedAt?: string | number | null; ageLimit?: number | null; description?: string | null; counts?: unknown }
+  //
+  // `duration` joined them 2026-08-27 with the Innertube source. It is not rendered — it is what lets
+  // settleMux REFUSE a mux the container would refuse anyway, and until there was a date source on the
+  // render path that arm was unreachable on this platform because the only duration lived in a record
+  // that was never written. See innertube.ts.
+  | { ok: true; oembed: unknown; uploadedAt?: string | number | null; ageLimit?: number | null; description?: string | null; counts?: unknown; duration?: number | null }
+  | { ok: false; uploadedAt?: string | number | null; ageLimit?: number | null; description?: string | null; counts?: unknown; duration?: number | null }
 
-export async function fetchYouTube(ref: Extract<PostRef, { p: 'yt' }>): Promise<YouTubeFetch> {
+/**
+ * TWO CALLS TO youtube.com, CONCURRENTLY, AND THE SECOND ONE CANNOT HURT THE FIRST.
+ *
+ * oembed owns the TITLE and the content assertion; Innertube owns the DATE, the description, the
+ * duration and the view count (see innertube.ts for why the date stopped coming from the container).
+ * They are independent, they go to the same host from the same egress, and they are raced in one
+ * Promise.all so the wall clock is the slower of the two rather than their sum — 0.146s and ~0.25s
+ * measured, against an HTML_DEADLINE_MS of 5000.
+ *
+ * THE ENRICHMENT IS STRICTLY ADDITIVE. `fetchInnertube` is total and answers null on a throw, a
+ * timeout, a non-2xx or an unusable body, and every field it can supply is optional on both arms of
+ * the union. So if YouTube changes that endpoint tomorrow, or refuses it from Cloudflare's egress
+ * entirely, this function returns exactly what it returned before the second call existed. That
+ * property is the whole reason the call is safe to make on the first-paste critical path, and it is
+ * worth preserving over any future refactor that would let an Innertube failure reach the caller.
+ */
+export async function fetchYouTube(
+  ref: Extract<PostRef, { p: 'yt' }>,
+  fetchImpl: typeof fetch = fetch,
+): Promise<YouTubeFetch> {
   if (!YT_ID.test(ref.id)) return { ok: false }
   const url = `https://www.youtube.com/oembed?format=json&url=${encodeURIComponent(ytPageUrl(ref))}`
 
-  const oembedRes = await fetch(url, {
-    headers: { 'user-agent': CRAWLER_UA, accept: 'application/json' },
-  }).catch(() => null)
+  const [oembedRes, meta] = await Promise.all([
+    fetchImpl(url, { headers: { 'user-agent': CRAWLER_UA, accept: 'application/json' } }).catch(() => null),
+    fetchInnertube(ref.id, fetchImpl),
+  ])
 
-  if (!oembedRes) return { ok: false }
+  // Spread onto BOTH arms below rather than onto the result at the end, so the oembed-miss arm keeps
+  // the date and body too — the exact defect the union's own comment records for `uploadedAt`.
+  const enriched = {
+    ...(meta?.uploadedAt === undefined ? {} : { uploadedAt: meta.uploadedAt }),
+    ...(meta?.description === undefined ? {} : { description: meta.description }),
+    ...(meta?.ageLimit === undefined ? {} : { ageLimit: meta.ageLimit }),
+    ...(meta?.duration === undefined ? {} : { duration: meta.duration }),
+    ...(meta?.views === undefined ? {} : { counts: { views: meta.views } }),
+  }
+
+  if (!oembedRes) return { ok: false, ...enriched }
   // ASSERT ON CONTENT: oembed answers a nonexistent/embedding-disabled video with 401/404 and a
   // non-JSON body, and a real one with a JSON object carrying `title` — the JSON IS the assertion.
-  if (!(oembedRes.headers.get('content-type') || '').includes('json')) return { ok: false }
+  if (!(oembedRes.headers.get('content-type') || '').includes('json')) return { ok: false, ...enriched }
   try {
-    return { ok: true, oembed: await oembedRes.json() }
+    return { ok: true, oembed: await oembedRes.json(), ...enriched }
   } catch {
-    return { ok: false }
+    return { ok: false, ...enriched }
   }
 }

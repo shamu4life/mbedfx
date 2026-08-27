@@ -223,6 +223,27 @@ export type Outcome2 =
    * that are too long by design.
    */
   | 'card_degraded'
+  /**
+   * DID youtubei/v1/player ANSWER US? Per post-cache miss, on `yt` only.
+   *
+   * THIS PAIR EXISTS TO ANSWER ONE QUESTION THAT COULD NOT BE ANSWERED BEFORE SHIPPING. Every timing
+   * behind the Innertube metadata change was taken residentially; nobody could measure what
+   * `youtubei/v1/player` does from a Cloudflare Worker's egress, because Cloudflare Access sits in
+   * front of the preview hosts and `npm run deploy` refuses on purpose. The change was therefore
+   * built so that a failure is indistinguishable from it never having shipped — and this ratio is how
+   * we find out which of the two we got, within an hour of the merge, with nothing at stake.
+   *
+   * READ THEM AS A RATIO, per the house rule for translate_* and smoke_*. `yt_innertube_ok` alone
+   * says nothing; `fail` climbing toward the total is the signal that YouTube has either changed the
+   * response shape or started refusing datacenter egress on this endpoint too — at which point the
+   * cards silently return to the 1 January 1970 they showed for the nine days before this, and this
+   * counter is the only thing that would say so.
+   *
+   * `ok` means a usable DATE came back, not merely a 200. A 200 carrying an empty `videoDetails` is
+   * the specific failure mode a sibling client (ANDROID_VR) already exhibits, and counting it as
+   * success would hide exactly the thing worth watching.
+   */
+  | 'yt_innertube_ok' | 'yt_innertube_fail'
 
 /**
  * The two analytics outcomes that are content GATES (walls a post sits behind) rather than fetch

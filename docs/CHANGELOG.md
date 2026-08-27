@@ -28,6 +28,41 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   "too strict", never "too open".
 
 ### Fixed
+- **Every YouTube card said "1 January 1970" with no description, for nine days.** Fixed by taking
+  the date from YouTube's own player API instead of from a subprocess
+  (`src/platforms/youtube/innertube.ts`, `src/platforms/youtube/fetch.ts`).
+  The date, description and counts all came from one place — a `yt-dlp -J` extract inside the media
+  container — and that extract never finished for a caller still listening. Measured 2026-08-25: the
+  R2 meta record exists under generations `g8` and `g10` and under **neither `g11` nor `g12`** for
+  any id checked, so nothing had been written since about 2026-08-18; `wrangler tail` showed every
+  request-scoped `MediaResolver` invocation ending `canceled` at 1.3–1.8s, which is the render's own
+  budget rather than a platform fault. Discord caches an embed permanently in the message it was
+  pasted into (jhgg, discord-api-docs#1663), so a card cannot wait seconds for a date — the first
+  paste is the only paste.
+  `POST youtubei/v1/player` is the endpoint youtube.com's own web player calls. Measured 2026-08-27,
+  cookie-free, no API key, no PO token, no player JS, no Deno: **0.14–0.37s** for a ~10KB response
+  carrying the publish date, description, duration, view count and age status.
+  `Date.parse('2009-10-24T23:57:33-07:00')/1000` is **1256453853**, byte-identical to the `timestamp`
+  in this bucket's surviving `g10` record for `dQw4w9WgXcQ` and to what `yt-dlp -J` returns — three
+  independent derivations of one value, which is the argument for replacing a 15.9s container call
+  with a 0.2s fetch.
+  **Strictly additive.** `fetchInnertube` is total and answers null on a throw, a timeout, a non-2xx
+  or an unusable body, and every field it supplies is optional on both arms of `YouTubeFetch`. So if
+  the endpoint changes, or is refused from Cloudflare's egress — which could not be measured before
+  shipping, because Access fronts the preview hosts and `npm run deploy` refuses on purpose — the card
+  is exactly the card that shipped before it. `yt_innertube_ok` / `yt_innertube_fail` report which of
+  the two we got, within an hour of the merge, with nothing at stake.
+  Two consequences worth naming. The **age gate now resolves with zero container calls**
+  (`LOGIN_REQUIRED` + "Sign in to confirm your age" reproduces `age_limit: 18` exactly; `isFamilySafe`
+  is *not* the discriminator and keying on it would mislabel ordinary videos). And the **duration
+  arrives on a cold paste**, which makes `settleMux`'s over-ceiling refusal reachable on this platform
+  for the first time — it reads `m.duration`, and the only duration used to live in the record that
+  was never written.
+  The metadata is harvested from a response YouTube reports as `playabilityStatus: UNPLAYABLE`;
+  `videoDetails` and `microformat` are populated anyway. That is the one fragile thing here, it is
+  documented at the top of `innertube.ts`, and a test asserts it out loud so its removal is loud too.
+  `ytDescription` moved to `src/platforms/youtube/description.ts` — two sources for one stored field
+  must not clamp differently. Same precedent as `platforms/uploaddate.ts`.
 - **Bluesky and Reddit videos had no durable mux path at all**, which the alarm above did not fix
   because it never reached them (`src/worker.ts`, `src/muxpolicy.ts`, `src/muxrunner.ts`). `settleMux`
   returned before its arming loop for any post whose remux carries no `page`, and `prewarmable()`

@@ -38,6 +38,7 @@ import { displayName } from './render/chooser.ts'
 import { metaPlatformOf, resolveMetaShare, stripMetaTracking } from './platforms/metashare/fetch.ts'
 import { normalizeReddit } from './platforms/reddit/normalize.ts'
 import { fetchYouTube, ytPageUrl } from './platforms/youtube/fetch.ts'
+import { ytDescriptionOf } from './platforms/youtube/description.ts'
 import {
   normalizeYouTube, uploadDateFrom, withAgeNote, withCounts, withDescription, withLengthNote,
   withMuxDuration,
@@ -681,6 +682,10 @@ export async function liveFetchPost(
         readCachedMeta<YouTubeMeta>(ref, env, YT_META_TTL_MS, ytMetaUsable(env)),
       ])
       if (!got.ok) count(env, 'yt', 'assert_fail', client)
+      // Bounded exactly as assert_fail is — once per post-cache miss, not once per request. The DATE
+      // is the test rather than the status code: see the counter's own docstring for why a 200 with
+      // an empty videoDetails must not read as success.
+      count(env, 'yt', got.uploadedAt === undefined ? 'yt_innertube_fail' : 'yt_innertube_ok', client)
       /**
        * THE JAR WAS SENT AND THE GATE HELD — the one arm where `pool_unused` is a REAL fault signal
        * rather than a staging note.
@@ -718,14 +723,34 @@ export async function liveFetchPost(
       // link 5 of its gate chain), and the card renders 1 January 1970 for the whole POST_TTL — with a
       // correct timestamp sitting in R2 the entire time. Title and date come from two independent
       // sources; one missing must not suppress the other.
+      /**
+       * `??`, NOT PLAIN ASSIGNMENT, AND THE DIFFERENCE IS THE WHOLE POINT NOW.
+       *
+       * This overlay used to write `uploadedAt: warm.timestamp` unconditionally. That was harmless
+       * while the R2 record was the ONLY source of a date — an absent warm field clobbered an absent
+       * fetch field, and both were absent together. It stopped being harmless the moment fetchYouTube
+       * started carrying a date of its own (innertube.ts): a warm record that predates a field, or a
+       * warm record that exists at all while Innertube answered faster, would silently blank a value
+       * we were already holding. That is the exact defect this file records for the pre-2026-07-26
+       * `got.ok && warm` spelling, one field over.
+       *
+       * The RECORD still wins where both exist, deliberately: it is the container's `yt-dlp -J`
+       * answer, it is what the age-gate jar was spent on, and the two agree byte-for-byte on every id
+       * measured (dQw4w9WgXcQ -> 1256453853 from both). This only decides who wins when one is absent.
+       */
+      const gotCounts = got.counts as { views?: number; likes?: number; replies?: number } | undefined
       const ytPost = normalizeYouTube(
         warm
           ? {
             ...got,
-            uploadedAt: warm.timestamp,
-            ageLimit: warm.ageLimit,
-            description: warm.description,
-            counts: { views: warm.views, likes: warm.likes, replies: warm.replies },
+            uploadedAt: warm.timestamp ?? got.uploadedAt,
+            ageLimit: warm.ageLimit ?? got.ageLimit,
+            description: warm.description ?? got.description,
+            counts: {
+              views: warm.views ?? gotCounts?.views,
+              likes: warm.likes ?? gotCounts?.likes,
+              replies: warm.replies ?? gotCounts?.replies,
+            },
           }
           : got,
         ref)
@@ -748,7 +773,9 @@ export async function liveFetchPost(
        * video still dispatches the doomed mux. POST_TTL is 900s and the record lives 30 days, so every
        * view after the activity route fills it is covered.
        */
-      return ytPost ? withMuxDuration(ytPost, warm?.duration) : ytPost
+      // The record's duration first for the reason above; Innertube's is what makes this reachable at
+      // all on a COLD paste, which is the only paste that matters.
+      return ytPost ? withMuxDuration(ytPost, warm?.duration ?? got.duration) : ytPost
     }
     case 'fb': {
       // Facebook: BOTH the title/poster and the video come from the container's yt-dlp — Meta decoys the
@@ -2793,20 +2820,10 @@ function ytCount(v: unknown): number | undefined {
  * a renderer, because this value is STORED IN R2 FOR 30 DAYS — trimming at render time would keep
  * paying to store and read the 5000 characters we always discard.
  */
-const YT_DESC_MAX = 300
-function ytDescription(v: unknown): string | undefined {
-  if (typeof v !== 'string') return undefined
-  // The first blank line ends the caption-ish part. \r\n handled because yt-dlp passes through
-  // whatever the uploader typed.
-  const first = v.replace(/\r\n/g, '\n').split(/\n\s*\n/)[0].trim()
-  if (!first) return undefined
-  // THE SAME THREE DOTS render/text.ts uses, so the codebase carries ONE truncation marker rather
-  // than two a reader would have to tell apart. Note this one can no longer reach a card: DESC_MAX
-  // (253) is tighter than YT_DESC_MAX (300), so anything clamped here is re-clamped at render. It
-  // survives because its job is bounding what is STORED IN R2 FOR 30 DAYS, not what is displayed —
-  // so matching the marker is about consistency in the stored value, not about anything a reader sees.
-  return first.length > YT_DESC_MAX ? `${first.slice(0, YT_DESC_MAX - 3).trimEnd()}...` : first
-}
+// MOVED to platforms/youtube/description.ts, because there are two sources for this field now — the
+// container's extract and youtubei/v1/player — and both write the record. See that file for why one
+// copy of the clamp matters when the value is stored for 30 days.
+const ytDescription = ytDescriptionOf
 /**
  * The content assertion for a stored/returned yt meta record. It is the SAME validator the value is
  * parsed with, so a record that would not render can never be written or read back — which matters
