@@ -7,6 +7,29 @@ import { normalizeYouTube, withMuxDuration } from '../src/platforms/youtube/norm
 import { readFileSync } from 'node:fs'
 
 /**
+ * THIS FILE MAKES NO NETWORK CALLS, and now says so in code rather than by convention.
+ *
+ * `resolveYouTubeMeta` asks `youtubei/v1/player` before it asks the container (see
+ * src/platforms/youtube/innertube.ts). Without this stub these tests would reach the live internet:
+ * caught when one of them started asserting a REAL upload date it had fetched for M7lc1UVf-VE, which
+ * is a non-deterministic suite and a dependency on YouTube being reachable from CI.
+ *
+ * Refusing the Innertube call is also what keeps these tests testing what they were WRITTEN to test —
+ * the container rung and its cache — rather than silently exercising the fast path that now sits in
+ * front of it. The Innertube path has its own file: test/youtube-innertube.test.mjs.
+ */
+const realFetch = globalThis.fetch
+globalThis.fetch = async (url, init) => {
+  const u = String(url)
+  if (u.includes('/youtubei/') || u.includes('youtube.com/oembed')) {
+    return new Response('offline', { status: 503 })
+  }
+  throw new Error(`unexpected network call in an offline test: ${u}`)
+}
+void realFetch
+
+
+/**
  * THE YOUTUBE UPLOAD DATE, driven through the real dispatcher with mocked bindings — no container, no
  * real R2, no network. It pins the defect reported from a live embed and re-measured 2026-07-26 with a
  * Discordbot UA against the apex, on the field that actually renders (`created_at` on the
@@ -147,6 +170,55 @@ test('A COLD ENTRY on a VOUCHED post costs exactly ONE container call and is WRI
   assert.match(metaCacheKey(ref), /^meta\/g\d+\/yt:M7lc1UVf-VE\.json$/)
   assert.deepEqual(JSON.parse(new TextDecoder().decode(r2.store.get(metaCacheKey(ref)).bytes)),
     { timestamp: TS_RICK }, 'ONLY the field we consume is persisted')
+})
+
+test('INNERTUBE ANSWERS AND THE CONTAINER IS NEVER ASKED — and the answer is WRITTEN', async () => {
+  /**
+   * THE POINT OF PUTTING INNERTUBE IN FRONT OF THE CONTAINER, which is not the same as the render
+   * path already asking it. `fetchYouTube` asks on every cold render, but that answer was not
+   * persisted — so every paste was an INDEPENDENT attempt, and measured against production on
+   * 2026-08-27 across 22 unseen ids that attempt succeeds only about 40-50% of the time from
+   * Cloudflare's egress. Not a timeout (the post fetch returns in ~250ms) and not a bad video (every
+   * failing id answers perfectly residentially) — the egress is refused on some fraction of requests.
+   *
+   * Reaching it from resolveYouTubeMeta puts the answer through metaAttempt -> metaWork, which writes
+   * the record for 30 days. A coin flip that STICKS is a different thing from one re-rolled forever:
+   * one success, on any paste, in any colo, fixes that video permanently for everyone.
+   *
+   * And it costs ZERO container calls, against a pool of four slots shared by ten platforms, on the
+   * rung that has not completed a request-scoped call since ~2026-08-18.
+   */
+  const ref = ytRef('innertube01')
+  const { seen, binding } = fakeResolver()
+  const r2 = fakeR2()
+
+  const saved = globalThis.fetch
+  globalThis.fetch = async (url) => {
+    if (!String(url).includes('/youtubei/')) return new Response('offline', { status: 503 })
+    return Response.json({
+      playabilityStatus: { status: 'UNPLAYABLE', reason: 'Video unavailable' },
+      videoDetails: {
+        lengthSeconds: '213', viewCount: '1808522174',
+        shortDescription: 'The official video for “Never Gonna Give You Up” by Rick Astley.',
+      },
+      microformat: { playerMicroformatRenderer: { publishDate: '2009-10-24T23:57:33-07:00' } },
+    })
+  }
+  try {
+    const res = await handle(req(activity(ref)), envWith(binding, r2), ctx, deps(vouchedPost(ref)))
+    assert.equal(await createdAt(res), ISO_RICK, 'the real date, on the first paste')
+    assert.equal(seen.meta, 0, 'and the container was never asked for it')
+
+    const written = r2.store.get(metaCacheKey(ref))
+    assert.ok(written, 'the answer is PERSISTED, which is what stops the next paste re-rolling it')
+    const rec = JSON.parse(new TextDecoder().decode(written.bytes))
+    assert.equal(rec.timestamp, TS_RICK)
+    assert.equal(rec.duration, 213)
+    assert.equal(rec.jarred, undefined,
+      'and never claims a credential was spent — this rung sends no cookie jar')
+  } finally {
+    globalThis.fetch = saved
+  }
 })
 
 test('THE SECURITY PIN: an UNVOUCHED post costs ZERO container calls and renders the epoch', async () => {

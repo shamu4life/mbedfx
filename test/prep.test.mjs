@@ -5,6 +5,29 @@ import { route } from '../src/router.ts'
 import { readFileSync } from 'node:fs'
 
 /**
+ * THIS FILE MAKES NO NETWORK CALLS, and now says so in code rather than by convention.
+ *
+ * `resolveYouTubeMeta` asks `youtubei/v1/player` before it asks the container (see
+ * src/platforms/youtube/innertube.ts). Without this stub these tests would reach the live internet:
+ * caught when one of them started asserting a REAL upload date it had fetched for M7lc1UVf-VE, which
+ * is a non-deterministic suite and a dependency on YouTube being reachable from CI.
+ *
+ * Refusing the Innertube call is also what keeps these tests testing what they were WRITTEN to test —
+ * the container rung and its cache — rather than silently exercising the fast path that now sits in
+ * front of it. The Innertube path has its own file: test/youtube-innertube.test.mjs.
+ */
+const realFetch = globalThis.fetch
+globalThis.fetch = async (url, init) => {
+  const u = String(url)
+  if (u.includes('/youtubei/') || u.includes('youtube.com/oembed')) {
+    return new Response('offline', { status: 503 })
+  }
+  throw new Error(`unexpected network call in an offline test: ${u}`)
+}
+void realFetch
+
+
+/**
  * /_prep — THE FIXER PAGE GETTING READY. Requested 2026-07-31: "if someone puts in a video which
  * would be going through yt-dlp then when they submit the link it kicks off the download/mux in the
  * background", plus the earlier ask to unfurl a share url "to the full thing instead of just

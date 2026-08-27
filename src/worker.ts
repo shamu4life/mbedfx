@@ -39,6 +39,7 @@ import { metaPlatformOf, resolveMetaShare, stripMetaTracking } from './platforms
 import { normalizeReddit } from './platforms/reddit/normalize.ts'
 import { fetchYouTube, ytPageUrl } from './platforms/youtube/fetch.ts'
 import { ytDescriptionOf } from './platforms/youtube/description.ts'
+import { fetchInnertube } from './platforms/youtube/innertube.ts'
 import {
   normalizeYouTube, uploadDateFrom, withAgeNote, withCounts, withDescription, withLengthNote,
   withMuxDuration,
@@ -3008,6 +3009,47 @@ export const MUX_WAIT_BOT_MS = 1500
  * when that instance idles out. Trusting the field instead would persist a hole for 30 days.
  */
 async function resolveYouTubeMeta(ref: Extract<PostRef, { p: 'yt' }>, env: Env): Promise<YouTubeMeta | null> {
+  /**
+   * INNERTUBE FIRST, AND THIS IS WHAT MAKES THE DATE STICK RATHER THAN BEING RE-ROLLED EVERY PASTE.
+   *
+   * `fetchYouTube` already asks `youtubei/v1/player` on the render path, which is what stopped the
+   * cards saying 1 January 1970. But that answer was deliberately not persisted, so every cold paste
+   * was an INDEPENDENT attempt — and measured against production on 2026-08-27, across 22 ids the
+   * service had never seen, that attempt succeeds only about 40-50% of the time. Not a timeout: the
+   * post fetch returns in ~250ms and the ~1750ms card is `settleMux` waiting out MUX_WAIT_BOT_MS
+   * afterwards. Not a bad video either: every failing id answers perfectly from a residential IP,
+   * same request, same minute. Cloudflare's egress is simply refused on some fraction of requests,
+   * and neither raising the budget (1200ms -> 2500ms) nor adding a second client moved the ratio.
+   *
+   * A COIN FLIP THAT IS RE-ROLLED FOREVER IS A DIFFERENT BUG FROM A COIN FLIP THAT STICKS. Reaching
+   * it from HERE puts the answer through `metaAttempt` -> `metaWork`, which writes the record to R2
+   * for 30 days — so one success anywhere, on any paste, in any colo, fixes that video permanently
+   * for everyone. It also buys a SECOND attempt per paste at no extra cost, because the activity
+   * route calls this seconds after the render already tried.
+   *
+   * AND IT IS TRIED BEFORE THE CONTAINER ON PURPOSE. The container's `yt-dlp -J` is the thing that
+   * has not completed a request-scoped call since ~2026-08-18 (every MediaResolver invocation ends
+   * `canceled` at 1.3-1.8s), it costs a slot from a pool of four shared by ten platforms, and it
+   * takes 15.9s from this egress against Innertube's ~0.25s. It stays as the fallback because it is
+   * the rung that carries a cookie jar, which is the only thing that can answer an age-gated id.
+   */
+  const quick = await fetchInnertube(ref.id)
+  const quickAt = quick?.uploadedAt === undefined ? null : uploadDateFrom(quick.uploadedAt)
+  if (quick && quickAt) {
+    return {
+      timestamp: Math.floor(quickAt.getTime() / 1000),
+      ...(quick.duration === undefined || quick.duration >= 86_400 ? {} : { duration: quick.duration }),
+      ...(quick.ageLimit === undefined ? {} : { ageLimit: quick.ageLimit }),
+      ...(quick.description === undefined ? {} : { description: quick.description }),
+      ...(quick.views === undefined ? {} : { views: quick.views }),
+      // NO `jarred`, deliberately, and not an oversight: this rung sends no cookie. ytMetaUsable
+      // reads the flag's ABSENCE as "the gate verdict on this record is not one a credential has been
+      // tried against", which is exactly true here — so an age-gated id still falls through to the
+      // container on a deployment that has a pool, and an ungated one is kept. Writing `jarred` here
+      // would claim a credential was spent that never was.
+    }
+  }
+
   const resolver = env.MEDIA_RESOLVER
   if (!resolver) return null
   try {
