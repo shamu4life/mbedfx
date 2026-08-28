@@ -1,6 +1,7 @@
 import type { Env } from '../../analytics.ts'
 import type { PostRef } from '../../types.ts'
 import { IM_ID } from '../../refkey.ts'
+import { askTwice } from '../../fetchretry.ts'
 
 /**
  * IMGUR, VIA IMGUR'S OWN JSON API — not the container.
@@ -164,7 +165,7 @@ export async function fetchImgur(
     const url =
       `${API}/${endpoint}/${encodeURIComponent(ref.id)}` +
       `?client_id=${encodeURIComponent(clientId)}&include=media,account`
-    const res = await fetch(url, { headers: { accept: 'application/json' } })
+    const res = await askTwice(url, { headers: { accept: 'application/json' } })
     /**
      * ONLY A CLEAN 404 MAY ADVANCE TO THE NEXT ENDPOINT, and this is the whole fix. A 404 is the one
      * answer that means "no object of THIS KIND carries that id" — the honest miss the two-entry

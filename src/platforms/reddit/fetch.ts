@@ -1,6 +1,7 @@
 import type { PostRef } from '../../types.ts'
 import type { Env } from '../../analytics.ts'
 import { redditGate } from './normalize.ts'
+import { askTwice } from '../../fetchretry.ts'
 
 /**
  * I/O ONLY. Reddit blocks anonymous `.json` from datacenter IPs (verified 2026-07-21: our Workers
@@ -37,7 +38,7 @@ export type RedditFetch =
  */
 async function fetchRedditEmbed(ref: Extract<PostRef, { p: 'rd' }>): Promise<RedditFetch> {
   const sub = ref.sub && /^[A-Za-z0-9_]+$/.test(ref.sub) ? ref.sub : '_'
-  const res = await fetch(`https://embed.reddit.com/r/${sub}/comments/${encodeURIComponent(ref.id)}/`, {
+  const res = await askTwice(`https://embed.reddit.com/r/${sub}/comments/${encodeURIComponent(ref.id)}/`, {
     headers: { 'user-agent': BROWSER_UA, accept: 'text/html' },
     redirect: 'follow',
   })
@@ -65,7 +66,7 @@ async function fetchRedditEmbed(ref: Extract<PostRef, { p: 'rd' }>): Promise<Red
 export async function resolveRedditShareUrl(shareUrl: string): Promise<string | null> {
   let res: Response
   try {
-    res = await fetch(shareUrl, {
+    res = await askTwice(shareUrl, {
       method: 'GET',
       redirect: 'manual',
       headers: { 'user-agent': BROWSER_UA, accept: 'text/html' },
@@ -86,7 +87,7 @@ async function appToken(env: Env): Promise<string | null> {
   const id = env.REDDIT_CLIENT_ID
   const secret = env.REDDIT_CLIENT_SECRET
   if (!id || !secret) return null
-  const res = await fetch('https://www.reddit.com/api/v1/access_token', {
+  const res = await askTwice('https://www.reddit.com/api/v1/access_token', {
     method: 'POST',
     headers: {
       authorization: `Basic ${btoa(`${id}:${secret}`)}`,
@@ -106,7 +107,7 @@ async function appToken(env: Env): Promise<string | null> {
 async function fetchRedditOAuth(ref: Extract<PostRef, { p: 'rd' }>, env: Env): Promise<RedditFetch> {
   const token = await appToken(env)
   if (!token) return { ok: false, reason: 'assert_fail' }
-  const res = await fetch(`https://oauth.reddit.com/comments/${encodeURIComponent(ref.id)}?raw_json=1&limit=1`, {
+  const res = await askTwice(`https://oauth.reddit.com/comments/${encodeURIComponent(ref.id)}?raw_json=1&limit=1`, {
     headers: { authorization: `Bearer ${token}`, 'user-agent': REDDIT_UA, accept: 'application/json' },
   })
   if (!(res.headers.get('content-type') || '').includes('json')) return { ok: false, reason: 'assert_fail' }

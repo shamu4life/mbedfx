@@ -181,6 +181,36 @@ test('a COLD BURST on one token is one activation, not one per concurrent reques
 test('a FAILED activation is never memoized — one 503 must not kill the guest path for two hours', async () => {
   // The failure would be invisible and long: every tweet on this isolate would take the credential-
   // free "no token" path until the TTL lapsed, and the cards would still render, just worse.
+  //
+  // REWRITTEN 2026-08-28. The invariant is untouched — only a real token is ever stored — but the
+  // title's own promise is now kept one rung earlier: since the activation goes through askTwice, ONE
+  // 503 no longer costs the token at all, so the stub has to refuse for as long as the retry is
+  // willing to ask before there is a failed activation to not-memoize. Both properties are pinned
+  // below, because the new one is the stronger half and would otherwise be untested.
+  resetGuestToken()
+  const real = globalThis.fetch
+  let activations = 0
+  globalThis.fetch = async () => {
+    activations++
+    return activations <= 2
+      ? new Response('gateway blew up', { status: 503 })
+      : new Response(JSON.stringify({ guest_token: 'gt-after' }), { status: 200 })
+  }
+  try {
+    assert.equal(await getGuestToken({}), null, 'a non-JSON body is no token, asserted on content')
+    assert.equal(activations, 2, 'and a refused activation is asked again before it is called a failure')
+    assert.equal(await getGuestToken({}), 'gt-after', 'and the next caller tries again')
+    assert.equal(activations, 3)
+  } finally { globalThis.fetch = real; resetGuestToken() }
+})
+
+test('ONE REFUSED ACTIVATION IS SURVIVED OUTRIGHT — the guest path is not lost to a single 503', async () => {
+  /**
+   * The half the rewrite above added rather than replaced, and the one that matters to a reader. The
+   * guest path is Twitter's FALLBACK: it runs only after syndication has already failed, so losing it
+   * to a blip means losing the card, and Discord caches that card permanently inside the message.
+   * Before src/fetchretry.ts a single 503 on activate.json ended the whole request with no token.
+   */
   resetGuestToken()
   const real = globalThis.fetch
   let activations = 0
@@ -188,28 +218,33 @@ test('a FAILED activation is never memoized — one 503 must not kill the guest 
     activations++
     return activations === 1
       ? new Response('gateway blew up', { status: 503 })
-      : new Response(JSON.stringify({ guest_token: 'gt-after' }), { status: 200 })
+      : new Response(JSON.stringify({ guest_token: 'gt-survived' }), { status: 200 })
   }
   try {
-    assert.equal(await getGuestToken({}), null, 'a non-JSON body is no token, asserted on content')
-    assert.equal(await getGuestToken({}), 'gt-after', 'and the next caller tries again')
-    assert.equal(activations, 2)
+    assert.equal(await getGuestToken({}), 'gt-survived', 'the second ask activates, so Path B still exists')
+    assert.equal(activations, 2, 'one extra ask, not a loop')
   } finally { globalThis.fetch = real; resetGuestToken() }
 })
 
 test('a THROWN activation does not park a rejected promise for the life of the process', async () => {
   // The in-flight slot has to be cleared however it settles. Left set, one transport error would be
   // handed to every later caller forever — a dead guest path with no way back short of a restart.
+  //
+  // REWRITTEN 2026-08-28: the activation now goes through askTwice, so a SINGLE reset is recovered
+  // from rather than propagated, and the stub has to throw for both attempts before there is a
+  // rejection to not-park. The invariant is unchanged, and so is the reason it exists — the in-flight
+  // slot must be cleared however it settles.
   resetGuestToken()
   const real = globalThis.fetch
   let calls = 0
   globalThis.fetch = async () => {
     calls++
-    if (calls === 1) throw new Error('connection reset')
+    if (calls <= 2) throw new Error('connection reset')
     return new Response(JSON.stringify({ guest_token: 'gt-recovered' }), { status: 200 })
   }
   try {
     await assert.rejects(() => getGuestToken({}), /connection reset/)
+    assert.equal(calls, 2, 'asked twice before the reset was allowed to propagate')
     assert.equal(await getGuestToken({}), 'gt-recovered')
   } finally { globalThis.fetch = real; resetGuestToken() }
 })

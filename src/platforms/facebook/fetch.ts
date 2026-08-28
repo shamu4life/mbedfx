@@ -1,5 +1,6 @@
 import type { PostRef } from '../../types.ts'
 import { fbPageUrl } from './normalize.ts'
+import { askTwice } from '../../fetchretry.ts'
 
 /**
  * I/O ONLY, and this is the FIRST Facebook fetcher this project has had — the platform was
@@ -84,7 +85,7 @@ const BROWSER_HEADERS: Record<string, string> = {
  */
 export async function fetchFacebookPageUrl(url: string): Promise<string | null> {
   try {
-    const res = await fetch(url, { headers: BROWSER_HEADERS, redirect: 'follow' })
+    const res = await askTwice(url, { headers: BROWSER_HEADERS, redirect: 'follow' })
     return await res.text()
   } catch {
     return null

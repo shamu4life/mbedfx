@@ -1,6 +1,7 @@
 import type { PostRef } from '../../types.ts'
 import { MASTO_ID } from '../../refkey.ts'
 import { MAX_BODY, instanceFetchable, type InstanceGuard } from '../fedihost.ts'
+import { askTwice } from '../../fetchretry.ts'
 
 /**
  * I/O ONLY. `POST /api/notes/show`, unauthenticated, ON THE HOST THE USER PASTED.
@@ -38,7 +39,7 @@ export async function fetchMisskey(
   if (!MASTO_ID.test(ref.id) || !(await instanceFetchable(ref.host, guard))) {
     return { ok: false, reason: 'assert_fail' }
   }
-  const res = await fetch(`https://${ref.host}/api/notes/show`, {
+  const res = await askTwice(`https://${ref.host}/api/notes/show`, {
     method: 'POST',
     headers: { accept: 'application/json', 'content-type': 'application/json' },
     body: JSON.stringify({ noteId: ref.id }),
