@@ -66,6 +66,18 @@ PROC_TIMEOUT = int(os.environ.get("PROC_TIMEOUT", "120"))     # per-subprocess w
 # A members-only video failed on BOTH, which is the control: this changes which client asks, it does
 # not bypass a gate YouTube means to enforce.
 #
+# RE-MEASURED 2026-08-28, AND UPSTREAM HAS FIXED THE DEFAULT. yt-dlp 2026.8.19 carries the POT handling
+# that 2026.7.4 predated, and the two images side by side, same video, same minute, residential:
+#   2026.7.4  default -> 0 bytes, HTTP 403          2026.8.19  default -> 11,829,048 bytes
+#   2026.7.4  web_embedded -> 11,829,048 bytes      2026.8.19  web_embedded -> 11,829,048 bytes
+#
+# THE OVERRIDE STAYS ANYWAY, and this is a decision rather than inertia. It still buys the full format
+# ladder — web_embedded returns 19-23 video formats where tv_simply and mweb return exactly one — so
+# dropping it would cost headroom even on a release where the default works. And the measurement above
+# is RESIDENTIAL: the egress that actually fails is Cloudflare's, where ~40-50% of YouTube requests are
+# refused regardless of client. Removing the override is a separate change that needs its own
+# production measurement; do not fold it into a version bump.
+#
 # ORDER MATTERS, AND `default` MUST NEVER APPEAR IN IT. `player_client=default,web_embedded` still
 # 403s: android_vr's format 18 and web_embedded's format 18 are indistinguishable by format_id, so
 # selection lands on the poisoned one. The list REPLACES yt-dlp's default; it does not extend it.
@@ -76,9 +88,10 @@ PROC_TIMEOUT = int(os.environ.get("PROC_TIMEOUT", "120"))     # per-subprocess w
 # follow web_embedded rather than replacing it. Upstream reached the same conclusion independently:
 # master promoted `web_embedded` into its own `_DEFAULT_AUTHED_CLIENTS`.
 #
-# DO NOT PICK A CLIENT FROM yt-dlp's TABLE. 2026.7.4's own GVS_PO_TOKEN_POLICY is stale in BOTH
-# directions: it says android_vr needs no token (it 403s) and that android/mweb/tv_simply do (they
-# work). Only measurement decides this, and the same goes for the next time it moves.
+# DO NOT PICK A CLIENT FROM yt-dlp's TABLE. 2026.7.4's own GVS_PO_TOKEN_POLICY was stale in BOTH
+# directions: it said android_vr needs no token (it 403'd) and that android/mweb/tv_simply do (they
+# worked). Only measurement decides this, and the same goes for the next time it moves — including
+# after the 2026.8.19 bump, whose table has NOT been re-verified claim by claim against live behaviour.
 #
 # THIS CANNOT AFFECT ANY OTHER PLATFORM. `--extractor-args` is keyed by extractor, and the `youtube:`
 # prefix scopes it to the YouTube extractor alone — Dailymotion, Streamable, Imgur and Facebook go
