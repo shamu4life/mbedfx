@@ -435,5 +435,51 @@ class MuxSources(unittest.TestCase):
             )
 
 
+
+class HandlerShape(unittest.TestCase):
+    """THE HTTP SURFACE IS A METHOD TABLE, and nothing here was checking it was still one.
+
+    THE OUTAGE THIS PREVENTS, shipped 2026-08-28 and caught only by hitting production. A patch that
+    added the client probe anchored on `class _Handler(...)`, fell through to its fallback anchor
+    because the class is called `Handler`, and spliced module-level functions INTO the class body just
+    above `do_GET`. Python ends a class at the first unindented line, so `do_GET` and `do_POST` stopped
+    being methods and became module-level functions. BaseHTTPRequestHandler then answered EVERY
+    request with 501 "Unsupported method" — GET and POST alike, so /health and every mux on every
+    platform broke together.
+
+    Nothing caught it. This file imports and calls the pure helpers, which all still worked perfectly
+    because they were never the broken part; the Worker suite stubs the container out entirely; and
+    the smoke run stayed green because most of its checks never reach the container and YouTube's
+    metadata now comes from Innertube rather than yt-dlp. A 501 on the one surface that matters was
+    invisible to 1448 passing tests.
+
+    These assertions are deliberately about SHAPE rather than behaviour: they would have failed on the
+    exact edit that caused it, they cost nothing, and they cannot be satisfied by a helper that merely
+    exists somewhere in the file.
+    """
+
+    def test_request_methods_are_methods_of_the_handler(self):
+        for name in ("do_GET", "do_POST"):
+            self.assertTrue(
+                callable(getattr(srv.Handler, name, None)),
+                f"{name} must be a METHOD of Handler; module-level makes every request a 501",
+            )
+
+    def test_probe_helpers_are_module_level_and_not_swallowed_by_the_class(self):
+        # The mirror of the above, and the half that localises the failure: if these ever became
+        # attributes of Handler, the class body has eaten them again.
+        for name in ("_probe_one", "_probe_clients", "_probe_error"):
+            self.assertTrue(callable(getattr(srv, name, None)), f"{name} must be module level")
+            self.assertFalse(hasattr(srv.Handler, name), f"{name} must NOT be inside Handler")
+
+    def test_the_probe_takes_no_input(self):
+        """The security property, asserted rather than promised. This route reaches yt-dlp, so a video
+        id read from the request would be an arbitrary-url fetcher wearing a diagnostic name."""
+        self.assertIsInstance(srv.PROBE_VIDEO, str)
+        self.assertTrue(srv.PROBE_VIDEO)
+        self.assertIsInstance(srv.PROBE_CLIENTS, tuple)
+        self.assertIn("web_embedded", srv.PROBE_CLIENTS)
+
+
 if __name__ == "__main__":
     unittest.main()

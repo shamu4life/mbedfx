@@ -497,21 +497,6 @@ def _meta_page(page: str, jar=None) -> dict:
     }
 
 
-class Handler(BaseHTTPRequestHandler):
-    protocol_version = "HTTP/1.1"
-
-    def log_message(self, format, *args):  # no request logging (privacy: no urls in logs)
-        pass
-
-    def _json_error(self, code: int, msg: str) -> None:
-        body = json.dumps({"error": msg}).encode()
-        self.send_response(code)
-        self.send_header("content-type", "application/json")
-        self.send_header("content-length", str(len(body)))
-        self.end_headers()
-        self.wfile.write(body)
-
-
 # ===================================================================================================
 # THE CLIENT PROBE — the instrument this project has never had.
 # ===================================================================================================
@@ -637,6 +622,21 @@ def _ytdlp_version():
         return (out.stdout or b"").decode().strip()[:32]
     except Exception:
         return "unknown"
+
+
+class Handler(BaseHTTPRequestHandler):
+    protocol_version = "HTTP/1.1"
+
+    def log_message(self, format, *args):  # no request logging (privacy: no urls in logs)
+        pass
+
+    def _json_error(self, code: int, msg: str) -> None:
+        body = json.dumps({"error": msg}).encode()
+        self.send_response(code)
+        self.send_header("content-type", "application/json")
+        self.send_header("content-length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
 
 
     def do_GET(self):
