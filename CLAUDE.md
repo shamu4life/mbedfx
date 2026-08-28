@@ -9,7 +9,7 @@ plays inline.
 - UI: `public/index.html`, one file of hand-written vanilla JS and CSS. Its visible copy carries no
   em dashes and no second person. The owner asked for that, later edits re-broke it within a day,
   and a test now asserts it.
-- Version: 1.10.0.
+- Version: 1.11.0 (`package.json` is authoritative; this line has been stale before).
 
 ## What gets a PR sent back
 

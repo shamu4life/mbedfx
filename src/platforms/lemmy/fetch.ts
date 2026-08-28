@@ -1,6 +1,7 @@
 import type { PostRef } from '../../types.ts'
 import { LEMMY_ID } from '../../refkey.ts'
 import { MAX_BODY, instanceFetchable, type InstanceGuard } from '../fedihost.ts'
+import { askTwice } from '../../fetchretry.ts'
 
 /**
  * I/O ONLY. Lemmy's v3 API, unauthenticated, ON THE HOST THE USER PASTED.
@@ -83,7 +84,7 @@ const FLAVORS = [
  * ONE ATTEMPT against one endpoint. Every guard in the SSRF boundary above applies per attempt.
  */
 async function attempt(host: string, path: string): Promise<LemmyFetch> {
-  const res = await fetch(`https://${host}${path}`, {
+  const res = await askTwice(`https://${host}${path}`, {
     headers: { accept: 'application/json' },
     redirect: 'manual',
   })

@@ -1,5 +1,6 @@
 import type { Post, PostRef } from '../../types.ts'
 import { AWEME_PLAY, rehydrationScopes, videoDetailScope } from './normalize.ts'
+import { askTwice } from '../../fetchretry.ts'
 
 /**
  * I/O ONLY. This file fetches a TikTok post page and decides one question — "did I get a real
@@ -187,7 +188,7 @@ export function pageOutcome(body: unknown): TikTokFetch {
  */
 export async function fetchTikTok(ref: Extract<PostRef, { p: 'tt' }>): Promise<TikTokFetch> {
   if (!pinnable(ref.id)) return { ok: false, reason: 'assert_fail' }
-  const res = await fetch(`https://www.tiktok.com/@i/video/${encodeURIComponent(ref.id)}`, {
+  const res = await askTwice(`https://www.tiktok.com/@i/video/${encodeURIComponent(ref.id)}`, {
     headers: { 'user-agent': TIKTOK_UA, accept: 'text/html' },
   })
   return pageOutcome(await res.text())
@@ -250,7 +251,7 @@ export function shortlinkOutcome(body: unknown): TikTokFetch {
  */
 export async function resolveTikTokShortlink(code: string): Promise<TikTokFetch> {
   if (!pinnable(code)) return { ok: false, reason: 'assert_fail' }
-  const res = await fetch(`https://www.tiktok.com/t/${encodeURIComponent(code)}`, {
+  const res = await askTwice(`https://www.tiktok.com/t/${encodeURIComponent(code)}`, {
     headers: { 'user-agent': TIKTOK_UA, accept: 'text/html' },
   })
   return shortlinkOutcome(await res.text())
@@ -324,6 +325,10 @@ export async function resolveAwemeUrl(aweme: string): Promise<string | null> {
     // Same UA as the page fetch, deliberately — TikTok's gate is INVERTED from Instagram's (see
     // TIKTOK_UA), so a crawler UA or an absent one would be measuring a different endpoint than
     // the one we are about to hand to Discord.
+    //
+    // NO-RETRY: deliberate. This is a media PROBE, not the fetch that decides whether a card exists.
+    // It is already try/caught and already degrades to the aweme URL we ship anyway, so a second ask
+    // buys nothing a reader would see and doubles the cost of the failure path. See src/fetchretry.ts.
     res = await fetch(aweme, {
       redirect: 'manual',
       headers: { 'user-agent': TIKTOK_UA, accept: 'video/mp4,*/*' },

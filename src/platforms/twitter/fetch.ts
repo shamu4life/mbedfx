@@ -1,6 +1,7 @@
 import type { PostRef } from '../../types.ts'
 import type { Env } from '../../analytics.ts'
 import { syndicationHasTweet } from './normalize.ts'
+import { askTwice } from '../../fetchretry.ts'
 
 /** Read-through for cache-shaped, UNVALIDATED guest bodies — whatever JSON.parse produced. */
 type Any = Record<string, any>
@@ -101,6 +102,8 @@ export function syndicationOutcome(json: unknown): SyndicationResult {
  * failure the worker treats as null / fetch_fail, a different signal from "the endpoint answered with
  * something un-parseable". id is percent-encoded into the query, but the token is base-36 (derived,
  * never user text) so it needs none.
+ *
+ * The single ask is now askJson's — see it for why one refusal must not cost a permanent card.
  */
 export async function fetchSyndication(
   ref: Extract<PostRef, { p: 'x' }>,
@@ -108,16 +111,81 @@ export async function fetchSyndication(
   const url =
     'https://cdn.syndication.twimg.com/tweet-result' +
     `?id=${encodeURIComponent(ref.id)}&lang=en&token=${deriveSyndicationToken(ref.id)}`
-  const res = await fetch(url, { headers: { accept: 'application/json' } })
-  const body = await res.text()
-  let json: unknown
+  const got = await askJson(url, { headers: { accept: 'application/json' } })
+  // A 404 HTML poodle page (or any non-JSON body) — the endpoint answered, but not with a tweet.
+  if (!got.ok) return { ok: false, reason: 'assert_fail' }
+  return syndicationOutcome(got.json)
+}
+
+/**
+ * ===================================================================================================
+ * ONE EXTRA ASK — the whole of the retry, shared by both Twitter paths.
+ * ===================================================================================================
+ *
+ * REPORTED 2026-08-28: a public video tweet drew the "couldn't load" card on this service while a
+ * self-hosted rival drew the same id correctly, minutes apart, from the same Discord message.
+ *
+ * MEASURED the same day, residentially, on that exact id: syndication answered a full `Tweet` with
+ * video 8 times out of 8 (0.18-0.34s), and the guest TweetResultByRestId answered `__typename: Tweet`
+ * carrying `media: ['video']`. Nothing about the post is gated — not sensitive, not protected, not
+ * deleted, and the account is live. Both of our paths are healthy for it. So the card was lost to
+ * Cloudflare's egress being refused ONCE: the same shape already measured on YouTube's Innertube
+ * endpoint, where ~40-50% of Worker-egress calls are refused while every one of them answers
+ * perfectly from a residential IP in the same minute.
+ *
+ * WHY ONE BLIP WAS ONE PERMANENT CARD. Discord stores the embed it built INSIDE the message and does
+ * not re-unfurl a link it has already drawn (discord-api-docs#1663). A transient refusal therefore is
+ * not a transient card: the first paste is the only paste, and a card lost to a 300ms hiccup stays
+ * lost for everyone who ever scrolls past that message. The YouTube fix could lean on PERSISTENCE for
+ * a second chance because a later paste re-reads R2; a Discord embed has no later. The extra attempt
+ * has to happen inside the one request we are given, which is what this is.
+ *
+ * WHAT IS AND IS NOT ASKED AGAIN, because retrying the wrong thing is worse than not retrying.
+ * A PARSED BODY IS A VERDICT AND IS BELIEVED — a `TweetTombstone`, a real `Tweet` and a recognizable
+ * error object all return on the first ask. Only an answer carrying NO verdict is asked again: a
+ * thrown fetch, an unreadable body, or a non-JSON body on a status that says the endpoint REFUSED
+ * rather than answered. That split is what keeps a genuinely deleted tweet from costing a second
+ * round trip: measured 2026-08-28, a nonexistent id answers HTTP 200 with a parseable
+ * `TweetTombstone` reading "This Post is from an account that no longer exists", so it never reaches
+ * the retry at all.
+ *
+ * THIS IS NOT "ASSERT ON STATUS", and the difference is worth stating because CLAUDE.md forbids the
+ * other thing for good reasons. Status never decides whether we HAVE an answer — `syndicationOutcome`
+ * and `guestOutcome` still read that out of the body, and a 200 carrying a decoy is still a failure.
+ * Status is consulted only to decide whether asking again is worth one round trip when we have no
+ * answer at all. A 429 with an HTML body and a 404 with an HTML body are identical to a content check
+ * and want opposite treatment, which is the one question status can answer and content cannot.
+ *
+ * NO BACKOFF, DELIBERATELY. 200ms does not reset a rate-limit window, so a sleep would buy nothing
+ * against the case it looks like it addresses, while adding latency to every failing card and to
+ * every test that exercises this path. The failure measured is per-request, not per-window — the very
+ * next request out of the same colo succeeds — so the valuable retry is the immediate one.
+ *
+ * IF THIS IS EVER "SIMPLIFIED" BACK to a single fetch, the failure it reintroduces is silent: cards
+ * stop appearing for a fraction of pastes, permanently, with nothing in the logs (Workers Logs are off
+ * — see wrangler.jsonc) and nothing in the counters to distinguish it from a genuinely dead post.
+ */
+
+/**
+ * I/O: GET a url and return its parsed JSON, asking twice when the first answer carried no verdict.
+ *
+ * `{ ok: false }` means "the endpoint answered, but not with JSON" — both call sites map that to
+ * assert_fail, exactly as their inline parse did before. A THROWN fetch is re-thrown after the last
+ * attempt rather than swallowed, which preserves the contract fetchSyndication/fetchGuest documented
+ * and worker.ts depends on: a genuine transport failure is null / fetch_fail, a DIFFERENT signal from
+ * "the endpoint answered un-parseably". The retry changes how many times we ask, never what an answer
+ * means.
+ */
+async function askJson(url: string, init: RequestInit): Promise<{ ok: true; json: unknown } | { ok: false }> {
+  const res = await askTwice(url, init)
   try {
-    json = JSON.parse(body)
+    return { ok: true, json: JSON.parse(await res.text()) }
   } catch {
-    // A 404 HTML poodle page (or any non-JSON body) — the endpoint answered, but not with a tweet.
-    return { ok: false, reason: 'assert_fail' }
+    // The endpoint answered with something that is not JSON. askTwice has already spent the extra ask
+    // if the STATUS said the request was refused; a 404 poodle page is a verdict about the post, and
+    // asking it twice would only double the cost of every dead link.
+    return { ok: false }
   }
-  return syndicationOutcome(json)
 }
 
 /**
@@ -400,7 +468,7 @@ export async function getGuestToken(_env: Env): Promise<string | null> {
 }
 
 async function activateGuestToken(): Promise<string | null> {
-  const res = await fetch('https://api.x.com/1.1/guest/activate.json', {
+  const res = await askTwice('https://api.x.com/1.1/guest/activate.json', {
     method: 'POST',
     headers: { authorization: GUEST_BEARER, 'user-agent': GUEST_UA },
     // The cf fetch cache reuses the activation for the TTL on Workers — NOT caches.default, and NOT
@@ -425,8 +493,10 @@ async function activateGuestToken(): Promise<string | null> {
  * and the guest_id/ct0 Cookie. No guest token -> assert_fail (the token dance failed; nothing to try).
  *
  * ASSERT ON CONTENT, NEVER ON STATUS. The parse is guarded (a non-JSON body -> assert_fail); a thrown
- * `fetch` is deliberately NOT caught (worker.ts treats it as null / fetch_fail — a transport failure,
- * a different signal from "the endpoint answered un-parseably"), matching fetchSyndication.
+ * `fetch` still reaches worker.ts as null / fetch_fail — a transport failure, a different signal from
+ * "the endpoint answered un-parseably" — matching fetchSyndication. Both of those now run through
+ * askJson, which asks a SECOND time when the first answer carries no verdict and re-throws afterwards
+ * rather than swallowing; see askJson for what that does and does not change.
  *
  * THE qid/features/fieldToggles SET DRIFTS — Twitter rotates them. It is kept current from FxEmbed, and
  * a LIVE 400/404 in Task 8 means "the set drifted" (re-copy from FxEmbed), NOT "the design is wrong".
@@ -455,7 +525,7 @@ export async function fetchGuest(
     `&features=${encodeURIComponent(JSON.stringify(TWEET_RESULT_FEATURES))}` +
     `&fieldToggles=${encodeURIComponent(JSON.stringify(TWEET_RESULT_FIELD_TOGGLES))}`
 
-  const res = await fetch(url, {
+  const got = await askJson(url, {
     headers: {
       authorization: GUEST_BEARER,
       'user-agent': GUEST_UA,
@@ -466,13 +536,8 @@ export async function fetchGuest(
       cookie: `guest_id=v1%3A${gt}; ct0=${csrf}`,
     },
   })
-  let json: unknown
-  try {
-    json = JSON.parse(await res.text())
-  } catch {
-    return { ok: false, reason: 'assert_fail' }
-  }
-  return guestOutcome(json)
+  if (!got.ok) return { ok: false, reason: 'assert_fail' }
+  return guestOutcome(got.json)
 }
 
 /**

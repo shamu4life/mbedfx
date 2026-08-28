@@ -4375,6 +4375,59 @@ export async function handle(req: Request, env: Env, ctx: ExecutionContext, d: D
    * one fetch per path per 15 minutes per colo, whatever they do to this endpoint, and only the JSON
    * itself is uncached.
    */
+  /**
+   * `/_clients` — WHICH YOUTUBE PLAYER CLIENTS ACTUALLY SERVE BYTES FROM THIS EGRESS.
+   *
+   * THE INSTRUMENT THIS PROJECT NEVER HAD, and the reason three "fixes" shipped dead. Every argument
+   * about which `player_client` to use has been settled on a laptop, and a laptop is a residential IP:
+   * measured 2026-08-28, the configured list answers 5 of 6 test videos residentially and tells us
+   * nothing, because the failures that reach users are Cloudflare-egress-only (~40-50% of Worker-egress
+   * YouTube requests refused, while every one succeeds residentially in the same minute). This runs the
+   * comparison INSIDE the container, ON that egress.
+   *
+   * IT ASSERTS ON BYTES, WHICH IS THE WHOLE POINT. The container extracts with each client and then
+   * range-fetches the chosen format url, so a client that lists formats and is then refused by
+   * googlevideo reports `gvs: "http-403"` rather than looking healthy. That distinction is not
+   * hypothetical: on the first residential run, `android_vr` returned `extracted: true, formats: 1`
+   * and then 403'd — which also contradicts yt-dlp's own current table saying it needs no PO token.
+   *
+   * IT TAKES NO INPUT, the same property `/_smoke` has and for the same reason: the video id and the
+   * client list are constants in container/server.py. There is no parameter to point anywhere, so this
+   * is a diagnostic rather than an open yt-dlp relay.
+   *
+   * IT IS SLOW AND UNCACHED, deliberately. Serial by design (parallel yt-dlp on a quarter of a vCPU
+   * contends for the only scarce resource), and measured at ~68s for six clients at that size. It is
+   * not linked from anywhere, answers JSON so nothing unfurls it, and needs MEDIA_RESOLVER — without
+   * the binding it says so rather than pretending.
+   */
+  if (url.pathname === '/_clients') {
+    const resolver = env.MEDIA_RESOLVER
+    if (!resolver) {
+      return Response.json({ ok: false, error: 'no MEDIA_RESOLVER binding on this deployment' }, { status: 503 })
+    }
+    const started = Date.now()
+    const headers: Record<string, string> = { 'content-type': 'application/json' }
+    if (env.RESOLVER_SECRET) headers['x-resolver-secret'] = env.RESOLVER_SECRET
+    try {
+      // A FIXED SLOT, not a hashed one: this is a diagnostic about the CLIENTS, and spreading it over
+      // the pool would answer about a different instance each run and make two results incomparable.
+      const r = await resolverStub(resolver, 'client-probe').fetch('http://media-resolver/resolve', {
+        method: 'POST', body: JSON.stringify({ probe: true }), headers,
+      })
+      if (!r.ok) {
+        return Response.json({ ok: false, status: r.status, ms: Date.now() - started }, { status: 502 })
+      }
+      const j = await r.json() as Record<string, unknown>
+      const serving = Array.isArray(j.serving) ? j.serving : []
+      return Response.json({ ok: serving.length > 0, ms: Date.now() - started, ...j })
+    } catch {
+      // Never a 500: this is a diagnostic, and one that crashes tells an operator less than one that
+      // reports it could not reach the container.
+      return Response.json({ ok: false, error: 'resolver unreachable', ms: Date.now() - started },
+        { status: 502 })
+    }
+  }
+
   if (url.pathname === '/_smoke') {
     const started = Date.now()
     const results = await runSmoke(url.origin, u => handle(new Request(u, {

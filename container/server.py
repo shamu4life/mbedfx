@@ -34,6 +34,9 @@ import os
 import socket
 import subprocess
 import tempfile
+import time
+import urllib.error
+import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlsplit
 
@@ -66,6 +69,18 @@ PROC_TIMEOUT = int(os.environ.get("PROC_TIMEOUT", "120"))     # per-subprocess w
 # A members-only video failed on BOTH, which is the control: this changes which client asks, it does
 # not bypass a gate YouTube means to enforce.
 #
+# RE-MEASURED 2026-08-28, AND UPSTREAM HAS FIXED THE DEFAULT. yt-dlp 2026.8.19 carries the POT handling
+# that 2026.7.4 predated, and the two images side by side, same video, same minute, residential:
+#   2026.7.4  default -> 0 bytes, HTTP 403          2026.8.19  default -> 11,829,048 bytes
+#   2026.7.4  web_embedded -> 11,829,048 bytes      2026.8.19  web_embedded -> 11,829,048 bytes
+#
+# THE OVERRIDE STAYS ANYWAY, and this is a decision rather than inertia. It still buys the full format
+# ladder — web_embedded returns 19-23 video formats where tv_simply and mweb return exactly one — so
+# dropping it would cost headroom even on a release where the default works. And the measurement above
+# is RESIDENTIAL: the egress that actually fails is Cloudflare's, where ~40-50% of YouTube requests are
+# refused regardless of client. Removing the override is a separate change that needs its own
+# production measurement; do not fold it into a version bump.
+#
 # ORDER MATTERS, AND `default` MUST NEVER APPEAR IN IT. `player_client=default,web_embedded` still
 # 403s: android_vr's format 18 and web_embedded's format 18 are indistinguishable by format_id, so
 # selection lands on the poisoned one. The list REPLACES yt-dlp's default; it does not extend it.
@@ -76,9 +91,10 @@ PROC_TIMEOUT = int(os.environ.get("PROC_TIMEOUT", "120"))     # per-subprocess w
 # follow web_embedded rather than replacing it. Upstream reached the same conclusion independently:
 # master promoted `web_embedded` into its own `_DEFAULT_AUTHED_CLIENTS`.
 #
-# DO NOT PICK A CLIENT FROM yt-dlp's TABLE. 2026.7.4's own GVS_PO_TOKEN_POLICY is stale in BOTH
-# directions: it says android_vr needs no token (it 403s) and that android/mweb/tv_simply do (they
-# work). Only measurement decides this, and the same goes for the next time it moves.
+# DO NOT PICK A CLIENT FROM yt-dlp's TABLE. 2026.7.4's own GVS_PO_TOKEN_POLICY was stale in BOTH
+# directions: it said android_vr needs no token (it 403'd) and that android/mweb/tv_simply do (they
+# worked). Only measurement decides this, and the same goes for the next time it moves — including
+# after the 2026.8.19 bump, whose table has NOT been re-verified claim by claim against live behaviour.
 #
 # THIS CANNOT AFFECT ANY OTHER PLATFORM. `--extractor-args` is keyed by extractor, and the `youtube:`
 # prefix scopes it to the YouTube extractor alone — Dailymotion, Streamable, Imgur and Facebook go
@@ -102,12 +118,8 @@ YT_PLAYER_CLIENTS = "web_embedded,tv_simply,mweb"
 # fraction, and an embed is displayed far smaller than 720p anyway. `height<=?720` is NON-STRICT
 # (the `?`), so a format with no height still qualifies rather than failing the whole selection.
 #
-# BUT THE LEVER IS BYTES, NOT RESOLUTION — and at the SAME resolution there was still a third to give
-# back. Measured 2026-08-23 with the pinned yt-dlp and this file's own player-client list; the numbers
-# are yt-dlp's reported source filesizes, so the muxed output differs by a few tens of KB:
-#
-#   Qy2DltXI3Fc  625s, 640x360   18: 32,347,122 B  ->  134+140: 20,164,682 B   (-37.7%)
-#   hFQ-UPZ77kA   81s, 360x640   18:  6,011,494 B  ->  134+140:  5,028,446 B   (-16.4%)
+# BUT THE LEVER IS BYTES, NOT RESOLUTION — and at the SAME resolution there is a third to give back on
+# exactly the videos that need it.
 #
 # WHY THE SAME PICTURE COSTS LESS: it is the H.264 PROFILE, not the resolution. Format 18 is
 # `avc1.42001E` — BASELINE, which is what it has always been, because it exists for players that
@@ -115,9 +127,34 @@ YT_PLAYER_CLIENTS = "web_embedded,tv_simply,mweb"
 # spends far fewer bits on the same frames. 140's AAC is slightly larger than 18's muxed audio, and
 # that is the whole of the trade; it is written here rather than hidden behind "same resolution".
 #
-# WHAT IT BUYS. At the ~267 KB/s measured off Cloudflare's egress on 2026-08-23, a third fewer bytes
-# is a third less wall clock on the only axis that was ever binding. The saving is largest on long
-# videos, which is exactly where it is needed: the short clip above gains 16%, the ten-minute one 38%.
+# IT IS NOT A UNIFORM WIN, AND THAT IS THE PART WORTH KNOWING. Measured 2026-08-24 across 27 real
+# videos from nine channels (yt-dlp's reported source filesizes, pinned yt-dlp, this file's own
+# player-client list; the muxed output differs by tens of KB of container overhead):
+#
+#   duration          pair smaller on   aggregate bytes
+#   under 2 min           8 / 13            mixed, small either way
+#   2 - 10 min            5 / 7             -30.8%
+#   10 - 25 min           6 / 7             -30.6%     <- the band this exists for
+#
+#   Yid9cO7peXg  1008s  57,595,754 -> 34,783,673   (-39.6%)
+#   7Wiw42ZlBKs  1060s  62,122,070 -> 36,935,926   (-40.5%)
+#   I07RBedXRYA  1122s  67,125,390 -> 41,728,766   (-37.8%)
+#   J1WoNuemKOg  1365s  66,276,948 -> 71,861,868   (+8.4%)   <- the one long regression measured
+#
+# THE REGRESSIONS CLUSTER WHERE BYTES DO NOT MATTER: short 202x360 news clips run +26% to +43%, and
+# they are 1-4 MB files that finish in a second at any bitrate. Videos past MAX_SECONDS are excluded
+# from the table above because the match filter refuses them regardless — a 2873s sample ran +28.5%
+# and can never be muxed.
+#
+# SO DO NOT "FIX" THE SHORT-VIDEO REGRESSION by conditioning this arm on duration. `_mux_page` does
+# not know the duration before it extracts, and buying back a megabyte on a clip that already works
+# is not worth a second extraction on the videos that do not. If you want per-video optimality the
+# honest form is a size-aware sort (`-S "res:360,+size"`), which needs measuring across all ten
+# platforms this selector serves before it goes anywhere near here.
+#
+# WHAT IT BUYS. At the ~267 KB/s measured off Cloudflare's egress on 2026-08-23, ~31% fewer bytes on a
+# 10-25 minute video is ~31% less wall clock on the only axis that was ever binding — and those are
+# precisely the videos that could not finish at all.
 #
 # WHY ITAGS RATHER THAN A SORT KEY. `-S "res:360,vcodec:h264,acodec:aac"` is the principled form and
 # needs no literal — but it would change selection on all ten platforms this container serves, and
@@ -474,6 +511,134 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+
+# ===================================================================================================
+# THE CLIENT PROBE — the instrument this project has never had.
+# ===================================================================================================
+#
+# WHY IT EXISTS. Every question about WHICH YouTube player client works has been argued from a laptop,
+# and a laptop is a residential IP. Measured 2026-08-28, our configured list answers 5 of 6 test videos
+# residentially — and tells us nothing, because the failures that actually reach users are
+# Cloudflare-egress-only: ~40-50% of Worker-egress YouTube requests are refused while every one of them
+# succeeds residentially in the same minute. Three separate "fixes" have shipped on residential
+# evidence and done nothing in production. This runs the same comparison INSIDE the container, ON that
+# egress, and reports which clients answered.
+#
+# IT TAKES NO INPUT, and that is a property of the design rather than a promise — the same rule
+# `/_smoke` keeps. The video id is a constant below and the client list is a constant below; there is
+# no parameter a caller can point at anything. A version of this accepting `?url=` would be an open
+# yt-dlp relay wearing a diagnostic badge.
+#
+# IT ASSERTS ON BYTES, NOT ON A FORMAT LIST. A client that lists twenty formats and then gets 403 from
+# googlevideo is a BROKEN client that looks healthy — that is exactly the shape of the outage this
+# project spent weeks on. So each client is asked to extract AND then the chosen format URL is
+# range-fetched. `gvs` is the answer that matters; `formats` is context.
+PROBE_VIDEO = "jNQXAC9IVRw"      # "Me at the zoo" — the same id src/smoke.ts pins, for the same reason
+PROBE_RANGE = 65535              # bytes to pull; enough to prove GVS served us, cheap enough to spam
+PROBE_TIMEOUT = int(os.environ.get("PROBE_TIMEOUT", "45"))   # per client, wall clock
+
+# The clients worth asking about, and why each is here rather than a table copied from yt-dlp:
+#   default        - what yt-dlp picks unaided. On 2026.7.4 this 403'd, which is the whole reason
+#                    YT_PLAYER_CLIENTS exists; on 2026.8.19 it downloads. Worth watching from here.
+#   web_embedded   - ours, first. No PO token needed, but EMBEDDABLE videos only.
+#   tv_simply/mweb - ours, the fallbacks. yt-dlp's table says both need a GVS PO token we cannot mint.
+#   web_safari     - not ours. Its HLS formats are documented as needing no GVS token; measured
+#                    residentially it served a 720p muxed stream for one video out of six.
+#   android_vr     - not ours. yt-dlp's table currently says "no token required", which CONTRADICTS
+#                    this repo's own Dockerfile comment. Only production can settle that.
+PROBE_CLIENTS = ("default", "web_embedded", "tv_simply", "mweb", "web_safari", "android_vr")
+
+
+def _probe_one(client):
+    """Ask ONE client for the probe video, then try to actually fetch bytes. Never raises."""
+    row = {"client": client, "extracted": False, "formats": 0, "gvs": "not-reached", "bytes": 0,
+           "error": "", "ms": 0}
+    started = time.monotonic()
+    try:
+        cmd = ["yt-dlp", "--skip-download", "-J", "--no-warnings"]
+        # `default` means "pass no override at all" — NOT the literal string "default", which yt-dlp
+        # would treat as a client name and which this repo has already been bitten by: mixing
+        # `default` into an explicit list re-poisons format selection (see YT_PLAYER_CLIENTS).
+        if client != "default":
+            cmd += ["--extractor-args", f"youtube:player_client={client}"]
+        cmd += ["-f", YT_FORMAT_SELECTOR, "--", f"https://www.youtube.com/watch?v={PROBE_VIDEO}"]
+        out = subprocess.run(cmd, capture_output=True, timeout=PROBE_TIMEOUT, stdin=subprocess.DEVNULL)
+        if out.returncode != 0:
+            row["error"] = _probe_error(out.stderr)
+            return row
+        info = json.loads(out.stdout or b"{}")
+        row["extracted"] = True
+        row["formats"] = len(info.get("formats") or [])
+        url = info.get("url") or ((info.get("requested_formats") or [{}])[0].get("url"))
+        if not isinstance(url, str) or not url:
+            row["gvs"] = "no-url"
+            return row
+        # THE PART THAT COUNTS. Everything above is yt-dlp talking to itself; this is googlevideo
+        # deciding whether THIS egress may have the bytes.
+        # THROUGH THE SAME GATE AS EVERYTHING ELSE. This url is googlevideo's, derived from a
+        # hardcoded video id, so it is not attacker-controlled — but that is a property of today's
+        # code rather than of this function, and _safe_url costs one call. It also refuses a
+        # `-`-prefixed string, which matters because this value reaches a network call.
+        req = urllib.request.Request(_safe_url(url), headers={"range": f"bytes=0-{PROBE_RANGE}",
+                                                              "user-agent": _PROBE_UA})
+        try:
+            with urllib.request.urlopen(req, timeout=20) as r:
+                body = r.read(PROBE_RANGE + 1)
+            row["bytes"] = len(body)
+            row["gvs"] = "ok" if body else "empty"
+        except urllib.error.HTTPError as e:
+            row["gvs"] = f"http-{e.code}"
+        except Exception as e:
+            row["gvs"] = "fetch-failed"
+            row["error"] = type(e).__name__
+    except subprocess.TimeoutExpired:
+        row["error"] = "timeout"
+    except Exception as e:
+        row["error"] = type(e).__name__
+    finally:
+        row["ms"] = int((time.monotonic() - started) * 1000)
+    return row
+
+
+_PROBE_UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) "
+             "Chrome/131.0.0.0 Safari/537.36")
+
+
+def _probe_error(stderr):
+    """One short line from yt-dlp's stderr — never the whole thing, which can carry urls."""
+    text = (stderr or b"").decode("utf-8", "replace")
+    for line in text.splitlines():
+        if "ERROR" in line:
+            # Truncated deliberately: a yt-dlp error can echo a signed googlevideo url, and this
+            # string ends up in an HTTP response.
+            return line.strip()[:160]
+    return text.strip().splitlines()[-1][:160] if text.strip() else "failed"
+
+
+def _probe_clients():
+    """Every client in PROBE_CLIENTS, serially. Serial ON PURPOSE: the instance this runs on has a
+    QUARTER of a vCPU (measured 2026-08-28: extraction alone costs 14-17s there against 5.7s at 1
+    vCPU), so parallel yt-dlp processes would contend for the one thing that is scarce and make the
+    numbers meaningless as well as slower."""
+    started = time.monotonic()
+    rows = [_probe_one(c) for c in PROBE_CLIENTS]
+    return {
+        "video": PROBE_VIDEO,
+        "ytdlp": _ytdlp_version(),
+        "ms": int((time.monotonic() - started) * 1000),
+        "serving": [r["client"] for r in rows if r["gvs"] == "ok"],
+        "clients": rows,
+    }
+
+
+def _ytdlp_version():
+    try:
+        out = subprocess.run(["yt-dlp", "--version"], capture_output=True, timeout=10)
+        return (out.stdout or b"").decode().strip()[:32]
+    except Exception:
+        return "unknown"
+
+
     def do_GET(self):
         if self.path == "/health":
             self.send_response(200)
@@ -493,6 +658,18 @@ class Handler(BaseHTTPRequestHandler):
             req = json.loads(self.rfile.read(length) or b"{}")
         except (ValueError, json.JSONDecodeError):
             return self._json_error(400, "bad json")
+
+        # THE PROBE rides the EXISTING authenticated endpoint rather than opening a new one: it is a
+        # diagnostic, it is expensive, and RESOLVER_SECRET already guards this path. It reads NOTHING
+        # from `req` beyond this flag — see _probe_clients for why it takes no input at all.
+        if req.get("probe") is True:
+            body = json.dumps(_probe_clients()).encode()
+            self.send_response(200)
+            self.send_header("content-type", "application/json")
+            self.send_header("content-length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
 
         page, video = req.get("page"), req.get("video")
         # THE ONE FIELD THAT IS NEVER ECHOED. It is pulled out here and handed straight to _CookieJar;

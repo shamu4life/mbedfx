@@ -486,7 +486,7 @@ footer .fine { font-size: 12px; opacity: .8; }
          hardcoded because this page is a static asset with no template step — and pinned to
          package.json by a test, because a version number that silently disagrees with the release is
          worse than none at all. -->
-    <div class="server">mbedfx <span class="ver" id="ver">v1.10.1</span></div>
+    <div class="server">mbedfx <span class="ver" id="ver">v1.11.0</span></div>
     <div class="cat">Start here</div>
     <a href="#convert"><b>#</b> convert</a>
     <a href="#sites"><b>#</b> sites</a>
@@ -1379,12 +1379,25 @@ function mbedfxConvert(input, host) {
      * whoever opens it gets the video once the mux lands, because the card is re-rendered per view and
      * a degraded one is deliberately never cached.
      */
+    /**
+     * THREE STATES, AND THE LAST TWO ARE NEW. Before this the page could only say "preparing" and then
+     * fall silent, so a mux that finished while somebody watched looked identical to one that never
+     * did, and a mux still running after the cap looked like one that had been abandoned.
+     *
+     * `muxDone` fires only where the page SAW the change: it was muxing on an earlier poll and is not
+     * now. A card that arrives complete says nothing, because there was nothing to wait for.
+     *
+     * `muxSlow` no longer implies the page is still looking. It says watching stopped, which is true,
+     * and repeats the thing that stays true regardless: the link is already correct.
+     */
     var prep = j.muxing
       ? '<div class="preplbl"><span class="prepdot"></span><span>Preparing the video. The link is ready to send now.</span></div>'
-      : (j.muxSlow
-          ? '<div class="preplbl"><span>Still preparing. A long video takes a while; the link works now '
-            + 'and shows the video once it is ready.</span></div>'
-          : '');
+      : (j.muxDone
+          ? '<div class="preplbl"><span>Video ready.</span></div>'
+          : (j.muxSlow
+              ? '<div class="preplbl"><span>Still preparing after two minutes. This preview has stopped '
+                + 'checking. The link works now and shows the video once it is ready.</span></div>'
+              : ''));
     var body = (j.title ? '<b>' + esc2(j.title) + '</b>\n' : '') + esc2(j.text || '');
     // The card carries the link now, so the standalone result row stands down — see .out.hasCard.
     cardUp = true; outClass(true);
@@ -1501,8 +1514,33 @@ function mbedfxConvert(input, host) {
    * spinner is replaced with a sentence rather than simply stopping: the link still works, the video
    * still arrives, and the reader should not conclude from a vanished spinner that something failed.
    */
-  var MUX_POLL_MS = 2500;
-  var MUX_POLL_MAX = 10;      // 25s, then say so in words instead
+  /**
+   * THE WATCH WINDOW WAS 25 SECONDS AND THE MUX RUNS FOR UP TO 1460, which is the whole defect this
+   * replaced. The old cap was ten polls at 2.5s: it stopped watching after 1.7% of the time a mux may
+   * legitimately still be working, then went quiet and NEVER confirmed the video landed. A reader who
+   * waited saw "still preparing" forever even when the video arrived two seconds later.
+   *
+   * THESE TWO NUMBERS MIRROR src/muxpolicy.ts AND ARE ASSERTED AGAINST IT. A hand-picked number here
+   * is the defect itself (the same argument the deadline constants make), and this file cannot import
+   * from src/ because it ships as one hand-written page with no build step. So a test parses the
+   * policy and fails when these drift, which is the pattern test/prep.test.mjs already uses to keep a
+   * literal in step with a union it cannot import.
+   *   MUX_WATCH_FAST_MS  = MUX_FIRST_ATTEMPT_MS        (35s)  the page-shape first attempt
+   *   MUX_WATCH_TOTAL_MS = MUX_FIRST_ATTEMPT_TRACKS_MS (140s) the slowest first attempt
+   * Past the first attempt the policy's own retries are 120s and 1200s away, and nobody watches a
+   * page for twenty minutes, so the window deliberately stops at the end of the first attempt rather
+   * than at the full horizon.
+   *
+   * CHEAP TO REPEAT, which is what makes a longer window affordable: a /_card for a muxing post does
+   * no upstream fetch and no inference. The post is served from cache and the only question asked is
+   * whether the Durable Object has finished. Polling does not start the work again, and since the
+   * MuxRunner alarm landed the work genuinely continues between polls rather than dying with the
+   * request, so watching longer now watches something real.
+   */
+  var MUX_POLL_MS = 2500;         // while inside the fast window
+  var MUX_POLL_SLOW_MS = 10000;   // after it: still watching, just not hovering
+  var MUX_WATCH_FAST_MS = 35000;
+  var MUX_WATCH_TOTAL_MS = 140000;
 
   /**
    * WHAT MEDIA-ONLY SHOWS INSTEAD OF A CARD. A d. link does not unfurl — Discord fetches the url and
@@ -1577,10 +1615,9 @@ function mbedfxConvert(input, host) {
    */
   var lastCard = null;   // { path, j }
 
-  function card(url, isRetry, muxTries) {
+  function card(url, isRetry, muxSince) {
     var path = url.slice(url.indexOf('/', 8));
     var seq = ++cardSeq;
-    muxTries = muxTries || 0;
     fetch('/_card?p=' + encodeURIComponent(path), { headers: { accept: 'application/json' } })
       .then(function (r) { return r.ok ? r.json() : null; })
       // LAST REQUEST WINS. Typing fires these in order and they do not return in order; without the
@@ -1599,18 +1636,37 @@ function mbedfxConvert(input, host) {
          * would put the spinner back with nothing polling behind it: an indicator that spins forever
          * because the thing that was supposed to stop it already gave up.
          */
-        if (j && j.muxing && muxTries >= MUX_POLL_MAX) { j.muxing = false; j.muxSlow = true; }
+        /**
+         * ELAPSED TIME, NOT A POLL COUNT. The interval backs off, so counting polls would silently
+         * mean a different wall-clock window depending on where the backoff fell. `muxSince` is the
+         * moment the page first saw this card muxing and is threaded through the retries.
+         */
+        if (j && j.muxing) muxSince = muxSince || Date.now();
+        var waited = muxSince ? Date.now() - muxSince : 0;
+
+        // WATCHED IT FINISH. Only sayable because the page saw both states; see the prep copy.
+        if (j && !j.muxing && muxSince && j.video) j.muxDone = true;
+
+        /**
+         * AT THE CAP THE PAYLOAD ITSELF IS SETTLED, not a copy of it passed to one draw.
+         *
+         * lastCard holds this very object and every redraw reads it: a domain switch, a media-only
+         * toggle. Marking only the draw would leave `muxing` true in the payload, so the next toggle
+         * would put the spinner back with nothing polling behind it, an indicator that spins forever
+         * because the thing that was supposed to stop it already gave up.
+         */
+        if (j && j.muxing && waited >= MUX_WATCH_TOTAL_MS) { j.muxing = false; j.muxSlow = true; }
         drawCard(url, j);
         if (j && j.muxing) {
           cardTimer = setTimeout(function () {
             // Re-checked on fire: the reader may have typed since, and that newer card wins.
-            if (seq === cardSeq) card(url, isRetry, muxTries + 1);
-          }, MUX_POLL_MS);
+            if (seq === cardSeq) card(url, isRetry, muxSince);
+          }, waited < MUX_WATCH_FAST_MS ? MUX_POLL_MS : MUX_POLL_SLOW_MS);
           return;                     // one timer at a time; the mux poll re-checks pending anyway
         }
         if (!isRetry && j && j.pending) {
           cardTimer = setTimeout(function () {
-            if (seq === cardSeq) card(url, true, muxTries);
+            if (seq === cardSeq) card(url, true, muxSince);
           }, CARD_RETRY_MS);
         }
       })

@@ -1,5 +1,6 @@
 import type { PostRef } from '../../types.ts'
 import { hasEmbedPost } from './normalize.ts'
+import { askTwice } from '../../fetchretry.ts'
 
 /**
  * I/O ONLY. This file fetches an Instagram embed page and decides one question — "did a real post
@@ -283,7 +284,7 @@ export async function fetchInstagram(ref: Extract<PostRef, { p: 'ig' }>): Promis
   // discovering that. This is what actually pins the URL invariant; encodeURIComponent below stays
   // as the second layer, because the two fail in different directions and neither is redundant.
   if (!SHORTCODE.test(ref.code)) return { ok: false, reason: 'assert_fail' }
-  const res = await fetch(
+  const res = await askTwice(
     `https://www.instagram.com/p/${encodeURIComponent(ref.code)}/embed/captioned/`,
     // The `accept` header mirrors fetchTikTok's: strictly more browser-like on a gated path, and
     // not measured to be load-bearing either way. The UA is the gate.
@@ -437,7 +438,7 @@ export async function fetchInstagramUserFeed(
      * `same-origin` + a referer on the profile is what the real web app sends for this call, and the
      * 200-with-a-text-body failure mode is another reminder that status carries no information here.
      */
-    const res = await fetch(
+    const res = await askTwice(
       `https://www.instagram.com/api/v1/feed/user/${encodeURIComponent(username)}/username/?count=12`,
       {
         headers: {
@@ -462,6 +463,10 @@ export async function fetchInstagramUserFeed(
       // Checked BEFORE the request, never after: the point is to avoid starting work that will
       // arrive too late to be drawn, not to abandon bytes already paid for.
       if (Date.now() - walkStarted >= IG_FEED_WALK_BUDGET_MS) break
+      // NO-RETRY: deliberate. This walk runs inside IG_FEED_WALK_BUDGET_MS, and a retry would spend
+      // the budget the walk exists to protect. A missed page costs CANDIDATES, not the card — the
+      // first page has already been fetched (with a retry) by the time this loop runs.
+      // See src/fetchretry.ts.
       const more = await fetch(
         `https://www.instagram.com/api/v1/feed/user/${encodeURIComponent(username)}/username/`
         + `?count=12&max_id=${encodeURIComponent(cursor)}`,
@@ -503,7 +508,7 @@ export async function fetchInstagramFullPage(ref: Extract<PostRef, { p: 'ig' }>)
   if (ref.kind === 'story') return null
   if (!SHORTCODE.test(ref.code)) return null
   try {
-    const res = await fetch(`https://www.instagram.com/p/${encodeURIComponent(ref.code)}/`, {
+    const res = await askTwice(`https://www.instagram.com/p/${encodeURIComponent(ref.code)}/`, {
       headers: { 'user-agent': INSTAGRAM_UA, accept: 'text/html' },
     })
     return await res.text()
@@ -573,7 +578,7 @@ export async function fetchInstagramGraphQLMedia(
         __relay_internal__pv__PolarisAIGMMediaWebLabelEnabledrelayprovider: false,
       }),
     })
-    const res = await fetch('https://www.instagram.com/graphql/query/', {
+    const res = await askTwice('https://www.instagram.com/graphql/query/', {
       method: 'POST',
       headers: {
         'content-type': 'application/x-www-form-urlencoded',

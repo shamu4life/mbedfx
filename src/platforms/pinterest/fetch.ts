@@ -1,5 +1,6 @@
 import type { PostRef } from '../../types.ts'
 import { PIN_ID } from '../../refkey.ts'
+import { askTwice } from '../../fetchretry.ts'
 
 /**
  * I/O ONLY. Pinterest's own web-app resource endpoint, unauthenticated and cookie-free.
@@ -50,7 +51,7 @@ export async function fetchPinterest(ref: Extract<PostRef, { p: 'pn' }>): Promis
   if (!PIN_ID.test(ref.id)) return { ok: false, reason: 'assert_fail' }
   const data = JSON.stringify({ options: { id: ref.id, field_set_key: 'detailed' }, context: {} })
   const qs = new URLSearchParams({ source_url: `/pin/${ref.id}/`, data })
-  const res = await fetch(`https://www.pinterest.com/resource/PinResource/get/?${qs}`, {
+  const res = await askTwice(`https://www.pinterest.com/resource/PinResource/get/?${qs}`, {
     headers: {
       'X-Pinterest-PWS-Handler': HANDLER,
       accept: 'application/json',

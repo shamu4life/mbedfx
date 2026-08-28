@@ -116,6 +116,33 @@
     // previous generation is still sleeping out its `sleepAfter` — without it, those stragglers hold the
     // whole cap and EVERY mux fails with "Maximum number of running container instances exceeded", which
     // the media route can only degrade into a video-less card.
+    // INSTANCE TYPE: standard-2 (1 vCPU, 6 GiB, 12 GB), moved up from `basic` (1/4 vCPU, 1 GiB) on
+    // 2026-08-28. THE QUARTER CORE WAS COSTING US MOST OF A MUX BUDGET, and it had been read as
+    // YouTube throttling for weeks.
+    //
+    // MEASURED, same connection and video, only --cpus/--memory varying, median of 3 across two ids —
+    // yt-dlp EXTRACTION only, no media bytes, which is the phase that runs before any progress shows:
+    //     basic       1/4 vCPU   14.1s / 16.9s
+    //     standard-1  1/2 vCPU    9.1s /  9.3s
+    //     standard-2  1   vCPU    5.7s /  5.7s
+    //     standard-4  4   vCPU    5.4s /  5.4s
+    // The production `yt-dlp -J` extract has long been recorded at 15.9s "from Cloudflare egress".
+    // That matches `basic` almost exactly, RESIDENTIALLY, with no gate involved: it was our own CPU.
+    //
+    // DO NOT GO PAST standard-2. The gain stops dead at 1 vCPU because the work is single-threaded —
+    // 4 vCPU measured identical (5.4s vs 5.7s), and the same flat top shows in the two pure-CPU
+    // controls (ffmpeg -c copy remux 1.15 -> 0.55 -> 0.59s; a CPU-bound python loop 5.28 -> 1.56 ->
+    // 1.67s). standard-3/4 is provisioned memory billed for nothing.
+    //
+    // WHAT IT COSTS, so the bill is not a surprise: memory and disk bill on PROVISIONED size for the
+    // whole time an instance is alive, INCLUDING the sleepAfter idle window — only CPU bills on use.
+    // Modelled at 4 slots alive continuously: basic ~$29/mo, standard-2 ~$166/mo. `sleepAfter`
+    // (src/container.ts, 5m) is therefore the cost dial, and shortening it is the first lever to pull
+    // if this reads high.
+    //
+    // WHAT IT DOES NOT FIX: the egress. ~40-50% of Cloudflare-egress YouTube requests are refused
+    // where residential succeeds every time. This buys back seconds, not access.
+    //
     // `name` IS PINNED TO THE OLD BRAND ON PURPOSE, and removing it breaks every deploy.
     //
     // Wrangler DERIVES a container application name from the Worker name when this is absent, so
@@ -127,7 +154,7 @@
     //
     // Renaming it for tidiness means deleting the application and letting the DO re-attach, which
     // re-provisions every container instance. Not worth it for a string only the dashboard shows.
-    { "name": "fxeverything-mediaresolver", "class_name": "MediaResolver", "image": "./container/Dockerfile", "max_instances": 10, "instance_type": "basic" }
+    { "name": "fxeverything-mediaresolver", "class_name": "MediaResolver", "image": "./container/Dockerfile", "max_instances": 10, "instance_type": "standard-2" }
   ],
   // MUX_RUNNER is a PLAIN Durable Object, not a container — it holds no image and runs no process. Its
   // whole job is to own an ALARM, because an alarm handler gets 15 minutes of wall clock where

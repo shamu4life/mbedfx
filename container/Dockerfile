@@ -57,14 +57,45 @@ RUN curl -fsSL https://github.com/denoland/deno/releases/latest/download/deno-x8
 # AND IT DOES NOT FIX YOUTUBE, which has to be said here rather than discovered later. YouTube began
 # enforcing GVS PO tokens on the `android_vr` client — 2026.07.04's own default — about two weeks
 # AFTER 2026.07.04 shipped. yt-dlp's handling merged 2026-07-20 (commit 69ea20006, "Since 2026.07,
-# intermittent/selective POT enforcement has been observed for non-HLS formats") and is in NO stable
-# release as of 2026-08-18. So no bump on this channel can resolve the outage described above; that
-# needs a PO-token provider, a different egress, or accepting the thumbnail-card degrade. Do not read
-# a future green bump here as having fixed it.
+# intermittent/selective POT enforcement has been observed for non-HLS formats").
+#
+# THAT PARAGRAPH USED TO END "and is in NO stable release as of 2026-08-18", and it was true when
+# written and false the very next day: **2026.8.19 shipped on 2026-08-19**, the first stable carrying
+# the POT handling.
+#
+# THE WEEKLY JOB WORKED. It is worth writing down, because the obvious reading of a nine-day-stale pin
+# is "the automation is broken" and that reading is wrong. On 2026-08-24 the job detected the release,
+# pushed `chore/ytdlp-2026.8.19`, could not open a pull request (the repo setting "Allow GitHub Actions
+# to create and approve pull requests" is off), and did exactly what it was designed to do instead:
+# raised issue #59 saying the branch was ready and why the PR could not be opened. The branch and the
+# issue both sat untouched for four days. The gap was follow-through, not detection — so the fix is to
+# turn that setting on (or to watch the issues), NOT to change the job.
+#
+# WHAT THE BUMP BUYS, measured 2026-08-28 on one machine in one minute, both images side by side:
+#
+#   yt-dlp 2026.7.4   default clients -> 0 bytes, "HTTP Error 403: Forbidden"
+#   yt-dlp 2026.8.19  default clients -> 11,829,048 bytes
+#   (web_embedded, our override, downloads 11,829,048 bytes on BOTH)
+#
+# So this release repairs the exact 403 that container/server.py's YT_PLAYER_CLIENTS override was
+# written to work around — the POT handling landed and it works. The override is deliberately LEFT IN
+# PLACE by this change: it is measured, it keeps the full format ladder (19-23 formats vs one), and
+# removing it is a separate decision that needs its own measurement from PRODUCTION egress, not from a
+# laptop. See the note in server.py.
+#
+# IT IS NOT A REGRESSION either: same argv, same downloads, and an identical CPU profile (extraction
+# median-of-3 across four instance sizes: 16.8 / 9.1 / 5.9 / 5.2s, matching 2026.7.4 within noise).
+#
+# WHAT IT DOES NOT FIX, said plainly so a green bump is not misread as an all-clear: the egress. About
+# 40-50% of Cloudflare-egress YouTube requests are refused where residential succeeds every time — a
+# RATE, not a block, which is IP reputation rather than a missing credential. And a PO token is not the
+# missing piece: measured the same day, pytubefix minted a valid one, attached it as `pot=` in the media
+# url, and STILL got 403 residentially, while a token-free client downloaded 11.8 MB from the same
+# container in the same second.
 #
 # yt-dlp[default,curl-cffi] — the extras are unchanged and argued above. Do not relax this to a
 # floor again; a floor here is indistinguishable from a pin that never moves.
-RUN pip install --no-cache-dir "yt-dlp[default,curl-cffi]==2026.7.4"
+RUN pip install --no-cache-dir "yt-dlp[default,curl-cffi]==2026.8.19"
 
 WORKDIR /app
 COPY server.py .
