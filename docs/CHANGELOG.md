@@ -7,6 +7,68 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+Nothing yet.
+
+---
+
+## [1.11.0] - 2026-08-28
+
+### Added
+- **Every platform asks twice when the first answer carries no verdict** (`src/fetchretry.ts`). Every
+  fetcher here asked its upstream exactly once, and Discord stores the embed it built INSIDE the
+  message and never re-unfurls a link it has already drawn. So one refused request was not a bad
+  minute, it was a permanently bad card for everyone who ever scrolled past that message. Reported
+  2026-08-28 on a public Twitter video post that a self-hosted rival rendered correctly minutes
+  apart; measured the same day, both of our Twitter paths answer that id perfectly from residential
+  egress, so the card was lost to Cloudflare's egress being refused once.
+  Only a REFUSED request is retried (408/425/429/5xx, or a thrown fetch). A parsed body is a verdict
+  and is believed on the first ask, which is what keeps the cost bounded: a nonexistent Twitter id
+  answers HTTP 200 with a parseable tombstone, so dead links still cost exactly one request. 22 call
+  sites across 15 fetchers, and a source-derived test requires every `await fetch(` under
+  `src/platforms` to be routed through it or carry a `NO-RETRY` comment saying why not.
+- **`/_clients`, which answers which YouTube player client actually serves bytes from production
+  egress.** Three YouTube fixes had shipped on residential evidence and done nothing, because the
+  failure that reaches readers is Cloudflare-egress-only. This runs the comparison inside the
+  container, on that egress, and asserts on BYTES rather than on a format list: each client extracts
+  and then the chosen format url is range-fetched, so a client that lists formats and is then refused
+  by googlevideo reports `gvs: "http-403"` instead of looking healthy. On the first run `android_vr`
+  did exactly that, which also contradicts yt-dlp's own current PO Token table.
+  It takes no input, the same property `/_smoke` has: the video id and the client list are constants
+  in `container/server.py`. It rides the existing authenticated `/resolve`, so it opens no new
+  container surface, and its range fetch goes through the same `_safe_url` SSRF gate.
+
+### Changed
+- **The container runs on `standard-2` (1 vCPU) instead of `basic` (1/4 vCPU).** The production
+  `yt-dlp -J` extract had been recorded at 15.9s "from Cloudflare egress" for weeks and read as
+  YouTube throttling. Measured on one connection with only `--cpus`/`--memory` varying, median of 3
+  across two ids, extraction only: basic 14.1/16.9s, standard-1 9.1/9.3s, standard-2 5.7/5.7s,
+  standard-4 5.4/5.4s. It matches `basic` almost exactly, residentially, with no gate involved. It
+  was our own CPU.
+  NOT past standard-2: the gain stops dead at 1 vCPU because the work is single-threaded, and the
+  same flat top shows in two pure-CPU controls. Memory and disk bill on PROVISIONED size for the whole
+  time an instance is alive, including `sleepAfter` idle, so this is a real cost increase and
+  `sleepAfter` is the dial if it reads high.
+- **yt-dlp 2026.7.4 -> 2026.8.19**, which repairs the default-client 403. Both images side by side,
+  same video, same minute: 2026.7.4's default clients returned 0 bytes and HTTP 403, 2026.8.19's
+  returned 11,829,048. The `YT_PLAYER_CLIENTS` override is deliberately kept anyway, because it still
+  buys the full format ladder (19-23 formats against one) and removing it needs its own production
+  measurement rather than riding a version bump.
+  The weekly freshness job was not broken: on 2026-08-24 it detected the release, pushed a branch,
+  could not open a PR because the repository setting forbade it, and raised an issue as designed.
+- **The converter preview watches a mux to the end, and says when it lands.** It polled ten times at
+  2.5s and stopped after 25 seconds, which is 1.7% of `MUX_TOTAL_HORIZON_MS`. It then went quiet and
+  never confirmed the video arrived, so a reader who waited saw "still preparing" indefinitely even
+  when the mux finished seconds later. The window now covers the whole first attempt, backing off from
+  2.5s to 10s and stopping at 140s; completion is stated in words; and giving up says so rather than
+  looking like the work stopped. The two window constants mirror `src/muxpolicy.ts` and a test fails
+  when they drift, because the page ships with no build step and cannot import them.
+
+### Fixed
+- The format selector's measurement was one video presented as a result. Re-measured across 27:
+  -30.6% on 10-25 min and -30.8% on 2-10 min, but +26-43% on short 202x360 clips. The in-code comment
+  said 38% from a single sample.
+
+
 ### Security
 - **An SSRF address guard in the Worker half** (`src/netguard.ts`), ported from the one
   `container/server.py` has always had. The fediverse routes take an instance hostname from the URL
