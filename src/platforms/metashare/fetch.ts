@@ -1,3 +1,5 @@
+import { askTwice } from '../../fetchretry.ts'
+
 /**
  * META'S BARE SHARE CODE — `/share/{code}` — which BOTH Threads and Facebook mint, in the same shape,
  * with no field that tells them apart.
@@ -96,7 +98,7 @@ function ogUrlOf(html: string): string | null {
 async function locationOf(url: string): Promise<string | null> {
   let res: Response
   try {
-    res = await fetch(url, { method: 'GET', redirect: 'manual', headers: SHARE_HEADERS })
+    res = await askTwice(url, { method: 'GET', redirect: 'manual', headers: SHARE_HEADERS })
   } catch {
     return null
   }

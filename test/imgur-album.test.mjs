@@ -383,12 +383,24 @@ test('A THROTTLE STOPS THE WALK — not-knowing must never license asking about 
   // 429 says nothing about whether the id names an album. Under the old `status !== 200` test this
   // fell straight into media/ and drew the colliding image — a permanently wrong card produced by a
   // transient upstream problem, exactly when traffic is highest.
+  //
+  // REWRITTEN 2026-08-28, and the invariant is unchanged: not-knowing must not license asking about a
+  // DIFFERENT post. What changed is that asking the SAME endpoint again is now correct — a refused
+  // request is the one case a second ask can win (src/fetchretry.ts), and this walk is exactly where
+  // a transient 429 used to become a permanent card. The assertion below therefore pins WHICH
+  // endpoints were asked rather than how many requests it took, because `deepEqual(seen, ['albums'])`
+  // was conflating those two things and only one of them is the rule.
   for (const status of [429, 500, 403]) {
     const api = stubApi({ albums: { status, body: '{}' }, media: { status: 200, body: COLLIDING } })
     try {
       const got = await fetchImgur({ p: 'im', kind: 'gallery', id: 'joNxn' }, { IMGUR_CLIENT_ID: 'test' })
       assert.equal(got.ok, false, `HTTP ${status} must not become a card`)
-      assert.deepEqual(api.seen, ['albums'], `HTTP ${status} must not advance to media/`)
+      assert.ok(!api.seen.includes('media'), `HTTP ${status} must not advance to media/`)
+      assert.deepEqual([...new Set(api.seen)], ['albums'], 'nothing but the album endpoint was asked')
+      // 403 is an answer ABOUT THE ALBUM and is believed at once; 429/500 are the endpoint refusing
+      // this request, and are worth exactly one more ask before giving up.
+      assert.equal(api.seen.length, status === 403 ? 1 : 2,
+        `HTTP ${status}: a refusal is retried once, a verdict is not retried at all`)
     } finally { api.restore() }
   }
 })

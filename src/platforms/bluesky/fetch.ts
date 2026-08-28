@@ -1,5 +1,6 @@
 import type { PostRef, ProfileRef } from '../../types.ts'
 import { BS_ACTOR } from '../../refkey.ts'
+import { askTwice } from '../../fetchretry.ts'
 
 const API = 'https://public.api.bsky.app/xrpc/app.bsky.feed.getPostThread'
 const PROFILE_API = 'https://public.api.bsky.app/xrpc/app.bsky.actor.getProfile'
@@ -11,7 +12,7 @@ const PROFILE_API = 'https://public.api.bsky.app/xrpc/app.bsky.actor.getProfile'
 export async function fetchBluesky(ref: Extract<PostRef, { p: 'bs' }>): Promise<unknown> {
   const uri = `at://${ref.handle}/app.bsky.feed.post/${ref.rkey}`
   const url = `${API}?uri=${encodeURIComponent(uri)}&depth=0&parentHeight=1`
-  const res = await fetch(url, { headers: { accept: 'application/json' } })
+  const res = await askTwice(url, { headers: { accept: 'application/json' } })
   if (!res.ok) return null
   // Never JSON.parse an unvalidated body — platforms return HTML error pages with 200s.
   if (!(res.headers.get('content-type') || '').includes('json')) return null
@@ -45,7 +46,7 @@ export async function fetchBluesky(ref: Extract<PostRef, { p: 'bs' }>): Promise<
  */
 export async function fetchBlueskyProfile(ref: ProfileRef): Promise<unknown> {
   if (ref.p !== 'bs' || !BS_ACTOR.test(ref.handle)) return null
-  const res = await fetch(`${PROFILE_API}?actor=${encodeURIComponent(ref.handle)}`, {
+  const res = await askTwice(`${PROFILE_API}?actor=${encodeURIComponent(ref.handle)}`, {
     headers: { accept: 'application/json' },
   })
   if (!res.ok) return null

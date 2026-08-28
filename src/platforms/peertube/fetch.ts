@@ -1,6 +1,7 @@
 import type { PostRef } from '../../types.ts'
 import { PEERTUBE_ID } from '../../refkey.ts'
 import { MAX_BODY, instanceFetchable, type InstanceGuard } from '../fedihost.ts'
+import { askTwice } from '../../fetchretry.ts'
 
 /**
  * I/O ONLY. `GET /api/v1/videos/{idOrUUID}`, unauthenticated, ON THE HOST THE USER PASTED.
@@ -33,7 +34,7 @@ export async function fetchPeerTube(
   if (!PEERTUBE_ID.test(ref.id) || !(await instanceFetchable(ref.host, guard))) {
     return { ok: false, reason: 'assert_fail' }
   }
-  const res = await fetch(`https://${ref.host}/api/v1/videos/${encodeURIComponent(ref.id)}`, {
+  const res = await askTwice(`https://${ref.host}/api/v1/videos/${encodeURIComponent(ref.id)}`, {
     headers: { accept: 'application/json' },
     redirect: 'manual',
   })

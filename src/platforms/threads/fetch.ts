@@ -1,5 +1,6 @@
 import type { PostRef } from '../../types.ts'
 import { hasThreadsSSR, threadsHasPost } from './normalize.ts'
+import { askTwice } from '../../fetchretry.ts'
 
 /**
  * I/O ONLY. Fetches the Threads post page and decides one thing — "did a real post arrive" — leaving
@@ -68,7 +69,7 @@ export async function fetchThreads(ref: Extract<PostRef, { p: 'th' }>): Promise<
   // PRIMARY: the SSR path. ONE GET yields the full post JSON (video, counts, timestamp, carousel,
   // quotes). A rate-limit (429) or a shifted header gate returns no SSR payload and we fall through.
   try {
-    const res = await fetch(url, { headers: SSR_HEADERS, redirect: 'follow' })
+    const res = await askTwice(url, { headers: SSR_HEADERS, redirect: 'follow' })
     const html = await res.text()
     if (hasThreadsSSR(html)) return { ok: true, source: 'ssr', html }
   } catch {

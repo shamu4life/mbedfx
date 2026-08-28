@@ -1,6 +1,7 @@
 import type { PostRef } from '../../types.ts'
 import type { Env } from '../../analytics.ts'
 import { syndicationHasTweet } from './normalize.ts'
+import { askTwice } from '../../fetchretry.ts'
 
 /** Read-through for cache-shaped, UNVALIDATED guest bodies — whatever JSON.parse produced. */
 type Any = Record<string, any>
@@ -165,22 +166,6 @@ export async function fetchSyndication(
  * — see wrangler.jsonc) and nothing in the counters to distinguish it from a genuinely dead post.
  */
 
-/** One extra ask, not a loop: two attempts total. See askJson for why more would not help. */
-const ASK_ATTEMPTS = 2
-
-/**
- * Does a verdict-less answer deserve one more round trip? PURE, so the policy is testable with no
- * network — the same discipline syndicationOutcome and guestOutcome keep.
- *
- * True for the statuses that mean "the endpoint refused this request", which is the case a second ask
- * can win: 429 (rate limited), 5xx (edge/origin trouble), 408/425 (the request itself was dropped).
- * False for everything else — notably 404 and 403, which are answers about the POST rather than about
- * the request, and asking twice would only double the cost of every dead link.
- */
-export function worthAskingAgain(status: number): boolean {
-  return status === 408 || status === 425 || status === 429 || status >= 500
-}
-
 /**
  * I/O: GET a url and return its parsed JSON, asking twice when the first answer carried no verdict.
  *
@@ -192,33 +177,15 @@ export function worthAskingAgain(status: number): boolean {
  * means.
  */
 async function askJson(url: string, init: RequestInit): Promise<{ ok: true; json: unknown } | { ok: false }> {
-  let thrown: unknown
-  let threw = false
-  for (let attempt = 0; attempt < ASK_ATTEMPTS; attempt++) {
-    const last = attempt === ASK_ATTEMPTS - 1
-    let status = 0
-    let body: string
-    try {
-      const res = await fetch(url, init)
-      status = res.status
-      body = await res.text()
-    } catch (e) {
-      // A reset/DNS failure is the most transient answer there is, and the one most worth asking
-      // again. Remembered rather than rethrown here so a successful second ask still wins.
-      threw = true
-      thrown = e
-      continue
-    }
-    try {
-      return { ok: true, json: JSON.parse(body) }
-    } catch {
-      // The endpoint answered with something that is not JSON. Only ask again if the STATUS says it
-      // refused the request; a 404 poodle page is a verdict about the post and is believed.
-      if (last || !worthAskingAgain(status)) return { ok: false }
-    }
+  const res = await askTwice(url, init)
+  try {
+    return { ok: true, json: JSON.parse(await res.text()) }
+  } catch {
+    // The endpoint answered with something that is not JSON. askTwice has already spent the extra ask
+    // if the STATUS said the request was refused; a 404 poodle page is a verdict about the post, and
+    // asking it twice would only double the cost of every dead link.
+    return { ok: false }
   }
-  if (threw) throw thrown
-  return { ok: false }
 }
 
 /**
@@ -501,7 +468,7 @@ export async function getGuestToken(_env: Env): Promise<string | null> {
 }
 
 async function activateGuestToken(): Promise<string | null> {
-  const res = await fetch('https://api.x.com/1.1/guest/activate.json', {
+  const res = await askTwice('https://api.x.com/1.1/guest/activate.json', {
     method: 'POST',
     headers: { authorization: GUEST_BEARER, 'user-agent': GUEST_UA },
     // The cf fetch cache reuses the activation for the TTL on Workers — NOT caches.default, and NOT

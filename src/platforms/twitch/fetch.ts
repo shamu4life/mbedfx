@@ -1,5 +1,6 @@
 import type { PostRef } from '../../types.ts'
 import { TWITCH_SLUG } from '../../refkey.ts'
+import { askTwice } from '../../fetchretry.ts'
 
 /**
  * I/O ONLY. Twitch's public web GraphQL endpoint, unauthenticated.
@@ -105,7 +106,7 @@ export function twitchForbidden(token: { value?: unknown } | null | undefined): 
  */
 export async function fetchTwitchClip(ref: Extract<PostRef, { p: 'tw' }>): Promise<TwitchFetch> {
   if (!TWITCH_SLUG.test(ref.slug)) return { ok: false, reason: 'assert_fail' }
-  const res = await fetch(GQL, {
+  const res = await askTwice(GQL, {
     method: 'POST',
     headers: {
       'Client-ID': CLIENT_ID,

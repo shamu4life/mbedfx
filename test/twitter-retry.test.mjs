@@ -1,9 +1,8 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
-import {
-  fetchSyndication, fetchGuest, resetGuestToken, worthAskingAgain,
-} from '../src/platforms/twitter/fetch.ts'
+import { fetchSyndication, fetchGuest, resetGuestToken } from '../src/platforms/twitter/fetch.ts'
+import { worthAskingAgain } from '../src/fetchretry.ts'
 
 /**
  * ONE REFUSED REQUEST MUST NOT COST A PERMANENT CARD.
