@@ -34,6 +34,9 @@ import os
 import socket
 import subprocess
 import tempfile
+import time
+import urllib.error
+import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlsplit
 
@@ -487,6 +490,134 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+
+# ===================================================================================================
+# THE CLIENT PROBE — the instrument this project has never had.
+# ===================================================================================================
+#
+# WHY IT EXISTS. Every question about WHICH YouTube player client works has been argued from a laptop,
+# and a laptop is a residential IP. Measured 2026-08-28, our configured list answers 5 of 6 test videos
+# residentially — and tells us nothing, because the failures that actually reach users are
+# Cloudflare-egress-only: ~40-50% of Worker-egress YouTube requests are refused while every one of them
+# succeeds residentially in the same minute. Three separate "fixes" have shipped on residential
+# evidence and done nothing in production. This runs the same comparison INSIDE the container, ON that
+# egress, and reports which clients answered.
+#
+# IT TAKES NO INPUT, and that is a property of the design rather than a promise — the same rule
+# `/_smoke` keeps. The video id is a constant below and the client list is a constant below; there is
+# no parameter a caller can point at anything. A version of this accepting `?url=` would be an open
+# yt-dlp relay wearing a diagnostic badge.
+#
+# IT ASSERTS ON BYTES, NOT ON A FORMAT LIST. A client that lists twenty formats and then gets 403 from
+# googlevideo is a BROKEN client that looks healthy — that is exactly the shape of the outage this
+# project spent weeks on. So each client is asked to extract AND then the chosen format URL is
+# range-fetched. `gvs` is the answer that matters; `formats` is context.
+PROBE_VIDEO = "jNQXAC9IVRw"      # "Me at the zoo" — the same id src/smoke.ts pins, for the same reason
+PROBE_RANGE = 65535              # bytes to pull; enough to prove GVS served us, cheap enough to spam
+PROBE_TIMEOUT = int(os.environ.get("PROBE_TIMEOUT", "45"))   # per client, wall clock
+
+# The clients worth asking about, and why each is here rather than a table copied from yt-dlp:
+#   default        - what yt-dlp picks unaided. On 2026.7.4 this 403'd, which is the whole reason
+#                    YT_PLAYER_CLIENTS exists; on 2026.8.19 it downloads. Worth watching from here.
+#   web_embedded   - ours, first. No PO token needed, but EMBEDDABLE videos only.
+#   tv_simply/mweb - ours, the fallbacks. yt-dlp's table says both need a GVS PO token we cannot mint.
+#   web_safari     - not ours. Its HLS formats are documented as needing no GVS token; measured
+#                    residentially it served a 720p muxed stream for one video out of six.
+#   android_vr     - not ours. yt-dlp's table currently says "no token required", which CONTRADICTS
+#                    this repo's own Dockerfile comment. Only production can settle that.
+PROBE_CLIENTS = ("default", "web_embedded", "tv_simply", "mweb", "web_safari", "android_vr")
+
+
+def _probe_one(client):
+    """Ask ONE client for the probe video, then try to actually fetch bytes. Never raises."""
+    row = {"client": client, "extracted": False, "formats": 0, "gvs": "not-reached", "bytes": 0,
+           "error": "", "ms": 0}
+    started = time.monotonic()
+    try:
+        cmd = ["yt-dlp", "--skip-download", "-J", "--no-warnings"]
+        # `default` means "pass no override at all" — NOT the literal string "default", which yt-dlp
+        # would treat as a client name and which this repo has already been bitten by: mixing
+        # `default` into an explicit list re-poisons format selection (see YT_PLAYER_CLIENTS).
+        if client != "default":
+            cmd += ["--extractor-args", f"youtube:player_client={client}"]
+        cmd += ["-f", YT_FORMAT_SELECTOR, "--", f"https://www.youtube.com/watch?v={PROBE_VIDEO}"]
+        out = subprocess.run(cmd, capture_output=True, timeout=PROBE_TIMEOUT, stdin=subprocess.DEVNULL)
+        if out.returncode != 0:
+            row["error"] = _probe_error(out.stderr)
+            return row
+        info = json.loads(out.stdout or b"{}")
+        row["extracted"] = True
+        row["formats"] = len(info.get("formats") or [])
+        url = info.get("url") or ((info.get("requested_formats") or [{}])[0].get("url"))
+        if not isinstance(url, str) or not url:
+            row["gvs"] = "no-url"
+            return row
+        # THE PART THAT COUNTS. Everything above is yt-dlp talking to itself; this is googlevideo
+        # deciding whether THIS egress may have the bytes.
+        # THROUGH THE SAME GATE AS EVERYTHING ELSE. This url is googlevideo's, derived from a
+        # hardcoded video id, so it is not attacker-controlled — but that is a property of today's
+        # code rather than of this function, and _safe_url costs one call. It also refuses a
+        # `-`-prefixed string, which matters because this value reaches a network call.
+        req = urllib.request.Request(_safe_url(url), headers={"range": f"bytes=0-{PROBE_RANGE}",
+                                                              "user-agent": _PROBE_UA})
+        try:
+            with urllib.request.urlopen(req, timeout=20) as r:
+                body = r.read(PROBE_RANGE + 1)
+            row["bytes"] = len(body)
+            row["gvs"] = "ok" if body else "empty"
+        except urllib.error.HTTPError as e:
+            row["gvs"] = f"http-{e.code}"
+        except Exception as e:
+            row["gvs"] = "fetch-failed"
+            row["error"] = type(e).__name__
+    except subprocess.TimeoutExpired:
+        row["error"] = "timeout"
+    except Exception as e:
+        row["error"] = type(e).__name__
+    finally:
+        row["ms"] = int((time.monotonic() - started) * 1000)
+    return row
+
+
+_PROBE_UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) "
+             "Chrome/131.0.0.0 Safari/537.36")
+
+
+def _probe_error(stderr):
+    """One short line from yt-dlp's stderr — never the whole thing, which can carry urls."""
+    text = (stderr or b"").decode("utf-8", "replace")
+    for line in text.splitlines():
+        if "ERROR" in line:
+            # Truncated deliberately: a yt-dlp error can echo a signed googlevideo url, and this
+            # string ends up in an HTTP response.
+            return line.strip()[:160]
+    return text.strip().splitlines()[-1][:160] if text.strip() else "failed"
+
+
+def _probe_clients():
+    """Every client in PROBE_CLIENTS, serially. Serial ON PURPOSE: the instance this runs on has a
+    QUARTER of a vCPU (measured 2026-08-28: extraction alone costs 14-17s there against 5.7s at 1
+    vCPU), so parallel yt-dlp processes would contend for the one thing that is scarce and make the
+    numbers meaningless as well as slower."""
+    started = time.monotonic()
+    rows = [_probe_one(c) for c in PROBE_CLIENTS]
+    return {
+        "video": PROBE_VIDEO,
+        "ytdlp": _ytdlp_version(),
+        "ms": int((time.monotonic() - started) * 1000),
+        "serving": [r["client"] for r in rows if r["gvs"] == "ok"],
+        "clients": rows,
+    }
+
+
+def _ytdlp_version():
+    try:
+        out = subprocess.run(["yt-dlp", "--version"], capture_output=True, timeout=10)
+        return (out.stdout or b"").decode().strip()[:32]
+    except Exception:
+        return "unknown"
+
+
     def do_GET(self):
         if self.path == "/health":
             self.send_response(200)
@@ -506,6 +637,18 @@ class Handler(BaseHTTPRequestHandler):
             req = json.loads(self.rfile.read(length) or b"{}")
         except (ValueError, json.JSONDecodeError):
             return self._json_error(400, "bad json")
+
+        # THE PROBE rides the EXISTING authenticated endpoint rather than opening a new one: it is a
+        # diagnostic, it is expensive, and RESOLVER_SECRET already guards this path. It reads NOTHING
+        # from `req` beyond this flag — see _probe_clients for why it takes no input at all.
+        if req.get("probe") is True:
+            body = json.dumps(_probe_clients()).encode()
+            self.send_response(200)
+            self.send_header("content-type", "application/json")
+            self.send_header("content-length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
 
         page, video = req.get("page"), req.get("video")
         # THE ONE FIELD THAT IS NEVER ECHOED. It is pulled out here and handed straight to _CookieJar;
