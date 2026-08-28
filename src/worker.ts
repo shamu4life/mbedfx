@@ -1496,7 +1496,25 @@ const RESOLVER_SLOTS = 4
 // right trade here rather than the wrong one: the alternative is leaving YouTube cards sized by a
 // broken generation for up to YT_META_TTL_MS (30 days) after the fix ships, which is most of the way
 // to the fix not having shipped.
-const RESOLVER_GENERATION = 'g12'
+//
+// g12 -> g13, 2026-08-28. NOT FOR THE USUAL REASON — the records are fine. This bump is being spent on
+// the OTHER thing the generation string does, which the paragraph above about instance names only
+// mentions in passing: it names the Durable Objects, so changing it forces brand-new instances.
+//
+// WHAT HAPPENED. 1.11.0 shipped a container whose `do_GET`/`do_POST` had stopped being methods of the
+// Handler class (a patch spliced module-level functions into the class body), so BaseHTTPRequestHandler
+// answered EVERY request with 501 "Unsupported method". The repair deployed as container image version
+// 120, sha256:3be632b0 — and production stayed broken anyway, because a pooled instance keeps running
+// the image it booted with until it idles out, and `sleepAfter` is 5m that ANY request resets. Under
+// live traffic the seven broken instances were being kept alive by the very requests they were
+// failing. Six minutes of deliberate quiet did not clear it; `/_media/` still answered 503 and the
+// probe still answered 501, on an image that had been correct for ten minutes.
+//
+// THE COST IS PAID TO END AN OUTAGE RATHER THAN TO AVOID A WRONG RECORD, which is a use this constant
+// has not been put to before and is worth naming so the next reader does not think the records were
+// suspect. If this recurs, the cheaper permanent answer is a shorter `sleepAfter` (see
+// src/container.ts, which already argues 3m is available), not another bump.
+const RESOLVER_GENERATION = 'g13'
 /** `slotKey` is the POST (refKey), never the operation — see RESOLVER_SLOTS for the 74% measurement. */
 function resolverStub(resolver: NonNullable<Env['MEDIA_RESOLVER']>, slotKey: string) {
   let h = 2166136261
