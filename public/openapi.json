@@ -242,12 +242,12 @@
     "schemas": {
       "PostEnvelope": {
         "type": "object",
-        "description": "A post that could be read. `muxing` and `pending` both mean the answer is incomplete but correct; neither is an error, both clear on their own, and both suppress caching. Re-ask later and the finished answer is free, because the work behind each is still running: a translation for the 30 seconds `waitUntil` allows, a mux on a Durable Object alarm that wakes at 35 seconds, then two minutes, then twenty. A few seconds is right for a short video and not for a long one.",
+        "description": "A post that could be read. `muxing` and `pending` both mean the answer is incomplete but correct; neither is an error, both clear on their own, and both suppress caching. Re-ask later and the finished answer is free, because the work behind each is still running: the translation for the 30 seconds `waitUntil` allows, the mux on a Durable Object alarm. See `muxing` for how long later actually is.",
         "properties": {
           "ok": { "const": true, "description": "The discriminator. `true` on this shape." },
           "muxing": {
             "type": "boolean",
-            "description": "A video is still being remuxed into the progressive MP4 this service serves, and what arrived is its poster still (`media[].still` is `true`). A re-request once the mux lands returns a `video`; the retry schedule is 35s, then roughly two minutes, then twenty, so seconds is right for a short video and minutes for a long one."
+            "description": "A video is still being remuxed into the progressive MP4 this service serves, and what arrived is its poster still (`media[].still` is `true`). A re-request a few seconds later carries the `video` for every mux that finishes inline, which is most of them. One that does not is retried on an alarm — first at 35s, or 140s where the source is separate tracks rather than a page, then at +2min and +20min — so a cold long video is minutes away, not seconds."
           },
           "pending": {
             "type": "boolean",
@@ -413,7 +413,7 @@
           },
           "still": {
             "type": "boolean",
-            "description": "This picture is standing in for a video. Read it with the envelope's `muxing`: `still` false with `muxing` false is an ordinary picture; `still` true with `muxing` true means a video is still muxing, so ask again; `still` true with `muxing` false means a video exists that cannot be served \u2014 it is longer than the remux ceiling, or it is a live or scheduled broadcast with no finished file behind it \u2014 and that is final for as long as this card is cached. Without this flag the last case is indistinguishable from a photograph except by reading the English in `text`."
+            "description": "This picture is standing in for a video. Read it with the envelope's `muxing`: `still` false with `muxing` false is an ordinary picture; `still` true with `muxing` true means a video is still muxing, so ask again; `still` true with `muxing` false means a video exists that cannot be served — it is longer than the remux ceiling, or it is a live or scheduled broadcast with no finished file behind it — and that is final for as long as this card is cached. Without this flag the last case is indistinguishable from a photograph except by reading the English in `text`."
           }
         },
         "required": ["kind", "url", "poster", "width", "height", "still"],

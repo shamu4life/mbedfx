@@ -95,10 +95,12 @@ RUN curl -fsSL https://github.com/denoland/deno/releases/latest/download/deno-x8
 # THE WEEKLY JOB WORKED. It is worth writing down, because the obvious reading of a nine-day-stale pin
 # is "the automation is broken" and that reading is wrong. On 2026-08-24 the job detected the release,
 # pushed `chore/ytdlp-2026.8.19`, could not open a pull request (the repo setting "Allow GitHub Actions
-# to create and approve pull requests" is off), and did exactly what it was designed to do instead:
-# raised issue #59 saying the branch was ready and why the PR could not be opened. The branch and the
-# issue both sat untouched for four days. The gap was follow-through, not detection — so the fix is to
-# turn that setting on (or to watch the issues), NOT to change the job.
+# to create and approve pull requests" was off at the time), and did exactly what it was designed to do
+# instead: raised issue #59 saying the branch was ready and why the PR could not be opened. The branch
+# and the issue both sat untouched for four days. The gap was follow-through, not detection — the job
+# was never the thing to change. That setting was turned on on 2026-08-28 and issue #59 is closed, so
+# the next bump should arrive as a PR. The issue fallback stays in the job regardless: it is what made
+# a silent refusal visible, and a permission can be taken away again as easily as it was granted.
 #
 # WHAT THE BUMP BUYS, measured 2026-08-28 on one machine in one minute, both images side by side:
 #

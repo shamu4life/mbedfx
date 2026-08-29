@@ -1,48 +1,62 @@
-# YouTube playback on mbedfx — handoff, 2026-08-23
+# YouTube mux ceilings and bytes — investigation, 2026-08-23
 
-> **SUPERSEDED, 2026-08-29. This is a frozen note, not current guidance.** The reasoning
-> below is still worth reading; several of its numbers and every one of its "next steps"
-> are not. Read this box before acting on anything in it:
->
-> - **Both PRs merged** on 2026-08-23/24 (`4db8cc8`, `81e9f37`). Everything under "State"
->   and "What is in the tree (uncommitted)" describes a tree that no longer exists, and the
->   two open decisions under "Commit / PR" were taken.
-> - **"A first paste shows a thumbnail by design" is no longer the design.** That is the
->   claim the 2026-08-29 work reverses: the crawler's activity document now gets its own
->   mux budget (`YT_MUX_BOT_MS`), because the production counters showed the old one could
->   never be won — 0 of 139 successful YouTube muxes finished inside it. The rest of that
->   line still holds: `og:video` width=0 is fine, do not re-litigate it.
-> - **The PO-token step is closed.** A production probe on 2026-08-28 found five of six
->   yt-dlp clients serving bytes from Cloudflare egress with no token. No minter buys
->   anything and there is no age-gate bypass. Do not start there.
-> - **The ~267 KB/s figure is retired**, not updated. Both terms under it moved: the
->   container is `standard-2` now (extraction went 14-17s to 3.1-4.7s) and yt-dlp is
->   2026.8.19. The QUESTION it raises — per-connection or per-egress — is still open; the
->   number is not evidence for anything.
-> - **The 180s page-mux wall is gone.** It is `MUX_PAGE_TIMEOUT`, 360s, since 2026-08-29,
->   split out of `PROC_TIMEOUT` because it was the first ceiling that actually bit once the
->   alarm made it reachable. "Do NOT raise `PROC_TIMEOUT`" below is still correct advice and
->   was honoured — the page mux got its own variable instead.
->
-> **Moved here from `HANDOFF-youtube.md` at the repository root, 2026-08-29**, to join the
-> six other dated measurement notes. It is dated 2026-08-23 because that is when it was
-> measured; like the rest of `docs/research/` it is frozen at that date and cited from
-> prose rather than maintained. It sat at the root, where an agent reads it first, telling
-> that agent to chase PO tokens and to accept a thumbnail on the first paste. Both were
-> wrong by the time anyone read them.
+**FROZEN 2026-08-29. This is a dated record, not a plan, and it was moved here from the repository
+root because it had stopped being one.** It was written as a handoff while two PRs were open. Both
+merged on 2026-08-24, everything it proposed shipped, and its measurements are pinned to a rig that
+no longer exists. Read it for the reasoning, which is still good, and for the numbers only with the
+corrections below applied. What supersedes it as current guidance is
+`docs/research/2026-08-29-the-1500ms-crawler-cut.md`.
 
-Goal: replace Discord's built-in YouTube embed (ads regardless of length or Premium)
-with our own ad-free MP4. That needs the mux to succeed reliably and quickly.
+It sat at the repository root, where an agent reads it first, telling that agent to chase PO tokens
+and to accept a thumbnail on the first paste. Both were wrong by the time anyone read them. It is
+dated 2026-08-23 because that is when it was measured; like the other notes in `docs/research/` it
+is frozen at that date and cited from prose rather than maintained.
 
-**State, 2026-08-23: committed and in review.** `9e2a1dc` on
-`perf/mux-without-re-extracting` (PR #57, the alarm + telemetry) and
-`fix/mux-durability-and-bytes` stacked on top of it (PR #58, the four items below).
-Neither is merged, and merging is the deploy. Both are green.
+Goal at the time: replace Discord's built-in YouTube embed (ads regardless of length or Premium)
+with our own ad-free MP4. That needed the mux to succeed reliably and quickly.
 
-Its Workers Builds check is RED on both, benignly: branch builds run
-`wrangler versions upload`, which cannot apply a Durable Object migration (error
-10211). `main` runs `wrangler deploy`, which can. See the memory note
-`do-migrations-fail-branch-builds`.
+**What has changed since, in the order it matters:**
+
+- **"A first paste shows a thumbnail by design" is no longer the design.** That is the claim the
+  2026-08-29 work reverses. The mux arm of the crawler's activity document now has a budget of its
+  own, `YT_MUX_BOT_MS` (4000 ms, YouTube only), because the production counters showed the 1500 ms it
+  replaced could never be won: 0 of 139 successful YouTube muxes finished inside it, and the fastest
+  one ever recorded took 4200 ms. The rest of that line still holds — `og:video` width=0 is fine, do
+  not re-litigate it.
+- **PRs #57 and #58 both merged on 2026-08-24** (`81e9f37`, `4db8cc8`) and have been running ever
+  since. Everything below filed as "in the tree (uncommitted)" or "in review" is live, and the
+  `Commit / PR` half of "Two open decisions" went with them. The repo was consolidated to a single
+  `main` branch on 2026-08-28, so neither `perf/mux-without-re-extracting` nor
+  `fix/mux-durability-and-bytes` exists on the remote any more. The observability half is still open:
+  `wrangler.jsonc` still reads `"observability": { "enabled": false }`.
+- **The `ctx.waitUntil` 30-second ceiling — the central finding below — was lifted by #57.** The
+  `MuxRunner` Durable Object alarm gets 15 minutes. Every conclusion here that reasons from "~8 MB is
+  the most any attempt can finish" was true of the old dispatcher and is not true now.
+- **The 180 s page-mux wall is gone.** `_mux_page` runs under its own `MUX_PAGE_TIMEOUT`, 360 s,
+  since 2026-08-29. It was split out of `PROC_TIMEOUT` because it became the first ceiling that
+  actually bit once the alarm made it reachable: `MAX_SECONDS` admits 1500 s of video, and a video
+  that needed longer than 180 s was SIGKILLed with nothing written, on every attempt. "Do NOT raise
+  `PROC_TIMEOUT`" below is still correct and was honoured — `PROC_TIMEOUT` (120 s) still walls the
+  tracks mux that `MUX_FIRST_ATTEMPT_TRACKS_MS` is derived from, so the page mux got its own variable
+  instead of that shared number being nudged.
+- **Every timing here was taken on `instance_type: basic`, a quarter of a vCPU.** That was itself the
+  finding of 2026-08-28: the "15.9s from Cloudflare egress" extract was our own CPU, not YouTube
+  throttling. The container runs `standard-2` now and production measures 3.1-4.7s per client.
+- **The pinned yt-dlp here is 2026.7.4, which returned 0 bytes and HTTP 403 on the default clients.**
+  The image pins 2026.8.19, which returned 11,829,048 bytes on the same video in the same minute. So
+  a 503 recorded below is not cleanly attributable to egress.
+- **The ~267 KB/s figure is retired rather than updated**, because both terms under it moved: the
+  quarter-core container and yt-dlp 2026.7.4, above. The question it raises — per-connection or
+  per-egress — is still open and still worth the one measurement it needs. The number is not evidence
+  for anything.
+- **The PO token thread is closed, and the answer is no.** `/_clients` measured five of six player
+  clients serving bytes from production egress with no token at all, including the two yt-dlp's own
+  guide says require one. No minter buys anything and there is no age-gate bypass, so item 1 under
+  "Next, in order" is not where to start. Recorded in `CLAUDE.md`.
+
+A branch build's Workers Builds check went red on both PRs, benignly: branch builds run
+`wrangler versions upload`, which cannot apply a Durable Object migration (error 10211). `main` runs
+`wrangler deploy`, which can. That mechanism is unchanged and is still worth knowing.
 
 ---
 
@@ -65,7 +79,7 @@ So there were **three ceilings and only the smallest was real**:
 | ceiling | value | reachable? |
 |---|---|---|
 | `--match-filter duration<?MAX_SECONDS` | 1500 s of video | no |
-| `subprocess.run(timeout=PROC_TIMEOUT + 60)` | 180 s of container work | no (see box) |
+| `subprocess.run(timeout=PROC_TIMEOUT + 60)` | 180 s of container work | no (see the header) |
 | `ctx.waitUntil` | **~30 s, shared** | **this is the one** |
 
 `settleMux`'s own comment claimed the opposite — that the mux "runs to completion
@@ -79,8 +93,8 @@ its bytes on every losing roll. That is the ten minutes, and why it never conver
 
 ## Measured 2026-08-23, so nobody re-derives it
 
-With the **pinned yt-dlp 2026.7.4** (installed locally, same version as the image) and
-the exact production argv, on `Qy2DltXI3Fc` (625 s — a 10-minute video):
+With **yt-dlp 2026.7.4** — what the image pinned at the time, replaced by 2026.8.19 on 2026-08-28 —
+and the exact production argv, on `Qy2DltXI3Fc` (625 s — a 10-minute video):
 
 - format **18**, `640x360`, 414 kbps, **`proto=https`**, **32,347,090 bytes**
 - residential throughput on the resolved url: **17.2 MB/s** (8 MB range fetch, 0.49 s)
@@ -93,7 +107,7 @@ the exact production argv, on `Qy2DltXI3Fc` (625 s — a 10-minute video):
   `134`+`140` is the *same* 640x360 at **19.2 MiB — 38% fewer bytes**. Under a throughput
   throttle, bytes are the binding constraint. Not acted on.
 
-## What is in the tree (uncommitted)
+## What shipped in PR #57, and lifted the 30 s ceiling above
 
 1. **`MuxRunner`** (`src/muxrunner.ts` + `src/muxpolicy.ts`, binding `MUX_RUNNER`,
    migration `v2`) — a Durable Object whose **alarm gets 15 minutes**. Fires at 35 s,

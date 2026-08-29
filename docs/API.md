@@ -74,7 +74,7 @@ Move the instance into the path and drop the scheme:
 
 `test/link-hygiene.test.mjs:71-74` drives those four through the router, with the Lemmy, Misskey and
 PeerTube ids from `test/fixtures/` and the Mastodon one from the converter page's example list
-(`public/index.html:976`). The cards mint the same shape:
+(`public/index.html:1020`). The cards mint the same shape:
 `https://mbedfx.app/lemmy.world/post/49966212`.
 
 ---
@@ -231,7 +231,7 @@ are both the poster frame, where the bytes are. Read it with the top-level `muxi
 | `still` | `muxing` | Meaning |
 |---|---|---|
 | `false` | `false` | An ordinary picture. |
-| `true` | `true` | A video is still muxing. Ask again once it lands: seconds for a short video, minutes for a long one — see the retry schedule below. |
+| `true` | `true` | A video is still muxing. Ask again on the horizon under [`muxing` and `pending`](#muxing-and-pending): seconds for a short video, minutes for a long one. |
 | `true` | `false` | A video exists that cannot be served. Too long to mux, in which case the verdict is permanent; or a live or scheduled broadcast, in which case it is final for as long as this card is cached and the archive will mux normally once the stream ends. |
 
 Without `still`, that last row is indistinguishable from an ordinary photo except by reading the
@@ -384,7 +384,7 @@ serialisation (`test/api.test.mjs:325`).
 | `XLATE_MAX_WAIT_MS` | **1500 ms** | the translation's share of the budget |
 | `XLATE_WAIT_FLOOR_MS` | **300 ms** | the floor under the translation's wait |
 | `META_WAIT_API_MS` | **8000 ms** | **YouTube only**: the metadata extract, awaited after the two above |
-| `META_TIMEOUT_API_MS` | **8700 ms** | **Dailymotion, Streamable, Imgur only**: the container metadata extract, which on those three *is* the upstream fetch |
+| `META_TIMEOUT_API_MS` | **8700 ms** | **Dailymotion, Streamable, Imgur only**: the container metadata extract, which on the first two *is* the upstream fetch and on Imgur is the fallback behind its own API |
 
 All six are in `src/worker.ts`. The mux and the translation race concurrently (the `Promise.all` in
 `describeTarget`), costing `max(300, 9000 − elapsed)` between them rather than the sum. The YouTube
@@ -408,8 +408,15 @@ so nobody sizes a client timeout against the wrong table.
 The three activity-document budgets race in one `Promise.all`, so that response ends at the largest
 of them plus its own serialisation, not at their sum.
 
-The upstream fetch is unbounded on fourteen of the seventeen platforms. Exactly one call in `src/`
-sets an `AbortSignal`, and it does not change that count: `fetchInnertube`
+The upstream fetch is unbounded on fourteen of the seventeen platforms, and since 1.11.0 it can be
+two requests rather than one: `askTwice` (`src/fetchretry.ts`) asks a second time when the first was
+refused with 408, 425, 429 or a 5xx, or threw, which is the shape of a Cloudflare-egress refusal
+rather than of a verdict. Every other status is an answer about the post, 404, 403 and 410 included,
+so a dead link still costs exactly one request. 1.12.0 widened it to the YouTube oembed leg, where a
+single refusal costs the vouch and dates the card 1 January 1970, and to both Threads fetches, which
+the retry lint could not see because they are `fetch(…).then(…)` inside a `Promise.all`.
+
+Exactly one call in `src/` sets an `AbortSignal`, and it does not change that count: `fetchInnertube`
 (`src/platforms/youtube/innertube.ts`) caps its YouTube player-API request at
 `INNERTUBE_TIMEOUT_MS`, 2500 ms shared across the two clients it tries in turn, because a metadata
 answer arriving after the card is drawn has nobody to take it and the connection is better released
@@ -421,8 +428,11 @@ code deliberately has none. Cloudflare places no wall-clock limit on an HTTP-tri
 ([Workers limits](https://developers.cloudflare.com/workers/platform/limits/): "No limit … as long
 as the client remains connected"). Only CPU time is capped, and this endpoint spends almost none.
 
-Dailymotion, Streamable and Imgur are the three exceptions, and they are exceptions because their
+Dailymotion and Streamable are the two exceptions, and they are exceptions because their
 "upstream fetch" is a `yt-dlp` extract inside our own container rather than a request to the site.
+Imgur was a third until 2026-08-16, when its own JSON API took that job (`fetchImgur`,
+`src/platforms/imgur/fetch.ts`); the container is still its fallback, so the bound below still applies
+to it.
 That call is bounded, because the container's own process timeout is 120 s and a wedged instance
 would otherwise hold the whole response. Past `META_TIMEOUT_API_MS` this endpoint answers
 `fetch_fail` for a post that may be perfectly fine. The extract keeps running and lands in storage,
@@ -443,12 +453,12 @@ total ≈ upstream fetch + max(300 ms, 9000 ms − upstream fetch) + (YouTube on
 ```
 
 An upstream answering within 8.7 s gives 9.0 s, 17.0 s on a cold YouTube link; slower, the mux drops
-to its 300 ms floor and the total tracks the upstream, except on Dailymotion, Streamable and Imgur,
-where 8.7 s is also where the answer stops arriving at all. (This said "the four container
-platforms" until 2026-08-29, which is the same miscount the paragraph above corrects: Facebook makes
-the call and is not bounded by it.) Set the client timeout to 20 s: the 17.0 s worst case plus
-roughly 3 s for connection setup and a slower upstream. 12 s covers a client that never sends
-YouTube links. 5 or 10 s cuts off requests about to answer.
+to its 300 ms floor and the total tracks the upstream, except on Dailymotion and Streamable, and on
+Imgur when it falls through to the container, where 8.7 s is also where the answer stops arriving at
+all. (This said "the four container platforms" until 2026-08-29, which is the same miscount the
+paragraph above corrects: Facebook makes the call and is not bounded by it.) Set the client timeout
+to 20 s: the 17.0 s worst case plus roughly 3 s for connection setup and a slower upstream. 12 s
+covers a client that never sends YouTube links. 5 or 10 s cuts off requests about to answer.
 
 Measured, each recorded in a comment beside the code it bounds in `src/worker.ts`: a Facebook
 metadata extract ~3.0 s (2026-07-25), a translation 217-798 ms.
@@ -472,18 +482,22 @@ Either flag means an incomplete answer, and both carry `cache-control: no-store`
 half-answer out of any cache in between.
 
 - `muxing: true`: a video is still being remuxed into the progressive MP4 mbedfx serves, and what
-  arrived is its poster still. A re-request returns a `video` once the mux lands. "A few seconds"
-  stood here and is only right for a short one: the durable retry schedule wakes at 35 s, then
-  roughly two minutes later, then twenty, and each attempt is itself allowed to run up to the
-  container's page-mux wall of 360 s. A long video can legitimately take several minutes.
+  arrived is its poster still. A re-request a few seconds later carries the `video` for every mux
+  that finishes inline, which is most of them. "A few seconds" stood here alone and is only right
+  for those: one that does not finish inline is picked up by an alarm instead, first at 35 s where
+  the source is a page and 140 s where it is separate tracks, then again at +2 min and +20 min
+  (`MUX_RETRY_MS`, `src/muxpolicy.ts`). Each attempt is itself allowed to run to the container's
+  wall, 360 s on a page mux. So the honest horizon for a cold long video is minutes, not seconds.
 - `pending: true`: a translation lost its race and `text` is the original. The translation is still
   being written; a re-request carries it.
 
 Neither is an error. Both clear on their own and an answer that ignores them is still correct. The
-work behind them runs in two different places, which matters if you are waiting on it: a translation
-runs on `ctx.waitUntil`, which Cloudflare cancels 30 s after the response, while a mux runs on the
-MuxRunner Durable Object alarm and gets fifteen minutes. (This paragraph said `waitUntil` for both
-until 2026-08-29, which is the mis-statement the alarm was written to fix.) `test/api.test.mjs:288`
+work behind them runs in two different places, which is what sets the horizons above: a translation
+runs on `ctx.waitUntil`, which Cloudflare cancels 30 s after the response, while a mux is handed to
+a Durable Object alarm (`MuxRunner`, `src/muxrunner.ts`) and gets fifteen minutes. That alarm is
+armed BEFORE the race rather than after it, because the videos needing longer than the `waitUntil`
+ceiling are exactly the ones it exists for. (This paragraph said `waitUntil` for both until
+2026-08-29, which is the mis-statement the alarm was written to fix.) `test/api.test.mjs:288`
 asserts the `no-store`, `317` the `max-age=900`.
 
 ---

@@ -489,8 +489,11 @@ export const smokeRunCeilingMs = (checks: number = SMOKE_CHECKS.length, budgetMs
  * ticks a day this is 48 requests per checked post per day, which is smaller than one person sharing
  * one link into one busy channel.
  *
- * It also keeps the container out of it: none of these paths is a `{page}` remux the resolver would
- * be dispatched for, and a cold mux would be abandoned when the scheduled invocation ends anyway.
+ * It also keeps the container out of it on all but one tick in sixty days. The `yt` row IS a `{page}`
+ * source, so a tick that finds its mp4 swept by `expire-60d` arms the MuxRunner alarm — see that row's
+ * own note. Every other tick reads a warm R2 head, and no other path here is a remux the resolver
+ * would be dispatched for. This said "none of these paths" until 2026-08-29, which was true while the
+ * yt row asserted nothing about video.
  */
 export async function runSmoke(
   origin: string,

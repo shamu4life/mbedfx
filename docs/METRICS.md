@@ -40,7 +40,7 @@ nowhere.
   Worker's dashboard page. No per-request detail, three months of history, no configuration, no
   price.
 - **Analytics Engine** (stored, aggregate, on): the `mbedfx_counters` dataset `src/analytics.ts`
-  writes into (`wrangler.jsonc:178`). Own config key, own write and read APIs, three months of
+  writes into (`wrangler.jsonc:262`). Own config key, own write and read APIs, three months of
   retention, out of `observability.enabled`'s reach.
 - **Workers Logpush** (export, off, own flag): the same trace events shipped off Cloudflare to R2, S3
   or a log vendor.
@@ -154,6 +154,40 @@ fastest 4200 ms. **Zero of the 139 finished inside `MUX_WAIT_BOT_MS` (1500 ms), 
 budget for three weeks.** That is the measurement `YT_MUX_BOT_MS` was sized against, and it is a
 better instrument than the `card_degraded` ratio below because it does not care about the traffic
 mix. Full working in `docs/research/2026-08-29-the-1500ms-crawler-cut.md`.
+
+### When `mux_gate` rises on `yt`: `/_clients`
+
+The counters say WHICH HALF of the pipeline failed. They cannot say which player client did, and on
+YouTube that is usually the question. `/_clients` answers it, and it is the only instrument here that
+measures from the egress that matters: every earlier argument in this project about `player_client`
+was settled on a laptop, and a laptop is a residential IP.
+
+```sh
+curl -s 'https://mbedfx.app/_clients' | jq '{ok, ms, ytdlp, serving, clients}'
+```
+
+It takes no input — the video id and the client list are constants in `container/server.py`, the same
+property that makes `/_smoke` comparable run to run. It rides the existing authenticated `/resolve`,
+so it opens no new container surface, and its range fetch goes through the same `_safe_url` SSRF gate
+as everything else the container fetches. It runs on a fixed resolver slot (`client-probe`) so two runs
+are comparable rather than landing on whichever instance was warm.
+
+**It asserts on BYTES, not on a format count**, and that distinction is the whole reason it works. Each
+client extracts, and then the chosen format url is range-fetched. A client that lists formats and is
+then refused by googlevideo reports `gvs: "http-403"` rather than looking healthy. The first run caught
+exactly that: `android_vr` reported `extracted: true, formats: 1` and served zero bytes.
+
+It is HAND-RUN, not scheduled, and deliberately so: it costs a real extraction per client on a shared
+container slot. Reach for it when the mux counters say `mux_gate` on `yt` and `/_smoke` says fine —
+which is the shape of every YouTube incident this project has had.
+
+It degrades rather than crashing: **503** when there is no container binding, **502** when the container
+is unreachable or answers non-ok. It never 500s, because a diagnostic that crashes tells an operator
+less than one that says it could not reach the thing it was asked about.
+
+Its first run, on 2026-08-28, is why the PO token question is closed. Five of six clients served bytes
+from Cloudflare egress with no token at all, including `tv_simply` and `mweb`, the two yt-dlp's own PO
+Token Guide lists as REQUIRING one. See `CLAUDE.md`.
 
 ### Reading `yt_innertube_ok` / `yt_innertube_fail`
 
@@ -310,7 +344,7 @@ agreement can stop holding without the written data changing.
 migrate rows. As of 2026-08-03 `mbedfx_counters` holds at most about two days of data, so every
 `INTERVAL '7' DAY` example below returns a partial window that looks like a traffic collapse.
 
-`wrangler.jsonc:176` records that the historical counters "stay in `fxeverything_counters` and are
+`wrangler.jsonc:260` records that the historical counters "stay in `fxeverything_counters` and are
 still queryable there". Neither table has been confirmed to exist; `SHOW TABLES` settles both in one
 call. The Worker was renamed in the same commit, and the repo has no evidence the old script ever
 deployed and wrote a point. Retention is three months either way: anything before 2026-05-03 is gone
@@ -323,16 +357,16 @@ exact or lazy and what a query reaching past the window returns. Don't convert i
 ### Stacked counters
 
 `fetch_fail` is a superset, not a disjoint bucket. Every gate counter and every `assert_fail` is
-counted on top of it by design (`src/worker.ts:204`); one age-gated Instagram request can emit four
-points, `assert_fail`, `age_restricted`, `pool_unused` and `fetch_fail`. A total across `blob2` is
-therefore not a request count. Compare named pairs.
+counted on top of it by design (the `Outcome2` docstring, `src/analytics.ts`); one age-gated
+Instagram request can emit four points, `assert_fail`, `age_restricted`, `pool_unused` and
+`fetch_fail`. A total across `blob2` is therefore not a request count. Compare named pairs.
 
-Two counting rates also mix. Counters inside `liveFetchPost` (`src/worker.ts:209`) fire once per
+Two counting rates also mix. Counters inside `liveFetchPost` (`src/worker.ts`) fire once per
 post-cache miss; the route-level ones (`ok`, `media_hit`/`media_miss`, `api_hit`/`api_miss`,
 `fetch_fail`, `ambiguous`, `notfound`, `api_bad_id`) fire once per request, spread across
 `renderPostRoute`, `serveDirectMedia` and `handle()`. A ratio across the two compares unlike things.
 (Those three used to be cited by line range. `src/worker.ts` gained 460 lines on 2026-08-29 and the
-range stopped pointing at any of them, so this file cites the functions by name from here down.)
+range stopped pointing at any of them, so this file cites `src/` symbols by name throughout.)
 
 ---
 
@@ -366,8 +400,8 @@ Most mean nothing as an absolute number, and several mislead alone.
 | `blob1` | What it means |
 |---|---|
 | `x` | Expected. The secret can be filled today; the Worker-side call that would spend it is a later phase. This counts the staging gap. |
-| `yt` | A real fault (`src/worker.ts:601`). The jar went with the container extract and the age wall held anyway: the accounts are signed out, rate-limited or flagged, and need rotating. |
-| `ig` | Neither (`src/worker.ts:351`). `IG_ACCOUNTS` is spent in the container, not on the page fetch that reads the gate. A rise means the credential is not reaching the request that needs it, and says nothing about whether the accounts are alive. |
+| `yt` | A real fault (the YouTube arm of `liveFetchPost`, `src/worker.ts`). The jar went with the container extract and the age wall held anyway: the accounts are signed out, rate-limited or flagged, and need rotating. |
+| `ig` | Neither (the Instagram arm of `liveFetchPost`, `src/worker.ts`). `IG_ACCOUNTS` is spent in the container, not on the page fetch that reads the gate. A rise means the credential is not reaching the request that needs it, and says nothing about whether the accounts are alive. |
 
 ### Zeros that do not mean health
 
@@ -380,7 +414,7 @@ Most mean nothing as an absolute number, and several mislead alone.
   `env.AE?.writeDataPoint` is optional-chained inside `count()` and `countMux()`
   (`src/analytics.ts`): a deploy without it writes nothing and neither throws nor logs, and
   "zero rows" means "no traffic" or "no binding".
-  `wrangler.jsonc:178` declares it, prod can diverge from `main` here, and the deployed bundle has
+  `wrangler.jsonc:262` declares it, prod can diverge from `main` here, and the deployed bundle has
   not been checked.
 
 ### Known defects in the write shape
@@ -400,8 +434,9 @@ No query works around either of these.
   the converter preview and `/_api/v1`, where it is a lie. Never split the translation ratio by
   client.
 
-The `Outcome2` docstring in `src/analytics.ts` still calls `fullpage_recovered` Instagram-only. It fires for Facebook too
-(`src/worker.ts:655`, `:709`), and a query filtered to `blob1='ig'` under-reports it.
+The `Outcome2` docstring in `src/analytics.ts` still calls `fullpage_recovered` Instagram-only. It
+fires for Facebook too, from two sites in the Facebook arm of `liveFetchPost` (`src/worker.ts`), and
+a query filtered to `blob1='ig'` under-reports it.
 
 ---
 
@@ -442,15 +477,18 @@ A cron runs every thirty minutes and renders a list of known posts through this 
 then counts whether a real card came back. `src/smoke.ts` holds the list and the assertion; `/_smoke`
 runs the same checks on demand and answers JSON.
 
-Seventeen checks across sixteen of the seventeen platforms, as of 2026-08-29. It was six for the
-first day, which left eleven platforms with no detector at all, the same position Facebook was in,
-and nobody would have known which eleven without rendering all seventeen by hand. ONE platform is
-deliberately unchecked and says so in `SMOKE_UNCHECKED`: Streamable returns the failure card on a
-COLD first render (measured 2026-08-12), its meta TTL equals the cron interval so a tick is always
-cold, and a row for it would alarm most ticks while the platform works. Dailymotion was excused for
-the same reason and has since been checked anyway — read its note in `src/smoke.ts` before treating
-an occasional red tick there as an outage. A platform that is neither checked nor excused fails the
-test suite.
+Seventeen checks across sixteen of the seventeen platforms, as of 2026-08-29. It was six for the first
+day, which left eleven platforms with no detector at all, the same position Facebook was in, and
+nobody would have known which eleven without rendering all seventeen by hand. ONE platform is
+deliberately unchecked, and `SMOKE_UNCHECKED` says why: Streamable returns the failure card on a COLD
+first render (measured 2026-08-12), and `ST_META_TTL_MS` is 1_800_000 ms, EXACTLY the cron interval,
+so a scheduled check finds the meta record freshly expired on essentially every tick and would sit
+permanently on that cold path. A row for it would alarm every half hour while the platform works,
+which teaches its only reader to ignore the one instrument that has to be believed when the Facebook
+row fires. Dailymotion was excluded alongside it until 2026-08-12 on a rationale this repo's own
+constants contradicted (`DM_META_TTL_MS` is 86_400_000, a full day), and is checked now: read its
+note in `src/smoke.ts` before treating a red tick there as an outage, because one cold tick a day is
+the expected rate. A platform that is neither checked nor excused fails the test suite.
 
 It asserts on CONTENT. Every interesting failure on this service answers HTTP 200, whether the failure
 card, Meta's login wall or TikTok's 404 page, so a monitor watching status codes would have reported perfect
@@ -497,6 +535,25 @@ It runs inside the worker it is checking, so it cannot report that the worker is
 route binding, a failed deploy and a Cloudflare incident are all invisible to it. It is a
 platform-breakage detector, not an uptime monitor, and treating it as the second thing would be a
 worse mistake than not having it.
+
+**IT ALSO CANNOT SEE THE CONTAINER, and this is not theoretical.** On 2026-08-28 the resolver answered
+every request with `501 Unsupported method` for roughly forty minutes — every mux on every platform
+failed — and this ran 17/17 GREEN throughout. Two reasons compound. Most checks never reach the
+container at all, and YouTube's, which used to, now takes its metadata from Innertube in the Worker
+rather than from `yt-dlp` in the container, so the platform most likely to expose a dead resolver
+stopped depending on it. On top of that `cardVerdict` passed any card carrying a title and one thing
+to draw, and a video degraded to its poster still carries both, so a still and a player were the same
+verdict.
+
+Since 2026-08-29 the `yt` row carries `expect: 'video'` and `cardVerdict` answers `no-video` on a
+playerless card (`src/smoke.ts`), which retires the second half of that. It does not retire the
+first. The pinned video's mp4 is durable in R2, and a warm mux is one R2 head, so the row goes green
+whether or not the container is running. The only tick that reaches this image is the one that finds
+the mp4 swept by `expire-60d` — roughly one in sixty days.
+
+So a green `/_smoke` still means the heads render, not that the resolver is alive. `/_clients` is the
+check that reaches the container, and it is the one to run when the counters say mux and this says
+fine.
 
 The check urls are a permanent list of real posts. When one is deleted, that platform fails forever
 until somebody swaps the entry. The counter names the platform, which is the signal to go and look.
@@ -671,7 +728,8 @@ which is the pool working, or any reading under
 
 ### Is the Instagram copyright recovery still alive
 
-Emitted at `src/worker.ts:439`, `:445` and `:463`.
+Emitted at `src/worker.ts:423` and `:550` (`copyright_gql`), `:558` (`copyright_recovered`) and
+`:576` (`copyright_remux`).
 
 ```sql
 SELECT SUM(_sample_interval * (blob2 = 'copyright_gql')) AS gql,

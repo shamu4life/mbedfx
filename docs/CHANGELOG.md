@@ -131,13 +131,13 @@ channels post these constantly.
   already is.
 - **`RESOLVER_GENERATION` and `META_GENERATION` are two strings.** One names the pooled container
   instances; the other scopes the stored meta records. They were one, and the cost of that is
-  recorded in the g13 note: ending a container outage on 2026-08-28 discarded every stored date,
-  description, duration, count and gate verdict on five platforms, 40 hours after the Innertube
-  corpus that was meant to make YouTube dates reliable shipped. Both hold `g13` today, so the split
-  itself invalidates nothing. The rule changed shape with them: it used to ask what changed (bump
-  whenever `container/` changes behaviour) and now asks what a record says (if one written yesterday
-  is read tomorrow, does it say something false?). Under-invalidation is newly expressible and is the
-  worse direction, so when it is unclear, bump `META_GENERATION`.
+  recorded in the g13 note: the bump that ended the 2026-08-28 container outage (1.11.1) discarded
+  every stored date, description, duration, count and gate verdict on five platforms, 40 hours after
+  the Innertube corpus that was meant to make YouTube dates reliable shipped. Both hold `g13` today,
+  so the split itself invalidates nothing. The rule changed shape with them: it used to ask what
+  changed (bump whenever `container/` changes behaviour) and now asks what a record says (if one
+  written yesterday is read tomorrow, does it say something false?). Under-invalidation is newly
+  expressible and is the worse direction, so when it is unclear, bump `META_GENERATION`.
 - **The outage detector can fail on YouTube.** Every Discord head this service emits carries a
   `rel=alternate` activity link unconditionally, and `cardVerdict` counts that link as "something to
   draw" — so the YouTube row was satisfied by the head's own boilerplate and could not go red short
@@ -157,9 +157,9 @@ channels post these constantly.
   call now retry; `askTwice` takes the injected seam as an optional third argument so the second
   could. Innertube keeps a NO-RETRY exemption: a refusal there is a prompt 403, which
   `worthAskingAgain` reads as an answer about the video, and asking again was measured as a no-op.
-  The count moved from 24 call sites across 15 fetcher files to 27 across 16; the 1.11.0 entry's
-  "22 call sites across 15 fetchers" is left as it was written, because it records what that release
-  believed it had covered, and being wrong about that is the point of this one.
+  The count moved from 24 call sites across 15 fetcher files to 27 across 16. The 1.11.0 entry said
+  22, which undercounted its own work: that tag carries 24 call sites across 15 fetchers, and the
+  entry below now says so.
 
 ### Documentation
 - **The Analytics Engine queries in `docs/METRICS.md` had never been run, and none of the three
@@ -211,13 +211,6 @@ channels post these constantly.
   is now frozen at its measurement date like the six other notes beside it.
 
 ### Notes
-- Two production commits landed after 1.11.0 and were never written down here. `5f6d827` was a total
-  mux outage on every platform: a patch spliced module-level functions into `container/server.py`'s
-  Handler class body, so `do_GET`/`do_POST` stopped being methods and `BaseHTTPRequestHandler`
-  answered every request with 501. `59708de` bumped `RESOLVER_GENERATION` g12 → g13 to evict the
-  seven pooled instances still running the broken image, which live traffic was keeping alive by
-  failing — `sleepAfter` is 5m and any request resets it, so six minutes of deliberate quiet did not
-  clear it. That bump is the one whose collateral damage the generation split above prevents.
 - `package-lock.json` was still on 1.10.1 at the 1.11.0 tag. npm writes the version in two places
   there and the cut moved neither, which nothing noticed because nothing reads it. Corrected with
   this release. Both copies, `package.json`, `CLAUDE.md` and the badge in `public/index.html` now say
@@ -226,6 +219,43 @@ channels post these constantly.
   budgets and `MUX_PAGE_TIMEOUT` change what a reader sees on a card, and `META_GENERATION` is new
   public surface for anyone self-hosting. Not a major: no route, no field and no response shape
   changed, and every client written against 1.11.0 still parses 1.12.0.
+
+---
+
+## [1.11.1] - 2026-08-28
+
+### Fixed
+- **The 1.11.0 container answered every request with `501 Unsupported method`, and every mux on every
+  platform broke together.** The patch that added the `/_clients` probe anchored on a class statement
+  that does not exist in this file, took its fallback anchor, and spliced the module-level probe
+  helpers into the middle of `Handler`'s body. A Python class ends at the first unindented line, so
+  `do_GET` and `do_POST` stopped being methods and `BaseHTTPRequestHandler`'s own base implementation
+  answered instead — which is a 501 for every verb. The helpers now sit above the class, and the
+  patch script that placed them verifies with `ast` rather than with a string anchor.
+- **The repair was live for ten minutes before production noticed it.** Container image 120 was
+  correct and deployed; seven pooled instances kept serving the broken image because an instance runs
+  the image it booted with until it idles out, `sleepAfter` is 5m, and *any* request resets that
+  timer — so under live traffic the broken instances were kept alive by the very requests they were
+  failing. Six minutes of deliberate quiet did not clear it. `RESOLVER_GENERATION` `g12` -> `g13`
+  ended it, because that string names the Durable Objects and changing it forces brand-new instances.
+  Recorded in `src/worker.ts` as the first time that constant has been spent to end an outage rather
+  than to invalidate a wrong record. If it recurs, a shorter `sleepAfter` is the cheaper permanent
+  answer than another bump; `src/container.ts` already argues 3m is available.
+
+### Added
+- **Three tests that assert the container's handler SHAPE**, not just its helpers
+  (`container/test_server.py`). `do_GET` and `do_POST` must be attributes of `Handler`, and the probe
+  helpers must be module-level. Nothing in 1448 Worker tests or 31 container tests could see this
+  defect: the container suite calls the pure helpers, which were all fine, and the Worker suite stubs
+  the container away entirely.
+
+### Known gap
+- **`/_smoke` stayed 17/17 green throughout a total container outage.** Most of its checks never reach
+  the container, and YouTube metadata now comes from Innertube rather than from `yt-dlp`, so the one
+  platform most likely to expose a dead container stopped depending on it. The breakage detector this
+  project added *because* Facebook was once broken for a week could not see a worse break than that
+  one. Nothing yet drives the container's HTTP surface end to end from the smoke path. Documented
+  rather than fixed, because the fix is a design decision about what `/_smoke` is for.
 
 ---
 
@@ -241,7 +271,7 @@ channels post these constantly.
   egress, so the card was lost to Cloudflare's egress being refused once.
   Only a REFUSED request is retried (408/425/429/5xx, or a thrown fetch). A parsed body is a verdict
   and is believed on the first ask, which is what keeps the cost bounded: a nonexistent Twitter id
-  answers HTTP 200 with a parseable tombstone, so dead links still cost exactly one request. 22 call
+  answers HTTP 200 with a parseable tombstone, so dead links still cost exactly one request. 24 call
   sites across 15 fetchers, and a source-derived test requires every `await fetch(` under
   `src/platforms` to be routed through it or carry a `NO-RETRY` comment saying why not.
 - **`/_clients`, which answers which YouTube player client actually serves bytes from production
@@ -507,7 +537,7 @@ channels post these constantly.
   *(Corrected 2026-08-29: the layer-caching mechanism in this entry is wrong. Every merge builds the
   image from scratch in a Workers Builds runner off a fresh clone, so a floor would FLOAT rather than
   freeze. The conclusion — pin exactly — survives, for reproducibility and a one-line revert. See the
-  Dockerfile and the entry under `[Unreleased]`.)*
+  Dockerfile and the Documentation section of 1.12.0.)*
 - **The media container now sleeps after 5 minutes idle instead of 10.** Measured from the bill:
   3.24M instance-seconds awake against 42.9k vCPU-seconds of work — a 5.3% duty cycle, so 94.7% of
   what was billed was an instance with nothing to do. With one dispatch every ~4.3 minutes per pool

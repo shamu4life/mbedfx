@@ -22,7 +22,9 @@ name: ci
 
 on:
   push:
-    branches: [main, staging]
+    # main only. The repo was consolidated to a single remote branch on 2026-08-28, and a
+    # trigger naming a second one reads as an invitation to create it.
+    branches: [main]
   pull_request:
   workflow_dispatch:
 
