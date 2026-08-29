@@ -1,5 +1,36 @@
 # YouTube playback on mbedfx — handoff, 2026-08-23
 
+> **SUPERSEDED, 2026-08-29. This is a frozen note, not current guidance.** The reasoning
+> below is still worth reading; several of its numbers and every one of its "next steps"
+> are not. Read this box before acting on anything in it:
+>
+> - **Both PRs merged** on 2026-08-23/24 (`4db8cc8`, `81e9f37`). Everything under "State"
+>   and "What is in the tree (uncommitted)" describes a tree that no longer exists, and the
+>   two open decisions under "Commit / PR" were taken.
+> - **"A first paste shows a thumbnail by design" is no longer the design.** That is the
+>   claim the 2026-08-29 work reverses: the crawler's activity document now gets its own
+>   mux budget (`YT_MUX_BOT_MS`), because the production counters showed the old one could
+>   never be won — 0 of 139 successful YouTube muxes finished inside it. The rest of that
+>   line still holds: `og:video` width=0 is fine, do not re-litigate it.
+> - **The PO-token step is closed.** A production probe on 2026-08-28 found five of six
+>   yt-dlp clients serving bytes from Cloudflare egress with no token. No minter buys
+>   anything and there is no age-gate bypass. Do not start there.
+> - **The ~267 KB/s figure is retired**, not updated. Both terms under it moved: the
+>   container is `standard-2` now (extraction went 14-17s to 3.1-4.7s) and yt-dlp is
+>   2026.8.19. The QUESTION it raises — per-connection or per-egress — is still open; the
+>   number is not evidence for anything.
+> - **The 180s page-mux wall is gone.** It is `MUX_PAGE_TIMEOUT`, 360s, since 2026-08-29,
+>   split out of `PROC_TIMEOUT` because it was the first ceiling that actually bit once the
+>   alarm made it reachable. "Do NOT raise `PROC_TIMEOUT`" below is still correct advice and
+>   was honoured — the page mux got its own variable instead.
+>
+> **Moved here from `HANDOFF-youtube.md` at the repository root, 2026-08-29**, to join the
+> six other dated measurement notes. It is dated 2026-08-23 because that is when it was
+> measured; like the rest of `docs/research/` it is frozen at that date and cited from
+> prose rather than maintained. It sat at the root, where an agent reads it first, telling
+> that agent to chase PO tokens and to accept a thumbnail on the first paste. Both were
+> wrong by the time anyone read them.
+
 Goal: replace Discord's built-in YouTube embed (ads regardless of length or Premium)
 with our own ad-free MP4. That needs the mux to succeed reliably and quickly.
 
@@ -34,7 +65,7 @@ So there were **three ceilings and only the smallest was real**:
 | ceiling | value | reachable? |
 |---|---|---|
 | `--match-filter duration<?MAX_SECONDS` | 1500 s of video | no |
-| `subprocess.run(timeout=PROC_TIMEOUT + 60)` | 180 s of container work | no |
+| `subprocess.run(timeout=PROC_TIMEOUT + 60)` | 180 s of container work | no (see box) |
 | `ctx.waitUntil` | **~30 s, shared** | **this is the one** |
 
 `settleMux`'s own comment claimed the opposite — that the mux "runs to completion
@@ -112,11 +143,13 @@ the exact production argv, on `Qy2DltXI3Fc` (625 s — a 10-minute video):
   -30.8% on 2-10 min (5/7), but +26% to +43% on short 202x360 clips. See the table in
   `container/server.py` next to the selector.
 - ~~**Reconcile the ceilings**~~ — DONE, and the finding was smaller than expected. The
-  table above is CORRECT (1500 s of video, 180 s on the `{page}` mux). What was imprecise
-  was `container/README.md`'s 504 line, which named `PROC_TIMEOUT` without saying the
-  `{page}` path gets `PROC_TIMEOUT + 60`. Fixed. **Do NOT raise `PROC_TIMEOUT`** hoping it
-  helps: before the alarm it did nothing, and after the alarm it only matters for videos
-  needing >180 s of download.
+  table above was CORRECT as of this date (1500 s of video, 180 s on the `{page}` mux; that
+  wall is `MUX_PAGE_TIMEOUT` = 360 s since 2026-08-29, and the "reachable? no" column went
+  false with it). What was imprecise was `container/README.md`'s 504 line, which named
+  `PROC_TIMEOUT` without saying the `{page}` path gets its own wall. Fixed. **Do NOT raise
+  `PROC_TIMEOUT`** hoping it helps: before the alarm it did nothing, and it is shared with
+  the tracks mux that `MUX_FIRST_ATTEMPT_TRACKS_MS` is timed against. The page mux got its
+  own variable instead, which is what that advice was pointing at.
 - **Bluesky and Reddit had NO alarm coverage** — found while checking the above, and
   bigger than either. `settleMux` returns before its arming loop for any page-less remux
   and `prewarmable()` is null for `bs`/`rd`, so their only dispatcher was `serveMuxed`,

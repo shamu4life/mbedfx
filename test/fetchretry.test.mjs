@@ -147,6 +147,52 @@ test('TWO THROWN FETCHES STILL THROW — fetch_fail must not be laundered into a
   } finally { net.restore() }
 })
 
+test('THE INJECTED SEAM IS ASKED TWICE TOO — otherwise YouTube could not use this at all', async () => {
+  /**
+   * `fetchYouTube` takes a `fetchImpl: typeof fetch` so its tests can answer oembed and Innertube with
+   * no network. Without a third parameter here, that call site could only have carried a NO-RETRY
+   * exemption — on the platform with this repo's highest measured egress refusal rate, and on the one
+   * call whose miss is permanent (an oembed miss leaves the post UNVOUCHED, so youtubeMeta then
+   * refuses to recover the date and the card renders 1 January 1970 forever).
+   *
+   * Pinned as a COUNT on the injected impl, because a version that quietly fell back to the global
+   * `fetch` would still return the right answer in production and would reach the live internet from
+   * every offline test in this repo.
+   */
+  const seen = []
+  const impl = async (url) => {
+    seen.push(String(url))
+    return new Response('x', { status: seen.length === 1 ? 503 : 200 })
+  }
+  const real = globalThis.fetch
+  globalThis.fetch = () => { throw new Error('askTwice reached the global fetch, not the injected one') }
+  try {
+    const res = await askTwice('https://example.test/a', undefined, impl)
+    assert.equal(res.status, 200)
+    assert.deepEqual(seen, ['https://example.test/a', 'https://example.test/a'])
+  } finally { globalThis.fetch = real }
+})
+
+test('A BARE NO-RETRY IS NOT AN EXEMPTION — the marker is a mute button, the reason is the decision',
+  () => {
+    /**
+     * The exemption rule is enforced by the lint below over real sources, so nothing there fails when
+     * the LENGTH test is deleted — every live exemption runs 250-280 characters and would pass a rule
+     * that only looked for the marker. This is the unit test of the rule itself.
+     *
+     * 40 characters is about one clause: not a bar for quality, just too long to be a shrug. This
+     * repo's history is mostly comments that stopped being true, so an exemption has to state a claim
+     * someone can later find wrong.
+     */
+    const exempt = (near) => (/NO-RETRY\b:?([\s\S]*)/.exec(near)?.[1] ?? '').replace(/\W+/g, ' ').trim().length >= 40
+    assert.equal(exempt('// NO-RETRY'), false, 'the marker alone exempts nothing')
+    assert.equal(exempt('// NO-RETRY: because'), false, 'and neither does a shrug')
+    assert.equal(exempt('// nothing here'), false, 'no marker at all is not an exemption')
+    assert.equal(
+      exempt('// NO-RETRY: a refusal here is a prompt 403, and worthAskingAgain reads 403 as an answer'),
+      true, 'a stated reason is')
+  })
+
 test('EVERY PLATFORM FETCH EITHER RETRIES OR SAYS WHY NOT — derived from the source, not a hand list',
   () => {
     /**
@@ -157,9 +203,27 @@ test('EVERY PLATFORM FETCH EITHER RETRIES OR SAYS WHY NOT — derived from the s
      *
      * A retry wired into fifteen files by hand has the same shape of problem: the sixteenth platform
      * gets written, nobody remembers, and its cards quietly start dying to blips that every other
-     * platform survives. So this reads the fetchers off disk and requires every raw `fetch(` in them
+     * platform survives. So this reads the fetchers off disk and requires every upstream call in them
      * to be a DECISION — either routed through askTwice, or carrying a NO-RETRY comment that says
      * why. It cannot pass by being forgotten.
+     *
+     * THE DETECTION IS DERIVED TOO, BECAUSE THE FIRST VERSION OF IT WAS FORGOTTEN THE SAME WAY. This
+     * test shipped in c025e5c (2026-08-28) matching the literal string `await fetch(`, and that is not
+     * how every fetcher here spells a fetch:
+     *
+     *   src/platforms/youtube/*.ts   `fetchImpl(...)`, an injected `typeof fetch` seam. Introduced by
+     *                                5b896b1 the DAY BEFORE this lint landed, when the oembed call
+     *                                went from `await fetch(url, …)` to `fetchImpl(url, …)`.
+     *   src/platforms/threads/*.ts   `fetch(url, …).then(…)` inside a Promise.all, no `await` on it.
+     *
+     * So the guard reached fifteen fetchers and zero YouTube files, on the platform with this repo's
+     * highest measured egress refusal rate (~40-50%, 09c7f01), and missed both halves of the Threads
+     * fallback. It reported nothing, which read exactly like coverage.
+     *
+     * What it matches now is derived per file: `fetch` itself, plus every identifier the file declares
+     * as `typeof fetch`. Still a text scan, so it is bounded honestly — a call split across a line
+     * break, or one made through a binding (`env.THING.fetch(…)`), would slip past. Neither exists in
+     * src/platforms today, and both would be a new spelling worth catching here when one does.
      */
     const dir = 'src/platforms'
     // EVERY .ts under src/platforms, not just the files named fetch.ts — a fetch that grows in a
@@ -171,15 +235,30 @@ test('EVERY PLATFORM FETCH EITHER RETRIES OR SAYS WHY NOT — derived from the s
 
     const unexplained = []
     for (const file of files) {
-      const lines = readFileSync(file, 'utf8').split('\n')
+      const src = readFileSync(file, 'utf8')
+      const lines = src.split('\n')
+      // The names that reach the network IN THIS FILE. Derived rather than hardcoded as `fetchImpl`,
+      // so the next rename of the seam is seen without anyone remembering to teach this test about it.
+      const aliases = new Set([...src.matchAll(/\b([A-Za-z_$][\w$]*)\s*:\s*typeof fetch\b/g)]
+        .map(m => m[1]))
+      // Not preceded by a dot or a word character: `fetchInnertube(`, `fetchRedditEmbed(` and the rest
+      // are this repo's OWN helpers, and a helper's own fetch is already caught where it is written.
+      const callsFetch = new RegExp(String.raw`(?<![.\w$])(?:${['fetch', ...aliases].join('|')})\s*\(`)
       lines.forEach((line, i) => {
-        if (!/\bawait fetch\(/.test(line)) return
+        // Prose mentioning `fetch()` is not a call site, and the docstrings around here are full of it.
+        if (/^\s*(\/\/|\/?\*)/.test(line)) return
+        if (!callsFetch.test(line)) return
         // A NO-RETRY marker anywhere in the preceding comment block is the exemption. Six lines is
         // enough for a paragraph explaining one, and short enough that it has to sit on the call.
         const near = lines.slice(Math.max(0, i - 6), i).join('\n')
-        if (!/NO-RETRY/.test(near)) unexplained.push(`${file}:${i + 1}  ${line.trim()}`)
+        // AND THE MARKER ALONE IS NOT THE EXEMPTION — the REASON is. A bare `// NO-RETRY` is a mute
+        // button, and this repo's history is mostly comments that stopped being true, so an exemption
+        // has to state a claim someone can later find wrong. 40 characters is about one clause: not a
+        // bar for quality, just too long to be a shrug. The two live exemptions run 250-280.
+        const reason = (/NO-RETRY\b:?([\s\S]*)/.exec(near)?.[1] ?? '').replace(/\W+/g, ' ').trim()
+        if (reason.length < 40) unexplained.push(`${file}:${i + 1}  ${line.trim()}`)
       })
     }
     assert.deepEqual(unexplained, [],
-      'every upstream fetch must go through askTwice or carry a NO-RETRY comment saying why not')
+      'every upstream fetch must go through askTwice, or carry a NO-RETRY comment stating why not')
   })

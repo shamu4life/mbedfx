@@ -242,12 +242,12 @@
     "schemas": {
       "PostEnvelope": {
         "type": "object",
-        "description": "A post that could be read. `muxing` and `pending` both mean the answer is incomplete but correct; neither is an error, both clear on their own, and both suppress caching. Re-ask a few seconds later and the finished answer is free, because the work behind each is still running.",
+        "description": "A post that could be read. `muxing` and `pending` both mean the answer is incomplete but correct; neither is an error, both clear on their own, and both suppress caching. Re-ask later and the finished answer is free, because the work behind each is still running: a translation for the 30 seconds `waitUntil` allows, a mux on a Durable Object alarm that wakes at 35 seconds, then two minutes, then twenty. A few seconds is right for a short video and not for a long one.",
         "properties": {
           "ok": { "const": true, "description": "The discriminator. `true` on this shape." },
           "muxing": {
             "type": "boolean",
-            "description": "A video is still being remuxed into the progressive MP4 this service serves, and what arrived is its poster still (`media[].still` is `true`). A re-request in a few seconds returns a `video`."
+            "description": "A video is still being remuxed into the progressive MP4 this service serves, and what arrived is its poster still (`media[].still` is `true`). A re-request once the mux lands returns a `video`; the retry schedule is 35s, then roughly two minutes, then twenty, so seconds is right for a short video and minutes for a long one."
           },
           "pending": {
             "type": "boolean",
@@ -340,7 +340,7 @@
           },
           "text": {
             "type": "string",
-            "description": "What the card shows, with the card's overlays composed in: a translation followed by a `Translated from …` marker and the original, an age note on a gated video, a `Too long to play here` note past the remux ceiling. `\"\"` when there is nothing to show. v1 has no field carrying the author's untouched words; splitting them out would be additive."
+            "description": "What the card shows, with the card's overlays composed in: a translation followed by a `Translated from …` marker and the original, an age note on a gated video, a `Too long to play here` note past the remux ceiling, a `Live stream, so no preview here` note on a streaming or scheduled broadcast. A card carries at most one of the last two. `\"\"` when there is nothing to show. v1 has no field carrying the author's untouched words; splitting them out would be additive."
           },
           "sensitive": {
             "type": "boolean",
@@ -413,7 +413,7 @@
           },
           "still": {
             "type": "boolean",
-            "description": "This picture is standing in for a video. Read it with the envelope's `muxing`: `still` false with `muxing` false is an ordinary picture; `still` true with `muxing` true means a video is still muxing, so ask again; `still` true with `muxing` false means a video exists that cannot be served, usually because it is longer than the remux ceiling, and that is final. Without this flag the last case is indistinguishable from a photograph except by reading the English in `text`."
+            "description": "This picture is standing in for a video. Read it with the envelope's `muxing`: `still` false with `muxing` false is an ordinary picture; `still` true with `muxing` true means a video is still muxing, so ask again; `still` true with `muxing` false means a video exists that cannot be served \u2014 it is longer than the remux ceiling, or it is a live or scheduled broadcast with no finished file behind it \u2014 and that is final for as long as this card is cached. Without this flag the last case is indistinguishable from a photograph except by reading the English in `text`."
           }
         },
         "required": ["kind", "url", "poster", "width", "height", "still"],

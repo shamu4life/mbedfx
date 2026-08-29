@@ -34,7 +34,7 @@ docker run -p 8080:8080 -e RESOLVER_SECRET="$(openssl rand -hex 32)" media-resol
 curl localhost:8080/health
 ```
 
-`container/server.py:350` checks `X-Resolver-Secret` only when `RESOLVER_SECRET` is set. Unset, that
+`container/server.py`'s `do_POST` checks `X-Resolver-Secret` only when `RESOLVER_SECRET` is set. Unset, that
 second command is an unauthenticated remuxer that fetches and downloads whatever any caller names.
 Do not publish it or bind it to a public interface.
 
@@ -67,7 +67,7 @@ module graph loads and executes under Node, and nothing more.
 
 ### The adapter entry point
 
-`env`, `ctx` and `Deps` are ordinary parameters of `handle()` at `src/worker.ts:3938`, and the
+`env`, `ctx` and `Deps` are ordinary parameters of `handle()` in `src/worker.ts`, and the
 Workers-specific default export is nine lines wrapped around it:
 
 ```ts
@@ -112,11 +112,14 @@ and a `fakeR2()` doing head / get / get-with-range / put over a `Map`
 
 Outside `Env`, `caches.default` is reached only through the hand-written `CacheLike` injected via
 `Deps` (`src/worker.ts`). `ExecutionContext` is
-used for `ctx.waitUntil` and nothing else, across nine call sites in `src/worker.ts`, with no
-`passThroughOnException`, `ctx.props` or `ctx.exports`. Nine is the count of invocations; a grep for
-`ctx.waitUntil` returns 13, five of which are prose inside comments, and the ninth invocation is the
-optional-chained `ctx?.waitUntil` at `src/worker.ts:2251` that the literal grep never matched. An
-earlier revision of this file printed that 13.
+used for `ctx.waitUntil` and nothing else, across FIFTEEN call sites in `src/worker.ts`, with no
+`passThroughOnException`, `ctx.props` or `ctx.exports`. Reproduce it with
+`grep -cE 'ctx\??\.waitUntil\(' src/worker.ts` — the `\??` matters, because one site is
+optional-chained and a literal grep for `ctx.waitUntil` misses it.
+
+**Do not trust this number without re-running that.** It has been wrong twice: an early revision
+printed 13 (the literal grep, comments included), a later one said nine, and the count has only gone
+up since — every mux the alarm arms and every response-cache write adds one.
 
 ### Workers-only globals
 
@@ -148,20 +151,23 @@ A Node port needs the same boundary: nothing on the request path may import that
 
 ### The container has no Cloudflare surface
 
-`container/server.py` is 430 lines and imports only the standard library (`ipaddress`, `json`, `os`,
-`socket`, `subprocess`, `tempfile`, `http.server`, `urllib.parse`). Lines `:428-430` are the whole
-entry point: `port = int(os.environ.get("PORT", "8080"))` under `if __name__ == "__main__":`, then
-`ThreadingHTTPServer(("0.0.0.0", port), Handler).serve_forever()`.
+`container/server.py` imports only the standard library (`ipaddress`, `json`, `os`, `socket`,
+`subprocess`, `tempfile`, `http.server`, `urllib.parse`). The last three lines are the whole entry
+point: `port = int(os.environ.get("PORT", "8080"))` under `if __name__ == "__main__":`, then
+`ThreadingHTTPServer(("0.0.0.0", port), Handler).serve_forever()`. A line count used to stand here
+and it was wrong by a third within a month, so the entry point is named rather than numbered.
 
 `container/Dockerfile` is `python:3.12-slim` plus ffmpeg, `yt-dlp[default,curl-cffi]` pinned to an
-exact NIGHTLY version and a static Deno binary, `EXPOSE 8080`, `CMD ["python", "server.py"]`. None of
+exact STABLE release and a static Deno binary, `EXPOSE 8080`, `CMD ["python", "server.py"]`. None of
 it needs porting.
 
 The yt-dlp version is deliberately not repeated here. It is bumped weekly by
 `.github/workflows/ytdlp-freshness.yml`, so a number written into this page would be wrong within
 days and would send self-hosters to a build that cannot play YouTube — read the pin off
 `container/Dockerfile`, which is the only place it lives. The Dockerfile explains why the channel is
-nightly rather than stable, and why the pin is exact rather than a floor. The
+stable rather than nightly (an owner decision, 2026-08-18), and why the pin is exact rather than a
+floor — reproducibility and a one-line revert, not Docker layer caching, which the 2026-08-29
+correction there retracts. The
 image has not been re-exercised outside Workers, though `server.py` itself has: it answered
 `/health`, enforced `X-Resolver-Secret` and refused every SSRF probe on a stock interpreter with no
 container at all, 2026-08-08 on macOS x86_64. `container/README.md` documents that path under
@@ -194,12 +200,19 @@ cover image (`src/worker.ts`).
 
 stderr is suppressed on failure; it can carry the source URL.
 
-**Environment** (`container/server.py:46-53`, `PORT` read once at `:429`): `PORT` (8080),
-`RESOLVER_SECRET` (unset = no auth), `MAX_SECONDS` (1500), `MAX_BYTES` (393216000, a 375 MB output
-ceiling), `PROC_TIMEOUT` (120 s per subprocess). `server.py` is authoritative whenever
+**Environment** (declared together at the top of `container/server.py`, `PORT` read once in the
+entry point): `PORT` (8080), `RESOLVER_SECRET` (unset = no auth), `MAX_SECONDS` (1500), `MAX_BYTES`
+(393216000, a 375 MB output ceiling), `PROC_TIMEOUT` (120 s, per subprocess EXCEPT the page mux) and
+`MUX_PAGE_TIMEOUT` (360 s, the `{page}` mux alone). `server.py` is authoritative whenever
 `container/README.md` disagrees, and the README has carried a stale pair before. `MAX_SECONDS` and
-`MAX_BYTES` were raised together on 2026-08-03 (`container/server.py:48`) and have to move together:
-the mux is `-c copy`, and output size is the source bitrate times the duration.
+`MAX_BYTES` were raised together on 2026-08-03 and have to move together: the mux is `-c copy`, and
+output size is the source bitrate times the duration.
+
+`MUX_PAGE_TIMEOUT` is the one most worth setting deliberately. It was `PROC_TIMEOUT + 60` (180 s)
+until 2026-08-29, which is less than the download a `MAX_SECONDS` video needs — so a long video was
+SIGKILLed with nothing written, on every attempt, forever. If your egress is slower than
+Cloudflare's, raise it or lower `MAX_SECONDS`; a video admitted and then killed is worse than one
+refused.
 
 **Security, already in the container** (docstring, `container/server.py`):
 
@@ -253,13 +266,13 @@ the failure is otherwise silent (`src/analytics.ts`).
 
 | Surface | Where it is declared | What the code calls | Replace with | Without it |
 |---|---|---|---|---|
-| `ASSETS` | `src/analytics.ts:184` | one call: `env.ASSETS.fetch(req)` (`src/worker.ts:3999`) | any static file server over `public/`, taking a `Request` and returning a `Response` | Required, about six lines of Node. Only the landing and converter pages touch it; both throw without it. |
-| `MEDIA_CACHE` (R2) | `src/analytics.ts:189` | `head(key)`, `get(key)`, `get(key, {range:{offset,length}})`, `put(key, stream\|ArrayBuffer\|string)`, and OPTIONALLY `putStream(key, stream, length\|null)` | any S3-compatible store, or a directory on disk. The test fake is a `Map` in 15 lines (`test/media-resolver.test.mjs`) | Optional. The mux is never cached: remux videos re-mux forever or get stripped, the card falls back to its cover still on every view, translations lose their cross-request cache, and yt-dlp metadata is re-extracted every time (2.4-3.1 s per Facebook video). Implement `putStream` if your store takes a stream. Without it, muxes are buffered in memory up to `MUX_BUFFER_MAX` and refused above it. |
-| `MEDIA_RESOLVER` (Durable Object) | `src/analytics.ts:188` | `resolver.getByName(name).fetch(url, init)` and nothing else | an object whose `getByName(name)` returns `{ fetch }` pointed at the container. The name is a pooling slot (`resolver-{generation}-{0..N}`), one container or several | Optional. Without it or without `MEDIA_CACHE`, `withResolver` strips every `remux` video and those platforms render a cover still (`src/worker.ts`). |
-| `AE` (Analytics Engine) | `src/analytics.ts:183` | one call: `env.AE?.writeDataPoint({ blobs: [platform, outcome, client], doubles: [1] })` (`src/analytics.ts`) | anything with a `writeDataPoint` method: a Prometheus counter, a StatsD client, a log line. The full schema is in `docs/METRICS.md` | Optional. Every card still renders, and the one signal that would report a refused egress is gone. |
-| `AI` (Workers AI) | `src/analytics.ts:195` | `ai.run(model, input)`, `FALLBACK_MODEL = '@cf/google/gemma-4-26b-a4b-it'` (`src/translate.ts:276`) | any model behind a `run(model, input)` shim | Optional. Translation falls back to Google's endpoint alone; if that is also refused from your egress, translation stops and every card renders untranslated. |
+| `ASSETS` | `Env`, `src/analytics.ts` | one call: `env.ASSETS.fetch(req)` (`src/worker.ts`) | any static file server over `public/`, taking a `Request` and returning a `Response` | Required, about six lines of Node. Only the landing and converter pages touch it; both throw without it. |
+| `MEDIA_CACHE` (R2) | `Env`, `src/analytics.ts` | `head(key)`, `get(key)`, `get(key, {range:{offset,length}})`, `put(key, stream\|ArrayBuffer\|string)`, and OPTIONALLY `putStream(key, stream, length\|null)` | any S3-compatible store, or a directory on disk. The test fake is a `Map` in 15 lines (`test/media-resolver.test.mjs`) | Optional. The mux is never cached: remux videos re-mux forever or get stripped, the card falls back to its cover still on every view, translations lose their cross-request cache, and yt-dlp metadata is re-extracted every time (2.4-3.1 s per Facebook video). Implement `putStream` if your store takes a stream. Without it, muxes are buffered in memory up to `MUX_BUFFER_MAX` and refused above it. |
+| `MEDIA_RESOLVER` (Durable Object) | `Env`, `src/analytics.ts` | `resolver.getByName(name).fetch(url, init)` and nothing else | an object whose `getByName(name)` returns `{ fetch }` pointed at the container. The name is a pooling slot (`resolver-{RESOLVER_GENERATION}-{0..N}` — that string names the instances and nothing stored; `META_GENERATION` is the one that scopes cached records), one container or several | Optional. Without it or without `MEDIA_CACHE`, `withResolver` strips every `remux` video and those platforms render a cover still (`src/worker.ts`). |
+| `AE` (Analytics Engine) | `Env`, `src/analytics.ts` | one call: `env.AE?.writeDataPoint({ blobs: [platform, outcome, client], doubles: [1] })` (`src/analytics.ts`) | anything with a `writeDataPoint` method: a Prometheus counter, a StatsD client, a log line. The full schema is in `docs/METRICS.md` | Optional. Every card still renders, and the one signal that would report a refused egress is gone. |
+| `AI` (Workers AI) | `Env`, `src/analytics.ts` | `ai.run(model, input)`, `FALLBACK_MODEL = '@cf/google/gemma-4-26b-a4b-it'` (`src/translate.ts:276`) | any model behind a `run(model, input)` shim | Optional. Translation falls back to Google's endpoint alone; if that is also refused from your egress, translation stops and every card renders untranslated. |
 | `caches.default` | `src/worker.ts`, behind `CacheLike` (`src/worker.ts`) | `match(url)` / `put(url, Response)` with a synthetic `https://cache.mbedfx.internal/…` key (`src/cache.ts`) | a `Map` (what the tests use), Redis, or a disk cache. **Not** a per-process `Map` across more than one process. The five promises an implementation makes (honour `cache-control: max-age`, hand back a readable body, be shared across processes, never reject, key on the exact string) are the `CacheLike` docstring in `src/worker.ts`; `test/selfhost.test.mjs` fails if the worker starts calling a third method | Required by the type, trivial to satisfy. With a weak one, every paste refetches upstream, and Discord fetches roughly three times per paste (`src/worker.ts`). Cloudflare's Cache API is itself only per-datacenter: a self-hosted shared cache is arguably better than what the public instance has ([Cloudflare docs: "the contents of the cache do not replicate outside of the originating data center"](https://developers.cloudflare.com/workers/runtime-apis/cache/)). |
-| `ExecutionContext` | parameter of `handle` | `ctx.waitUntil(p)` only, nine sites in `src/worker.ts` | `{ waitUntil(p) { … } }` that tracks the promise and keeps the process alive until it settles | Required. `waitUntil` is what releases in-flight container slots, keeps a mux running past the response, and writes the response cache. A no-op silently cancels all three, and the symptom is "videos never appear". |
+| `ExecutionContext` | parameter of `handle` | `ctx.waitUntil(p)` only, fifteen sites in `src/worker.ts` | `{ waitUntil(p) { … } }` that tracks the promise and keeps the process alive until it settles | Required. `waitUntil` is what releases in-flight container slots, keeps a mux running past the response, and writes the response cache. A no-op silently cancels all three, and the symptom is "videos never appear". |
 | `OWN_HOSTS` | `src/analytics.ts` | added to the built-in own-zone list in `src/platforms/fedihost.ts` | every domain you serve from, comma- or whitespace-separated, hostname or origin | **Set it.** Unset, the fediverse routes will fetch your own domain if somebody asks them to. Additive, so a wrong value can only make the guard stricter. |
 | `RESOLVE_HOST` | `src/analytics.ts` | `blockedResolvedHost` in `src/netguard.ts`, before every fediverse fetch | `async (host) => (await dns.lookup(host, { all: true })).map(a => a.address)` | Optional, strongly recommended off Cloudflare. Without it the address guard is literal-only, which is all a Worker can ever do, so `evil.example.com IN A 127.0.0.1` is not caught. |
 | `MUX_BUFFER_MAX` | `src/analytics.ts` | `putMuxed` in `src/worker.ts` | bytes, as a string. Default 64 MB | Optional. Raise it if you have memory and no `putStream`; a video above it is not cached and its card degrades to the cover still. |
@@ -267,7 +280,7 @@ the failure is otherwise silent (`src/analytics.ts`).
 
 Secrets are plain strings on `Env` and map straight onto environment variables: `RESOLVER_SECRET`,
 `IMGUR_CLIENT_ID`, `TRANSLATE_GOOGLE`, `IG_GRAPHQL_DOC_ID`, `X_ACCOUNTS`, `IG_ACCOUNTS`,
-`YT_ACCOUNTS`, `REDDIT_CLIENT_ID`, `REDDIT_CLIENT_SECRET` (`src/analytics.ts:199-316`). A Worker
+`YT_ACCOUNTS`, `REDDIT_CLIENT_ID`, `REDDIT_CLIENT_SECRET` (all on `Env` in `src/analytics.ts`). A Worker
 secret is encrypted at rest and never on disk (`src/analytics.ts`). On a self-hosted box the same
 values sit in a plain file, the threat model FxEmbed's encrypted-bundle design was answering. Fill
 `IG_ACCOUNTS` or `YT_ACCOUNTS` and you take that trade-off on.

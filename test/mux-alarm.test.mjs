@@ -251,8 +251,13 @@ test('THE FIRST ATTEMPT WAITS FOR THE RIGHT CEILING — 35s is wrong for a sourc
 })
 
 test('THE HORIZON IS STATED, so nobody has to add the constants up to know what a reader is promised', () => {
-  // Quoted for the SLOWEST shape — the tracks path, whose first attempt waits out the container's own
-  // 120s wall rather than waitUntil's 30s. A {page} source's horizon is 105s shorter.
+  /**
+   * IT SUMS THE WAITS AND NOT THE ATTEMPTS, which is what the constant has always done and what its
+   * docstring now says out loud. The comment here used to read "quoted for the SLOWEST shape — the
+   * tracks path … a {page} source's horizon is 105s shorter", and both halves went false on
+   * 2026-08-29 when container/server.py's page mux got its own 360s wall: the page shape is now the
+   * slowest, by ~975s of real wall clock, none of which is in this number.
+   */
   assert.equal(MUX_TOTAL_HORIZON_MS, MUX_FIRST_ATTEMPT_TRACKS_MS + MUX_RETRY_MS.reduce((a, b) => a + b, 0))
   // ~22 minutes. Long enough to outlast a throttle, short enough that a hard gate is established
   // quickly rather than proved all afternoon.

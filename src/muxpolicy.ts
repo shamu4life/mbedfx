@@ -46,6 +46,39 @@ export const MUX_FIRST_ATTEMPT_MS = 35_000
 export const MUX_FIRST_ATTEMPT_TRACKS_MS = 140_000
 
 /**
+ * container/server.py's `MUX_PAGE_TIMEOUT`, MIRRORED — the wall a `{page}` mux actually runs to, and
+ * the reason this file no longer holds the slowest first attempt.
+ *
+ * A MIRROR, NOT A DERIVATION, and there is precedent for both halves of that. The container is
+ * reached over a binding rather than imported, so no build step can share the number and nothing but
+ * a test can make the two agree — exactly the situation `MAX_SECONDS` / `MUX_MAX_SECONDS` is already
+ * in, and test/smoke.test.mjs is what keeps that pair honest. test/preview-mux-watch.test.mjs does
+ * the same for this one, parsing `container/server.py` and comparing.
+ *
+ * WHY IT IS HERE RATHER THAN AT ITS ONE READER. public/index.html mirrors the SUM below and cannot
+ * import anything (it ships as one hand-written page with no build step), so the alternative is a
+ * literal in the page derived from a literal in Python with nothing in between. That is the shape of
+ * the defect the deadline constants argue about at length.
+ */
+export const MUX_PAGE_WALL_MS = 360_000
+
+/**
+ * WHEN A `{page}` FIRST ATTEMPT HAS CERTAINLY ENDED: the alarm's own delay, plus the container wall
+ * the work it starts then runs to. 395s.
+ *
+ * THE `{page}` SHAPE IS NOW THE SLOWEST, and it was not when MUX_FIRST_ATTEMPT_TRACKS_MS was written.
+ * That constant's 140s came from PROC_TIMEOUT (120) because the tracks ffmpeg was the longest thing
+ * the container did. Splitting MUX_PAGE_TIMEOUT out at 360s (2026-08-29) inverted it: a page mux now
+ * runs nearly three times as long as a tracks mux, and every YouTube link is a page source
+ * (src/platforms/youtube/normalize.ts hardcodes `remux: { page }`).
+ *
+ * NOT USED BY THE ALARM. `firstMuxDelayMs` is when the alarm FIRES, which is still 35s for a page
+ * source — the moment its inline waitUntil attempt stops existing. This is when the work that alarm
+ * starts is finally walled, which is a different question and is only asked by things that watch.
+ */
+export const MUX_FIRST_ATTEMPT_PAGE_TOTAL_MS = MUX_FIRST_ATTEMPT_MS + MUX_PAGE_WALL_MS
+
+/**
  * How long after arming the first attempt should fire, given the source that will be muxed.
  *
  * ONE FUNCTION SO THE CHOICE IS MADE ONCE. The two constants above are each derived from a DIFFERENT
@@ -72,6 +105,20 @@ export function firstMuxDelayMs(hasPage: boolean): number {
  * THE DELAYS ARE SHAPED BY WHAT ACTUALLY FAILS. A cold container (503) heals in seconds; a throttled
  * download heals in minutes if the throttle lifts; a hard gate never heals, and three attempts is
  * enough to establish that without spending the afternoon proving it.
+ *
+ * WHAT THE 360s PAGE WALL DID TO THIS COST, written down 2026-08-29 because the count did not change
+ * and the price did. The delay is applied AFTER an attempt resolves (src/muxrunner.ts), so a longer
+ * wall creates no double-mux hazard and needs no companion change here — but a permanently-failing
+ * `{page}` video now burns 3 x 360s of container time instead of 3 x 180s: 1080 slot-seconds out of
+ * RESOLVER_SLOTS (4), or eighteen minutes of one slot, and ~41 minutes of wall clock end to end.
+ *
+ * DROPPING THE THIRD ATTEMPT (`[120_000]`) IS THE OBVIOUS ANSWER AND IT IS NOT TAKEN HERE. The
+ * argument for it is real: a 360s attempt that fails is much stronger evidence of a hard gate than a
+ * 180s one was, since 180s could fail on the wall alone; and the third attempt lands ~34 minutes
+ * after the paste, long after Discord froze the embed and after the converter page stopped watching,
+ * so its only remaining value is warming R2 for the next reader — which attempt two already delivers
+ * at ~15 minutes. What is missing is a measurement of how often attempt three is the one that lands,
+ * and this change had none. Cutting it is a separate decision with its own number to take first.
  */
 export const MUX_RETRY_MS: readonly number[] = [120_000, 1_200_000]
 
@@ -91,8 +138,21 @@ export function nextMuxDelayMs(spent: number): number | null {
 /**
  * The horizon a reader is promised: one paste, and we keep trying for this long before giving up.
  *
- * STATED FOR THE SLOWEST SHAPE, not the common one. A `{page}` source's horizon is 105s shorter; this
- * is the number to quote when the question is "how long before we have definitely stopped".
+ * IT SUMS THE WAITS, NOT THE ATTEMPTS, and that has always been true — it just used to be close
+ * enough not to matter. The attempts themselves are up to 360s each on a `{page}` source and 120s on
+ * `{video}` tracks, none of which is in this number: the real page-shape wall clock is
+ * 35 + 360 + 120 + 360 + 1200 + 360 ≈ 2435s (~41 min) against the 1460s stated here.
+ *
+ * SO IT IS A LOWER BOUND, and the sentence it used to carry — "stated for the slowest shape, a
+ * `{page}` source's horizon is 105s shorter" — is now backwards twice over. The page shape is the
+ * SLOWEST since MUX_PAGE_WALL_MS split out at 360s (2026-08-29), and it is ~975s longer, not 105s
+ * shorter. Read this as "the alarm has certainly stopped scheduling by now"; for "how long could one
+ * paste hold container time", add the attempts.
+ *
+ * NOT REDEFINED TO THE TRUE WALL CLOCK, deliberately: the two readers of this constant (the alarm
+ * test, and the converter page's window sanity check) both want "when do we stop trying", and
+ * changing the meaning underneath them to make one docstring shorter is how a number silently starts
+ * answering a different question.
  */
 export const MUX_TOTAL_HORIZON_MS =
   MUX_FIRST_ATTEMPT_TRACKS_MS + MUX_RETRY_MS.reduce((a, b) => a + b, 0)

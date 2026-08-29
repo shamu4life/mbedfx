@@ -1,7 +1,8 @@
 # media-resolver — the mbedfx remux/resolve container (ffmpeg + yt-dlp).
 # Debian slim over Alpine deliberately: ffmpeg and yt-dlp are far better exercised on glibc, and this
-# is a media tool where robustness beats image size. yt-dlp comes from pip (not apt) so it stays
-# current — YouTube in particular needs frequent yt-dlp updates; rebuild the image to pick them up.
+# is a media tool where robustness beats image size. yt-dlp comes from pip (not apt) because apt's
+# copy lags releases badly and YouTube needs frequent yt-dlp updates. It is PINNED below, so a
+# rebuild does NOT pick up a newer one: the version moves only when the pin moves.
 FROM python:3.12-slim
 
 RUN apt-get update \
@@ -22,23 +23,51 @@ RUN curl -fsSL https://github.com/denoland/deno/releases/latest/download/deno-x8
 # yt-dlp auto-uses it for extractors that request impersonation. YouTube does not need it (Deno covers
 # that), so it is a long-tail robustness dep, not a YouTube one.
 # PINNED EXACTLY, AND BUMPED WEEKLY by .github/workflows/ytdlp-freshness.yml. The `>=2025.1.1` that
-# stood here read like "always current" and did the opposite. It is a FLOOR, not a target: pip
-# resolves it once, at the moment this layer is first built, and Docker then reuses that layer on
-# every later build because the instruction text never changed. The version therefore froze at
-# whatever was newest the day the image was first built and never moved again — and because nothing
-# records or reports it, NOBODY COULD TELL WHICH VERSION WAS RUNNING.
+# stood here read like "always current" and bought nothing. It is a FLOOR, not a target: pip picks
+# whatever satisfies it at build time, and NOTHING ANYWHERE RECORDED WHAT THAT WAS — not the repo,
+# not a commit, not a build log. NOBODY COULD TELL WHICH VERSION WAS RUNNING.
 #
-# WHAT THAT COST, measured 2026-08-17: every NEW YouTube video on the site was a thumbnail with no
-# player, while older ones kept playing from the R2 cache. Metadata was fine — title, channel, upload
-# date, view and like counts all correct — because the metadata call passes
+# THE ORIGINAL ARGUMENT FOR THE PIN CITED DOCKER LAYER CACHING — a floor resolves once, Docker reuses
+# the layer forever because the instruction text never changes, so the version freezes — AND THAT IS
+# NOT HOW THIS IMAGE IS BUILT. There is no machine holding this repo's previous layers. Every merge
+# to main runs `wrangler deploy` in a Cloudflare Workers Builds runner off a fresh clone at
+# `/opt/buildhome/repo`, and this repo's own build logs report `Image does not exist remotely,
+# pushing:` on that build — a from-scratch build and a new digest each time (container/README.md
+# quotes the log). So a floor here would not freeze, it would FLOAT: each merge silently installs
+# whatever pip resolves that day, two builds of one commit can ship different yt-dlp, and a release
+# that breaks a platform arrives with no commit to revert.
+#
+# THE PIN IS STILL RIGHT, for the two reasons that survive the correction. The image is
+# REPRODUCIBLE — a commit names exactly one yt-dlp, so "which version ran when that card broke" is
+# answerable from the repo alone. And it is ROLLBACK-ABLE — a bad release is one one-line revert
+# away instead of something to wait out. Both were unavailable under the floor, and the second is
+# what matters most here: ONE binary serves six platforms (see below).
+#
+# WHAT THE MISSING RECORD COST, 2026-08-17: every NEW YouTube video on the site was a thumbnail with
+# no player, while older ones kept playing from the R2 cache. Metadata was fine — title, channel,
+# upload date, view and like counts all correct — because the metadata call passes
 # `--ignore-no-formats-error` (see server.py, where it is what makes an age-gated video render at
 # all). So YouTube withheld the FORMATS, the meta call papered over it, and the mux had nothing to
 # select. Reproduced locally by forcing a client YouTube gates: `-J` returns a complete metadata
 # object while the same selector fails "Requested format is not available".
 #
-# AN EXACT PIN IS WHAT MAKES THE WEEKLY BUMP WORK, and the two are one mechanism rather than two
-# ideas: changing this string is what invalidates the layer, so the pin is not bureaucracy around the
-# update, it IS the update. It also makes the running version answerable from the repo alone.
+# THE FLOOR DID NOT CAUSE THAT OUTAGE, and this paragraph used to imply it did. The version running
+# was 2026.7.4 — the newest STABLE at the time, and what this pin first named, so the pin changed
+# nothing about what was installed. The cause was that release's DEFAULT player clients: YouTube
+# began enforcing GVS PO tokens on `android_vr` about two weeks after 2026.7.4 shipped, and
+# googlevideo answered the format urls it handed back with 403. The fix was container/server.py
+# naming `player_client=web_embedded,tv_simply,mweb`, not a version bump. See the 2026-08-17 "Fixed"
+# entry in docs/CHANGELOG.md. What the floor cost was the DIAGNOSIS: with no record of the installed
+# version, "is yt-dlp simply stale?" could be neither confirmed nor ruled out, and it was the first
+# thing everybody asked.
+#
+# AN EXACT PIN IS ALSO WHAT GIVES THE WEEKLY BUMP SOMETHING TO DO — not because rewriting the string
+# invalidates a layer (there is no cached layer to invalidate), but because the pin is the only place
+# the version is written down. Bumping it is therefore a reviewable one-line commit with a date on
+# it. Under the floor the job had nothing to compare against and nothing to change. Note what that
+# review does NOT include: CI never installs yt-dlp (ci.yml runs the suites with no network and no
+# container) and a branch build ships the Worker alone, so the new release is unexercised until the
+# merge — which is exactly why the revert has to be one line.
 #
 # STABLE RELEASES ONLY. THIS IS A DECISION, NOT AN OVERSIGHT — owner, 2026-08-18: "nightly is not
 # acceptable for the pipeline releases only." Nightlies are not release-tested, and ONE binary here
@@ -94,7 +123,8 @@ RUN curl -fsSL https://github.com/denoland/deno/releases/latest/download/deno-x8
 # container in the same second.
 #
 # yt-dlp[default,curl-cffi] — the extras are unchanged and argued above. Do not relax this to a
-# floor again; a floor here is indistinguishable from a pin that never moves.
+# floor again: a floor makes the running version unrecorded and un-revertable, which is the state the
+# 2026-08 diagnosis had to work around.
 RUN pip install --no-cache-dir "yt-dlp[default,curl-cffi]==2026.8.19"
 
 WORKDIR /app

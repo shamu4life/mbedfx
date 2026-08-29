@@ -9,7 +9,7 @@ plays inline.
 - UI: `public/index.html`, one file of hand-written vanilla JS and CSS. Its visible copy carries no
   em dashes and no second person. The owner asked for that, later edits re-broke it within a day,
   and a test now asserts it.
-- Version: 1.11.0 (`package.json` is authoritative; this line has been stale before).
+- Version: 1.12.0 (`package.json` is authoritative; this line has been stale before).
 
 ## What gets a PR sent back
 
@@ -62,13 +62,25 @@ plays inline.
   `Route` union out of `src/types.ts` and fails on an unlisted kind. Until the refkey tests derive
   their list the same way, treat the allowlist as unguarded.
 - A cache key has to capture what produced the answer. The translation cache was keyed on the post
-  text alone, so changing the model couldn't invalidate a stale answer. Hence `XLATE_GENERATION` and
-  `RESOLVER_GENERATION`. Bump them when the engine, prompt or stored shape changes.
+  text alone, so changing the model couldn't invalidate a stale answer. Hence `XLATE_GENERATION`,
+  `META_GENERATION` and `RESOLVER_GENERATION`. Bump `XLATE_GENERATION` when the engine or prompt
+  changes, `META_GENERATION` when a stored record's shape or meaning changes, `RESOLVER_GENERATION`
+  to force pooled container instances onto a new image. The last two were one string until
+  2026-08-29; splitting them made UNDER-invalidation possible for the first time, and that is the
+  worse direction, so when it is unclear, bump `META_GENERATION`.
+- And a TTL has to match how long the answer stays true, not how long it is convenient to keep.
+  YouTube meta records hold for 30 days because an upload date cannot change — then one mutable
+  field (`isLive`) moved in and a finished broadcast kept saying "live" for a month. `YT_LIVE_TTL_MS`
+  is the fix and the shape to copy: expire on the record's content, not on one number for the file.
 - A degraded card must not be response-cached. A video still muxing renders its cover image, and
   caching that means the real video never appears. Same for a translation that lost its race.
 - Every deadline is a budget on the whole response, not on one step of it. `META_WAIT_API_MS` sat at
   4000 while the extract it waited for took 2.3 to 6.7s. First pastes rendered the epoch and
-  self-healed on the second view, which is why the defect survived so long.
+  self-healed on the second view, which is why the defect survived so long. The activity route's
+  three per-arm budgets (`YT_MUX_BOT_MS`, `YT_META_BOT_MS`, `MUX_WAIT_BOT_MS`) are not that mistake
+  and the difference is why: they race in one `Promise.all`, so the response still ends at the
+  slowest of them, and the number that has to stay under Discord's tolerance is the max, not the sum.
+  `test/card-muxing.test.mjs` asserts that.
 - The converter preview is a third seam. Two of the lessons above assume a next render: the
   uncached degraded card, and the translation that lands in R2 for the next reader. `/_card` is
   fetched once per typing-settle and drawn, and nobody re-pastes to heal it. When you fix a head,

@@ -377,6 +377,26 @@ export type Media = {
    */
   remux?: { video?: string; audio?: string; page?: string }
   /**
+   * "THERE IS NO FINISHED FILE BEHIND THIS `remux` — IT IS STILL BEING BROADCAST, OR HAS NOT STARTED."
+   *
+   * The sibling of `duration` for settleMux's refusals, and it exists because duration cannot express
+   * this state: an unfinished broadcast reports a length of ZERO, so it is not over any ceiling and
+   * the over-ceiling arm waved it through. The container then refuses it on its own
+   * `--match-filter "duration<?1500 & !is_live"`, the card degrades, a degraded card is not cached,
+   * and the whole 1.7s round trip repeats on every render forever — measured on yt:xDWQ3LkccY8 (Sky
+   * News, permanently live), which sat pinned at `muxing: true` and never cached.
+   *
+   * PERSISTED, unlike `posterOnly`: it is set by the normalizer, so it rides the post cache and the
+   * next render refuses the mux without asking anything. That also bounds how wrong it can be — a
+   * stream that ends is re-fetched at POST_TTL and the fresh verdict wins (see worker.ts's yt arm).
+   *
+   * Only ever set on a video that still carries its `remux`. settleMux's degrade carries it onto the
+   * still (worker.ts's stillOf) so a later overlay can still see WHY that entry is a picture;
+   * withResolver's does not, and does not need to — with no container bound there is no mux to
+   * refuse, and the note is already in `text` by then.
+   */
+  live?: true
+  /**
    * "THIS ENTRY'S BYTES ARE AT /_media/{refKey}/poster{i} — NOT AT /_media/{refKey}/{i}."
    *
    * Set by exactly ONE line: settleMux's DEADLINE degrade, which turns a `{page}` remux VIDEO into
@@ -427,16 +447,18 @@ export type Media = {
  * WHY THIS TYPE EXISTS AT ALL — the defect it closes, measured 2026-08-23. Every mux was dispatched
  * through `ctx.waitUntil`, and Cloudflare documents that as a HARD 30-SECOND ceiling, shared across
  * every `waitUntil` in the same request: "If any Promises have not settled after 30 seconds, they are
- * canceled." The container is allowed 180s (PROC_TIMEOUT + 60) and the duration filter admits 1500s
- * of video, so there were THREE ceilings and only the smallest was ever real. Worse, a cancelled
+ * canceled." The container was allowed 180s then (PROC_TIMEOUT + 60; it is MUX_PAGE_TIMEOUT = 360s
+ * now, split out 2026-08-29 once the alarm made that wall reachable at all) and the duration filter
+ * admits 1500s of video, so there were THREE ceilings and only the smallest was ever real. A cancelled
  * attempt left NOTHING behind — the container buffers the whole file before sending a byte, and it
  * writes to a fresh `mkstemp` with `--force-overwrites` — so every re-paste restarted at byte zero.
  * That is the reported "a 10-minute video took nearly ten minutes to warm": a repeated 30-second
  * lottery, throwing away 100% of its bytes on every losing roll.
  *
  * A Durable Object alarm handler gets 15 MINUTES (Cloudflare's documented limit, the same as a cron
- * trigger and a queue consumer), which is 30x the old budget and comfortably past the container's own
- * 180s wall. This is what crosses that boundary, so it must be plain JSON.
+ * trigger and a queue consumer), which is 30x the old budget and still past the container's own
+ * page-mux wall — 180s when this was written, MUX_PAGE_TIMEOUT (360s) now, so the margin went from
+ * 5x to 2.5x. This is what crosses that boundary, so it must be plain JSON.
  *
  * NO CREDENTIAL AND NO PLATFORM RIDE HERE, deliberately. Both are re-derived from `slotKey` at the
  * far end (parseRefKey, then jarPlatform), because a cookie jar serialized into Durable Object

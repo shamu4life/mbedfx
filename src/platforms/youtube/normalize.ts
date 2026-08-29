@@ -161,6 +161,17 @@ export function withUploadDate(post: Post, ts: unknown): Post {
  * NON-DESTRUCTIVE AND TOTAL, matching withUploadDate's contract: never overwrites a body that
  * already has one (the age note gets there first and must keep the top), returns the same reference
  * when there is nothing to add, and never throws on junk.
+ *
+ * A BARE LIVE NOTE IS NOT A BODY, corrected 2026-08-29 in the same review that scoped the notes to
+ * this platform. LIVE_NOTE is unlike the age note in one way that matters here: it is applied at
+ * BUILD TIME, inside normalizeYouTube, because Innertube answers the liveness question before the
+ * Post exists. So by the time this seam runs, `text` is non-empty on every broadcast and a warm
+ * record's description was refused. Reachable on /_card and /_api/v1, where describeTarget falls
+ * back to readCachedMeta and supplies a description even though youtubeMeta declined to run.
+ *
+ * THE AGE NOTE IS DELIBERATELY NOT TREATED THIS WAY. That one is a decision about what to show, not
+ * an ordering accident: an age-restricted video has no description worth putting under it, which is
+ * what the rule below has always said.
  */
 export function withDescription(post: Post, description: unknown): Post {
   if (!post) return post
@@ -168,10 +179,9 @@ export function withDescription(post: Post, description: unknown): Post {
   const add = description.trim()
   if (!add) return post
   const cur = typeof post.text === 'string' ? post.text : ''
-  // A body already present wins. The only writer that gets in first is the age note, and an
-  // age-restricted video has no description worth showing under it.
-  if (cur) return post
-  return { ...post, text: add }
+  // A body already present wins. The only writers that get in first are the two notes above.
+  if (cur && cur !== LIVE_NOTE) return post
+  return { ...post, text: cur ? `${cur}\n\n${add}` : add }
 }
 
 /**
@@ -189,6 +199,106 @@ export function withDescription(post: Post, description: unknown): Post {
  * short post can afford is not a note.
  */
 export const LENGTH_NOTE = '🎬 Too long to play here. Open it on YouTube'
+
+/**
+ * THE NOTE FOR A BROADCAST WITH NO FINISHED FILE, and the flag that stops the mux being dispatched.
+ *
+ * The same two jobs as the length note, for the case the length note structurally cannot cover: a
+ * live or scheduled stream reports `lengthSeconds: '0'`, so there is no duration to be over the
+ * ceiling and settleMux's over-ceiling arm waved every one of them through to a container that
+ * refuses them on `!is_live`. Measured on yt:xDWQ3LkccY8 (Sky News, permanently live): pinned at
+ * `muxing: true`, ~1.7s of container round trip per render, never cached, forever. News channels
+ * post these constantly.
+ *
+ * PREPENDED AND IDEMPOTENT, the same contract as the age and length notes: the cap trims the END, so
+ * a note only a short post can afford is not a note, and a second application must not double it.
+ *
+ * "STREAM" RATHER THAN "LIVE NOW", deliberately. The card is cached for POST_TTL and Discord keeps
+ * the embed it got forever, so a note that asserts the present tense is wrong the moment the
+ * broadcast ends. This one stays true for an ended stream too — it just stops being applied.
+ */
+export const LIVE_NOTE = '🔴 Live stream, so no preview here. Open it on YouTube'
+
+/**
+ * A DURATION WE WILL ACT ON: finite, positive, seconds. One predicate, because the value crosses R2
+ * and a corrupt record must be ignored identically wherever it is read.
+ */
+function usableDuration(d: unknown): d is number {
+  return typeof d === 'number' && Number.isFinite(d) && d > 0
+}
+
+/**
+ * IS THIS OUR POST AT ALL — the guard the two note overlays below could do without until they grew a
+ * source of truth that is not their argument.
+ *
+ * THE DEFECT, found in review 2026-08-29 and reproduced end to end. Both notes name YouTube in their
+ * text, and both are applied at the activity seam (worker.ts's 'activity'/'oembed' callback), which
+ * is NOT platform-scoped — describeTarget's `if (post.ref.p === 'yt')` has no twin there. That was
+ * harmless while the only supply was `meta?.duration` / `meta?.isLive`, because youtubeMeta returns
+ * null for every other platform, so both overlays were no-ops on a non-yt post by accident. Adding
+ * the media fallbacks turned the accident into a bug: `Media.duration` is written by dm/st/im (the
+ * yt-dlp tier), pt, tw, ig, fb and mastoapi, so
+ *
+ *     GET /users/anyone/statuses/{dm:x9abcde}   ->  "🎬 Too long to play here. Open it on YouTube"
+ *
+ * on a 4830s Dailymotion video — measured through the real dispatcher, and frozen in the message by
+ * Discord forever. The live note has the same reach and is safe today only because nothing but
+ * normalizeYouTube writes `Media.live`.
+ *
+ * GUARDED IN THE FUNCTIONS, NOT AT THE CALL SITE, because the accident is what a call-site guard
+ * restores: it protects the two seams that exist and nothing about the third. These live in a
+ * YouTube module and say "YouTube" in their output; refusing a post from another platform is their
+ * contract, not their caller's.
+ */
+const isYouTube = (post: Post): boolean => post.ref?.p === 'yt'
+
+/**
+ * THE LENGTH THIS POST ALREADY KNOWS, off its own media, or undefined.
+ *
+ * THE READ IS DELIBERATELY BROADER THAN withMuxDuration's WRITE, and that is not a second spelling of
+ * "which entries carry a duration" — it is the only question worth asking here. The stamp goes on the
+ * `remux` entry, but by the time withLengthNote runs, settleMux has already replaced that entry with
+ * its poster still on exactly the videos this matters for (worker.ts's stillOf, on the over-ceiling
+ * arm): same item, same length, no `remux`. A reader that re-spelled the write predicate would
+ * therefore find nothing in the one case it exists for.
+ */
+function mediaDuration(post: Post): number | undefined {
+  const media = Array.isArray(post.media) ? post.media : []
+  for (const m of media) if (usableDuration(m?.duration)) return m.duration
+  return undefined
+}
+
+/**
+ * DOES THIS POST'S OWN MEDIA SAY IT IS A BROADCAST — the live twin of mediaDuration, and it exists
+ * for the identical reason, so read that one first. The overlay seams are handed `meta?.isLive`, and
+ * the meta call is correctly SKIPPED on the common path (the post already carries a date), so the
+ * argument is undefined exactly when the note is needed. The flag is on the entry either way:
+ * normalizeYouTube stamps it, and settleMux's live arm carries it onto the still.
+ */
+function mediaLive(post: Post): boolean {
+  const media = Array.isArray(post.media) ? post.media : []
+  return media.some(m => m?.live === true)
+}
+
+/**
+ * Overlay the live note onto an already-built Post — the seam for a verdict that arrives after the
+ * Post was built, exactly as withAgeNote is for the age gate.
+ *
+ * A `false` ARGUMENT DOES NOT UN-MARK A POST, and that is not laziness about the third value. The
+ * media flag is what settleMux acted on THIS render: if the entry is a still because of it, the card
+ * must say why, or it is the silent blank rectangle this project promises not to ship. The fresh
+ * negative does its work one step earlier — in the yt arm, where it decides what gets stamped on the
+ * next fetch — and the post cache bounds how long the two can disagree.
+ */
+export function withLiveNote(post: Post, isLive: unknown): Post {
+  if (!post) return post
+  // See isYouTube: this note names YouTube and the seam that applies it is not platform-scoped.
+  if (!isYouTube(post)) return post
+  if (isLive !== true && !mediaLive(post)) return post
+  const cur = typeof post.text === 'string' ? post.text : ''
+  if (cur.includes(LIVE_NOTE)) return post
+  return { ...post, text: cur ? `${LIVE_NOTE}\n\n${cur}` : LIVE_NOTE }
+}
 
 /**
  * THE DURATION, STAMPED ON THE REMUX ENTRY AND NOTHING ELSE — split out of withLengthNote so the
@@ -210,22 +320,53 @@ export const LENGTH_NOTE = '🎬 Too long to play here. Open it on YouTube'
  */
 export function withMuxDuration(post: Post, duration: unknown): Post {
   if (!post) return post
-  if (typeof duration !== 'number' || !Number.isFinite(duration) || duration <= 0) return post
+  if (!usableDuration(duration)) return post
   const media = Array.isArray(post.media) ? post.media : []
   return { ...post, media: media.map(m => (m && m.remux ? { ...m, duration } : m)) }
 }
 
+/**
+ * THE ARGUMENT IS NO LONGER THE ONLY SUPPLY, and until 2026-08-29 it was — which made the note
+ * unreachable on the path most pastes take.
+ *
+ * Both call sites pass `meta?.duration`, and youtubeMeta returns null as soon as the post already
+ * carries a real date. Since the Innertube source landed (#61-#64) that is the COMMON case: the date
+ * arrives at fetch time, the meta call is correctly skipped, and the note therefore never fired at
+ * all. Not a rare miss — the ordinary path.
+ *
+ * The duration is not missing in that state, only somewhere else: liveFetchPost's yt arm stamps it
+ * onto the remux entry with withMuxDuration (`warm?.duration ?? got.duration`) before the post is
+ * ever cached. So the fallback reads it back off the media — see mediaDuration for why the read is
+ * not the write predicate spelled twice.
+ *
+ * THE ARGUMENT STILL WINS where both exist: it is the fresher of the two, and on the seam where a
+ * warm record answers it is the only one that has been re-read this request.
+ *
+ * AND ONLY THE ARGUMENT IS STAMPED. withMuxDuration writes one number onto EVERY entry carrying a
+ * `remux`, which is right for a value that arrived from outside and wrong for one read back off the
+ * media: `mediaDuration` returns the FIRST usable length, so re-stamping would copy entry 0's length
+ * onto its siblings and erase theirs. Inert on YouTube (normalizeYouTube emits exactly one entry) and
+ * a trap the moment anything else reaches here, which is the shape of every bug on this path so far.
+ */
 export function withLengthNote(post: Post, duration: unknown, maxSeconds: number): Post {
   if (!post) return post
-  if (typeof duration !== 'number' || !Number.isFinite(duration) || duration <= 0) return post
-  // ONE SPELLING OF THE STAMP, shared with the fetch path — see withMuxDuration. Two expressions of
-  // "which media entries carry a duration" is the bug shape this file keeps apologising for.
-  const stamped = withMuxDuration(post, duration)
-  const withDur = Array.isArray(stamped.media) ? stamped.media : []
-  if (duration <= maxSeconds) return { ...post, media: withDur }
-  const cur = typeof post.text === 'string' ? post.text : ''
-  if (cur.includes(LENGTH_NOTE)) return { ...post, media: withDur }
-  return { ...post, media: withDur, text: cur ? `${LENGTH_NOTE}\n\n${cur}` : LENGTH_NOTE }
+  // See isYouTube: this note names YouTube and the seam that applies it is not platform-scoped.
+  if (!isYouTube(post)) return post
+  const fresh = usableDuration(duration)
+  const secs = fresh ? duration : mediaDuration(post)
+  if (secs === undefined) return post
+  // ONE SPELLING OF THE STAMP, shared with the fetch path — see withMuxDuration. Skipped when the
+  // value came off the media, because then it is already where the stamp would put it.
+  const base = fresh ? withMuxDuration(post, secs) : post
+  if (secs <= maxSeconds) return base
+  const cur = typeof base.text === 'string' ? base.text : ''
+  // ONE REASON PER CARD. The live note already says there is no player and it is the more specific
+  // verdict — settleMux refuses the mux on liveness, not on length — so it wins and this one stands
+  // down. An unfinished broadcast reports a length of 0 and cannot reach here on its own; a 30-day
+  // record written while it was live, read back beside a real duration, can. The STAMP above still
+  // happens either way: it is what the next reader needs, and it renders nothing.
+  if (cur.includes(LENGTH_NOTE) || cur.includes(LIVE_NOTE)) return base
+  return { ...base, text: cur ? `${LENGTH_NOTE}\n\n${cur}` : LENGTH_NOTE }
 }
 
 export function withAgeNote(post: Post, ageLimit: unknown): Post {
@@ -325,9 +466,30 @@ export function ytAgeRestricted(got: YouTubeFetch): boolean {
   return typeof n === 'number' && Number.isFinite(n) && n > 0
 }
 
+/**
+ * ONLY AN EXPLICIT `true`. The field is three-valued on the fetch (see fetch.ts) and it crosses R2 on
+ * the warm-record overlay, so anything else — false, absent, a corrupt record's string — means "not
+ * known to be a broadcast", which is the answer that changes nothing.
+ */
+export function ytLive(got: YouTubeFetch): boolean {
+  return got?.isLive === true
+}
+
 export function normalizeYouTube(got: YouTubeFetch, ref: PostRef): Post | null {
   if (ref.p !== 'yt') return null
   const id = ref.id
+  /**
+   * READ ONCE, USED TWICE — the media flag and the note, and they must not be able to disagree. The
+   * flag is what settleMux refuses the mux on; the note is what tells the reader why the card is a
+   * picture. A card carrying one without the other is either a silent degrade or a lie.
+   *
+   * KNOWN AT BUILD TIME ON THE FIRST PASTE, which is what makes this worth doing here rather than
+   * only at the overlay seams: `isLive` comes from the Innertube call inside fetchYouTube, so it is
+   * on `got` before the Post exists — no warm record needed, no container call, and the very first
+   * render already refuses the mux. That is the opposite of the length note's history, which was
+   * unreachable until a record existed.
+   */
+  const live = ytLive(got)
   const o: Any = got.ok && got.oembed && typeof got.oembed === 'object' ? (got.oembed as Any) : {}
 
   const title = typeof o.title === 'string' && o.title ? o.title : 'YouTube video'
@@ -368,7 +530,7 @@ export function normalizeYouTube(got: YouTubeFetch, ref: PostRef): Post | null {
   const posterH = typeof o.thumbnail_height === 'number' && o.thumbnail_height > 0 ? o.thumbnail_height : 360
   const canonical = `https://www.youtube.com/watch?v=${id}`
 
-  return {
+  const post: Post = {
     ref: { p: 'yt', id },
     canonical,
     author: { name: author, handle, url: authorUrl },
@@ -393,7 +555,13 @@ export function normalizeYouTube(got: YouTubeFetch, ref: PostRef): Post | null {
     // portrait without a per-surface hint. poster = the thumbnail (mandatory on a video, and the still
     // withResolver degrades to when no container is bound). url is the watch page as a plain placeholder
     // — it is never served (the /_media route uses `remux`, and the no-container degrade uses `poster`).
-    media: [{ kind: 'video', url: canonical, w: 0, h: 0, poster: thumb, posterW, posterH, remux: { page: canonical } }],
+    // `live` marks the entry settleMux must not dispatch — see Media.live. The remux is KEPT rather
+    // than rewritten to the thumbnail here: settleMux owns the degrade shape (posterOnly, the poster
+    // slot the card then names), and a second spelling of it in a normalizer is how the two drift.
+    media: [{
+      kind: 'video', url: canonical, w: 0, h: 0, poster: thumb, posterW, posterH,
+      remux: { page: canonical }, ...(live ? { live: true as const } : {}),
+    }],
     /**
      * COUNTS, from the container's extract. This was hardcoded `{}` until 2026-08-01, and unlike the
      * description that was not an oversight — there was nowhere to get them. oEmbed carries none and
@@ -409,4 +577,8 @@ export function normalizeYouTube(got: YouTubeFetch, ref: PostRef): Post | null {
     // renderers already understand — Discord blurs, and the shared `[sensitive]` marker applies.
     sensitive: ytAgeRestricted(got),
   }
+  // THROUGH withLiveNote RATHER THAN A THIRD TERNARY IN `text` ABOVE, so the prepend, the cap-safe
+  // ordering and the idempotence have ONE spelling shared with the overlay seam. It is a no-op on
+  // every ordinary video.
+  return withLiveNote(post, live)
 }

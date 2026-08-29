@@ -79,9 +79,16 @@ export async function fetchThreads(ref: Extract<PostRef, { p: 'th' }>): Promise<
   // FALLBACK: the two-UA OG scrape (author + caption + cover image, no video/counts). Robust when the
   // SSR path is throttled, at the cost of richness. No single bot UA carries both text and media, so
   // Discordbot gives the post image and facebookexternalhit the caption.
+  //
+  // askTwice ON BOTH, added 2026-08-29 — these two were the only platform fetches the retry lint could
+  // not see, because it anchored on `await fetch(` and these are `fetch(…).then(…)` inside a
+  // Promise.all. The extra ask fires only on a refusal (worthAskingAgain: 408/425/429/5xx), so the
+  // happy path is still exactly two requests; the worst case is four, on a path that is ALREADY the
+  // degraded one — reached only when the SSR fetch above found no payload, which is what a throttle
+  // looks like. A throw still propagates, unchanged: loadPost reads it as fetch_fail.
   const [media, text] = await Promise.all([
-    fetch(url, { headers: { 'user-agent': MEDIA_UA, accept: 'text/html' } }).then(r => r.text()),
-    fetch(url, { headers: { 'user-agent': TEXT_UA, accept: 'text/html' } }).then(r => r.text()),
+    askTwice(url, { headers: { 'user-agent': MEDIA_UA, accept: 'text/html' } }).then(r => r.text()),
+    askTwice(url, { headers: { 'user-agent': TEXT_UA, accept: 'text/html' } }).then(r => r.text()),
   ])
   if (!threadsHasPost(media) && !threadsHasPost(text)) return { ok: false, reason: 'assert_fail' }
   return { ok: true, source: 'html', media, text }

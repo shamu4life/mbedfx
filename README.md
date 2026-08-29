@@ -100,7 +100,7 @@ A bare `dai.ly` or `redd.it` code names no site on its own, and the converter pa
 
 ## Features
 
-The container remuxes the stream into one progressive faststart MP4, cached in R2 and served with `accept-ranges: bytes` for Discord's player to seek on. A cold video draws the cover image first, and the card is never response-cached, so a **later paste** of the same link plays. The message that was already posted does not heal: Discord caches an embed permanently in the message it was pasted into, and per-URL for about 30 minutes on top. For the reader who pasted first, the first paste is the only paste — which is why the mux is given a Durable Object alarm and 15 minutes rather than `waitUntil`'s 30 seconds, and why `card_degraded / ok` is the number that measures this. [container/README.md](container/README.md) has the resolver and its ceilings.
+The container remuxes the stream into one progressive faststart MP4, cached in R2 and served with `accept-ranges: bytes` for Discord's player to seek on. A cold video usually draws the cover image first, and a card that is still waiting is never response-cached, so a **later paste** of the same link plays. The message that was already posted does not heal: Discord caches an embed permanently in the message it was pasted into, and per-URL for about 30 minutes on top. For the reader who pasted first, the first paste is the only paste — which is why the mux is given a Durable Object alarm and 15 minutes rather than `waitUntil`'s 30 seconds, why YouTube's crawler callback is allowed four seconds to catch a mux that finishes fast, and why `card_degraded / ok` is the number that measures both. A card that is *final* rather than incomplete — too long to mux, or a live broadcast with no finished file behind it — does cache, deliberately. [container/README.md](container/README.md) has the resolver and its ceilings.
 
 Posts that can't be read get a card naming the reason: 🔒 private or friends-only, 🔞 age-restricted, or deleted and never existed. Where the platform gives no reason the card lists the likely ones and picks none. A path two sites both claim is not guessed either ([docs/API.md](docs/API.md#failures) has the codes; `src/render/chooser.ts` draws the human version).
 
@@ -209,7 +209,7 @@ Both heads need the same fix, or half the posts stay broken. For a post with med
 - `src/translate.ts` holds detection, translation and the marker.
 - `public/index.html` is the converter page: one file, no framework.
 
-[CONTRIBUTING.md](.github/CONTRIBUTING.md) has the rest of the layout, the commands, the test count and why `npm run deploy` refuses on purpose. [docs/SELF-HOSTING.md](docs/SELF-HOSTING.md) walks `handle()` at `src/worker.ts:3358`, the eight Cloudflare surfaces behind it and `container/server.py`.
+[CONTRIBUTING.md](.github/CONTRIBUTING.md) has the rest of the layout, the commands, the test count and why `npm run deploy` refuses on purpose. [docs/SELF-HOSTING.md](docs/SELF-HOSTING.md) walks `handle()` in `src/worker.ts`, the eight Cloudflare surfaces behind it and `container/server.py`.
 
 ## Contributing
 

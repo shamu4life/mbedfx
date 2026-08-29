@@ -190,7 +190,10 @@ What the card shows, the card's overlays composed in. v1 gives none of them a fi
 
 - a translation, followed by a `🌐 Translated from …` marker and then the original text;
 - `🔞 Age-restricted on …` on a gated YouTube video (`sensitive` is also `true`);
-- `🎬 Too long to play here. Open it on …` on a video past the length ceiling for a remux.
+- `🎬 Too long to play here. Open it on …` on a video past the length ceiling for a remux;
+- `🔴 Live stream, so no preview here. Open it on …` on a broadcast with no finished file behind
+  it, streaming now or scheduled. It suppresses the length note: a card carries at most one of the
+  two, and this is the more specific verdict because it is the one the mux was refused on.
 
 No v1 field carries the author's untouched words; splitting them out is additive and on the list.
 
@@ -221,15 +224,15 @@ publishing a `gif` as `"video"` (`toApiPost`, `src/worker.ts`).
 
 ### `still`
 
-A video that hasn't finished muxing, or one too long to mux at all, is published as an `image` entry
-carrying `still: true`; `url` and `poster` are both the poster frame, where the bytes are. Read it
-with the top-level `muxing` flag:
+A video that hasn't finished muxing, one too long to mux at all, or a live broadcast with no
+finished file behind it, is published as an `image` entry carrying `still: true`; `url` and `poster`
+are both the poster frame, where the bytes are. Read it with the top-level `muxing` flag:
 
 | `still` | `muxing` | Meaning |
 |---|---|---|
 | `false` | `false` | An ordinary picture. |
-| `true` | `true` | A video is still muxing. Ask again in a few seconds. |
-| `true` | `false` | A video exists that cannot be served, usually because it is too long. This is final. |
+| `true` | `true` | A video is still muxing. Ask again once it lands: seconds for a short video, minutes for a long one — see the retry schedule below. |
+| `true` | `false` | A video exists that cannot be served. Too long to mux, in which case the verdict is permanent; or a live or scheduled broadcast, in which case it is final for as long as this card is cached and the archive will mux normally once the stream ends. |
 
 Without `still`, that last row is indistinguishable from an ordinary photo except by reading the
 English in `text`.
@@ -371,7 +374,7 @@ if (!body.ok) { /* body.error.code */ }
 
 No timeout parameter, no per-step limit. One budget, taken at the top of the shared pipeline
 (`describeTarget`, `src/worker.ts`), bounds the whole response and leaves each step whatever is
-left. The card and the converter preview run that pipeline too, the three differing only in
+left. The converter preview (`/_card`) runs the same pipeline, the two differing only in
 serialisation (`test/api.test.mjs:325`).
 
 | Constant | Value | What it bounds |
@@ -388,11 +391,35 @@ All six are in `src/worker.ts`. The mux and the translation race concurrently (t
 metadata warm runs after them, only when the post has no known date yet: up to 8000 ms on a first
 YouTube link, nothing thereafter.
 
-The upstream fetch is unbounded on fourteen of the seventeen platforms. Nothing in `src/` sets an
-`AbortSignal` (verified by grep), and Cloudflare places no wall-clock limit on an HTTP-triggered
-Worker ([Workers limits](https://developers.cloudflare.com/workers/platform/limits/): "No limit …
-as long as the client remains connected"). Only CPU time is capped, and this endpoint spends almost
-none.
+**The crawler seams are not on this budget and never were**, which the paragraph above claimed until
+2026-08-29 by counting the Discord card as a third caller of `describeTarget`. It is not one: the
+HTML head Discord fetches is rendered by `renderPostRoute`, and the Mastodon-shaped documents behind
+it are their own route. Their numbers are smaller because a crawler leaves, and they are listed here
+so nobody sizes a client timeout against the wrong table.
+
+| Constant | Value | What it bounds |
+|---|---|---|
+| `HTML_DEADLINE_MS` | **5000 ms** | the whole crawler-facing HTML head |
+| `MUX_WAIT_BOT_MS` | **1500 ms** | the mux wait on the head, on the `/_oembed` callback, and on every non-YouTube activity document |
+| `YT_META_BOT_MS` | **2800 ms** | **YouTube only**: the metadata arm of the activity document |
+| `YT_MUX_BOT_MS` | **4000 ms** | **YouTube only**: the mux arm of the activity document, which is where a player is won or lost |
+| `META_TIMEOUT_MS` | **4700 ms** (derived) | the container metadata extract on the head, `HTML_DEADLINE_MS − MUX_WAIT_FLOOR_MS` |
+
+The three activity-document budgets race in one `Promise.all`, so that response ends at the largest
+of them plus its own serialisation, not at their sum.
+
+The upstream fetch is unbounded on fourteen of the seventeen platforms. Exactly one call in `src/`
+sets an `AbortSignal`, and it does not change that count: `fetchInnertube`
+(`src/platforms/youtube/innertube.ts`) caps its YouTube player-API request at
+`INNERTUBE_TIMEOUT_MS`, 2500 ms shared across the two clients it tries in turn, because a metadata
+answer arriving after the card is drawn has nobody to take it and the connection is better released
+than left holding the isolate. That bounds one leg, not the fetch: `fetchYouTube`
+(`src/platforms/youtube/fetch.ts`) races Innertube against the oembed call in one `Promise.all`,
+oembed carries no signal, and the Innertube arm is total, so a timeout there returns null and the
+card is built without the date. Every other `AbortSignal` in `src/` is a comment recording why that
+code deliberately has none. Cloudflare places no wall-clock limit on an HTTP-triggered Worker
+([Workers limits](https://developers.cloudflare.com/workers/platform/limits/): "No limit … as long
+as the client remains connected"). Only CPU time is capped, and this endpoint spends almost none.
 
 Dailymotion, Streamable and Imgur are the three exceptions, and they are exceptions because their
 "upstream fetch" is a `yt-dlp` extract inside our own container rather than a request to the site.
@@ -416,14 +443,22 @@ total ≈ upstream fetch + max(300 ms, 9000 ms − upstream fetch) + (YouTube on
 ```
 
 An upstream answering within 8.7 s gives 9.0 s, 17.0 s on a cold YouTube link; slower, the mux drops
-to its 300 ms floor and the total tracks the upstream, except on the four container platforms,
-where 8.7 s is also where the answer stops arriving at all. Set the client timeout to 20 s: the
-17.0 s worst case plus roughly 3 s for connection setup and a slower upstream. 12 s covers a client
-that never sends YouTube links. 5 or 10 s cuts off requests about to answer.
+to its 300 ms floor and the total tracks the upstream, except on Dailymotion, Streamable and Imgur,
+where 8.7 s is also where the answer stops arriving at all. (This said "the four container
+platforms" until 2026-08-29, which is the same miscount the paragraph above corrects: Facebook makes
+the call and is not bounded by it.) Set the client timeout to 20 s: the 17.0 s worst case plus
+roughly 3 s for connection setup and a slower upstream. 12 s covers a client that never sends
+YouTube links. 5 or 10 s cuts off requests about to answer.
 
-Measured, each recorded in a comment beside the code it bounds in `src/worker.ts`: a cold video
-remux 6-9 s at ≤480p (2026-07-24), `yt-dlp -J` on YouTube 2.3-6.7 s over five runs (2026-07-26), a
-Facebook metadata extract ~3.0 s (2026-07-25), a translation 217-798 ms.
+Measured, each recorded in a comment beside the code it bounds in `src/worker.ts`: a Facebook
+metadata extract ~3.0 s (2026-07-25), a translation 217-798 ms.
+
+The two YouTube figures this paragraph used to quote — a cold remux at 6-9 s (2026-07-24) and
+`yt-dlp -J` at 2.3-6.7 s (2026-07-26) — are **retired, not updated**. Both were taken on the
+quarter-core container with an older yt-dlp; extraction alone is 3.1-4.7 s on `standard-2` now, and
+the production counters put a completed YouTube mux at p50 18.2 s, p90 41.3 s, minimum 4.2 s over
+139 samples. Quoting a number smaller than the p10 as the cost of a cold video is how a client
+timeout gets sized to fail.
 
 A post is held 900 s (`POST_TTL`, `src/cache.ts:5`) independently of the response, and a second
 request skips the upstream fetch even when the first answer wasn't cacheable. `/_api/v1` never
@@ -437,13 +472,19 @@ Either flag means an incomplete answer, and both carry `cache-control: no-store`
 half-answer out of any cache in between.
 
 - `muxing: true`: a video is still being remuxed into the progressive MP4 mbedfx serves, and what
-  arrived is its poster still. A re-request in a few seconds returns a `video`.
+  arrived is its poster still. A re-request returns a `video` once the mux lands. "A few seconds"
+  stood here and is only right for a short one: the durable retry schedule wakes at 35 s, then
+  roughly two minutes later, then twenty, and each attempt is itself allowed to run up to the
+  container's page-mux wall of 360 s. A long video can legitimately take several minutes.
 - `pending: true`: a translation lost its race and `text` is the original. The translation is still
   being written; a re-request carries it.
 
-Neither is an error. Both clear on their own, the work behind each running on in `waitUntil`, and an
-answer that ignores them is still correct. `test/api.test.mjs:288` asserts the `no-store`, `317` the
-`max-age=900`.
+Neither is an error. Both clear on their own and an answer that ignores them is still correct. The
+work behind them runs in two different places, which matters if you are waiting on it: a translation
+runs on `ctx.waitUntil`, which Cloudflare cancels 30 s after the response, while a mux runs on the
+MuxRunner Durable Object alarm and gets fifteen minutes. (This paragraph said `waitUntil` for both
+until 2026-08-29, which is the mis-statement the alarm was written to fix.) `test/api.test.mjs:288`
+asserts the `no-store`, `317` the `max-age=900`.
 
 ---
 

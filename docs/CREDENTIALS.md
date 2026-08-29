@@ -72,7 +72,7 @@ YouTube rotates cookies, and a session used in two places tends to invalidate th
 
 **Never use a Premium account.** yt-dlp picks its player clients from the cookies, and a Premium
 session selects a set with no `web_safari`, checked against yt-dlp 2026.07.04's source. `web_safari`
-alone carries the timezone-bearing microformat that `ytDateSeconds` (`src/worker.ts:2264`) parses
+alone carries the timezone-bearing microformat that `ytDateSeconds` (`src/worker.ts`) parses
 `timestamp` from. A Premium jar makes the intermittent missing-date bug permanent on every YouTube
 video, and the card reads as a broken extract. An ordinary free throwaway is fine: `web_safari` sits
 in the same position of both the anonymous and the ordinary logged-in client lists. `9cab036` added
@@ -134,20 +134,26 @@ recipe "Are the account pools working", against the analytics counters.
 ### Cached gate verdicts
 
 Filling a pool needs no deploy, no TTL wait and no cache flush. `wrangler secret put` does not have
-to be timed against a merge. `YT_META_TTL_MS` is 30 days (`src/worker.ts:2118`), so every age-gated
-video viewed before fill-day left a record saying `ageLimit: 18`, written by a jar-capable build
-with no jar to send. Those are `g10` records too, the generation the running build still writes, so
-1.8.0's bump to `g10` retired nothing here: `metaCacheKey` (`src/worker.ts:1657`) namespaces every
-record by generation, and a bump to `g11` would orphan these along with a month of good dates,
-descriptions and counts. `ytMetaUsable` (`src/worker.ts:2240`) refuses a gated record carrying no
-`jarred` flag while `jarAvailable(env, 'yt')` holds, and the next view re-extracts with the jar.
+to be timed against a merge. `YT_META_TTL_MS` is 30 days (`src/worker.ts`; a record that says
+`isLive` expires in an hour instead, which is the only exception and does not apply to a gate
+verdict), so every age-gated video viewed before fill-day left a record saying `ageLimit: 18`,
+written by a jar-capable build with no jar to send. Those were `g10` records, the generation the
+build of the day still wrote, so 1.8.0's bump to `g10` retired nothing here: `metaCacheKey`
+(`src/worker.ts`) namespaces every record by generation, and a bump would orphan these along with a
+month of good dates, descriptions and counts. `ytMetaUsable` (`src/worker.ts`) refuses a gated
+record carrying no `jarred` flag while `jarAvailable(env, 'yt')` holds, and the next view
+re-extracts with the jar.
 That conditional shipped in 1.9.0 on 2026-08-04 (`docs/CHANGELOG.md:8`, `:39`) and adds no second
 bump. Without it, filling a secret heals none of those records, and `pool_unused` reports the fresh
 accounts as dead.
 
 Rotating a dead pool leaves the cached verdicts in place. A record measured with a jar that still
 says gated is treated as correct, because the extract was logged in and walled anyway. Only a
-`RESOLVER_GENERATION` bump (`src/worker.ts:1187`, currently `g10`) clears it.
+`META_GENERATION` bump (`metaCacheKey`, `src/worker.ts`) clears it — **not** `RESOLVER_GENERATION`,
+which since the two split on 2026-08-29 renames the pooled container instances and invalidates
+nothing stored. They held the same value on the day they were split, so a reader coming from an
+older copy of this page will find both saying `g13` and no way to tell which one matters from the
+value alone.
 
 ---
 
@@ -167,13 +173,15 @@ jq . accounts.json    # if this errors, so did the Worker, just quietly
   `{"label":"alt1"}` is not an account. A pool of two with one bad entry runs as a pool of one, at
   twice the load on the survivor.
 - yt-dlp rejects a jar whose first line is not `# Netscape HTTP Cookie File`, answering `does not
-  look like a Netscape format cookies file` with no other symptom. `container/server.py:125`
-  prepends the line and adds a trailing newline.
+  look like a Netscape format cookies file` with no other symptom. `CookieJar.__enter__`
+  (`container/server.py`) prepends the line and adds a trailing newline.
 - The jar is a `tempfile.mkstemp` file at 0600, unlinked in `__exit__` even when yt-dlp raises or
-  times out (`container/server.py:118`). yt-dlp reads cookies from a path and has no argv form, and
+  times out (`CookieJar.__exit__`, `container/server.py`). yt-dlp reads cookies from a path and has
+  no argv form, and
   must not gain one here: argv is world-readable in `/proc` on this box, and a jar passed as a flag
-  would be readable by every process in the container (`container/server.py:96-98`).
-- `--cookies` splices at `cmd[1:1]` in `_mux_page` (`:215`) and `_meta_page` (`:241`), fixed in
+  would be readable by every process in the container (`CookieJar`'s own note,
+  `container/server.py`).
+- `--cookies` splices at `cmd[1:1]` in both `_mux_page` and `_meta_page`, fixed in
   `d2c0b85` on 2026-08-03. The first version spliced at a negative index and landed between `-o` and
   its value, producing `-o --cookies <path> <out> -- <url>`. yt-dlp read `--cookies` as the output
   template, so every jarred mux wrote to the wrong place, and it could not fire until a pool was
@@ -184,7 +192,7 @@ jq . accounts.json    # if this errors, so did the Worker, just quietly
 ## Rotating
 
 Replace the whole array and push it again. `wrangler secret put` has no partial update, so one dead
-account means re-pushing every entry, then bumping `RESOLVER_GENERATION` per "Cached gate verdicts"
+account means re-pushing every entry, then bumping `META_GENERATION` per "Cached gate verdicts"
 above.
 
 `pickAccount` (`src/credentials.ts:121`) picks per request at random. Round-robin needs state the
@@ -193,6 +201,6 @@ edge does not share between isolates, and taking the first entry puts the whole 
 `label` is operator-facing and the only field here safe to write down, for telling one throwaway
 from another between exports. The runtime never reads it and no counter carries it. The other fields
 never reach a log line, an analytics blob, a cache key, an error body or a card: `count()`
-(`src/analytics.ts:224`) accepts fixed enum strings only. `pool_unused` records that a jar was spent
+(`src/analytics.ts`) accepts fixed enum strings only. `pool_unused` records that a jar was spent
 and the gate held, per platform, and making it per-account would put an account identifier where a
 log could reach.

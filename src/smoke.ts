@@ -16,7 +16,9 @@ import type { ClientClass, Platform } from './types.ts'
  * path — the same `handle()` a crawler reaches — and asks whether a real card came back. It never
  * looks at an HTTP status, because on this service every interesting failure answers 200: the
  * failure card is a 200, Meta's login wall is a 200, TikTok's 404 page is a 200. `cardVerdict`
- * below is a pure function over the emitted head, and it is the entire assertion.
+ * below is a pure function over the emitted head and the row's own `expect`, and it is the entire
+ * assertion. The default floor is "a title and something to draw"; one row asks for more, and the
+ * SmokeExpect docstring is where the case for keeping that rare is written down.
  *
  * WHAT IT DOES NOT COLLECT. Platform, outcome and nothing else, through the existing counters. No
  * url, no ip, no user agent, no geolocation. wrangler.jsonc explains at length why Workers Logs are
@@ -24,6 +26,20 @@ import type { ClientClass, Platform } from './types.ts'
  * a monitor that reintroduced that by the back door would be a worse defect than the outage it
  * detects.
  */
+
+/**
+ * WHAT A ROW DEMANDS BEYOND "a card came back at all", and it is OPT-IN because the floor has to stay
+ * low enough for sixteen platforms to share it.
+ *
+ * `video` says the head must name an og:video, i.e. a real player rather than a picture. Almost no row
+ * may ask for that. A Mastodon, Misskey or Lemmy note is routinely text plus an avatar; the Pinterest
+ * and Reddit rows are drawn from the activity document and carry no og:video anywhere; the Bluesky
+ * profile row is a profile and has no post media to play. Eleven of the seventeen rows below name no
+ * video in their own notes, so making og:video universal would turn most of this list red at once —
+ * the "alarm nobody believes" failure that keeps Streamable out of the list entirely. The same reader
+ * has to believe the Facebook row when it fires.
+ */
+export type SmokeExpect = 'video'
 
 /**
  * The posts this service checks itself against.
@@ -65,6 +81,12 @@ export type SmokeCheck = {
   name: string
   path: string
   verifiedOn: string
+  /**
+   * ABSENT ON EVERY ROW BUT ONE, and that is the design rather than an accident of what has been
+   * written so far. See SmokeExpect above for why a stricter default would be worse than none, and
+   * the yt row below for the outage that made exactly one row need this.
+   */
+  expect?: SmokeExpect
 }
 
 export const SMOKE_CHECKS: readonly SmokeCheck[] = [
@@ -98,8 +120,52 @@ export const SMOKE_CHECKS: readonly SmokeCheck[] = [
   { platform: 'ig', name: 'ig', path: '/reel/DZxLuleoEoC/', verifiedOn: '2026-08-11' },
   // Verified 2026-08-09: a TikTok whose card carries og:video at 576x1024.
   { platform: 'tt', name: 'tt', path: '/@.g.r.b/video/7246058829106973978', verifiedOn: '2026-08-09' },
-  // "Me at the zoo", the first video published to YouTube. As close to undeletable as this list gets.
-  { platform: 'yt', name: 'yt', path: '/jNQXAC9IVRw', verifiedOn: '2026-08-09' },
+  /**
+   * "Me at the zoo", the first video published to YouTube. As close to undeletable as this list gets.
+   *
+   * THE ONE ROW THAT DEMANDS A PLAYER, added 2026-08-29, because until then this row COULD NOT FAIL on
+   * a YouTube card with no player in it. Every Discord head this service emits carries the activity
+   * link unconditionally — render/discord.ts returns renderSpoof for `client === 'discord'` with no
+   * branch left above it, and the `rel=alternate application/activity+json` tag is not behind a
+   * condition inside it — and cardVerdict counts that link as "something to draw". Correctly, for a
+   * media post whose picture comes out of the activity document. But it means the default assertion on
+   * THIS platform was satisfied by the head's own boilerplate, so the only YouTube failure it could
+   * ever report was the upstream vanishing entirely. A thumbnail-only, playerless card is exactly the
+   * state 553bd2e (2026-08-09, "Answer a crawler in a second") put this platform into when it
+   * collapsed the crawler's mux budget onto MUX_WAIT_BOT_MS — and this row, running every half hour
+   * throughout, had no way to say so.
+   *
+   * og:video IS THE TAG THAT SEPARATES THE TWO OUTCOMES, which is why the expectation is spelled as
+   * the video and not as anything about the picture. A YouTube head carries og:video only when
+   * settleMux found the muxed mp4 already in R2 inside the crawler budget; when it did not, the entry
+   * is degraded to its poster still and the head comes back with the activity link, NO og:video and NO
+   * og:image (renderSpoof emits og:image only on a post with no media at all). Playing card and
+   * thumbnail card differ by that one tag and nothing else a regex can see.
+   *
+   * IT IS SAFE BECAUSE THE MUX IS DURABLE. Verified 2026-08-29 through production, Discordbot UA, the
+   * same method as the rest of this list: the card answered 200 in 0.50s carrying
+   * og:video=/_media/yt%3AjNQXAC9IVRw/0.mp4, and a HEAD on that url answered 200 in 0.28s with
+   * content-length 629172. A warm mux is one R2 head, which MUX_WAIT_FLOOR_MS sizes at 300ms, so even
+   * the 1500ms crawler budget clears it five times over.
+   *
+   * AND IT IS NOT READING ITS OWN STALE ANSWER, which is the first thing to suspect of a check that
+   * passes on a timer. RESP_TTL is 900s against a 30-minute schedule, so every cron tick renders for
+   * real; and settleMux never lets a DEGRADED card into the response cache, so even a tick that did
+   * hit could only ever be served a card that had the player.
+   *
+   * THE KNOWN FALSE ALARM IS THE BUCKET'S OWN BROOM, and it is bounded to about one tick every 60
+   * days. wrangler.jsonc records the lifecycle rule `expire-60d` on mbedfx-media, which deletes an
+   * object 60 days after it was WRITTEN — a read does not refresh it — so roughly that often this row
+   * finds the mp4 swept and reports `no-video`. The tick that finds it gone is also the tick that arms
+   * the MuxRunner alarm on a 19-second video, so the next tick 30 minutes later is warm again. One or
+   * two red ticks out of the ~2,880 in those 60 days is a much quieter row than dm, which the note at
+   * the top of this list budgets at about one failure a DAY and keeps anyway.
+   *
+   * WHAT IT CATCHES THAT NOTHING ELSE DOES: a crawler budget cut back under a warm R2 head, a
+   * container that has stopped muxing, a MEDIA_CACHE binding that went missing on a deploy, and a
+   * format selector that makes yt-dlp produce nothing. All four render a perfectly well-formed card.
+   */
+  { platform: 'yt', name: 'yt', path: '/jNQXAC9IVRw', verifiedOn: '2026-08-29', expect: 'video' },
   // Verified 2026-08-10: a Threads video, now proxied rather than redirected.
   { platform: 'th', name: 'th', path: '/@bisniscom/post/DbkwmbMEt6u', verifiedOn: '2026-08-10' },
   /**
@@ -277,17 +343,38 @@ export const SMOKE_UNCHECKED: readonly { platform: Platform, why: string }[] = [
  * THE FAILURE CARD IS THE THING BEING DETECTED and it also has an og:title — "Couldn't load this
  * ... post" — so a title alone proves nothing. It carries no media and no activity link, which is
  * exactly what separates it here.
+ *
+ * `expect` RAISES THE BAR FOR ONE ROW, and the floor above stays this low for everybody else on
+ * purpose: it is the widest assertion sixteen platforms can share. On YouTube that floor is met by
+ * the activity link the head emits unconditionally, so the check could not fail while the cards had
+ * no player in them. `expect: 'video'` additionally demands og:video. SmokeExpect says why the rest
+ * of the list must not ask for it.
+ *
+ * THE FAILURE CARD STILL WINS OVER AN UNMET EXPECTATION, which is what the order of the returns below
+ * decides. "The upstream is gone" and "the card rendered but has no player" are different repairs and
+ * the first is the more specific, so a row carrying an expectation must not relabel a dead platform as
+ * a muxing problem.
+ *
+ * `no-video` IS A VERDICT OF ITS OWN rather than a second spelling of `failure-card`, for the reason
+ * `timeout` is not a second spelling of `threw`: both count as `smoke_fail`, and only one of them
+ * tells the reader which half of the service to go and look at. Reusing `failure-card` would also make
+ * the paragraph above it false — a thumbnail card has a title AND something to draw.
  */
-export function cardVerdict(html: unknown): 'ok' | 'failure-card' | 'no-card' {
+export function cardVerdict(html: unknown, expect?: SmokeExpect): 'ok' | 'failure-card' | 'no-card' | 'no-video' {
   if (typeof html !== 'string' || !html) return 'no-card'
   const hasTitle = /<meta property="og:title"/.test(html)
   if (!hasTitle) return 'no-card'
-  const drawable = /<meta property="og:(image|video)"/.test(html)
+  // The closing quote is load-bearing: `og:video:type` and `og:video:width` ride along with every real
+  // og:video (see spoofVideoTags) and must not be able to satisfy this on their own.
+  const hasVideo = /<meta property="og:video"/.test(html)
+  const drawable = hasVideo
+    || /<meta property="og:image"/.test(html)
     || /type="application\/activity\+json"/.test(html)
-  return drawable ? 'ok' : 'failure-card'
+  if (!drawable) return 'failure-card'
+  return expect === 'video' && !hasVideo ? 'no-video' : 'ok'
 }
 
-export type SmokeVerdict = 'ok' | 'failure-card' | 'no-card' | 'threw' | 'timeout'
+export type SmokeVerdict = 'ok' | 'failure-card' | 'no-card' | 'no-video' | 'threw' | 'timeout'
 
 export type SmokeResult = {
   platform: Platform
@@ -322,14 +409,17 @@ export type SmokeResult = {
  *   measured 0.23s and 0.27s, but seconds after a cron tick, so treat those two as unmeasured)
  *
  * The whole six-check `/_smoke` run took 10.4s cold and 0.10-0.13s warm; the ten checks added that
- * day sum to 6.4s. A full sixteen-check tick is therefore on the order of fifteen to twenty seconds
- * cold, and a cron tick is always cold.
+ * day sum to 6.4s. A full tick is therefore on the order of fifteen to twenty seconds cold, and a
+ * cron tick is always cold. The list was sixteen rows when this was measured and is seventeen now;
+ * the row added since is `dm`, unmeasured here and warm on roughly 47 of every 48 ticks by its own
+ * note above, so it moves the estimate by less than the spread already in it.
  *
  * 20s is five times the slowest measured cold render, which makes this a budget for "this upstream
  * has stopped answering" rather than for "this upstream is having a slow day". Cutting it finer
  * would start converting slowness into false alarms, and a monitor that cries wrongly is the one
  * failure mode that makes the service worse than having no monitor — the same reasoning that keeps
- * Dailymotion and Streamable out of the list entirely.
+ * Streamable out of the list entirely. Dailymotion was excluded on that reasoning too until
+ * 2026-08-12, when the cache it was said to miss turned out to be the wrong cache.
  *
  * WHY THERE IS A BUDGET AT ALL, given a cron sounds like it has all the time in the world. It does
  * not, and the two facts that decide it come from Cloudflare's limits page (read 2026-08-12):
@@ -337,15 +427,18 @@ export type SmokeResult = {
  *   - a scheduled invocation is killed at 15 MINUTES of wall clock, and
  *   - "There is no set time limit on individual subrequests".
  *
- * Nothing in this repo's platform fetchers passes an AbortSignal, so an upstream that accepts a
- * connection and then says nothing stalls its render for as long as the invocation lives. A serial
+ * EXACTLY ONE call in this repo's platform fetchers passes an AbortSignal — fetchInnertube, on one
+ * leg of the YouTube fetch — and its sibling oembed leg does not. So on YouTube and on all sixteen
+ * other platforms, an upstream that accepts a connection and then says nothing stalls its render for
+ * as long as the invocation lives. (The blanket claim stood here until 2026-08-29 and the argument
+ * survives it: one bounded leg out of seventeen platforms bounds nothing.) A serial
  * list with no per-check bound therefore has NO bound at all: ONE hung upstream can consume the
  * whole invocation, the runtime kills it part-way down the list, and every check after the hang goes
  * uncounted — which docs/METRICS.md says reads exactly like "the cron is not running". A monitor
  * that goes quiet during an outage is worse than no monitor, and the outage is precisely when an
  * upstream is likeliest to hang.
  *
- * With the budget, the worst case is SMOKE_CHECKS.length * SMOKE_BUDGET_MS = 16 * 20s = 320s, about
+ * With the budget, the worst case is SMOKE_CHECKS.length * SMOKE_BUDGET_MS = 17 * 20s = 340s, about
  * a third of the ceiling, and a hung platform is REPORTED as `timeout` rather than silently eating
  * the checks behind it. `smokeRunCeilingMs` and its test keep that arithmetic honest as the list
  * grows.
@@ -374,7 +467,7 @@ export const smokeRunCeilingMs = (checks: number = SMOKE_CHECKS.length, budgetMs
  * fetch proxy and not an oracle for arbitrary hosts. That property is why the list lives in code
  * instead of in a binding or a query parameter.
  *
- * STILL SERIAL AT SIXTEEN CHECKS, and this was re-decided on measurements rather than left alone.
+ * STILL SERIAL AT SEVENTEEN CHECKS, and this was re-decided on measurements rather than left alone.
  * A cold six-check run measured 10.4s end to end on 2026-08-12 and the ten checks added that day sum
  * to 6.4s cold, so a healthy tick is fifteen to twenty seconds against a fifteen-MINUTE ceiling —
  * about two per cent of it. Concurrency would buy nothing worth having and would cost two things:
@@ -385,7 +478,7 @@ export const smokeRunCeilingMs = (checks: number = SMOKE_CHECKS.length, budgetMs
  *     queues at a limit that is invisible in the code, and the checks pile up behind the slowest
  *     upstream instead of beside it.
  *   - Serial keeps this monitor's load on somebody else's API shaped like ONE reader, which is what
- *     it is pretending to be. Sixteen simultaneous requests from one Cloudflare IP every thirty
+ *     it is pretending to be. Seventeen simultaneous requests from one Cloudflare IP every thirty
  *     minutes is a shape that gets IPs rate-limited, and this project has already lost two surfaces
  *     to datacenter-egress blocks.
  *
@@ -426,7 +519,7 @@ export async function runSmoke(
         render(`${origin}${check.path}`),
         new Promise<'timeout'>(resolve => { timer = setTimeout(() => resolve('timeout'), budgetMs) }),
       ])
-      const verdict = raced === 'timeout' ? 'timeout' : cardVerdict(await raced.text())
+      const verdict = raced === 'timeout' ? 'timeout' : cardVerdict(await raced.text(), check.expect)
       out.push({ platform: check.platform, name: check.name, verdict, ms: Date.now() - started })
     } catch {
       // A throw is a failure like any other: the point is whether a reader would have got a card.

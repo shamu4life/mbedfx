@@ -1,0 +1,27 @@
+{
+  "playabilityStatus": {
+    "status": "UNPLAYABLE",
+    "reason": "Video unavailable"
+  },
+  "videoDetails": {
+    "videoId": "0cVnt1bUzLI",
+    "title": "Nancy Grace Roman Space Telescope Science Overview News Conference (Aug. 29, 2026)",
+    "lengthSeconds": "3764",
+    "viewCount": "66418",
+    "author": "NASA",
+    "isLiveContent": true,
+    "shortDescription": "Watch as mission experts discuss the science objectives for NASA's Nancy Grace Roman Space Telescope.\n\nNamed for the agency's first chief astronomer, the Nancy Grace Roman Space Telescope's crisp, sweeping surveys will help scientists investigate dark energy and dark matter, discover and characterize exoplanets, map billions of galaxies, study black holes, and explore objects from our own solar system to the edge of the observable universe. \n\nRoman is scheduled to lift off at 7:26 a.m. EDT (1126 UTC) on Sunday, Aug. 30. Watch live here on YouTube: https://www.youtube.com/watch?v=9wq3VHsL_bE\n\nParticipants include:\n- Shawn Domagal-Goldman, director, Astrophysics Division, NASA Headquarters\n- Julie McEnery, Roman telescope senior project scientist, NASA Goddard Space Flight Center\n- Vanessa Bailey, Roman Coronagraph Instrument scientist, NASA Jet Propulsion Laboratory\n- Kristen McQuinn, Roman Science Operations Center lead, Space Telescope Science Institute\n- Lee Armus, Roman Science Support Center lead, Caltech/IPAC\n\nLearn more about Roman: https://science.nasa.gov/mission/roman-space-telescope/\n\nCredit: NASA"
+  },
+  "microformat": {
+    "playerMicroformatRenderer": {
+      "publishDate": "2026-08-29T07:05:41-07:00",
+      "uploadDate": "2026-08-29T07:05:41-07:00",
+      "isFamilySafe": true,
+      "liveBroadcastDetails": {
+        "isLiveNow": false,
+        "startTimestamp": "2026-08-29T12:59:37+00:00",
+        "endTimestamp": "2026-08-29T14:02:12+00:00"
+      }
+    }
+  }
+}

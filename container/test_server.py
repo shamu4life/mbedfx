@@ -46,13 +46,20 @@ JAR_TEXT = "# Netscape HTTP Cookie File\n.youtube.com\tTRUE\t/\tTRUE\t0\tSID\tFI
 
 
 class ArgvRecorder:
-    """Stub for subprocess.run that records argv instead of running anything."""
+    """Stub for subprocess.run that records argv instead of running anything.
+
+    THE KWARGS ARE RECORDED TOO, because `timeout=` is an argument like any other and the walls are a
+    thing this file has to be able to assert on. They live in a parallel list so `calls[i]` stays the
+    argv every other test in this file already reads.
+    """
 
     def __init__(self):
         self.calls = []
+        self.kwargs = []
 
     def __call__(self, cmd, **kwargs):
         self.calls.append(cmd)
+        self.kwargs.append(kwargs)
 
         class Result:
             stdout = b"{}"
@@ -370,6 +377,74 @@ class Ceilings(unittest.TestCase):
         strict comparison and the video simply never exists as far as the card is concerned.
         """
         self.assertIn("duration<?", f"duration<?{srv.MAX_SECONDS} & !is_live")
+
+
+class Walls(unittest.TestCase):
+    """WHICH SUBPROCESS RUNS UNDER WHICH WALL, read off the kwargs the call actually receives.
+
+    PROC_TIMEOUT was one number doing three jobs, and only one of the three downloads a whole video
+    before it can write a byte. The `{page}` mux ran under PROC_TIMEOUT + 60 = 180s while MAX_SECONDS
+    admits 1500s of video, so a long one was SIGKILLed with nothing in R2 — and because the container
+    buffers to a fresh mkstemp, every alarm retry restarted at byte zero and died at the same wall. A
+    20-minute video never played on any paste. MUX_PAGE_TIMEOUT is that wall, split out.
+
+    THE OTHER HALF MATTERS AS MUCH, which is why this class asserts the split from both sides.
+    src/muxpolicy.ts derives MUX_FIRST_ATTEMPT_TRACKS_MS (140s) from `_mux_tracks` running under
+    PROC_TIMEOUT: the tracks alarm waits for that ffmpeg to be CERTAINLY dead before it wakes. Point
+    the tracks path at the longer wall and the alarm lands inside a live pull, which is two concurrent
+    pulls of one video on one pooled instance — the double-mux muxOnce was written to prevent. That
+    regression would be invisible in the argv, so it is asserted here.
+    """
+
+    def setUp(self):
+        self.rec = ArgvRecorder()
+        self._run = srv.subprocess.run
+        self._resolve = srv.socket.getaddrinfo
+        srv.subprocess.run = self.rec
+        # No DNS: _safe_url resolves every host, and these tests are about walls, not the SSRF gate.
+        srv.socket.getaddrinfo = lambda host, port, **kw: [
+            (socket.AF_INET, socket.SOCK_STREAM, socket.IPPROTO_TCP, "", ("93.184.216.34", port))
+        ]
+
+    def tearDown(self):
+        srv.subprocess.run = self._run
+        srv.socket.getaddrinfo = self._resolve
+
+    def test_the_page_mux_runs_under_the_page_wall(self):
+        srv._mux_page(PAGE, OUT, None)
+        self.assertEqual(
+            self.rec.kwargs[0].get("timeout"), srv.MUX_PAGE_TIMEOUT,
+            "the {page} mux is the call that downloads the whole video, so it gets the long wall",
+        )
+
+    def test_the_tracks_mux_still_runs_under_proc_timeout(self):
+        """Moving this one silently moves src/muxpolicy.ts's tracks alarm off its premise."""
+        srv._mux_tracks("https://example.com/v.m4s", "https://example.com/a.m4s", OUT)
+        self.assertEqual(
+            self.rec.kwargs[0].get("timeout"), srv.PROC_TIMEOUT,
+            "MUX_FIRST_ATTEMPT_TRACKS_MS (140s) = this number + slack; they are one number twice",
+        )
+
+    def test_the_meta_extract_still_runs_under_proc_timeout(self):
+        """`-J` downloads nothing, so it has no reason to inherit a download's wall."""
+        srv._meta_page(PAGE, None)
+        self.assertEqual(self.rec.kwargs[0].get("timeout"), srv.PROC_TIMEOUT)
+
+    def test_the_page_wall_outlasts_the_one_it_replaced(self):
+        """The direction is the defensible part: a longer wall only spends slot-seconds on videos that
+        currently fail 100% of the time. A wall at or below 180 would be this change undone.
+        """
+        self.assertGreater(srv.MUX_PAGE_TIMEOUT, srv.PROC_TIMEOUT + 60)
+
+    def test_the_page_wall_is_env_overridable_like_the_ceilings_around_it(self):
+        """Every other ceiling in this file can be tuned without a rebuild, and a self-hoster on a
+        slower egress is exactly who needs to move this one.
+        """
+        os.environ["MUX_PAGE_TIMEOUT"] = "45"
+        try:
+            self.assertEqual(_load().MUX_PAGE_TIMEOUT, 45)
+        finally:
+            del os.environ["MUX_PAGE_TIMEOUT"]
 
 
 class MuxSources(unittest.TestCase):
