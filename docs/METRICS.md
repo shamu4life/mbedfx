@@ -114,10 +114,44 @@ rather than left as one number that points at the wrong system.
 SELECT blob1 AS platform, blob2 AS outcome,
        SUM(_sample_interval) AS n,
        SUM(_sample_interval * double2) / SUM(_sample_interval) AS avg_ms
-FROM mbedfx
+FROM mbedfx_counters
 WHERE timestamp > NOW() - INTERVAL '24' HOUR AND blob2 LIKE 'mux\_%'
 GROUP BY platform, outcome ORDER BY platform, n DESC
 ```
+
+### When `mux_gate` rises on `yt`: `/_clients`
+
+The counters say WHICH HALF of the pipeline failed. They cannot say which player client did, and on
+YouTube that is usually the question. `/_clients` answers it, and it is the only instrument here that
+measures from the egress that matters: every earlier argument in this project about `player_client`
+was settled on a laptop, and a laptop is a residential IP.
+
+```sh
+curl -s 'https://mbedfx.app/_clients' | jq '{ok, ms, ytdlp, serving, clients}'
+```
+
+It takes no input — the video id and the client list are constants in `container/server.py`, the same
+property that makes `/_smoke` comparable run to run. It rides the existing authenticated `/resolve`,
+so it opens no new container surface, and its range fetch goes through the same `_safe_url` SSRF gate
+as everything else the container fetches. It runs on a fixed resolver slot (`client-probe`) so two runs
+are comparable rather than landing on whichever instance was warm.
+
+**It asserts on BYTES, not on a format count**, and that distinction is the whole reason it works. Each
+client extracts, and then the chosen format url is range-fetched. A client that lists formats and is
+then refused by googlevideo reports `gvs: "http-403"` rather than looking healthy. The first production
+run caught exactly that: `android_vr` reported `extracted: true, formats: 1` and served zero bytes.
+
+It is HAND-RUN, not scheduled, and deliberately so: it costs a real extraction per client on a shared
+container slot. Reach for it when the mux counters say `mux_gate` on `yt` and `/_smoke` says fine —
+which is the shape of every YouTube incident this project has had.
+
+It degrades rather than crashing: **503** when there is no container binding, **502** when the container
+is unreachable or answers non-ok. It never 500s, because a diagnostic that crashes tells an operator
+less than one that says it could not reach the thing it was asked about.
+
+Its first run, on 2026-08-28, is why the PO token question is closed. Five of six clients served bytes
+from Cloudflare egress with no token at all, including `tv_simply` and `mweb`, the two yt-dlp's own PO
+Token Guide lists as REQUIRING one. See `CLAUDE.md`.
 
 ### Reading `yt_innertube_ok` / `yt_innertube_fail`
 
@@ -133,7 +167,7 @@ is how you find out which happened.** Read it as a ratio, per the house rule for
 ```sql
 SELECT SUM(IF(blob2 = 'yt_innertube_ok', _sample_interval, 0)) AS ok,
        SUM(IF(blob2 = 'yt_innertube_fail', _sample_interval, 0)) AS fail
-FROM mbedfx
+FROM mbedfx_counters
 WHERE timestamp > NOW() - INTERVAL '1' HOUR AND blob1 = 'yt'
 ```
 
@@ -169,7 +203,7 @@ entirely of videos that are too long by design.
 SELECT blob1 AS platform,
        SUM(IF(blob2 = 'card_degraded', _sample_interval, 0)) AS degraded,
        SUM(IF(blob2 = 'ok', _sample_interval, 0)) AS ok
-FROM mbedfx
+FROM mbedfx_counters
 WHERE timestamp > NOW() - INTERVAL '24' HOUR
   AND blob3 = 'discord' AND blob2 IN ('card_degraded', 'ok')
 GROUP BY platform ORDER BY degraded DESC
@@ -373,12 +407,16 @@ A cron runs every thirty minutes and renders a list of known posts through this 
 then counts whether a real card came back. `src/smoke.ts` holds the list and the assertion; `/_smoke`
 runs the same checks on demand and answers JSON.
 
-Sixteen checks across fifteen of the seventeen platforms, as of 2026-08-12. It was six for the first
+Seventeen checks across sixteen of the seventeen platforms, as of 2026-08-12. It was six for the first
 day, which left eleven platforms with no detector at all, the same position Facebook was in, and
-nobody would have known which eleven without rendering all seventeen by hand. Two platforms are
-deliberately unchecked and say so in `SMOKE_UNCHECKED`: Dailymotion and Streamable return the failure
-card on a COLD first render (measured 2026-08-12), and a cron is always cold, so a row for either
-would alarm most ticks while the platform works. A platform that is neither checked nor excused fails
+nobody would have known which eleven without rendering all seventeen by hand. ONE platform is
+deliberately unchecked, and `SMOKE_UNCHECKED` says why: Streamable returns the failure
+card on a COLD first render (measured 2026-08-12), and `ST_META_TTL_MS` is 1_800_000 ms — EXACTLY the
+cron interval — so a scheduled check finds the meta record freshly expired essentially every tick and
+would sit permanently on that cold path. A row for it would alarm every half hour while the platform
+works, which teaches its only reader to ignore the one instrument that has to be believed when the
+Facebook row fires. Dailymotion was excluded alongside it until 2026-08-12 on a rationale this repo's
+own constants contradicted, and is checked now. A platform that is neither checked nor excused fails
 the test suite.
 
 It asserts on CONTENT. Every interesting failure on this service answers HTTP 200, whether the failure
@@ -418,6 +456,18 @@ route binding, a failed deploy and a Cloudflare incident are all invisible to it
 platform-breakage detector, not an uptime monitor, and treating it as the second thing would be a
 worse mistake than not having it.
 
+**IT ALSO CANNOT SEE THE CONTAINER, and this is not theoretical.** On 2026-08-28 the resolver answered
+every request with `501 Unsupported method` for roughly forty minutes — every mux on every platform
+failed — and this ran 17/17 GREEN throughout. Two reasons compound. Most checks never reach the
+container at all, and YouTube's, which used to, now takes its metadata from Innertube in the Worker
+rather than from `yt-dlp` in the container, so the platform most likely to expose a dead resolver
+stopped depending on it. On top of that `cardVerdict` passes a card carrying a title and one thing to
+draw, and a video degraded to its poster still carries both — a still and a player are the same verdict
+here, by design, because a degraded card is a real card.
+
+So a green `/_smoke` means the heads still render. `/_clients` is the check that reaches the container,
+and it is the one to run when the counters say mux and this says fine.
+
 The check urls are a permanent list of real posts. When one is deleted, that platform fails forever
 until somebody swaps the entry. The counter names the platform, which is the signal to go and look.
 Each entry records the date it was last seen working. Three of them are noted in `src/smoke.ts` as
@@ -439,7 +489,7 @@ these ever needs a budget of its own.
 The run is SERIAL and stays that way. `/_smoke` reports its own elapsed `ms`, and each check reports
 its own, so the next person to widen the list can read the cost instead of inheriting a number that
 was true once. Each check has a 20s budget; a check that overruns it is reported as `timeout` and
-counted as `smoke_fail`, which bounds a whole run at 16 x 20s = 320s against Cloudflare's 15-minute
+counted as `smoke_fail`, which bounds a whole run at 17 x 20s = 340s against Cloudflare's 15-minute
 ceiling on a scheduled invocation. That bound is not decoration: an individual subrequest has no time
 limit of its own, so without it one hung upstream could consume the invocation and every check behind
 it would go uncounted, which looks exactly like the "cron is not running" case above.
@@ -584,7 +634,8 @@ which is the pool working, or any reading under
 
 ### Is the Instagram copyright recovery still alive
 
-Emitted at `src/worker.ts:439`, `:445` and `:463`.
+Emitted at `src/worker.ts:423` and `:550` (`copyright_gql`), `:558` (`copyright_recovered`) and
+`:576` (`copyright_remux`).
 
 ```sql
 SELECT SUM(_sample_interval * (blob2 = 'copyright_gql')) AS gql,

@@ -242,12 +242,12 @@
     "schemas": {
       "PostEnvelope": {
         "type": "object",
-        "description": "A post that could be read. `muxing` and `pending` both mean the answer is incomplete but correct; neither is an error, both clear on their own, and both suppress caching. Re-ask a few seconds later and the finished answer is free, because the work behind each is still running.",
+        "description": "A post that could be read. `muxing` and `pending` both mean the answer is incomplete but correct; neither is an error, both clear on their own, and both suppress caching. Re-ask later and the finished answer is free, because the work behind each is still running — the translation on `waitUntil`, the mux on a Durable Object alarm. See `muxing` for how long later actually is.",
         "properties": {
           "ok": { "const": true, "description": "The discriminator. `true` on this shape." },
           "muxing": {
             "type": "boolean",
-            "description": "A video is still being remuxed into the progressive MP4 this service serves, and what arrived is its poster still (`media[].still` is `true`). A re-request in a few seconds returns a `video`."
+            "description": "A video is still being remuxed into the progressive MP4 this service serves, and what arrived is its poster still (`media[].still` is `true`). A re-request a few seconds later carries the `video` for every mux that finishes inline, which is most of them. One that does not is retried on an alarm — first at 35s, or 140s where the source is separate tracks rather than a page, then at +2min and +20min — so a cold long video is minutes away, not seconds."
           },
           "pending": {
             "type": "boolean",

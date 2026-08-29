@@ -74,7 +74,7 @@ Move the instance into the path and drop the scheme:
 
 `test/link-hygiene.test.mjs:71-74` drives those four through the router, with the Lemmy, Misskey and
 PeerTube ids from `test/fixtures/` and the Mastodon one from the converter page's example list
-(`public/index.html:976`). The cards mint the same shape:
+(`public/index.html:1020`). The cards mint the same shape:
 `https://mbedfx.app/lemmy.world/post/49966212`.
 
 ---
@@ -228,7 +228,7 @@ with the top-level `muxing` flag:
 | `still` | `muxing` | Meaning |
 |---|---|---|
 | `false` | `false` | An ordinary picture. |
-| `true` | `true` | A video is still muxing. Ask again in a few seconds. |
+| `true` | `true` | A video is still muxing. Ask again on the horizon under [`muxing` and `pending`](#muxing-and-pending). |
 | `true` | `false` | A video exists that cannot be served, usually because it is too long. This is final. |
 
 Without `still`, that last row is indistinguishable from an ordinary photo except by reading the
@@ -381,21 +381,29 @@ serialisation (`test/api.test.mjs:325`).
 | `XLATE_MAX_WAIT_MS` | **1500 ms** | the translation's share of the budget |
 | `XLATE_WAIT_FLOOR_MS` | **300 ms** | the floor under the translation's wait |
 | `META_WAIT_API_MS` | **8000 ms** | **YouTube only**: the metadata extract, awaited after the two above |
-| `META_TIMEOUT_API_MS` | **8700 ms** | **Dailymotion, Streamable, Imgur only**: the container metadata extract, which on those three *is* the upstream fetch |
+| `META_TIMEOUT_API_MS` | **8700 ms** | **Dailymotion, Streamable, Imgur only**: the container metadata extract, which on the first two *is* the upstream fetch and on Imgur is the fallback behind its own API |
 
 All six are in `src/worker.ts`. The mux and the translation race concurrently (the `Promise.all` in
 `describeTarget`), costing `max(300, 9000 − elapsed)` between them rather than the sum. The YouTube
 metadata warm runs after them, only when the post has no known date yet: up to 8000 ms on a first
 YouTube link, nothing thereafter.
 
-The upstream fetch is unbounded on fourteen of the seventeen platforms. Nothing in `src/` sets an
-`AbortSignal` (verified by grep), and Cloudflare places no wall-clock limit on an HTTP-triggered
+The upstream fetch is unbounded on fourteen of the seventeen platforms, and since 1.11.0 it can be
+TWO requests rather than one: `askTwice` (`src/fetchretry.ts`) asks a second time when the first was
+refused with 408, 425, 429 or a 5xx, or threw — the shape of a Cloudflare-egress refusal rather than
+of a verdict. A parsed body is believed on the first ask, so a dead link still costs exactly one
+request. The YouTube metadata call is the one bounded exception on this path
+(`AbortSignal.timeout`, `INNERTUBE_TIMEOUT_MS` 2500 ms across every client it tries,
+`src/platforms/youtube/innertube.ts`). Nothing else in `src/` sets an `AbortSignal`, and Cloudflare places no wall-clock limit on an HTTP-triggered
 Worker ([Workers limits](https://developers.cloudflare.com/workers/platform/limits/): "No limit …
 as long as the client remains connected"). Only CPU time is capped, and this endpoint spends almost
 none.
 
-Dailymotion, Streamable and Imgur are the three exceptions, and they are exceptions because their
+Dailymotion and Streamable are the two exceptions, and they are exceptions because their
 "upstream fetch" is a `yt-dlp` extract inside our own container rather than a request to the site.
+Imgur was a third until 2026-08-16, when its own JSON API took that job (`fetchImgur`,
+`src/platforms/imgur/fetch.ts`); the container is still its fallback, so the bound below still applies
+to it.
 That call is bounded, because the container's own process timeout is 120 s and a wedged instance
 would otherwise hold the whole response. Past `META_TIMEOUT_API_MS` this endpoint answers
 `fetch_fail` for a post that may be perfectly fine. The extract keeps running and lands in storage,
@@ -416,7 +424,7 @@ total ≈ upstream fetch + max(300 ms, 9000 ms − upstream fetch) + (YouTube on
 ```
 
 An upstream answering within 8.7 s gives 9.0 s, 17.0 s on a cold YouTube link; slower, the mux drops
-to its 300 ms floor and the total tracks the upstream, except on the four container platforms,
+to its 300 ms floor and the total tracks the upstream, except on the container platforms above,
 where 8.7 s is also where the answer stops arriving at all. Set the client timeout to 20 s: the
 17.0 s worst case plus roughly 3 s for connection setup and a slower upstream. 12 s covers a client
 that never sends YouTube links. 5 or 10 s cuts off requests about to answer.
@@ -437,12 +445,18 @@ Either flag means an incomplete answer, and both carry `cache-control: no-store`
 half-answer out of any cache in between.
 
 - `muxing: true`: a video is still being remuxed into the progressive MP4 mbedfx serves, and what
-  arrived is its poster still. A re-request in a few seconds returns a `video`.
+  arrived is its poster still. A re-request a few seconds later carries the `video` for every mux that
+  finishes inline, which is most of them. One that does not is picked up by an alarm instead: first at
+  35 s, or 140 s where the source is separate tracks rather than a page, then again at +2 min and
+  +20 min. So the honest horizon is minutes for a cold long video, not seconds.
 - `pending: true`: a translation lost its race and `text` is the original. The translation is still
   being written; a re-request carries it.
 
-Neither is an error. Both clear on their own, the work behind each running on in `waitUntil`, and an
-answer that ignores them is still correct. `test/api.test.mjs:288` asserts the `no-store`, `317` the
+Neither is an error, and both clear on their own — but by different machinery, which is what sets the
+horizons above. The translation runs on in `waitUntil`. The mux is handed to a Durable Object alarm,
+armed BEFORE the race rather than after it, because Cloudflare cancels an unsettled `waitUntil` thirty
+seconds after the response and the videos that need longer than that are exactly the ones the alarm
+exists for. An answer that ignores either flag is still correct. `test/api.test.mjs:288` asserts the `no-store`, `317` the
 `max-age=900`.
 
 ---

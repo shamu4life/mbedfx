@@ -1,17 +1,36 @@
-# YouTube playback on mbedfx — handoff, 2026-08-23
+# YouTube mux ceilings and bytes — investigation, 2026-08-23
 
-Goal: replace Discord's built-in YouTube embed (ads regardless of length or Premium)
-with our own ad-free MP4. That needs the mux to succeed reliably and quickly.
+**FROZEN 2026-08-28. This is a dated record, not a plan, and it was moved here from the repo root
+because it had stopped being one.** It was written as a handoff while two PRs were open. Both merged
+the same evening, everything it proposed shipped, and its measurements are pinned to a rig that no
+longer exists. Read it for the reasoning, which is still good, and for the numbers only with the
+corrections below applied.
 
-**State, 2026-08-23: committed and in review.** `9e2a1dc` on
-`perf/mux-without-re-extracting` (PR #57, the alarm + telemetry) and
-`fix/mux-durability-and-bytes` stacked on top of it (PR #58, the four items below).
-Neither is merged, and merging is the deploy. Both are green.
+Goal at the time: replace Discord's built-in YouTube embed (ads regardless of length or Premium)
+with our own ad-free MP4. That needed the mux to succeed reliably and quickly.
 
-Its Workers Builds check is RED on both, benignly: branch builds run
-`wrangler versions upload`, which cannot apply a Durable Object migration (error
-10211). `main` runs `wrangler deploy`, which can. See the memory note
-`do-migrations-fail-branch-builds`.
+**What has changed since, in the order it matters:**
+
+- **PRs #57 and #58 both merged on 2026-08-23** and have been running ever since. Everything below
+  filed as "in the tree (uncommitted)" or "in review" is live. The repo was consolidated to a single
+  `main` branch on 2026-08-28, so neither `perf/mux-without-re-extracting` nor
+  `fix/mux-durability-and-bytes` exists on the remote any more.
+- **The `ctx.waitUntil` 30-second ceiling — the central finding below — was lifted by #57.** The
+  `MuxRunner` Durable Object alarm gets 15 minutes. Every conclusion here that reasons from "~8 MB is
+  the most any attempt can finish" was true of the old dispatcher and is not true now.
+- **Every timing here was taken on `instance_type: basic`, a quarter of a vCPU.** That was itself the
+  finding of 2026-08-28: the "15.9s from Cloudflare egress" extract was our own CPU, not YouTube
+  throttling. The container runs `standard-2` now and production measures 3.1-4.7s per client.
+- **The pinned yt-dlp here is 2026.7.4, which returned 0 bytes and HTTP 403 on the default clients.**
+  The image pins 2026.8.19, which returned 11,829,048 bytes on the same video in the same minute. So
+  a 503 recorded below is not cleanly attributable to egress.
+- **The PO token thread is closed, and the answer is no.** `/_clients` measured five of six player
+  clients serving bytes from production egress with no token at all, including the two yt-dlp's own
+  guide says require one. Recorded in `CLAUDE.md`.
+
+A branch build's Workers Builds check went red on both PRs, benignly: branch builds run
+`wrangler versions upload`, which cannot apply a Durable Object migration (error 10211). `main` runs
+`wrangler deploy`, which can. That mechanism is unchanged and is still worth knowing.
 
 ---
 
@@ -48,7 +67,8 @@ its bytes on every losing roll. That is the ten minutes, and why it never conver
 
 ## Measured 2026-08-23, so nobody re-derives it
 
-With the **pinned yt-dlp 2026.7.4** (installed locally, same version as the image) and
+With **yt-dlp 2026.7.4** — what the image pinned at the time, replaced by 2026.8.19 on
+2026-08-28 — and
 the exact production argv, on `Qy2DltXI3Fc` (625 s — a 10-minute video):
 
 - format **18**, `640x360`, 414 kbps, **`proto=https`**, **32,347,090 bytes**
@@ -62,7 +82,7 @@ the exact production argv, on `Qy2DltXI3Fc` (625 s — a 10-minute video):
   `134`+`140` is the *same* 640x360 at **19.2 MiB — 38% fewer bytes**. Under a throughput
   throttle, bytes are the binding constraint. Not acted on.
 
-## What is in the tree (uncommitted)
+## What shipped in PR #57, and lifted the 30 s ceiling above
 
 1. **`MuxRunner`** (`src/muxrunner.ts` + `src/muxpolicy.ts`, binding `MUX_RUNNER`,
    migration `v2`) — a Durable Object whose **alarm gets 15 minutes**. Fires at 35 s,

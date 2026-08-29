@@ -9,7 +9,7 @@ plays inline.
 - UI: `public/index.html`, one file of hand-written vanilla JS and CSS. Its visible copy carries no
   em dashes and no second person. The owner asked for that, later edits re-broke it within a day,
   and a test now asserts it.
-- Version: 1.11.0 (`package.json` is authoritative; this line has been stale before).
+- Version: 1.11.1 (`package.json` is authoritative; this line has been stale before).
 
 ## What gets a PR sent back
 
@@ -25,7 +25,7 @@ plays inline.
 - Do not guess. If something can't be determined, say so on the card. Never invent a plausible value
   to fill a hole.
 - Keep fetching and normalising separate. Every platform has a `fetch.ts` for the I/O and a pure
-  `normalize.ts`. Captured fixtures test the pure half, and the whole suite runs offline in ~20s.
+  `normalize.ts`. Captured fixtures test the pure half, and the whole suite runs offline in ~30s.
   Keep the judgement in the pure half.
 
 ## Layout
@@ -36,6 +36,7 @@ plays inline.
 | `src/refkey.ts` | **the security boundary.** What crosses the wire and comes back; kind lists are allowlists |
 | `src/worker.ts` | dispatch, caching, deadlines, the container calls |
 | `src/platforms/<site>/` | `fetch.ts` (I/O) + `normalize.ts` (pure) |
+| `src/fetchretry.ts` | `askTwice`, the one extra ask every platform fetcher goes through. The two exempt call sites say `NO-RETRY` and why |
 | `src/render/` | the two heads, the Mastodon spoof, failure cards |
 | `src/render/embed.ts` | shared predicates: `usable`, `mediaOf`, `themeColor`, `byline` |
 | `src/render/text.ts` | `statParts`, the quote block, the plain-text builders |
@@ -64,6 +65,12 @@ plays inline.
 - A cache key has to capture what produced the answer. The translation cache was keyed on the post
   text alone, so changing the model couldn't invalidate a stale answer. Hence `XLATE_GENERATION` and
   `RESOLVER_GENERATION`. Bump them when the engine, prompt or stored shape changes.
+  `RESOLVER_GENERATION` also does a second job its name does not advertise: it names the Durable
+  Objects, so bumping it forces brand-new container instances. That is the lever that ends a
+  bad-image outage, and it was spent for exactly that on 2026-08-28 with every record perfectly
+  fine. A pooled instance keeps running the image it booted with until it idles out, `sleepAfter`
+  is five minutes that ANY request resets, and under live traffic the broken instances were being
+  held open by the very requests they were failing.
 - A degraded card must not be response-cached. A video still muxing renders its cover image, and
   caching that means the real video never appears. Same for a translation that lost its race.
 - Every deadline is a budget on the whole response, not on one step of it. `META_WAIT_API_MS` sat at
@@ -75,6 +82,28 @@ plays inline.
   check what the preview does. Skipping that shipped two defects in one day: the 1970 epoch on every
   YouTube preview, because only Discord's own unfurl warmed the date, and translations that looked
   unreliable because the preview's budget went to a mux queued ahead of it.
+- Python ends a class at the first unindented line, so an edit that lands below `class Handler`
+  silently stops being a method. 1.11.0 shipped a container whose `do_GET` and `do_POST` had been
+  demoted that way, and `BaseHTTPRequestHandler` answered every request with `501 Unsupported
+  method`: `/health` and every mux on every platform broke together. `container/test_server.py`
+  now asserts the SHAPE rather than the behaviour, because shape is what the bad edit changed —
+  the request methods must belong to `Handler`, and the probe helpers must not.
+- A green `/_smoke` does not mean the container is alive. It stayed 17 of 17 green through that
+  entire outage, because most of its checks never reach the resolver and YouTube's metadata now
+  comes from Innertube rather than from `yt-dlp` — so the one platform most likely to expose a
+  dead container had stopped depending on it. 1448 tests passed alongside it: the Worker suite
+  stubs the container out, and the Python suite exercises the pure helpers, which were never the
+  broken part. `/_smoke` says the heads still render. `/_clients` is the check that reaches the
+  container.
+- A PO token minter buys this project nothing, and re-opening that question costs weeks. Measured
+  2026-08-28 through `/_clients` on production egress: five of six player clients served bytes
+  with no token at all, including `tv_simply` and `mweb`, which are precisely the two yt-dlp's own
+  PO Token Guide says require one. Five minters were built and tested before that, and every
+  positive result had an equally green no-token control. Two readings from the same run are worth
+  keeping because both contradict the published table: `web_safari` works from Cloudflare where it
+  failed residentially on the same video, and `android_vr` is refused from this egress although
+  the table lists it as needing nothing. There is also no working YouTube age-gate bypass — 68
+  candidate repositories were checked and none works.
 - `git add -A` sweeps in agent scratch. `.gitignore` has four essays about this. Always use
   slashless patterns. A `dir/` pattern won't match a symlink or a path that doesn't exist yet.
 
@@ -120,7 +149,7 @@ here than in a single-platform fixer.
 | No public JSON API | Closed. `/_api/v1?url=…` is documented in `docs/API.md` and shares `describeTarget` with `/_card`, so it cannot drift from the other three surfaces. Two rivals publish an API and FxEmbed ships OpenAPI specs; `public/openapi.json` (OpenAPI 3.1) is served at `/openapi.json` since 2026-08-12, and a derive-and-compare test fails when it drifts from the code that answers. Writing it is what found a live wrong answer: a walled TikTok share code was published as `not_a_post` about a post that exists. |
 | No realistic self-hosting | Open, with no known blocker, and the SAFETY half is now closed. The suite runs in stock Node against `src/worker.ts`, `handle()` is already an adapter entry point, six of the eight Cloudflare surfaces it touches need only an object literal, and `container/` has no Cloudflare surface at all. Since 2026-08-12 the corrections that stood between "it would run" and "it would be safe to expose" have landed: the private-address guard the Worker half never had (`src/netguard.ts`, ported from `container/server.py`, with a `RESOLVE_HOST` seam for the DNS half a Worker cannot do), a configurable and additive `OWN_HOSTS`, a Twitter guest-token cache that works where the `cf` fetch option is ignored, a bound on the mux buffering fallback, and the `CacheLike` contract written down. Three rivals hand over a container and this repo documents `wrangler dev`. What's missing is an adapter and somebody to run it. The unknown is egress IP. Plan in `docs/SELF-HOSTING.md`. |
 | No profile embeds | Closed where it was real, and measured closed where it was not. `/profile/{handle}` renders a Bluesky account (bio, avatar, three counts, join month) because bsky.app hands a crawler `og:title` and nothing else. Measured 2026-08-11 from Cloudflare egress, x.com, tiktok.com and instagram.com all already answer a crawler with a complete profile card, so a route for them would duplicate what Discord draws; Instagram's profile surfaces are additionally walled from this egress (HTTP 429, zero bytes, with a post-page control at 254 KB). Bare `/{handle}` and `/@{handle}` stay choosers: each names an account on two sites at once, so claiming one serves a card from a site nobody pasted. vxTwitter can claim bare handles because it serves one platform. |
-| No operator metrics | Half closed. `docs/METRICS.md` documents the Analytics Engine SQL read path, and since 2026-08-12 a half-hourly cron renders one known post per platform through this worker's own handler and counts whether a real card came back (`src/smoke.ts`, `/_smoke`), added because Facebook was broken for up to a week and the detector was the owner pasting a link. That is a breakage detector, not an uptime monitor: it runs inside the worker it checks. There is deliberately no scrape endpoint: an in-Worker one would need an account-scoped API token at the edge, and `pool_unused` publishes whether the account pools are loaded. fxTikTok has a `/metrics`; this Worker doesn't. |
+| No operator metrics | Half closed. `docs/METRICS.md` documents the Analytics Engine SQL read path, and since 2026-08-12 a half-hourly cron renders one known post per platform through this worker's own handler and counts whether a real card came back (`src/smoke.ts`, `/_smoke`), added because Facebook was broken for up to a week and the detector was the owner pasting a link. That is a breakage detector, not an uptime monitor: it runs inside the worker it checks. There is deliberately no scrape endpoint: an in-Worker one would need an account-scoped API token at the edge, and `pool_unused` publishes whether the account pools are loaded. `/_clients` joined it on 2026-08-28, a sibling probe that runs inside the container on production egress and reports which YouTube player clients actually serve bytes; it takes no input and rides the existing authenticated `/resolve`, so it opens no new surface, and it degrades to 503 or 502 rather than 500 because a diagnostic that crashes tells an operator less than one that says it could not reach the container. It exists because `/_smoke` stayed green through a total container outage the same week. fxTikTok has a `/metrics`; this Worker doesn't. |
 | No card screenshots in the README | Four of the five show the card their project produces. The README shows a designed banner. |
 
 Do not assume the converter page is unique. InstaFix Revived ships one. This one adds cross-site

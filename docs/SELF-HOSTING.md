@@ -34,13 +34,22 @@ docker run -p 8080:8080 -e RESOLVER_SECRET="$(openssl rand -hex 32)" media-resol
 curl localhost:8080/health
 ```
 
-`container/server.py:350` checks `X-Resolver-Secret` only when `RESOLVER_SECRET` is set. Unset, that
+`container/server.py:654` checks `X-Resolver-Secret` only when `RESOLVER_SECRET` is set. Unset, that
 second command is an unauthenticated remuxer that fetches and downloads whatever any caller names.
 Do not publish it or bind it to a public interface.
 
 `container/Dockerfile:16` installs an x86_64 Deno binary and `container/README.md:264` requires
 linux/amd64, which `--platform` pins above. What an arm64 build produces is unrecorded; nobody has
 built or resolved on one.
+
+**Size the host for yt-dlp's extraction, not for ffmpeg's remux.** The public instance ran the
+resolver on a quarter of a vCPU until 2026-08-27 and paid 14-17 s per YouTube extract for it; on one
+vCPU the same extract measured 3.1-4.7 s per client from the same egress the next day. For a long time
+that 15.9 s was read as YouTube throttling a datacenter IP, and it was our own CPU. The gain stops
+dead at one vCPU, because the hot path is single-threaded Python and an `ffmpeg -c copy` remux, so
+four cores buy nothing over one. `wrangler.jsonc` now asks for `standard-2` (1 vCPU, 6 GiB memory,
+12 GB disk); a self-hoster wants at least one dedicated core and enough disk for `MAX_BYTES` plus the
+unmerged tracks.
 
 ---
 
@@ -67,7 +76,7 @@ module graph loads and executes under Node, and nothing more.
 
 ### The adapter entry point
 
-`env`, `ctx` and `Deps` are ordinary parameters of `handle()` at `src/worker.ts:3938`, and the
+`env`, `ctx` and `Deps` are ordinary parameters of `handle()` at `src/worker.ts:4366`, and the
 Workers-specific default export is nine lines wrapped around it:
 
 ```ts
@@ -112,11 +121,12 @@ and a `fakeR2()` doing head / get / get-with-range / put over a `Map`
 
 Outside `Env`, `caches.default` is reached only through the hand-written `CacheLike` injected via
 `Deps` (`src/worker.ts`). `ExecutionContext` is
-used for `ctx.waitUntil` and nothing else, across nine call sites in `src/worker.ts`, with no
-`passThroughOnException`, `ctx.props` or `ctx.exports`. Nine is the count of invocations; a grep for
-`ctx.waitUntil` returns 13, five of which are prose inside comments, and the ninth invocation is the
-optional-chained `ctx?.waitUntil` at `src/worker.ts:2251` that the literal grep never matched. An
-earlier revision of this file printed that 13.
+used for `ctx.waitUntil` and nothing else, across fifteen call sites in `src/worker.ts`, with no
+`passThroughOnException`, `ctx.props` or `ctx.exports`. Fifteen is the count of invocations; a grep for
+`ctx.waitUntil` returns 25, ten of which are prose inside comments, and the fifteenth invocation is the
+optional-chained `ctx?.waitUntil` at `src/worker.ts:2584` that the literal grep never matched. An
+earlier revision of this file printed the grep count instead of the invocation count, which is the
+mistake this sentence now spends three clauses making impossible to repeat.
 
 ### Workers-only globals
 
@@ -148,20 +158,28 @@ A Node port needs the same boundary: nothing on the request path may import that
 
 ### The container has no Cloudflare surface
 
-`container/server.py` is 430 lines and imports only the standard library (`ipaddress`, `json`, `os`,
-`socket`, `subprocess`, `tempfile`, `http.server`, `urllib.parse`). Lines `:428-430` are the whole
-entry point: `port = int(os.environ.get("PORT", "8080"))` under `if __name__ == "__main__":`, then
+`container/server.py` is 746 lines and imports only the standard library (`ipaddress`, `json`, `os`,
+`socket`, `subprocess`, `tempfile`, `time`, `urllib.error`, `urllib.request`, `http.server`,
+`urllib.parse`) — the client probe added the last three and needed nothing outside it. Lines
+`:744-746` are the whole entry point: `port = int(os.environ.get("PORT", "8080"))` under `if __name__ == "__main__":`, then
 `ThreadingHTTPServer(("0.0.0.0", port), Handler).serve_forever()`.
 
 `container/Dockerfile` is `python:3.12-slim` plus ffmpeg, `yt-dlp[default,curl-cffi]` pinned to an
-exact NIGHTLY version and a static Deno binary, `EXPOSE 8080`, `CMD ["python", "server.py"]`. None of
+exact STABLE version and a static Deno binary, `EXPOSE 8080`, `CMD ["python", "server.py"]`. None of
 it needs porting.
 
-The yt-dlp version is deliberately not repeated here. It is bumped weekly by
-`.github/workflows/ytdlp-freshness.yml`, so a number written into this page would be wrong within
-days and would send self-hosters to a build that cannot play YouTube — read the pin off
-`container/Dockerfile`, which is the only place it lives. The Dockerfile explains why the channel is
-nightly rather than stable, and why the pin is exact rather than a floor. The
+The yt-dlp version is deliberately not repeated here. `.github/workflows/ytdlp-freshness.yml` PROPOSES
+a bump weekly, so a number written into this page would be wrong within days and would send
+self-hosters to a build that cannot play YouTube — read the pin off `container/Dockerfile`, which is
+the only place it lives. The Dockerfile explains why the channel is stable rather than nightly, and
+why the pin is exact rather than a floor.
+
+**What the weekly job cannot do is merge, and a pin nobody merges goes stale silently.** It spent six
+weeks unable even to propose one: the repository's "Allow GitHub Actions to create and approve pull
+requests" setting was off, so `gh pr create` failed and the job fell back to raising an issue, exactly
+as designed — and the issue then sat for four days. The setting was turned on on 2026-08-28. If you
+fork this, the fallback matters more than the happy path: check that the pin has actually moved rather
+than that the workflow is green. The
 image has not been re-exercised outside Workers, though `server.py` itself has: it answered
 `/health`, enforced `X-Resolver-Secret` and refused every SSRF probe on a stock interpreter with no
 container at all, 2026-08-08 on macOS x86_64. `container/README.md` documents that path under
@@ -175,6 +193,8 @@ From the module docstring and `do_POST` in `container/server.py`. **`POST /resol
 { "video": "<url>", "audio": "<url>"|null }   // ffmpeg -c copy mux of tracks already extracted
 { "page":  "<url>" }                          // yt-dlp resolves + merges (any yt-dlp-supported site)
 { "page":  "<url>", "meta": true }            // METADATA ONLY: one `yt-dlp -J`, no download
+{ "probe": true }                             // DIAGNOSTIC: extract PROBE_VIDEO with every client in
+                                              // PROBE_CLIENTS, then range-fetch each chosen format
 ```
 
 Any shape also accepts `"cookies"`, the contents of a Netscape `cookies.txt`. The jar is
@@ -188,15 +208,17 @@ cover image (`src/worker.ts`).
 | | |
 |---|---|
 | `200 video/mp4` | the muxed file, streamed. Remux, never transcode: `-c copy -movflags +faststart` |
-| `200 application/json` | meta mode only, a passthrough of `yt-dlp -J` |
+| `200 application/json` | meta mode, a passthrough of `yt-dlp -J`; or probe mode, `{ok, video, ytdlp, ms, serving, clients}` |
 | `4xx/5xx application/json` | `{"error": "..."}`. `400` bad json / `need 'page' or 'video'` / invalid source; `401` unauthorized; `404` not found; `502` mux failed, meta failed, empty or oversized result; `504` mux timed out, meta timed out; `500` internal error |
 | `GET /health` | `200 ok` |
 
 stderr is suppressed on failure; it can carry the source URL.
 
-**Environment** (`container/server.py:46-53`, `PORT` read once at `:429`): `PORT` (8080),
+**Environment** (no longer one block: `MAX_SECONDS` `:49`, `MAX_BYTES` `:50`, `PROC_TIMEOUT` `:55`,
+`RESOLVER_SECRET` `:181`, `PROBE_TIMEOUT` `:523`, and `PORT` read once at `:745`): `PORT` (8080),
 `RESOLVER_SECRET` (unset = no auth), `MAX_SECONDS` (1500), `MAX_BYTES` (393216000, a 375 MB output
-ceiling), `PROC_TIMEOUT` (120 s per subprocess). `server.py` is authoritative whenever
+ceiling), `PROC_TIMEOUT` (120 s per subprocess), `PROBE_TIMEOUT` (45 s per client, read only by the
+client probe). `server.py` is authoritative whenever
 `container/README.md` disagrees, and the README has carried a stale pair before. `MAX_SECONDS` and
 `MAX_BYTES` were raised together on 2026-08-03 (`container/server.py:48`) and have to move together:
 the mux is `-c copy`, and output size is the source bitrate times the duration.
@@ -214,7 +236,11 @@ the mux is `-c copy`, and output size is the source bitrate times the duration.
 
 ## Egress IP
 
-Platforms answer a datacenter IP differently from a residential one, in both directions.
+Platforms answer a datacenter IP differently from a residential one, in both directions. Some of
+that difference is a FLAP rather than a rule, and since 1.11.0 the fetchers no longer take a single
+refusal as the answer: `src/fetchretry.ts` carries one extra ask (`askTwice`, `ASK_ATTEMPTS = 2`,
+retried on 408, 425, 429 and 5xx) across twenty-four call sites in fifteen platform fetchers. So read
+the rows below as what a host is refused TWICE, not once.
 
 | Platform / surface | Measured | Where |
 |---|---|---|
@@ -225,7 +251,7 @@ Platforms answer a datacenter IP differently from a residential one, in both dir
 | Threads video (`scontent*.cdninstagram.com`) | Meta blocks Cloudflare's datacenter egress for these bytes: "our container can't fetch it … that fetch is a datacenter IP; Discord's proxy is not". Threads video is a 302 to Discord's own proxy, never a remux or a byte proxy. | `src/platforms/threads/normalize.ts`, `src/mediaproxy.ts` |
 | Google translate endpoint | Measured 2026-07-31 from a Worker: answers in 13-16 ms and is not blocked from Cloudflare's egress. It does rate-limit bursts, and ~30 requests in a few seconds drew HTTP 429 on every one. | `src/translate.ts` |
 | Twitter guest endpoints | Byte-identical from residential and Cloudflare Workers egress in the 2026-07-19 recon; the activation and `TweetResultByRestId` were both measured working. | `src/platforms/twitter/fetch.ts`, `:129`, `:147` |
-| YouTube via yt-dlp | Not datacenter-IP-blocked. Measured 2026-07-22 from Cloudflare Container egress: a `{page}` resolve returns a real ad-free MP4. It needed Deno for the signature challenge, not a different IP. | `container/README.md` |
+| YouTube via yt-dlp | Not datacenter-IP-blocked, and measured PER PLAYER CLIENT since 2026-08-28. A `{page}` resolve returned a real ad-free MP4 from Cloudflare Container egress on 2026-07-22; it needed Deno for the signature challenge, not a different IP. `/_clients` then extracted one video with six clients on that egress and range-fetched each chosen format: `default`, `web_embedded`, `tv_simply`, `mweb` and `web_safari` all served bytes with NO PO token, and only `android_vr` was refused (`http-403`). `tv_simply` and `mweb` are the two clients yt-dlp's PO Token Guide says require one, so a token provider buys a self-hoster on datacenter egress nothing. Refusals are intermittent rather than absolute — worth one retry, not a verdict. | `src/worker.ts` (`/_clients`), `container/README.md` |
 | Instagram copyright recovery (`copyright_recovered`) | Unconfirmed from Cloudflare egress. Every measurement behind it is residential, and the recovery fails silently into a cover still. The counter exists so the failure is visible at all. | `src/analytics.ts` |
 | Instagram generally | Instagram's behaviour toward Cloudflare is PATH-DEPENDENT: a residential result does not transfer to Workers egress by itself. | `src/platforms/instagram/fetch.ts` |
 
@@ -434,3 +460,11 @@ Run the fetchers from the host you plan to use and compare against the table abo
 anonymous `.json`, a Facebook `/share/{code}`, an Instagram embed for a known-public post, a Threads
 `scontent` video URL, and a Google translate call. Record the results here with the date and the
 host type.
+
+**YouTube has an instrument rather than a procedure.** `GET /_clients` runs `container/server.py`'s
+probe on your own resolver: it extracts one fixed video with each client in `PROBE_CLIENTS` and then
+range-fetches the format each one chose, so it reports bytes rather than a format list. That
+distinction is the point — a client can list formats and still be refused by googlevideo, and only the
+range fetch tells them apart. Run it from the egress you intend to serve from before concluding
+anything about YouTube on your host, because every claim in this project that was reasoned from a
+laptop and not re-measured this way turned out to be wrong in one direction or the other.

@@ -40,7 +40,7 @@ import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlsplit
 
-# 20 min. This bounds WORK, not the user's patience — and it is deliberately NOT set to "whatever plays on
+# 25 min. This bounds WORK, not the user's patience — and it is deliberately NOT set to "whatever plays on
 # the first paste". A {page} mux downloads the whole video before we can serve a byte, so time-to-play
 # scales with length; a 10-min ceiling made long videos fail FOREVER, which is strictly worse than making
 # them arrive late. They now mux like anything else: the first paste renders the still card (the card only

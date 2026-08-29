@@ -11,6 +11,43 @@ Nothing yet.
 
 ---
 
+## [1.11.1] - 2026-08-28
+
+### Fixed
+- **The 1.11.0 container answered every request with `501 Unsupported method`, and every mux on every
+  platform broke together.** The patch that added the `/_clients` probe anchored on a class statement
+  that does not exist in this file, took its fallback anchor, and spliced the module-level probe
+  helpers into the middle of `Handler`'s body. A Python class ends at the first unindented line, so
+  `do_GET` and `do_POST` stopped being methods and `BaseHTTPRequestHandler`'s own base implementation
+  answered instead — which is a 501 for every verb. The helpers now sit above the class, and the
+  patch script that placed them verifies with `ast` rather than with a string anchor.
+- **The repair was live for ten minutes before production noticed it.** Container image 120 was
+  correct and deployed; seven pooled instances kept serving the broken image because an instance runs
+  the image it booted with until it idles out, `sleepAfter` is 5m, and *any* request resets that
+  timer — so under live traffic the broken instances were kept alive by the very requests they were
+  failing. Six minutes of deliberate quiet did not clear it. `RESOLVER_GENERATION` `g12` -> `g13`
+  ended it, because that string names the Durable Objects and changing it forces brand-new instances.
+  Recorded in `src/worker.ts` as the first time that constant has been spent to end an outage rather
+  than to invalidate a wrong record. If it recurs, a shorter `sleepAfter` is the cheaper permanent
+  answer than another bump; `src/container.ts` already argues 3m is available.
+
+### Added
+- **Three tests that assert the container's handler SHAPE**, not just its helpers
+  (`container/test_server.py`). `do_GET` and `do_POST` must be attributes of `Handler`, and the probe
+  helpers must be module-level. Nothing in 1448 Worker tests or 31 container tests could see this
+  defect: the container suite calls the pure helpers, which were all fine, and the Worker suite stubs
+  the container away entirely.
+
+### Known gap
+- **`/_smoke` stayed 17/17 green throughout a total container outage.** Most of its checks never reach
+  the container, and YouTube metadata now comes from Innertube rather than from `yt-dlp`, so the one
+  platform most likely to expose a dead container stopped depending on it. The breakage detector this
+  project added *because* Facebook was once broken for a week could not see a worse break than that
+  one. Nothing yet drives the container's HTTP surface end to end from the smoke path. Documented
+  rather than fixed, because the fix is a design decision about what `/_smoke` is for.
+
+---
+
 ## [1.11.0] - 2026-08-28
 
 ### Added
@@ -23,7 +60,7 @@ Nothing yet.
   egress, so the card was lost to Cloudflare's egress being refused once.
   Only a REFUSED request is retried (408/425/429/5xx, or a thrown fetch). A parsed body is a verdict
   and is believed on the first ask, which is what keeps the cost bounded: a nonexistent Twitter id
-  answers HTTP 200 with a parseable tombstone, so dead links still cost exactly one request. 22 call
+  answers HTTP 200 with a parseable tombstone, so dead links still cost exactly one request. 24 call
   sites across 15 fetchers, and a source-derived test requires every `await fetch(` under
   `src/platforms` to be routed through it or carry a `NO-RETRY` comment saying why not.
 - **`/_clients`, which answers which YouTube player client actually serves bytes from production

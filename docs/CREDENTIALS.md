@@ -8,6 +8,15 @@ Unfilled, those posts render `🔞 This post is age-restricted` over "Can't prev
 posts." in `#657786` (`src/render/index.ts:61`), the correct answer without accounts. A filled
 secret turns them into ordinary cards and changes nothing else.
 
+**A pool is for the gate and for nothing else, and a PO token is not one of these.** An operator
+arriving from yt-dlp's PO Token Guide will reasonably assume a token provider belongs beside these
+pools. It does not, and that is measured rather than assumed: `/_clients` on 2026-08-28 extracted one
+video with six player clients from the production container and range-fetched each chosen format, and
+five of the six served bytes with no token at all — including `tv_simply` and `mweb`, the two clients
+that guide lists as REQUIRING a GVS token. Ordinary YouTube playback from this egress needs no
+credential and no token. Five minters were built and tested before that measurement existed, and every
+positive result had an equally green no-token control.
+
 ---
 
 ## Throwaways only
@@ -73,8 +82,11 @@ YouTube rotates cookies, and a session used in two places tends to invalidate th
 **Never use a Premium account.** yt-dlp picks its player clients from the cookies, and a Premium
 session selects a set with no `web_safari`, checked against yt-dlp 2026.07.04's source. `web_safari`
 alone carries the timezone-bearing microformat that `ytDateSeconds` (`src/worker.ts:2264`) parses
-`timestamp` from. A Premium jar makes the intermittent missing-date bug permanent on every YouTube
-video, and the card reads as a broken extract. An ordinary free throwaway is fine: `web_safari` sits
+`timestamp` from. A Premium jar used to make the intermittent missing-date bug permanent on
+every YouTube video. It does not any more: the render path asks `youtubei/v1/player` first
+(`src/platforms/youtube/innertube.ts`) and that call carries no jar, so the date, description and
+duration arrive without touching the client list above. What a Premium jar costs today is the
+FALLBACK, on the videos Innertube refuses — and the card reads as a broken extract on those. An ordinary free throwaway is fine: `web_safari` sits
 in the same position of both the anonymous and the ordinary logged-in client lists. `9cab036` added
 this section on 2026-08-04, the first time this file mentioned upload dates at all; the warning it
 supersedes, that any cookie jar worsened the epoch bug, was never written here, and
@@ -136,10 +148,15 @@ recipe "Are the account pools working", against the analytics counters.
 Filling a pool needs no deploy, no TTL wait and no cache flush. `wrangler secret put` does not have
 to be timed against a merge. `YT_META_TTL_MS` is 30 days (`src/worker.ts:2118`), so every age-gated
 video viewed before fill-day left a record saying `ageLimit: 18`, written by a jar-capable build
-with no jar to send. Those are `g10` records too, the generation the running build still writes, so
-1.8.0's bump to `g10` retired nothing here: `metaCacheKey` (`src/worker.ts:1657`) namespaces every
-record by generation, and a bump to `g11` would orphan these along with a month of good dates,
-descriptions and counts. `ytMetaUsable` (`src/worker.ts:2240`) refuses a gated record carrying no
+with no jar to send. Those were `g10` records, the generation the running build wrote at the
+time, so 1.8.0's bump to `g10` retired nothing here: `metaCacheKey` (`src/worker.ts:2246`) namespaces
+every record by generation, and a bump would orphan them along with a month of good dates,
+descriptions and counts. THREE BUMPS HAVE SINCE LANDED and the running build writes `g13`: `g11` on
+2026-08-18 for the player-client change, `g12`, then `g13` on 2026-08-28 — that last one spent not to
+invalidate a wrong record but to force brand-new container instances out of a 501 outage, which is a
+use of this constant worth knowing about before you read a bump as evidence the records were suspect.
+Each one paid the cost this paragraph weighs, so the pre-fill-day records it worries about are long
+gone. `ytMetaUsable` (`src/worker.ts:2240`) refuses a gated record carrying no
 `jarred` flag while `jarAvailable(env, 'yt')` holds, and the next view re-extracts with the jar.
 That conditional shipped in 1.9.0 on 2026-08-04 (`docs/CHANGELOG.md:8`, `:39`) and adds no second
 bump. Without it, filling a secret heals none of those records, and `pool_unused` reports the fresh
@@ -147,7 +164,7 @@ accounts as dead.
 
 Rotating a dead pool leaves the cached verdicts in place. A record measured with a jar that still
 says gated is treated as correct, because the extract was logged in and walled anyway. Only a
-`RESOLVER_GENERATION` bump (`src/worker.ts:1187`, currently `g10`) clears it.
+`RESOLVER_GENERATION` bump (`src/worker.ts:1517`, currently `g13`) clears it.
 
 ---
 

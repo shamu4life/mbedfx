@@ -15,6 +15,7 @@ yt-dlp knows. Those posts are cover stills without it.
                                              // a bare HLS .m3u8 or DASH .mpd as `video` with no `audio`)
 { "page": "<url>" }                          // yt-dlp resolves + merges (YouTube/Vimeo/FB/…)
 { "page": "<url>", "meta": true }            // METADATA ONLY (yt-dlp -J, no download) — see below
+{ "probe": true }                            // DIAGNOSTIC (yt-dlp per client + a range fetch) — see below
 ```
 
 - **200 `video/mp4`** is the muxed file, streamed. The Worker pipes it straight into R2 and serves
@@ -89,6 +90,35 @@ minutes (Streamable) to 24 hours (Dailymotion, Imgur). `src/worker.ts` carries t
 record rather than inside it — see `cachedYtdlpMeta` — so a cache hit has no shortcut by
 construction and muxes from the page. The mux tries the tracks and falls back to the page, which is
 the only safe way to use a url that can go stale between the two calls.
+
+### Probe mode (`{"probe": true}`)
+
+`200 application/json`. A DIAGNOSTIC, not a serving path: it extracts one fixed video with each client
+in `PROBE_CLIENTS` and then RANGE-FETCHES the format that client chose, reporting bytes.
+
+```jsonc
+{ "ok": true, "ms": 20233, "video": "jNQXAC9IVRw", "ytdlp": "2026.08.19",
+  "serving": ["default", "web_embedded", "tv_simply", "mweb", "web_safari"],
+  "clients": [ { "client": "default", "extracted": true, "formats": 24,
+                 "gvs": "ok", "bytes": 65536, "ms": 3378 }, … ] }
+```
+
+**The range fetch is the whole point.** A client can extract happily and then be refused by
+googlevideo, and only fetching bytes tells the two apart — `android_vr` reported `extracted: true,
+formats: 1` and served nothing on the first production run. A probe that asserted on a format count
+would have called it healthy. This is the same rule the rest of the repo follows: assert on content,
+never on status.
+
+It takes NO INPUT. The video id (`PROBE_VIDEO`) and the client list (`PROBE_CLIENTS`) are constants in
+`server.py`, which is what makes two runs comparable rather than a measurement of whichever video was
+passed. It rides this same authenticated `/resolve`, so it opens no new surface, and its range fetch
+goes through `_safe_url` like every other fetch here. `PROBE_TIMEOUT` (45 s) bounds each client
+separately; the clients run SERIALLY on purpose, because they contend for the same CPU and running
+them together would measure the contention rather than the clients.
+
+It is reached in production as `GET /_clients` on the Worker. Run it when YouTube muxes are failing
+and `/_smoke` says everything is fine — `/_smoke` cannot see this container, which is how a total
+outage stayed 17/17 green on 2026-08-28.
 
 ## `RESOLVER_GENERATION`
 
@@ -176,10 +206,19 @@ Running it anywhere else is [Running it standalone](#running-it-standalone) belo
 Instances are pooled onto `RESOLVER_SLOTS` keys, not minted per post. A deploy starts a gradual
 rollout that retires them over minutes, and an instance the rollout hasn't reached keeps the image
 it booted with until it sleeps (`sleepAfter`, 5m) or is otherwise recycled. A fresh post will most
-likely land on an existing warm slot, so it's an unreliable way to reach a new image. The g10 block
-in `src/worker.ts` has the note on the rollout.
+likely land on an existing warm slot, so it's an unreliable way to reach a new image. The
+`RESOLVER_GENERATION` block in `src/worker.ts` has the note on the rollout.
 
-To reach a rebuild sooner, wait out `sleepAfter` or recycle the instances.
+**"Wait out `sleepAfter`" DOES NOT WORK UNDER LIVE TRAFFIC, and this was learned the hard way on
+2026-08-28.** Any request resets the timer, so an instance serving a broken image is kept alive by the
+very requests it is failing. A container image that was correct and deployed sat behind seven broken
+instances for ten minutes, and six minutes of deliberately not touching the service did not clear it.
+
+The lever that does work is **`RESOLVER_GENERATION`**. It names the Durable Objects, so bumping it
+sends the next request to a brand-new instance, which boots on the current image. It costs the cached
+meta records — that is a real price, and it is the right one to pay to end an outage. If this keeps
+happening, a shorter `sleepAfter` is the cheaper permanent fix; `src/container.ts` already argues 3m
+is available.
 
 ## Running it standalone
 
@@ -251,11 +290,21 @@ where yt-dlp builds its own ffmpeg call.
 The interface note above still advertises a bare `.mpd` as `video`, which is the shape to re-measure
 before relying on it, and a self-hoster on a newer ffmpeg than the image's is who would find out.
 
-## Status (2026-08-03)
+## Status (2026-08-28)
 
 Reddit and Bluesky single videos play in production, since their HLS muxes to a progressive
 faststart MP4. Both were confirmed live against a real post: 200 `video/mp4` with a valid `ftyp`,
 Range answered 206, the file cached in R2.
+
+Since 2026-08-27 this runs on `standard-2` (1 vCPU) rather than `basic` (1/4 vCPU). Measured from
+production egress the next day, a per-client YouTube extract takes 3.1-4.7 s; it took 14-17 s before,
+and that figure had been read as YouTube throttling for weeks. Do not go past `standard-2`: the work
+is single-threaded and the gain stops dead at one core.
+
+Also measured 2026-08-28, from that egress, with no PO token anywhere: `default`, `web_embedded`,
+`tv_simply`, `mweb` and `web_safari` all served bytes; only `android_vr` was refused. `tv_simply` and
+`mweb` are the two clients yt-dlp's PO Token Guide lists as REQUIRING a token, so the token question
+is closed for this container.
 
 ## Testing the container after deploy
 

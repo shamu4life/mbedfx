@@ -19,8 +19,9 @@
 # string outright rather than trusting the query to have asked for the right thing.
 #
 # EXPECT MOST MONDAYS TO BE QUIET, and do not read that as the job being broken. Stable ships
-# sparsely: 2026 gave 2026.3.3, 2026.3.13, 2026.3.17, 2026.6.9 and 2026.7.4, an eleven-week gap
-# between March and June. The check still runs weekly; it simply has nothing to open most weeks. What
+# sparsely: measured on PyPI 2026-08-28, this year gave 2026.3.3, 2026.3.13, 2026.3.17, 2026.6.9,
+# 2026.7.4 and 2026.8.19 — an eleven-week gap between March and June, and six more weeks after July.
+# The check still runs weekly; it simply has nothing to open most weeks. What
 # it buys is that a stable release is picked up within a week instead of never — which is the defect
 # it replaced, not a smaller version of it.
 #
@@ -63,7 +64,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - name: Compare the pin against the newest nightly on PyPI
+      - name: Compare the pin against the newest stable on PyPI
         id: v
         run: |
           set -euo pipefail
@@ -170,7 +171,11 @@ jobs:
           # permitted to create or approve pull requests". The branch is already pushed by then, so
           # the work is not lost; what would be lost is any signal that it happened. Falling back to
           # an issue keeps the weekly heartbeat visible either way, and an issue needs no such
-          # setting. Turn the setting on to get the nicer path.
+          # setting. IT FIRED ONCE FOR REAL: the 2026.8.19 bump on 2026-08-24 pushed its branch, was
+          # refused the PR, and raised issue #59. The setting was turned on on 2026-08-28, so this
+          # should now be the cold path — which is a reason to keep it here, not a reason to delete
+          # it. A permission can be revoked as easily as it was granted, and the failure it catches
+          # is silent by construction.
           if gh pr create --base main --head "$branch" \
                --title "chore(container): yt-dlp ${CURRENT} -> ${LATEST}" \
                --body-file /tmp/pr-body.md; then
