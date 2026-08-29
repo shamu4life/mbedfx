@@ -491,13 +491,32 @@ test('THE yt ACTIVITY DOCUMENT GETS THE LONGER BUDGET, AND THE OTHER THREE SEAMS
   assert.equal(degraded.filter(r => r.blobs[0] === 'yt').length, 3)
   assert.equal(degraded.filter(r => r.blobs[0] === 'x').length, 1)
 
-  assert.ok(ytActivity.ms >= YT_MUX_BOT_MS - 200 && ytActivity.ms < YT_MUX_BOT_MS + 900,
+  /**
+   * THE LOWER BOUND IS THE ASSERTION; THE UPPER BOUND IS ONLY A SANITY RAIL, and that split is what
+   * this test got wrong the first time. A budget shows up as time SPENT, so `>= budget - 200` is what
+   * proves a seam waited the budget it was given. Overshoot proves nothing: the four requests share
+   * one event loop and the box underneath it, so a contended runner inflates every arm.
+   *
+   * MEASURED, Workers Builds on 2026-08-29 (build aeacb488): the head returned in 2408ms against a
+   * 1500ms budget and an upper band of `MUX_WAIT_BOT_MS + 900` = 2400. The build went red over 8ms of
+   * someone else's CPU. The budget was correct and the test was wrong.
+   *
+   * So each rail is now set at the OTHER budget rather than at a slack constant: a shared seam must
+   * come in under YT_MUX_BOT_MS, and that is the only thing an upper bound here can honestly claim.
+   * The rails move on their own if either constant is retuned, and the discrimination between the two
+   * budgets is carried by the gap assertion below, which is load-independent by construction.
+   */
+  assert.ok(ytActivity.ms >= YT_MUX_BOT_MS - 200,
     `the yt activity document must spend YT_MUX_BOT_MS on the mux (${ytActivity.ms}ms, ` +
     `YT_MUX_BOT_MS=${YT_MUX_BOT_MS})`)
+  assert.ok(ytActivity.ms < HTML_DEADLINE_MS + YT_MUX_BOT_MS,
+    `and it must still answer (${ytActivity.ms}ms)`)
 
   for (const [name, got] of [['the HTML head', ytHead], ['/_oembed', ytOembed], ['a non-yt activity document', xActivity]]) {
-    assert.ok(got.ms >= MUX_WAIT_BOT_MS - 200 && got.ms < MUX_WAIT_BOT_MS + 900,
-      `${name} keeps the shared crawler budget (${got.ms}ms, MUX_WAIT_BOT_MS=${MUX_WAIT_BOT_MS})`)
+    assert.ok(got.ms >= MUX_WAIT_BOT_MS - 200,
+      `${name} must spend the shared crawler budget (${got.ms}ms, MUX_WAIT_BOT_MS=${MUX_WAIT_BOT_MS})`)
+    assert.ok(got.ms < YT_MUX_BOT_MS - 200,
+      `${name} must NOT have the longer budget (${got.ms}ms, YT_MUX_BOT_MS=${YT_MUX_BOT_MS})`)
   }
 
   /**
