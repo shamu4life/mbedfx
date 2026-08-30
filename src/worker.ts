@@ -18,7 +18,8 @@ import {
 } from './cache.ts'
 import { fetchBluesky, fetchBlueskyProfile } from './platforms/bluesky/fetch.ts'
 import { normalizeBluesky, normalizeBlueskyProfile } from './platforms/bluesky/normalize.ts'
-import { fetchTikTok, resolveTikTokShortlink, withResolvedVideo } from './platforms/tiktok/fetch.ts'
+import type { AwemeResolver } from './platforms/tiktok/fetch.ts'
+import { fetchTikTok, isTikTokCdnHost, resolveTikTokShortlink, TIKTOK_UA, withResolvedVideo } from './platforms/tiktok/fetch.ts'
 import { AWEME_PLAY, normalizeTikTok, tiktokGate, tiktokRefFrom, videoDetailScope } from './platforms/tiktok/normalize.ts'
 import {
   fetchInstagram, fetchInstagramFullPage, fetchInstagramGraphQLMedia, fetchInstagramUserFeed,
@@ -317,7 +318,7 @@ export async function liveFetchPost(
        */
       const post = normalizeTikTok(got.html, ref)
       if (post) {
-        const resolved = await withResolvedVideo(post)
+        const resolved = await withResolvedVideo(post, awemeViaContainer(env, ref))
         /**
          * COUNT WHICH URL WE ACTUALLY SHIPPED, because the degrade above is silent by design and
          * that is how it went unnoticed for three weeks. See Outcome2's tt_onehop/tt_twohop.
@@ -1603,8 +1604,28 @@ const RESOLVER_SLOTS = 4
  * else. Bumping it costs one cold boot per slot and invalidates NOTHING that is stored.
  *
  * SPLIT FROM META_GENERATION 2026-08-29 — see it for the measurement that forced the split.
+ *
+ * g13 -> g14, 2026-08-30, AND IT IS THE SAME USE AS THE 2026-08-28 BUMP ABOVE: ending a stale-image
+ * state, not invalidating a record. Every record is fine.
+ *
+ * WHAT WAS OBSERVED. 1.12.3 added one field to the container's TikTok probe (`hdrs`) precisely so the
+ * running image could be identified from outside. After that deploy: the build log shows the image
+ * built and pushed (`sha256:8a921a43248a`, 19:13:39), the application reports version 125 on that
+ * digest, the rollout reports `completed` with 7/7 instances and zero errors, and the instance census
+ * reports ALL TWELVE on that digest — and `/_clients` still answered without `hdrs`, i.e. still ran
+ * 1.12.2's code. Not a response cache: a cache-busted request took 19s and did the real work.
+ *
+ * SEVEN MINUTES OF DELIBERATE QUIET DID NOT CLEAR IT, which is the same result the 2026-08-28 note
+ * records for six. Take that pairing as the standing lesson rather than a coincidence: idling is not
+ * a reliable way to cycle these instances, the platform's own instance census reports the DESIRED
+ * image rather than the running one, and this constant is the only lever measured to work.
+ *
+ * THE MARKER FIELD IS THE PART WORTH COPYING. Without `hdrs` the stale image was indistinguishable
+ * from a platform gate — the probe's `fetch: http-403` reads exactly like the `*-webapp-prime` cookie
+ * wall — and the wrong conclusion was one step away. Ship a shape marker with any container change
+ * whose result you intend to act on.
  */
-const RESOLVER_GENERATION = 'g13'
+const RESOLVER_GENERATION = 'g14'
 /**
  * THE STORED-RECORD HALF, pinned at the value the shared string had when it split, so the split
  * itself invalidates nothing. Read by metaCacheKey and by nothing else.
@@ -1633,6 +1654,55 @@ const RESOLVER_GENERATION = 'g13'
  */
 export const META_GENERATION = 'g13'
 /** `slotKey` is the POST (refKey), never the operation — see RESOLVER_SLOTS for the 74% measurement. */
+/**
+ * TIKTOK'S AWEME REDIRECT, FOLLOWED BY THE CONTAINER INSTEAD OF BY US.
+ *
+ * Returns undefined when there is no container binding, which is the same shape every other
+ * container caller uses and keeps `withResolvedVideo` a pure two-argument function in the tests that
+ * drive it with no bindings at all.
+ *
+ * WHY IT IS NOT A PLAIN fetch(): see withResolvedVideo's `viaContainer` docstring. The short version
+ * is that Cloudflare WORKER egress gets a 404 HTML page from `/aweme/v1/play/` — reproduced against
+ * fxTikTok's own Worker, so it is the platform and not us — while the container reaches TikTok in
+ * under three seconds (`/_clients` TikTok arm, production, 2026-08-30).
+ *
+ * TOTAL BY CONSTRUCTION. Every failure returns null and `withResolvedVideo` then keeps the aweme url,
+ * i.e. exactly today's behaviour. This call must never be able to fail a card: the tt arm has no
+ * try/catch around it, so an escaping throw here is an uncaught 500 on a public path.
+ *
+ * THE HOST IS RE-CHECKED ON THIS SIDE even though the container checks its own output. A Location is
+ * attacker-influenced, the container is a separate program that can change independently, and the
+ * value goes on to become og:video — so the rule that produced today's url is applied to tomorrow's
+ * too, in the file that ships it.
+ */
+function awemeViaContainer(env: Env, ref: PostRef): AwemeResolver | undefined {
+  const resolver = env.MEDIA_RESOLVER
+  if (!resolver) return undefined
+  return async (url: string) => {
+    try {
+      const headers: Record<string, string> = { 'content-type': 'application/json' }
+      if (env.RESOLVER_SECRET) headers['x-resolver-secret'] = env.RESOLVER_SECRET
+      const r = await resolverStub(resolver, refKey(ref)).fetch('http://media-resolver/resolve', {
+        method: 'POST', body: JSON.stringify({ redirect: url, ua: TIKTOK_UA }), headers,
+      })
+      if (!r.ok) return null
+      const j = await r.json() as Record<string, unknown>
+      const loc = typeof j?.location === 'string' ? j.location : ''
+      if (!loc) return null
+      const u = new URL(loc)
+      // The same three refusals resolveAwemeUrl applies to its own answer, for the same reasons:
+      // https only (this becomes og:video), a CDN host we recognise, and never another aweme url —
+      // which would be the same two hops with an extra round trip spent.
+      if (u.protocol !== 'https:') return null
+      if (!isTikTokCdnHost(u.hostname)) return null
+      if (u.pathname.includes(AWEME_PLAY)) return null
+      return u.href
+    } catch {
+      return null
+    }
+  }
+}
+
 function resolverStub(resolver: NonNullable<Env['MEDIA_RESOLVER']>, slotKey: string) {
   let h = 2166136261
   for (let i = 0; i < slotKey.length; i++) {

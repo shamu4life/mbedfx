@@ -28,6 +28,7 @@ import importlib.util
 import os
 import socket
 import unittest
+import urllib.request
 
 
 def _load():
@@ -509,6 +510,45 @@ class MuxSources(unittest.TestCase):
                 (None, None), f"requested_formats={bad!r}",
             )
 
+
+
+class NoRedirectOpener(unittest.TestCase):
+    """The redirect-resolve mode's one load-bearing piece, exercised rather than read.
+
+    `{redirect: <url>}` exists because Cloudflare WORKER egress gets a 404 HTML page from TikTok's
+    /aweme/v1/play/ while this container reaches TikTok fine, and collapsing that 302 is what keeps
+    Discord to ONE hop. The whole mode depends on urllib REFUSING to follow the redirect so the
+    Location survives to be read; if _NoRedirect silently started following again, the endpoint would
+    return `location: null` for every input and the Worker would degrade to two hops forever --
+    silently, which is exactly how the original defect survived three weeks.
+    """
+
+    def test_every_redirect_code_is_refused(self):
+        """redirect_request returning None is urllib's documented way to REFUSE a redirect.
+
+        Asserted directly rather than through an opener: driving it end to end needs a socket, and
+        the rule in this repo is that no test touches the network. This is the whole contract --
+        the default HTTPRedirectHandler returns a Request here, and returning one again is precisely
+        the regression that would make the endpoint answer `location: null` for every input.
+        """
+        h = srv._NoRedirect()
+        req = urllib.request.Request("https://example.invalid/start")
+        for code in (301, 302, 303, 307, 308):
+            self.assertIsNone(
+                h.redirect_request(req, None, code, "Found",
+                                   {"location": "https://example.invalid/final.mp4"},
+                                   "https://example.invalid/final.mp4"),
+                f"HTTP {code} must be refused, not followed",
+            )
+
+    def test_it_really_is_a_redirect_handler(self):
+        """Subclassing HTTPRedirectHandler is what puts it in the opener's redirect slot at all.
+
+        If it stopped being one, build_opener would add the DEFAULT handler alongside it, redirects
+        would be followed again, and the refusal above would still pass while the endpoint silently
+        broke.
+        """
+        self.assertTrue(issubclass(srv._NoRedirect, urllib.request.HTTPRedirectHandler))
 
 
 class HandlerShape(unittest.TestCase):

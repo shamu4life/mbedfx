@@ -38,7 +38,7 @@ import time
 import urllib.error
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import urlsplit
+from urllib.parse import urljoin, urlsplit
 
 # 25 min. This bounds WORK, not the user's patience — and it is deliberately NOT set to "whatever plays on
 # the first paste". A {page} mux downloads the whole video before we can serve a byte, so time-to-play
@@ -239,6 +239,19 @@ FFMPEG_PROTOCOLS = "http,https,tcp,tls,crypto"
 # INPUT (before each -i), which is where ffmpeg reads http options.
 HTTP_OPTS = ["-http_persistent", "0", "-reconnect", "1", "-reconnect_streamed", "1", "-reconnect_delay_max", "5"]
 CHUNK = 1 << 16
+
+
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    """Turn a 3xx into an HTTPError instead of following it.
+
+    Returning None from redirect_request is urllib's documented way to refuse a redirect; the 3xx
+    then surfaces as an HTTPError carrying the response headers, which is where the Location we came
+    for lives. Refusing rather than following is the point: this server resolves ONE hop and hands
+    the answer back, so the caller keeps the decision about whether the destination is acceptable.
+    """
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
 
 
 def _safe_url(url: object) -> str:
@@ -811,6 +824,66 @@ class Handler(BaseHTTPRequestHandler):
         # THE PROBE rides the EXISTING authenticated endpoint rather than opening a new one: it is a
         # diagnostic, it is expensive, and RESOLVER_SECRET already guards this path. It reads NOTHING
         # from `req` beyond this flag — see _probe_clients for why it takes no input at all.
+        # FOLLOW ONE REDIRECT AND REPORT WHERE IT POINTS. `{redirect: <url>}` -> `{location}`.
+        #
+        # WHY THIS ENDPOINT EXISTS AT ALL, since the Worker can obviously issue a fetch itself: it
+        # cannot issue THIS one. TikTok's cookie-free `/aweme/v1/play/` url is a 302 to the CDN, and
+        # collapsing it is what keeps Discord to ONE hop (worker.ts's tt arm, measured 2026-07-19 —
+        # two hops and Discord draws the OpenGraph card instead of the Mastodon activity card). From
+        # Cloudflare WORKER egress that endpoint answers a 404 HTML page instead of a 302, so
+        # resolveAwemeUrl has been degrading to two hops for every TikTok since ~2026-08-08.
+        #
+        # THAT IS NOT A BUG WE CAN FIX IN THE WORKER, and the proof is external: the identical failure
+        # reproduces against fxTikTok's OWN Cloudflare Worker (fxtiktok-rewrite-dev.dargy.workers.dev,
+        # their staging `OFF_LOAD`), which answers `location: https://www.tiktok.com/404?fromUrl=…`.
+        # Their production works only because `OFF_LOAD` points at a Bun box they run themselves.
+        # This container is the box we already own, and its egress DOES reach TikTok — measured on
+        # production 2026-08-30, `/_clients` TikTok arm: extracted true, 10 formats, 2704ms.
+        #
+        # IT FOLLOWS EXACTLY ONE HOP AND NEVER FETCHES A BYTE. `redirect: manual` plus a HEAD-shaped
+        # GET; the body is discarded unread. A second hop would be a different url with a different
+        # trust story, and chasing redirects server-side is how an SSRF gate gets walked around one
+        # Location header at a time — so the caller gets the one Location and decides.
+        #
+        # BOTH ENDS GO THROUGH _safe_url: the input because it arrives over the wire, and the OUTPUT
+        # because a Location header is attacker-influenced in exactly the way the input is. Returning
+        # an unvalidated Location would turn this into the open redirector the input gate exists to
+        # prevent.
+        redirect_url = req.get("redirect")
+        if isinstance(redirect_url, str) and redirect_url:
+            out = {"location": None, "status": 0}
+            try:
+                target = _safe_url(redirect_url)
+                r = urllib.request.Request(target, method="GET", headers={
+                    "user-agent": req.get("ua") if isinstance(req.get("ua"), str) else _PROBE_UA,
+                    "accept": "video/mp4,*/*",
+                })
+                opener = urllib.request.build_opener(_NoRedirect)
+                try:
+                    with opener.open(r, timeout=20) as resp:
+                        out["status"] = resp.status
+                        resp.read(0)
+                except urllib.error.HTTPError as e:
+                    out["status"] = e.code
+                    loc = e.headers.get("location")
+                    if loc:
+                        try:
+                            out["location"] = _safe_url(urljoin(target, loc))
+                        except ValueError:
+                            out["location"] = None
+                    e.close()
+            except ValueError:
+                return self._json_error(400, "invalid source")
+            except Exception as e:
+                out["error"] = type(e).__name__
+            body = json.dumps(out).encode()
+            self.send_response(200)
+            self.send_header("content-type", "application/json")
+            self.send_header("content-length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
+
         if req.get("probe") is True:
             body = json.dumps(_probe_clients()).encode()
             self.send_response(200)

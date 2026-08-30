@@ -11,6 +11,65 @@ Nothing yet.
 
 ---
 
+## [1.13.0] - 2026-08-30
+
+### TikTok's redirect is resolved by the container, because a Cloudflare Worker cannot resolve it
+
+`resolveAwemeUrl` turns TikTok's playable url — the cookie-free `/aweme/v1/play/`, which is itself a
+302 — into the CDN url behind it, so Discord sees ONE hop. Two hops and Discord draws the OpenGraph
+card instead of the Mastodon activity card (measured 2026-07-19; the tt arm of `worker.ts` records
+it). Since roughly 2026-08-08 it has returned `null` for **every** TikTok: from Cloudflare Worker
+egress that endpoint answers a 404 HTML page instead of a 302. Production counters after 1.12.2 made
+it visible: `tt_twohop` 3, `tt_onehop` 0.
+
+**It is not a bug the Worker can fix, and that is why this is an architecture change.** The identical
+failure reproduces against fxTikTok's OWN Cloudflare Worker — their `wrangler.toml` names
+`fxtiktok-rewrite-dev.dargy.workers.dev` as the staging `OFF_LOAD`, and for the same video it answers
+`location: https://www.tiktok.com/404?fromUrl=/aweme/v1/play/…`. Same algorithm, same UA, same 404.
+Their production works only because `OFF_LOAD = "https://offload.tnktok.com"` is a Bun server behind
+a `Dockerfile`: their own box, off Cloudflare.
+
+This container is the box we already own, and its egress was **measured before this was written**:
+`/_clients`' TikTok arm on production reported `extracted: true, formats: 10, ms: 2704`. It reaches
+TikTok in under three seconds where the Worker gets a 404 page.
+
+#### Added
+- **`{redirect: <url>}` on the container's `/resolve`.** It follows exactly ONE hop and returns the
+  `Location`; it never fetches a byte. One hop, not a chase: following redirects server-side is how
+  an SSRF gate gets walked around one `Location` header at a time, so the caller gets the one answer
+  and decides. Both ends go through `_safe_url` — the input because it arrives over the wire, the
+  OUTPUT because a `Location` is attacker-influenced in exactly the same way.
+- **`withResolvedVideo(post, viaContainer?)`.** The Worker's own fetch is tried FIRST, always: it is
+  free when it works, it is the path every test drives, and on the day TikTok stops refusing this
+  egress it silently becomes the only path taken again. The container is the fallback.
+
+#### Changed
+- **`RESOLVER_GENERATION` g13 → g14**, and it is the same use as the 2026-08-28 bump: ending a
+  stale-image state, not invalidating a record. Every record is fine. After the 1.12.3 deploy the
+  build log showed the image pushed, the application reported the new digest, the rollout reported
+  `completed` with 7/7 and zero errors, and the instance census reported all twelve on it — and
+  `/_clients` still ran 1.12.2's code. **Seven minutes of deliberate quiet did not clear it**, which
+  is the same result the 2026-08-28 note records for six. Take the pair as the standing lesson: the
+  instance census reports the DESIRED image, not the running one, and this constant is the only lever
+  measured to work.
+
+#### Deliberately not done
+- **TikTok was NOT converted to a `{page}` remux.** It is the obvious change, it was written, and it
+  was dropped: `settleMux` degrades to a cover still while a mux runs, so every TikTok's first paste
+  would become a still. That regresses the posts that render today, and fxTikTok does not do it
+  either — they resolve the redirect at request time, which is what this release copies.
+- **The claim that every TikTok is BROKEN is withdrawn.** `tt_twohop` proves all of them are
+  two-hop; it does not prove all of them fail. Two hops costs the richer Mastodon card, and an
+  OpenGraph card still carries `og:video`. The reported post fails; how many others do is unmeasured.
+
+#### Also written down, not fixed
+`settleMux`'s over-length ceiling can never fire for TikTok: it returns early on
+`if (!own.some(m => m?.remux))`, and a directly-playable source carries no `remux`. So
+`m.duration > MUX_MAX_SECONDS` has never once applied to this platform, and the 2139-second post that
+started this was being offered to Discord as a playable attachment.
+
+---
+
 ## [1.12.3] - 2026-08-30
 
 ### The TikTok probe was measuring a request nothing in this system ever makes

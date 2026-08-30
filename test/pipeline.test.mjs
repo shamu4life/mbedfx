@@ -56,12 +56,16 @@ function fakeCache() {
  * `env.AE?.writeDataPoint(x)`, so the receiver is `env.AE` — a `this.points`
  * would resolve against AE, which has no such field, and throw on every count().
  */
-const fakeEnv = () => {
+// `extra` is spread LAST so a test can add a binding (MEDIA_RESOLVER, RESOLVER_SECRET) without
+// every other caller changing. Default {} keeps the no-bindings shape every existing test relies on
+// — several of them assert behaviour that only holds when a binding is ABSENT.
+const fakeEnv = (extra = {}) => {
   const points = []
   return {
     points,
     AE: { writeDataPoint(p) { points.push(p) } },
     ASSETS: { async fetch() { return new Response('asset', { status: 200 }) } },
+    ...extra,
   }
 }
 const ctx = { waitUntil() {} }
@@ -1756,6 +1760,123 @@ test('NO RESOLVED CDN URL REACHES A CLIENT — not in the head, not in media_att
   }
   // The positive half: the head still advertises OUR url for the same bytes.
   assert.ok(head.includes(`/_media/${TT_MEDIA_KEY}/0`), 'og:video must still point at our origin')
+})
+
+/**
+ * A container binding whose /resolve answers the `{redirect}` mode with `location`.
+ * `calls` counts them, so "the container was not asked at all" is assertable rather than implied.
+ */
+function fakeRedirectResolver(location, { status = 200 } = {}) {
+  const calls = { n: 0, bodies: [] }
+  return {
+    calls,
+    binding: {
+      getByName: () => ({
+        async fetch(_url, init) {
+          calls.n++
+          calls.bodies.push(JSON.parse(init.body))
+          if (status !== 200) return new Response('', { status })
+          return Response.json({ location, status: location ? 302 : 200 })
+        },
+      }),
+    },
+  }
+}
+
+test('WHEN WORKER EGRESS CANNOT RESOLVE, THE CONTAINER DOES — and the card gets one hop anyway', async () => {
+  // THE FIX THIS RELEASE EXISTS FOR. `aweme: null` is the 200 HTML interstitial Cloudflare WORKER
+  // egress actually returns for /aweme/v1/play/ — the state production has been in since roughly
+  // 2026-08-08, measured as tt_twohop 3 / tt_onehop 0. Before this, that meant two hops forever.
+  //
+  // It is NOT a bug we can fix in the Worker, which is why the fallback goes through the container:
+  // fxTikTok's own Cloudflare Worker answers the same 404 for the same video, and their production
+  // only works because OFF_LOAD points at a box they run themselves.
+  const { net, serving } = ttNetwork({ aweme: null })
+  const rr = fakeRedirectResolver(CDN_URL)
+  const env = fakeEnv({ MEDIA_RESOLVER: rr.binding })
+  const deps = { cache: fakeCache(), fetchPost: liveFetchPost, resolveShortlink: liveResolveShortlink }
+  const loc = await serving(async () => {
+    const m = await handle(req(`/_media/${TT_MEDIA_KEY}/0`, DISCORD), env, ctx, deps)
+    assert.equal(m.status, 302)
+    return m.headers.get('location')
+  })
+  assert.equal(loc, CDN_URL, 'the container-resolved url must be what /_media/ hands Discord')
+  assert.ok(!loc.includes('/aweme/v1/play/'), `still two hops: ${loc}`)
+  assert.equal(rr.calls.n, 1, 'the container is asked exactly once, not once per media hit')
+  assert.equal(rr.calls.bodies[0].redirect.includes('/aweme/v1/play/'), true,
+    'and it is asked to resolve the AWEME url, not the page')
+  // The Worker still tries its own fetch first — free when it works, and the only path the day
+  // TikTok stops refusing this egress.
+  assert.equal(net.aweme, 1, 'the Worker attempt still happens before the container is asked')
+})
+
+test('THE WORKER FETCH WINS WHEN IT CAN — the container is a fallback, never the default', async () => {
+  // Guards the ordering. If this inverted, every TikTok would pay a container round trip for an
+  // answer the Worker already had, on the platform this repo rates most fragile.
+  const { serving } = ttNetwork()   // aweme resolves normally
+  const rr = fakeRedirectResolver('https://v16m-default.tiktokcdn-us.com/SHOULD-NOT-BE-USED/v.mp4')
+  const env = fakeEnv({ MEDIA_RESOLVER: rr.binding })
+  const deps = { cache: fakeCache(), fetchPost: liveFetchPost, resolveShortlink: liveResolveShortlink }
+  const loc = await serving(async () =>
+    (await handle(req(`/_media/${TT_MEDIA_KEY}/0`, DISCORD), env, ctx, deps)).headers.get('location'))
+  assert.equal(loc, CDN_URL, "the Worker's own resolution must win")
+  assert.equal(rr.calls.n, 0, 'and the container must not be asked at all')
+})
+
+test('A CONTAINER ANSWER IS HELD TO THE SAME HOST RULE — never trusted because it came from us', async () => {
+  // A Location is attacker-influenced wherever it is followed, and this one becomes og:video. The
+  // container validates its own output; this asserts the WORKER does too, so the rule survives the
+  // container changing independently. Each of these degrades to the aweme url — today's behaviour —
+  // rather than shipping the bad value.
+  for (const [what, bad] of [
+    ['a non-CDN host', 'https://evil.example.com/v.mp4'],
+    ['another aweme url', 'https://www.tiktok.com/aweme/v1/play/?item_id=1'],
+    ['plain http', 'http://v16m-default.tiktokcdn-us.com/v.mp4'],
+    ['nothing at all', ''],
+  ]) {
+    const { serving } = ttNetwork({ aweme: null })
+    const rr = fakeRedirectResolver(bad)
+    const env = fakeEnv({ MEDIA_RESOLVER: rr.binding })
+    const deps = { cache: fakeCache(), fetchPost: liveFetchPost, resolveShortlink: liveResolveShortlink }
+    const loc = await serving(async () =>
+      (await handle(req(`/_media/${TT_MEDIA_KEY}/0`, DISCORD), env, ctx, deps)).headers.get('location'))
+    assert.ok(loc.includes('/aweme/v1/play/'), `${what}: must degrade to the aweme url, got ${loc}`)
+    assert.ok(!loc.includes('evil.example.com'), `${what}: refused host reached a client`)
+  }
+})
+
+test('A REFUSING CONTAINER COSTS THE OPTIMISATION AND NOTHING ELSE — never a 500, never a 404', async () => {
+  // The tt arm has no try/catch around this call, so an escaping throw is an uncaught 500 on a
+  // public path. Asserted on a 502 from the binding and on a binding that throws outright.
+  const throwing = { getByName: () => ({ fetch: async () => { throw new Error('DO unavailable') } }) }
+  for (const [what, binding] of [
+    ['a 502 from the container', fakeRedirectResolver(CDN_URL, { status: 502 }).binding],
+    ['a binding that throws', throwing],
+  ]) {
+    const { serving } = ttNetwork({ aweme: null })
+    const env = fakeEnv({ MEDIA_RESOLVER: binding })
+    const deps = { cache: fakeCache(), fetchPost: liveFetchPost, resolveShortlink: liveResolveShortlink }
+    let res
+    await serving(async () => {
+      await assert.doesNotReject(async () => {
+        res = await handle(req(`/_media/${TT_MEDIA_KEY}/0`, DISCORD), env, ctx, deps)
+      }, `${what} must not throw`)
+    })
+    assert.equal(res.status, 302, `${what}: still a redirect`)
+    assert.ok(res.headers.get('location').includes('/aweme/v1/play/'),
+      `${what}: degrades to the aweme url, exactly as before this fallback existed`)
+  }
+})
+
+test('NO CONTAINER BINDING MEANS NO FALLBACK, AND NO CRASH — the self-host / dev shape', async () => {
+  // awemeViaContainer returns undefined with no MEDIA_RESOLVER, and withResolvedVideo must then be
+  // the two-hop-degrading function it has always been. docs/SELF-HOSTING.md's whole premise is that
+  // the Worker runs without the container.
+  const { serving } = ttNetwork({ aweme: null })
+  const deps = { cache: fakeCache(), fetchPost: liveFetchPost, resolveShortlink: liveResolveShortlink }
+  const loc = await serving(async () =>
+    (await handle(req(`/_media/${TT_MEDIA_KEY}/0`, DISCORD), fakeEnv(), ctx, deps)).headers.get('location'))
+  assert.ok(loc.includes('/aweme/v1/play/'), 'no binding: the aweme url, unchanged')
 })
 
 test('A SLIDESHOW IS UNTOUCHED — one hop already, and it must cost no extra fetch', async () => {
