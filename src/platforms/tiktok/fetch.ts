@@ -279,6 +279,14 @@ export async function resolveTikTokShortlink(code: string): Promise<TikTokFetch>
 const CDN_HOST = /(^|\.)tiktokcdn(-[a-z]{2})?\.com$/
 
 /**
+ * The same host guard, exported so the CONTAINER-resolved Location is held to the identical rule.
+ * The container validates its own output too, but a second gate here is what keeps the Worker from
+ * ever trusting a Location it did not check — an unvalidated redirect target is an open redirector
+ * whichever side of the binding produced it.
+ */
+export const isTikTokCdnHost = (host: string): boolean => CDN_HOST.test(host)
+
+/**
  * The final CDN URL the aweme endpoint 302s to, or null. ONE upstream request, NO video bytes.
  *
  * WHY THIS EXISTS: THE HOP COUNT DECIDES WHICH CARD DISCORD DRAWS. Measured 2026-07-19 with
@@ -387,7 +395,34 @@ export async function resolveAwemeUrl(aweme: string): Promise<string | null> {
  * video post and ZERO for a photo post — which matters, because slideshows are the arm that
  * already renders correctly and must not start paying for this.
  */
-export async function withResolvedVideo(post: Post): Promise<Post> {
+/**
+ * A SECOND RESOLVER, TRIED ONLY WHEN THE WORKER'S OWN FETCH CANNOT ANSWER.
+ *
+ * WHY IT EXISTS. resolveAwemeUrl above is correct and was measured working on 2026-07-19. It has
+ * been returning null for EVERY TikTok since roughly 2026-08-08: from Cloudflare WORKER egress
+ * `www.tiktok.com/aweme/v1/play/` answers a 404 HTML page instead of a 302, and no Location means no
+ * resolution. Production counters after the instrumentation landed: `tt_twohop` 3, `tt_onehop` 0.
+ *
+ * IT IS NOT A BUG THE WORKER CAN FIX, which is the whole reason this indirection is worth its cost.
+ * The identical failure reproduces against fxTikTok's OWN Cloudflare Worker — their wrangler.toml
+ * names fxtiktok-rewrite-dev.dargy.workers.dev as the staging `OFF_LOAD`, and for the same video it
+ * answers `location: https://www.tiktok.com/404?fromUrl=/aweme/v1/play/…`. Same algorithm, same UA,
+ * same 404. Their production works only because `OFF_LOAD = "https://offload.tnktok.com"` is a Bun
+ * server behind a Dockerfile: their own box, off Cloudflare.
+ *
+ * OURS IS THE CONTAINER, and its egress was measured before this was written rather than assumed:
+ * `/_clients`' TikTok arm on production, 2026-08-30, reported `extracted: true, formats: 10,
+ * ms: 2704`. It reaches TikTok in under three seconds where the Worker gets a 404 page.
+ *
+ * A REDIRECT RESOLVE, NOT A MUX, and that distinction is the design. The container follows ONE hop
+ * and returns the Location; it never fetches a byte. So this keeps TikTok's direct-url architecture
+ * exactly as it is — no container mux, no R2 write, no still-on-first-paste — and changes only WHERE
+ * the one redirect is followed. Muxing TikTok instead would have made every first paste a cover
+ * still, which would regress the posts that render today.
+ */
+export type AwemeResolver = (url: string) => Promise<string | null>
+
+export async function withResolvedVideo(post: Post, viaContainer?: AwemeResolver): Promise<Post> {
   const media = post.media
   if (!Array.isArray(media)) return post
   const i = media.findIndex(
@@ -395,7 +430,11 @@ export async function withResolvedVideo(post: Post): Promise<Post> {
   )
   if (i < 0) return post
 
-  const resolved = await resolveAwemeUrl(media[i].url)
+  // THE WORKER'S OWN FETCH FIRST, ALWAYS. It is free when it works, it is the path every test in
+  // this repo drives, and on the day TikTok stops refusing this egress it silently becomes the only
+  // path taken again. The container is the fallback, not the replacement.
+  const resolved = (await resolveAwemeUrl(media[i].url))
+    ?? (viaContainer ? await viaContainer(media[i].url) : null)
   // DEGRADE TO THE INPUT, and the direction is deliberate: two hops renders the OpenGraph card,
   // which is a worse embed; no video renders nothing at all. Every no-answer lands on the former.
   if (!resolved) return post
