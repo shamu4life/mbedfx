@@ -214,7 +214,12 @@ channels post these constantly.
 - `package-lock.json` was still on 1.10.1 at the 1.11.0 tag. npm writes the version in two places
   there and the cut moved neither, which nothing noticed because nothing reads it. Corrected with
   this release. Both copies, `package.json`, `CLAUDE.md` and the badge in `public/index.html` now say
-  1.12.0; only the badge has a test holding it there.
+  1.12.0, and two tests hold them there: `test/version-consistency.test.mjs` pins the lockfile's two
+  copies, the package name, `CLAUDE.md`'s version line and the existence of a dated changelog
+  heading, and `test/landing-convert.test.mjs` pins the badge. This sentence previously said only the
+  badge was guarded, which was TRUE when it was written at the release commit and was falsified an
+  hour later by the merge that folded PR #72 in — that merge imported the very test it denies. A
+  union merge that brings in a test needs a pass over the sentences asserting what is untested.
 - **A minor rather than a patch.** The live-stream guard, the 🔴 note, the three activity-document
   budgets and `MUX_PAGE_TIMEOUT` change what a reader sees on a card, and `META_GENERATION` is new
   public surface for anyone self-hosting. Not a major: no route, no field and no response shape
