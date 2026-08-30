@@ -11,6 +11,41 @@ Nothing yet.
 
 ---
 
+## [1.12.3] - 2026-08-30
+
+### The TikTok probe was measuring a request nothing in this system ever makes
+
+1.12.2's container probe answered `fetch: http-403` from production. That reads exactly like the
+`*-webapp-prime` cookie gate `tiktok/normalize.ts` documents, and it is **not** that — it is the
+probe's own artifact. It pulled bytes with a bare UA and a `Range` and nothing else, while yt-dlp
+returns a `http_headers` dict per format (Referer, and whatever else the extractor negotiated) and
+the real mux path sends them, because yt-dlp does the downloading. Control, same yt-dlp and same
+post, run locally: the download completes at **2,321,023 bytes of valid ISO Media**.
+
+A 403 from a request the system never issues is a false negative on the one question the probe was
+added to answer, and acting on it would have meant abandoning the container path for no reason.
+
+#### Fixed
+- **The probe sends yt-dlp's own per-format `http_headers`.** `range` and the UA are set first so a
+  format carrying its own user-agent wins, and any upstream attempt to redefine `range` is dropped —
+  an upstream header must not choose how many bytes we asked for. The headers actually sent are
+  reported as `hdrs`, so the next reader can tell a real gate from a malformed request without
+  guessing.
+- **Only the TikTok arm changed.** `_probe_one`'s YouTube fetch is deliberately untouched:
+  googlevideo serves it as-is today, and editing a green probe to make a point about a different
+  platform is how a baseline gets lost.
+
+### What is still true, and what comes next
+The reading that matters from 1.12.2 stands: on production container egress the TikTok arm reported
+`extracted: true, formats: 10, ms: 2704`. **The container reaches TikTok in under three seconds where
+the Worker gets a 404 page.** If this release's corrected fetch also returns bytes, the container is
+the box that can serve TikTok video — mbedfx's equivalent of fxTikTok's `offload.tnktok.com` — and
+the fix is to route TikTok through it as a `{page}` remux like every other platform. That change is
+written and held back deliberately: it turns seven tests that pin the aweme-302 design into tests of
+a different architecture, and those get rewritten with a measurement in hand, not an inference.
+
+---
+
 ## [1.12.2] - 2026-08-30
 
 ### Every TikTok has been handing Discord a two-hop redirect, and nothing counted it
