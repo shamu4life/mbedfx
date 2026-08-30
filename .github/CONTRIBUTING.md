@@ -24,7 +24,7 @@ npm run typecheck
 npx wrangler dev      # local worker
 ```
 
-`npm run build` runs the suite and a type check. Cloudflare Workers Builds, the only system that deploys this Worker, runs it before deploying, so a red suite ships nothing. GitHub Actions runs the same two steps on pushes to `main` and `staging` and on every pull request; those checks do not gate the deploy.
+`npm run build` runs the suite and a type check. Cloudflare Workers Builds, the only system that deploys this Worker, runs it before deploying, so a red suite ships nothing. GitHub Actions runs the same two steps on pushes to `main` and on every pull request; those checks do not gate the deploy.
 
 Do **not** deploy by hand. Workers Builds watches `main`, so merging is the deploy, and `npm run deploy` refuses on purpose. A hand deploy overwrites whatever the build shipped, and prod goes on looking healthy while the pipeline is broken. That has cost the project real downtime once already.
 

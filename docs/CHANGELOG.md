@@ -11,6 +11,254 @@ Nothing yet.
 
 ---
 
+## [1.12.0] - 2026-08-29
+
+### A cold YouTube paste could not carry a player, and the budget that decided it was arithmetically lost
+
+The 2026-08-09 crawler cut collapsed a split budget — 5000 ms on the HTML head, 9000 ms on the
+activity document — into one `MUX_WAIT_BOT_MS = 1500` on both. The activity document is where
+`media_attachments[].type` is decided, which is whether Discord draws a player or a photo, and
+Discord stores the embed it drew inside the message forever. So a cold first paste was structurally
+unable to be a player, permanently, for the reader who pasted it.
+
+The production counters now say how badly. Of the 139 successful YouTube muxes recorded since the
+`mux_*` rows went live on 2026-08-24, weighted by `_sample_interval`: p10 6922 ms, p50 18219 ms,
+p90 41254 ms, **minimum 4200 ms**. Zero finished inside 1500 ms. That is not a poor hit rate, it is
+a race lost before it starts. The whole reading, the queries behind it and the archaeology on the
+cut are in `docs/research/2026-08-29-the-1500ms-crawler-cut.md`.
+
+#### Changed
+- **The activity document's three arms have three budgets** (`src/worker.ts`). The mux arm gets
+  `YT_MUX_BOT_MS` (4000 ms) on YouTube only; the metadata arm gets `YT_META_BOT_MS` (2800 ms),
+  because `INNERTUBE_TIMEOUT_MS` is 2500 ms and 1500 sat below the 1716 ms median of that call's own
+  successes; the translation keeps the shared 1500 ms. The HTML head and the `/_oembed` callback are
+  untouched — `toOEmbed` reads two fields off the post and `settleMux` can change neither, so a
+  bigger budget there would buy literally nothing on a third crawler request.
+- **4000 is a tolerance step, not a win, and the ceiling is the argument.** The one number in this
+  repository derived from Discord's own behaviour is the 2026-08-09 run where a 5.14 s head drew NO
+  card: whatever the crawler's per-request tolerance is, it is under 5.14 s. 4000 plus the route's
+  own work lands near 4.2-4.3 s. 8000 rebuilds the 8.19-8.29 s document the cut deleted. The
+  widely-quoted "Discord leaves at 3-4 s" is folklore — until this release that phrase appeared
+  exactly once anywhere here, in the commit message that made the cut, citing nothing. It is now
+  written down as unsourced in two places instead of quoted as fact in one.
+  `test/card-muxing.test.mjs` now holds both new budgets under the 5.14 s bound;
+  neither had a guard, while the constant they were split from has had one since it was written.
+- **Two comments that justified the cut are corrected in place.** "NOTHING IS ABANDONED" was false —
+  `ctx.waitUntil` is a hard 30 s cancel on a budget shared across one request, and the MuxRunner
+  alarm is what makes the claim true now. "It lasts exactly one view" was false the other way, and
+  four other files in this tree already cited discord-api-docs#1663 saying so. That second one cuts
+  both ways: it is why raising the budget matters, and why losing the bet is permanent.
+
+### Live streams were muxed on every render, forever
+
+Measured on `yt:xDWQ3LkccY8` (Sky News, permanently live): pinned at `muxing: true`, about 1.7 s of
+container round trip per render, never cached, on every paste. A live stream reports
+`lengthSeconds: '0'`, so it carries no duration, so `settleMux`'s over-ceiling arm — the only refusal
+it had — waved it through to a container that refuses it on `--match-filter "… & !is_live"`. A
+degraded card is deliberately not response-cached, so the next render repeated the whole thing. News
+channels post these constantly.
+
+#### Added
+- **A liveness verdict from Innertube, and a `Media.live` flag settleMux refuses to dispatch.**
+  `isLiveContent` is NOT the discriminator and keying on it would refuse a mux for every past
+  broadcast a channel has ever published. Measured cookie-free 2026-08-29, one id per state:
+  `xDWQ3LkccY8` streaming (`isLive` true), `wEpMzbXi1CM` scheduled (neither `isLive` nor `isLiveNow`,
+  caught by a broadcast with no `endTimestamp` and no length), `0cVnt1bUzLI` ended (`isLiveContent`
+  true, a real 3764 s length, muxes normally), `dQw4w9WgXcQ` never a broadcast. A scheduled stream is
+  treated as live because it fails identically: no file, nothing to download, a card that spins.
+- **`🔴 Live stream, so no preview here. Open it on YouTube`**, so the picture is not a silent
+  degrade. It suppresses the length note — one reason per card, and this is the one the mux was
+  actually refused on. The card CACHES, because the answer is final rather than incomplete; that is
+  the half that stops the round trip repeating.
+- **`YT_LIVE_TTL_MS`.** A stored record saying `isLive` expires in an hour rather than in
+  `YT_META_TTL_MS`'s thirty days. Liveness is the one mutable field these records carry, and the
+  record cannot heal itself: `metaAttempt` runs only on a read miss, and `youtubeMeta` returns null
+  once the post has a real date, which a live stream always does. Without the split, a broadcast that
+  ended went on claiming to be live for up to a month on every render whose own Innertube call was
+  refused — roughly half of them from this egress.
+
+### Fixed
+- **The length note fired on other platforms' cards.** Both YouTube note overlays are applied at the
+  activity callback, which is not scoped to `ref.p === 'yt'` the way `describeTarget` is. That was
+  harmless while their only supply was a `YouTubeMeta` field, since `youtubeMeta` answers null
+  everywhere else — the seam was safe by accident. Giving the notes a fallback that reads
+  `Media.duration` off the post removed the accident, and `Media.duration` is written by the yt-dlp
+  tier (Dailymotion, Streamable, Imgur), PeerTube, Twitch, Instagram, Facebook and the Mastodon API
+  arm. A 4830 s Dailymotion video unfurled as "🎬 Too long to play here. Open it on YouTube", frozen
+  in the message. Both notes now refuse a post from another platform, guarded in the functions rather
+  than at the call site, because a call-site guard restores exactly the accident.
+- **The length note ate the description.** It prepends into `text`, and `withDescription` refuses to
+  write a body that already exists, so on a long video the card got the note or the description and
+  never both. Fixed at BOTH seams; the ordering comment says so, because applying it at one is
+  applying it at neither.
+- **The note was unreachable on the path most pastes take.** `withLengthNote` read only its argument,
+  and `youtubeMeta` returns null as soon as the post carries a real date — the common case since the
+  Innertube source landed. The duration was not missing, only somewhere else: the fetch path stamps
+  it onto the media entry. The fallback reads it back from there, and does not re-stamp what it read,
+  because `withMuxDuration` writes one number onto every remux entry and the fallback takes the first.
+- **A live card lost its description.** `LIVE_NOTE` is applied at build time inside
+  `normalizeYouTube`, so `text` was non-empty by the time the overlay seam ran and the warm record's
+  description was refused. `withDescription` now treats a bare live note as a marker rather than a
+  body. The age note is deliberately still a body: that one is a decision about what to show.
+- **A partial Innertube response answered a confident "not live".** `liveVerdict` returned `false` for
+  any body carrying a `videoDetails` block, so the three-valued design collapsed to two on every
+  response that happened to lack a microformat — and `false` is the one value allowed to clear a
+  stored `isLive: true`. Every measured negative comes out of the microformat, so a body without one
+  now abstains.
+
+### Changed
+- **The container's `{page}` mux has its own wall, `MUX_PAGE_TIMEOUT` (360 s).** It ran under
+  `PROC_TIMEOUT + 60` = 180 s while `MAX_SECONDS` admits 1500 s of video. That wall was UNREACHABLE
+  until the MuxRunner alarm landed, because `ctx.waitUntil` cancelled the attempt at 30 s first, so
+  nothing ever hit it and nobody noticed. It is now the first ceiling that bites: a long video is
+  SIGKILLed at 180 s, the container buffers the whole file before sending a byte and writes to a
+  fresh `mkstemp`, so R2 gets nothing and all three alarm attempts restart from byte zero. A
+  20-minute video never plays, on any paste, ever. `PROC_TIMEOUT` is deliberately NOT raised: it also
+  walls the tracks mux, which `MUX_FIRST_ATTEMPT_TRACKS_MS` is timed against, and a mux alarm that
+  fires early is the double-mux `muxOnce` exists to prevent. **360 is not a derivation and the
+  comment does not pretend it is** — the only throughput figure on file is ~267 KB/s from the old
+  quarter-core container on yt-dlp 2026.7.4, and both terms have since moved. The direction is what
+  is defensible: a longer wall spends slot-seconds only on videos that currently fail 100% of the
+  time. What it costs is written down beside `MUX_RETRY_MS` — a permanently-failing page video now
+  burns 1080 slot-seconds instead of 540.
+- **The converter preview watches the whole first attempt again.** `MUX_WATCH_TOTAL_MS` mirrored
+  `MUX_FIRST_ATTEMPT_TRACKS_MS` (140 s) on the reasoning that the `{video}` tracks shape is the
+  slowest. It stopped being the slowest the moment the page mux got a wall it could reach, and every
+  YouTube link is a `{page}` source, so the page was giving up at 35% of the real first attempt — on
+  exactly the long videos the raised wall exists to rescue. It is now
+  `MUX_FIRST_ATTEMPT_PAGE_TOTAL_MS` (395 s), exported from `src/muxpolicy.ts` so the literal stays
+  derived, with `MUX_PAGE_WALL_MS` pinned to `container/server.py` by a test the way `MAX_SECONDS`
+  already is.
+- **`RESOLVER_GENERATION` and `META_GENERATION` are two strings.** One names the pooled container
+  instances; the other scopes the stored meta records. They were one, and the cost of that is
+  recorded in the g13 note: the bump that ended the 2026-08-28 container outage (1.11.1) discarded
+  every stored date, description, duration, count and gate verdict on five platforms, 40 hours after
+  the Innertube corpus that was meant to make YouTube dates reliable shipped. Both hold `g13` today,
+  so the split itself invalidates nothing. The rule changed shape with them: it used to ask what
+  changed (bump whenever `container/` changes behaviour) and now asks what a record says (if one
+  written yesterday is read tomorrow, does it say something false?). Under-invalidation is newly
+  expressible and is the worse direction, so when it is unclear, bump `META_GENERATION`.
+- **The outage detector can fail on YouTube.** Every Discord head this service emits carries a
+  `rel=alternate` activity link unconditionally, and `cardVerdict` counts that link as "something to
+  draw" — so the YouTube row was satisfied by the head's own boilerplate and could not go red short
+  of YouTube disappearing, through the three weeks first pastes were structurally unable to carry a
+  player. One row now carries `expect: 'video'` and reports a new `no-video` verdict. Expect one or
+  two red ticks every 60 days from R2's `expire-60d` rule sweeping the muxed file; the alarm re-muxes
+  it. The expectation is opt-in and a test pins the list to `['yt']`, so adding a platform stays a
+  measured decision.
+- **The retry lint sees every fetcher.** It matched the literal string `await fetch(`, which is not
+  how two of them spell a fetch: `src/platforms/youtube/*` calls through an injected
+  `fetchImpl: typeof fetch` (renamed the day before the lint landed) and the Threads OG fallback
+  spells it `fetch(url, …).then(…)` inside a `Promise.all`. So the guard reached fifteen fetchers and
+  zero YouTube files, on the platform with this repo's highest measured egress refusal rate, and
+  reported nothing — which read exactly like coverage. Detection is now derived per file from `fetch`
+  plus every identifier that file declares as `typeof fetch`, and the existing `NO-RETRY` exemption
+  requires a stated reason rather than a bare marker. Both Threads OG fetches and the YouTube oembed
+  call now retry; `askTwice` takes the injected seam as an optional third argument so the second
+  could. Innertube keeps a NO-RETRY exemption: a refusal there is a prompt 403, which
+  `worthAskingAgain` reads as an answer about the video, and asking again was measured as a no-op.
+  The count moved from 24 call sites across 15 fetcher files to 27 across 16. The 1.11.0 entry said
+  22, which undercounted its own work: that tag carries 24 call sites across 15 fetchers, and the
+  entry below now says so.
+
+### Documentation
+- **The Analytics Engine queries in `docs/METRICS.md` had never been run, and none of the three
+  worked.** The table is `mbedfx_counters`, not `mbedfx`; a backslash in a string literal is rejected
+  outright with HTTP 422, so `LIKE 'mux\_%'` errors and the eight outcomes have to be enumerated; and
+  the data is SAMPLED — `_sample_interval` took values from 1 to 12 in the first window read, so a
+  bare `COUNT()` under-reports badly. Every query is fixed and weighted.
+- **The Dockerfile's pin no longer blames Docker layer caching.** The argument for an exact pin cited
+  a floor freezing behind a reused layer. There is no machine holding this repo's previous layers:
+  every merge runs `wrangler deploy` in a Workers Builds runner off a fresh clone, and this repo's own
+  logs report `Image does not exist remotely, pushing:`. A floor would not freeze, it would FLOAT.
+  The pin is still right for the two reasons that survive — the image is reproducible and a bad
+  release is one line to revert. The same paragraph also blamed the floor for the 2026-08-17 outage;
+  the running version was 2026.7.4, the newest stable that day, and the cause was that release's
+  default player clients. What the floor cost was the diagnosis. Mirrored into
+  `test/ytdlp-pin.test.mjs`, which was repeating both.
+- **`docs/SELF-HOSTING.md` described the pin as an exact NIGHTLY** and explained why the channel is
+  nightly rather than stable. Both false, and against an owner decision from 2026-08-18. It also
+  counted nine `ctx.waitUntil` sites where a grep that allows for the optional-chained one finds
+  fifteen, and quoted a line count for `container/server.py` that was wrong by a third.
+- **A new research note**, `docs/research/2026-08-29-the-1500ms-crawler-cut.md`, holding the counter
+  reading, the queries that produced it, what the 2026-08-09 measurement does and does not prove, and
+  the two open questions this release could not answer: what Discord's abandon threshold actually is,
+  and whether Cloudflare's throughput limit is per-connection or per-egress. `docs/METRICS.md` now
+  carries the mux-quantile query and the `card_degraded` reading, with the caveat that the smoke cron
+  fires `ok` rows with a Discordbot user-agent and so biases the published ratio downward.
+- **Site copy that had gone false.** The converter preview said "Still preparing after two minutes"
+  while it now watches for six, and the YouTube row of the platform table said only age-restricted
+  videos are thumbnail-only. The "Video came back as a still" card names live and scheduled streams
+  as a fourth cause. PeerTube's row already carried the live sentence, so YouTube was the outlier the
+  moment the guard landed.
+- Corrected everywhere they appear: the 180 s page-mux wall (six documents), the single generation
+  string (four), what `card_degraded` excludes (four), the smoke list's size (seventeen checks across
+  sixteen platforms, one excused, not sixteen across fifteen with two excused), and every
+  `src/worker.ts:NNNN` citation in `docs/METRICS.md` and `docs/CREDENTIALS.md`, which this release
+  moved by 460 lines. Those now name the function instead, the way `docs/API.md` already did.
+- **`src/fetchretry.ts` was inviting the change its own neighbour forbids.** Its docstring credited
+  "a SECOND attempt" with lifting YouTube first-paste success from 0/14 to 9/10. That was persistence
+  plus the activity route's later call; the same commit measured a second immediate ask as a no-op.
+  As written it argued for wiring `askTwice` into Innertube, 200 lines from the NO-RETRY comment that
+  refuses it.
+- **`HANDOFF-youtube.md` is frozen into `docs/research/2026-08-23-youtube-mux-ceilings-and-bytes.md`**
+  and gone from the repository root, where it was the first file an agent read. It was a handoff to a
+  tree that stopped existing on 2026-08-24, when both PRs it was waiting on merged. Three of its
+  claims had gone false and all three were load-bearing: "a first paste shows a thumbnail by design"
+  is what this release reverses, its next step was a PO-token provider that a production probe closed
+  on 2026-08-28, and its ~267 KB/s was measured on the quarter-core container against yt-dlp 2026.7.4.
+  It keeps a dated header separating the reasoning, which holds, from the numbers, which do not, and
+  is now frozen at its measurement date like the six other notes beside it.
+
+### Notes
+- `package-lock.json` was still on 1.10.1 at the 1.11.0 tag. npm writes the version in two places
+  there and the cut moved neither, which nothing noticed because nothing reads it. Corrected with
+  this release. Both copies, `package.json`, `CLAUDE.md` and the badge in `public/index.html` now say
+  1.12.0; only the badge has a test holding it there.
+- **A minor rather than a patch.** The live-stream guard, the 🔴 note, the three activity-document
+  budgets and `MUX_PAGE_TIMEOUT` change what a reader sees on a card, and `META_GENERATION` is new
+  public surface for anyone self-hosting. Not a major: no route, no field and no response shape
+  changed, and every client written against 1.11.0 still parses 1.12.0.
+
+---
+
+## [1.11.1] - 2026-08-28
+
+### Fixed
+- **The 1.11.0 container answered every request with `501 Unsupported method`, and every mux on every
+  platform broke together.** The patch that added the `/_clients` probe anchored on a class statement
+  that does not exist in this file, took its fallback anchor, and spliced the module-level probe
+  helpers into the middle of `Handler`'s body. A Python class ends at the first unindented line, so
+  `do_GET` and `do_POST` stopped being methods and `BaseHTTPRequestHandler`'s own base implementation
+  answered instead — which is a 501 for every verb. The helpers now sit above the class, and the
+  patch script that placed them verifies with `ast` rather than with a string anchor.
+- **The repair was live for ten minutes before production noticed it.** Container image 120 was
+  correct and deployed; seven pooled instances kept serving the broken image because an instance runs
+  the image it booted with until it idles out, `sleepAfter` is 5m, and *any* request resets that
+  timer — so under live traffic the broken instances were kept alive by the very requests they were
+  failing. Six minutes of deliberate quiet did not clear it. `RESOLVER_GENERATION` `g12` -> `g13`
+  ended it, because that string names the Durable Objects and changing it forces brand-new instances.
+  Recorded in `src/worker.ts` as the first time that constant has been spent to end an outage rather
+  than to invalidate a wrong record. If it recurs, a shorter `sleepAfter` is the cheaper permanent
+  answer than another bump; `src/container.ts` already argues 3m is available.
+
+### Added
+- **Three tests that assert the container's handler SHAPE**, not just its helpers
+  (`container/test_server.py`). `do_GET` and `do_POST` must be attributes of `Handler`, and the probe
+  helpers must be module-level. Nothing in 1448 Worker tests or 31 container tests could see this
+  defect: the container suite calls the pure helpers, which were all fine, and the Worker suite stubs
+  the container away entirely.
+
+### Known gap
+- **`/_smoke` stayed 17/17 green throughout a total container outage.** Most of its checks never reach
+  the container, and YouTube metadata now comes from Innertube rather than from `yt-dlp`, so the one
+  platform most likely to expose a dead container stopped depending on it. The breakage detector this
+  project added *because* Facebook was once broken for a week could not see a worse break than that
+  one. Nothing yet drives the container's HTTP surface end to end from the smoke path. Documented
+  rather than fixed, because the fix is a design decision about what `/_smoke` is for.
+
+---
+
 ## [1.11.0] - 2026-08-28
 
 ### Added
@@ -23,7 +271,7 @@ Nothing yet.
   egress, so the card was lost to Cloudflare's egress being refused once.
   Only a REFUSED request is retried (408/425/429/5xx, or a thrown fetch). A parsed body is a verdict
   and is believed on the first ask, which is what keeps the cost bounded: a nonexistent Twitter id
-  answers HTTP 200 with a parseable tombstone, so dead links still cost exactly one request. 22 call
+  answers HTTP 200 with a parseable tombstone, so dead links still cost exactly one request. 24 call
   sites across 15 fetchers, and a source-derived test requires every `await fetch(` under
   `src/platforms` to be routed through it or carry a `NO-RETRY` comment saying why not.
 - **`/_clients`, which answers which YouTube player client actually serves bytes from production
@@ -286,6 +534,10 @@ Nothing yet.
   layer, so the exact version IS the update mechanism rather than paperwork around it. Four tests now
   hold the pin exact, keep the `[default,curl-cffi]` extras through any bump, check that the
   workflow's extraction still matches the line it edits, and refuse a deploy step in that job.
+  *(Corrected 2026-08-29: the layer-caching mechanism in this entry is wrong. Every merge builds the
+  image from scratch in a Workers Builds runner off a fresh clone, so a floor would FLOAT rather than
+  freeze. The conclusion — pin exactly — survives, for reproducibility and a one-line revert. See the
+  Dockerfile and the Documentation section of 1.12.0.)*
 - **The media container now sleeps after 5 minutes idle instead of 10.** Measured from the bill:
   3.24M instance-seconds awake against 42.9k vCPU-seconds of work — a 5.3% duty cycle, so 94.7% of
   what was billed was an instance with nothing to do. With one dispatch every ~4.3 minutes per pool

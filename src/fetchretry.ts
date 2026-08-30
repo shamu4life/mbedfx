@@ -18,8 +18,16 @@
  * post is not sensitive, not protected and not deleted. Cloudflare's egress was simply refused once.
  * That is the same shape already measured on YouTube's Innertube endpoint, where ~40-50% of
  * Worker-egress calls are refused while every one of them answers perfectly from a residential IP in
- * the same minute — and where a SECOND attempt is exactly what lifted first-paste success from 0/14
- * to 9/10.
+ * the same minute.
+ *
+ * AND INNERTUBE IS THE ONE PLACE THIS DOES NOT APPLY, which is worth stating here rather than only at
+ * that call site, because the sentence above used to end "and where a SECOND attempt is exactly what
+ * lifted first-paste success from 0/14 to 9/10" — inviting the wire-up the exemption there refuses.
+ * What lifted that number (09c7f01) was persisting the answer for 30 days plus the activity route
+ * asking again seconds later, not another ask inside one fetch. Measured in the same commit: raising
+ * the budget moved nothing and adding a second client moved nothing. See the NO-RETRY comment in
+ * src/platforms/youtube/innertube.ts, which also records that a refusal there is a prompt 403 —
+ * `worthAskingAgain` reads 403 as an answer about the video, so this would not fire on it anyway.
  *
  * WHY THE RETRY KEYS ON STATUS, WHICH LOOKS LIKE THE THING CLAUDE.md FORBIDS. It is not. "Assert on
  * content, never on status" governs whether we HAVE an answer, and that rule is untouched here: every
@@ -81,14 +89,24 @@ export function worthAskingAgain(status: number): boolean {
  * The refused Response's body is CANCELLED before the retry. A Response whose body is never read and
  * never cancelled holds its stream open for the life of the request, and this path runs on every
  * refusal on every platform.
+ *
+ * THE THIRD PARAMETER IS THE INJECTED SEAM, not a general hook. `fetchYouTube` takes a
+ * `fetchImpl: typeof fetch` so its tests can answer oembed and Innertube with no network, and without
+ * this that one call site could not use the retry at all — it would have had to carry a NO-RETRY
+ * exemption, on the platform with this repo's highest measured egress refusal rate and where an
+ * oembed miss is permanent (the post is UNVOUCHED, so youtubeMeta then refuses to recover the date
+ * and the card renders 1 January 1970 forever). Defaults to `fetch`, so every other caller is a
+ * one-word edit exactly as before.
  */
-export async function askTwice(input: string, init?: RequestInit): Promise<Response> {
+export async function askTwice(
+  input: string, init?: RequestInit, fetchImpl: typeof fetch = fetch,
+): Promise<Response> {
   let thrown: unknown
   let threw = false
   for (let attempt = 0; attempt < ASK_ATTEMPTS; attempt++) {
     const last = attempt === ASK_ATTEMPTS - 1
     try {
-      const res = await fetch(input, init)
+      const res = await fetchImpl(input, init)
       if (last || !worthAskingAgain(res.status)) return res
       res.body?.cancel().catch(() => {})
     } catch (e) {

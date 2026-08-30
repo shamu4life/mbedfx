@@ -40,7 +40,7 @@ import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlsplit
 
-# 20 min. This bounds WORK, not the user's patience — and it is deliberately NOT set to "whatever plays on
+# 25 min. This bounds WORK, not the user's patience — and it is deliberately NOT set to "whatever plays on
 # the first paste". A {page} mux downloads the whole video before we can serve a byte, so time-to-play
 # scales with length; a 10-min ceiling made long videos fail FOREVER, which is strictly worse than making
 # them arrive late. They now mux like anything else: the first paste renders the still card (the card only
@@ -53,6 +53,54 @@ MAX_BYTES = int(os.environ.get("MAX_BYTES", "393216000"))     # 375 MB output ce
 # byte ceiling would just move the refusal from the duration filter to the size filter for the
 # videos the duration change was meant to admit, and the symptom would be identical.
 PROC_TIMEOUT = int(os.environ.get("PROC_TIMEOUT", "120"))     # per-subprocess wall clock
+
+# THE {page} MUX GETS ITS OWN WALL, because PROC_TIMEOUT was one number doing three jobs and only one
+# of the three is a whole-video download.
+#
+# WHAT PROC_TIMEOUT STILL DOES, AND WHY IT IS NOT THE THING BEING RAISED. It walls `_mux_tracks`
+# (ffmpeg, given direct format urls) and `_meta_page` (a `-J` extract that downloads nothing), and
+# src/muxpolicy.ts derives MUX_FIRST_ATTEMPT_TRACKS_MS = 140s from it so the tracks alarm cannot wake
+# while that ffmpeg is still pulling. Raising PROC_TIMEOUT here would silently move that alarm's
+# premise in another repo half, and a mux alarm that fires early is the double-mux muxOnce exists to
+# prevent. So the page mux is split out instead of the shared number being nudged.
+#
+# WHAT THIS FIXES. `_mux_page` ran under PROC_TIMEOUT + 60 = 180s while MAX_SECONDS admits 1500s of
+# video. That wall was UNREACHABLE until the MuxRunner alarm landed, because ctx.waitUntil cancelled
+# the attempt at 30s first, so nothing ever hit it and nobody noticed. It is now the first ceiling
+# that actually bites: a long video is SIGKILLed at 180s, the container buffers the whole file before
+# sending a byte and writes to a fresh mkstemp, so R2 gets nothing, and all three alarm attempts
+# restart from byte zero and die at the same wall. A 20-minute video never plays, on any paste, ever.
+#
+# 360 IS NOT A DERIVATION AND THIS COMMENT WILL NOT PRETEND IT IS. The arithmetic that would justify a
+# specific number needs a throughput figure, and the one on file is ~267 KB/s measured 2026-08-23 on
+# the OLD quarter-core container with yt-dlp 2026.7.4. Both terms have since moved: the container is
+# standard-2 (extraction went 14-17s to 3.1-4.7s) and yt-dlp is 2026.8.19. 360 is a round number
+# picked to be clearly past 180 and clearly short of holding a slot for the alarm's whole 15 minutes.
+#
+# THE DIRECTION IS WHAT IS DEFENSIBLE. Raising a wall spends slot-seconds only on videos that
+# currently fail 100% of the time: a mux that finishes inside 180s is untouched by this, and one that
+# does not currently produces nothing at any wall, so there is no case this makes worse. The blast
+# radius stays bounded by RESOLVER_SLOTS (4) and MAX_BYTES, neither of which this touches.
+#
+# THE OPEN QUESTION, for whoever measures next: what is sustained yt-dlp throughput from Cloudflare
+# egress on standard-2 with 2026.8.19, and does MAX_SECONDS (1500) still fit under a wall we are
+# willing to hold a slot for? If it does not, the honest fix is lowering MAX_SECONDS to what this wall
+# can finish, not raising the wall again — a video admitted and then killed is worse than one refused.
+#
+# WHAT WAS CHECKED ON THE WORKER SIDE BEFORE RAISING IT, and what was not. 360s is longer than any
+# container subrequest this repo has previously exercised, so the question is whether something above
+# the container cuts it off first. Three things say no and one is untested:
+#   - the caller is the MuxRunner alarm handler, which Cloudflare gives 15 minutes.
+#   - Cloudflare's limits page says "There is no set time limit on individual subrequests"
+#     (quoted in src/smoke.ts, read 2026-08-12).
+#   - `sleepAfter` (5m) is an IDLE timer; an instance serving a request is not idle.
+#   - UNTESTED: no request through this binding has actually run past 180s in production. If some
+#     ceiling does sit between the Worker and the container below 360s, the effective wall is that
+#     one — the change is still a strict improvement over 180, but the arithmetic above would want a
+#     correction, and mux_timeout on a {page} platform is where it would show.
+# The DO runtime's own alarm retry is NOT a hazard here: `alarm()` in src/muxrunner.ts catches every
+# throw precisely so that loop never runs, so a long attempt cannot be raced by a retried alarm.
+MUX_PAGE_TIMEOUT = int(os.environ.get("MUX_PAGE_TIMEOUT", "360"))  # {page} mux only, see above
 
 # THE YOUTUBE PLAYER CLIENTS, SPELLED OUT RATHER THAN LEFT TO yt-dlp's DEFAULT — and this is a
 # workaround for a live upstream/YouTube fight, not a preference. Re-measure before touching it.
@@ -331,7 +379,10 @@ def _mux_page(page: str, out: str, jar=None) -> None:
     # which the negative index silently could.
     if jar is not None:
         cmd[1:1] = jar.args()
-    subprocess.run(cmd, check=True, timeout=PROC_TIMEOUT + 60, stdin=subprocess.DEVNULL,
+    # MUX_PAGE_TIMEOUT, NOT PROC_TIMEOUT + 60. This one call downloads the whole video before it can
+    # write a byte, so its wall scales with the source; the other two subprocesses do not, and one of
+    # them is what src/muxpolicy.ts's tracks alarm is timed against. See MUX_PAGE_TIMEOUT's own note.
+    subprocess.run(cmd, check=True, timeout=MUX_PAGE_TIMEOUT, stdin=subprocess.DEVNULL,
                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 
@@ -445,8 +496,11 @@ def _meta_page(page: str, jar=None) -> dict:
     # og:title, which is what `title` falls back to — the STRUCTURED fields are the only clean creator
     # and caption available (measured 2026-07-25: uploader 'PhillyBanana ', description 'Are you
     # "Disturbed"', against a title of '3.9K reactions · 292 shares | Are you "Disturbed" | PhillyBanana').
-    # CHANGING THIS DICT REQUIRES BUMPING RESOLVER_GENERATION in src/worker.ts — pooled instances keep
-    # running the image they booted with until sleepAfter, so otherwise the new fields stay undefined.
+    # CHANGING THIS DICT REQUIRES BUMPING BOTH GENERATIONS in src/worker.ts. RESOLVER_GENERATION,
+    # because pooled instances keep running the image they booted with until sleepAfter, so otherwise
+    # the new fields just stay undefined. And META_GENERATION, because records already persisted in the
+    # OLD shape are read back for up to 30 days. They were one string until 2026-08-29 and the reason
+    # given here only ever covered the first of the two.
     # _type DISTINGUISHES A VIDEO FROM A PLAYLIST, and without it the Worker cannot. Its content
     # assertion is "title is a non-empty string", which an Imgur ALBUM passes — measured 2026-07-26:
     # imgur.com/a/iX265HX yields _type='playlist' with a title and NOTHING else (no thumbnail, no

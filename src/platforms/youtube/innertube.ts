@@ -100,10 +100,17 @@ const INNERTUBE_CLIENTS = [
  * budget. The budget was the bug, not the endpoint.
  *
  * 2500ms, against a card that already takes ~1700ms end to end and an HTML_DEADLINE_MS of 5000. What
- * this spends is `settleMux`'s share of the same budget, and on YouTube specifically that is the right
- * trade rather than a regrettable one: a cold YouTube mux cannot finish inside a render at any budget
- * (20-60MB through a throttled datacenter link), so the seconds settleMux would spend waiting buy
- * nothing, while these buy the date, the description and the duration on the only paste that counts.
+ * this spends on the HTML HEAD is `settleMux`'s share of the same budget, and there the trade is
+ * still the right one: a cold YouTube mux almost never finishes inside a head render, so the seconds
+ * settleMux would spend waiting buy little, while these buy the date, the description and the
+ * duration on the only paste that counts.
+ *
+ * "CANNOT FINISH AT ANY BUDGET" IS WHAT THIS USED TO SAY, and the production counters retired it on
+ * 2026-08-29: of 139 recorded yt muxes the fastest finished in 4200ms (p10 6922, p50 18219), so the
+ * race is long, not unwinnable. Two things follow. The head keeps this trade because 4200ms does not
+ * fit under HTML_DEADLINE_MS beside everything else it owes. The ACTIVITY document does not share a
+ * budget with this call at all any more — see worker.ts's YT_META_BOT_MS (2800, sized around the
+ * timeout here) and YT_MUX_BOT_MS (4000) — so on that seam neither arm is spending the other's time.
  *
  * `AbortSignal.timeout` rather than the `deadline()` helper used elsewhere in this repo: that one
  * deliberately leaves the loser running because the loser is doing work worth finishing. Here it is
@@ -128,6 +135,12 @@ export type InnertubeMeta = {
   ageLimit?: number
   /** Views only. Innertube's WEB player response carries no like or comment count. */
   views?: number
+  /**
+   * IS THERE NO FINISHED FILE YET — streaming now, or scheduled and not started. `false` is a real
+   * answer (see liveVerdict); absent means the response carried nothing to read it from, which is
+   * what lets a stale record's `true` be overridden only by an answer we actually got.
+   */
+  isLive?: boolean
 }
 
 const str = (v: unknown): string | undefined =>
@@ -164,6 +177,61 @@ function ageLimitFrom(playability: Record<string, unknown> | undefined): number 
 }
 
 /**
+ * IS THERE ANY FINISHED FILE TO MUX — and `isLiveContent` IS NOT THE DISCRIMINATOR, which is the
+ * whole reason this is a function rather than one field read.
+ *
+ * Measured 2026-08-29, cookie-free, four ids, one per state:
+ *
+ *   xDWQ3LkccY8  Sky News, streaming    isLive true   isLiveContent true   len '0'
+ *                liveBroadcastDetails {isLiveNow: true, startTimestamp: '2026-08-27T05:26:32+00:00'}
+ *   wEpMzbXi1CM  Sky News, scheduled    isLive ABSENT isLiveContent true   len '0'
+ *                liveBroadcastDetails {isLiveNow: false, startTimestamp: '2026-08-30T05:00:00+00:00'}
+ *   0cVnt1bUzLI  NASA, stream ENDED     isLive ABSENT isLiveContent true   len '3764'
+ *                liveBroadcastDetails {isLiveNow: false, start …, endTimestamp: '2026-08-29T14:02:12+00:00'}
+ *   dQw4w9WgXcQ  never a broadcast      isLive ABSENT isLiveContent false  len '213'   no details block
+ *
+ * So `isLiveContent` is true on all three broadcasts INCLUDING the finished one, and keying on it
+ * would refuse a mux for every past stream a channel has ever published, forever. An ended stream is
+ * an ordinary VOD and muxes like one — that is the case this predicate exists to keep answering false.
+ *
+ * A SCHEDULED STREAM IS TREATED AS LIVE, deliberately, because it fails the same way: there is no
+ * file, the container downloads nothing, and the card would spin on a doomed mux until the broadcast
+ * starts. It reports neither `isLive` nor `isLiveNow`, so the third arm is what catches it — a
+ * broadcast with no `endTimestamp` and no positive `lengthSeconds`.
+ *
+ * THE LENGTH CONJUNCT IS THE SAFETY PROPERTY, not a shortcut: this can never fire on a video that
+ * declares a real duration. If YouTube ever drops `endTimestamp` from a finished broadcast, that
+ * video still has a length, so it still muxes; the worst this predicate can do to a playable video
+ * is nothing. (A 24/7 stream that ended is the one to test that against: jfKfPfyJRdk reports
+ * `lengthSeconds '121601512'` — 3.85 years of DVR window — and is refused by the OVER-CEILING arm on
+ * its length, which is the right reason.)
+ *
+ * `undefined` WHEN THERE WAS NOTHING TO READ. A response that carried no verdict is not "not live",
+ * it is "no answer", and the two must stay distinguishable: a stored `isLive: true` is only
+ * overridden by a fresh negative, never by silence. See worker.ts's yt arm.
+ *
+ * THE NEGATIVE COMES OUT OF THE MICROFORMAT, corrected in review 2026-08-29. This used to answer a
+ * confident `false` for any body with a `videoDetails` block, so the three-valued design collapsed to
+ * two on every partial response — `{videoDetails: {shortDescription: 'x'}}` read as "not live". Every
+ * negative in the table above is a microformat that HAS been read and carries no live broadcast
+ * (dQw4w9WgXcQ) or a finished one (0cVnt1bUzLI); no measured shape answers false from `videoDetails`
+ * alone. So a body with no microformat now abstains, and the one value allowed to clear a stored
+ * `true` is one that actually looked. The clients are asked in turn (INNERTUBE_CLIENTS) and MWEB's
+ * shape has not been measured against these four states, which is exactly the case this protects.
+ */
+function liveVerdict(
+  details: Record<string, unknown> | undefined,
+  micro: Record<string, unknown> | undefined,
+): boolean | undefined {
+  if (details?.isLive === true) return true
+  if (!micro) return undefined
+  const b = obj(micro.liveBroadcastDetails)
+  if (!b) return false
+  if (b.isLiveNow === true) return true
+  return !str(b.endTimestamp) && !count(details?.lengthSeconds)
+}
+
+/**
  * Parse a `youtubei/v1/player` body into the fields the card needs. Exported and PURE so the parsing
  * is testable against captured fixtures with no network — the network half below is four lines and
  * has nothing to get wrong that a fixture would catch.
@@ -184,8 +252,10 @@ export function parseInnertube(body: unknown): InnertubeMeta | null {
   if (desc) out.description = desc
 
   const secs = count(details?.lengthSeconds)
-  // 0 is what a livestream reports, and a zero duration is not a short video — it is "unknown", which
-  // must stay absent so settleMux's over-ceiling arm does not read it as "safely under the ceiling".
+  // 0 is what a livestream reports (verified again 2026-08-29 on the two unfinished broadcasts in
+  // liveVerdict's table), and a zero duration is not a short video — it is "unknown", which must stay
+  // absent so settleMux's over-ceiling arm does not read it as "safely under the ceiling". Absent is
+  // also why the over-ceiling arm alone never refused a live stream: see the live arm beside it.
   if (secs) out.duration = secs
 
   const age = ageLimitFrom(obj(d.playabilityStatus))
@@ -197,7 +267,16 @@ export function parseInnertube(body: unknown): InnertubeMeta | null {
   // ALL-ABSENT IS A MISS, NOT AN EMPTY ANSWER. An empty object overlaid onto the post would look
   // exactly like a successful call that found nothing, and the caller could not tell it from the
   // shape change this file's docstring warns about. Null is the signal that nothing was learned.
-  return Object.keys(out).length ? out : null
+  //
+  // COUNTED BEFORE `isLive` IS ADDED, and that ordering is load-bearing. A `false` verdict is a real
+  // answer about the video but it is NOT evidence that this call worked — `videoDetails: {}` reads as
+  // not-live. Counting it would make every empty body a non-null result, which fetchInnertube's
+  // `if (got) return got` would accept, retiring the MWEB fallback that exists for exactly those
+  // responses (WEB answered 5 of 10 ids; see INNERTUBE_CLIENTS).
+  const learned = Object.keys(out).length
+  const live = liveVerdict(details, micro)
+  if (live !== undefined) out.isLive = live
+  return learned ? out : null
 }
 
 /**
@@ -222,6 +301,11 @@ export async function fetchInnertube(
     // and starting one anyway would only delay the card to reach the same null.
     if (left < 250) break
     try {
+      // NO-RETRY: deliberate, and about the POLICY rather than a budget. A refusal here is a prompt
+      // 403 (see INNERTUBE_TIMEOUT_MS above), and worthAskingAgain reads 403 as an answer about the
+      // video rather than about the request, so askTwice would not fire on the failure that actually
+      // happens. Asking again was measured anyway: 09c7f01, n=22 production ids, a second client
+      // moved the ~40-50% rate not at all. Persisting for 30 days fixed it. See src/fetchretry.ts.
       const res = await fetchImpl(INNERTUBE_URL, {
         method: 'POST',
         headers: { 'content-type': 'application/json', 'user-agent': ua, accept: 'application/json' },

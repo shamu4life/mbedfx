@@ -1,0 +1,27 @@
+{
+  "playabilityStatus": {
+    "status": "UNPLAYABLE",
+    "reason": "Video unavailable"
+  },
+  "videoDetails": {
+    "videoId": "xDWQ3LkccY8",
+    "title": "Watch Sky News",
+    "lengthSeconds": "0",
+    "viewCount": "499175",
+    "author": "Sky News",
+    "isLive": true,
+    "isLiveContent": true,
+    "shortDescription": "Watch Sky News live to find out the latest on what is happening around the world and what is coming up throughout the day ⬇️ \n\n🔴 Nepal flooding latest: 'Huge' loss of life as 'distraught' relatives wait for information on the missing - https://trib.al/R6frAxJ\n\n🔴 Politics latest: Burnham says he'll abstain on assisted dying - and will give MPs 'genuinely free vote' - https://news.sky.com/story/politics-latest-burnham-labour-farage-badenoch-reform-12593360\n\n🔴 Middlesbrough FC pays tribute to police officers killed in A66 crash - https://news.sky.com/video/middlesbrough-fc-pays-tribute-to-police-officers-killed-in-a66-crash-13578523\n\n#SkyNews #BreakingNews #UK #Politics #UKPolitics #AndyBurnham #Burnham #Trump #DonaldTrump #Live #SkyNewsLive\n\nSUBSCRIBE to our YouTube channel for more videos: http://www.youtube.com/skynews \nFollow us on Twitter: https://twitter.com/skynews \nLike us on Facebook: https://www.facebook.com/skynews \nFollow us on Instagram: https://www.instagram.com/skynews \nFollow us on TikTok: https://www.tiktok.com/@skynews \n\nFor more content go to http://news.sky.com and download our apps: Apple https://itunes.apple.com/gb/app/sky-news/id316391924?mt=8 Android https://play.google.com/store/apps/details?id=com.bskyb.skynews.android&hl=en_GB \n\nSky News Daily podcast is available for free here: https://podfollow.com/skynewsdaily/ \n\nTo enquire about licensing Sky News content, you can find more information here: https://news.sky.com/info/library-sales"
+  },
+  "microformat": {
+    "playerMicroformatRenderer": {
+      "publishDate": "2026-08-26T22:24:39-07:00",
+      "uploadDate": "2026-08-26T22:24:39-07:00",
+      "isFamilySafe": true,
+      "liveBroadcastDetails": {
+        "isLiveNow": true,
+        "startTimestamp": "2026-08-27T05:26:32+00:00"
+      }
+    }
+  }
+}

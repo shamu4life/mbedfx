@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { handle, liveFetchPost, metaCacheKey, HTML_DEADLINE_MS, MUX_WAIT_FLOOR_MS } from '../src/worker.ts'
+import { handle, liveFetchPost, metaCacheKey, META_GENERATION, HTML_DEADLINE_MS, MUX_WAIT_FLOOR_MS } from '../src/worker.ts'
 import { refKey } from '../src/refkey.ts'
 import { cacheUrl, postCacheKey, serializePost } from '../src/cache.ts'
 
@@ -221,27 +221,43 @@ test('THE META R2 CACHE: a success is written, a FAILURE is never written', asyn
   assert.ok(!badR2.store.has(key), 'a failed extract must NEVER be cached — it self-heals next unfurl')
 })
 
-test('THE META R2 CACHE: the GENERATION is in the key, so a bump misses the old entry', async () => {
+test('THE META R2 CACHE: META_GENERATION is in the key, so a bump misses the old entry', async () => {
   /**
    * A redeploy is not atomic. During a rollout a PRE-BUMP pooled instance still answers, and without
    * the generation in the key its thinner dict is PERSISTED for 24h — so after the rollout completes
    * the card STILL ships with no dimensions, no caption and no timestamp, on every colo, not fixable by
-   * re-pasting. Same argument container/README.md already makes for instance names: the bump has to be
-   * the SINGLE invalidation switch, covering both the instances that produce an answer and the answers
-   * we kept.
+   * re-pasting. Same argument container/README.md already makes for instance names.
    *
-   * Asserted against a key built the OLD way rather than by mutating the constant: this is exactly what
-   * a pre-bump object in the live bucket looks like on the morning after.
+   * TWO SWITCHES SINCE 2026-08-29, not one. This used to say the bump was the SINGLE invalidation
+   * switch covering both the instances and the answers, and that is what it cost: `metaCacheKey` read
+   * RESOLVER_GENERATION, which also names the Durable Objects, so a bump aimed at evicting a broken
+   * container instance also emptied this cache — five times in 27 days against a 30-day TTL that was
+   * never once reached. The two constants hold the same value today and are bumped for different
+   * reasons: RESOLVER_GENERATION to evict instances, META_GENERATION when a stored record's shape or
+   * meaning changed. This test is about the second one.
+   *
+   * Asserted against keys built the OLD way rather than by mutating the constant: this is exactly what
+   * a pre-bump object in the live bucket looks like on the morning after. `nextGen` is the same trick
+   * pointed forwards — the state of every object in the bucket the morning after the NEXT bump.
    */
   const key = metaCacheKey(FB_REF)
+  assert.equal(key, `meta/${META_GENERATION}/${refKey(FB_REF)}.json`, 'the segment is META_GENERATION')
   assert.notEqual(key, `meta/${refKey(FB_REF)}.json`, 'the key must carry a generation segment')
-  for (const older of [`meta/${refKey(FB_REF)}.json`, `meta/g3/${refKey(FB_REF)}.json`, `meta/g4/${refKey(FB_REF)}.json`]) {
+  const nextGen = `g${Number(META_GENERATION.slice(1)) + 1}`
+  for (const older of [
+    `meta/${refKey(FB_REF)}.json`, `meta/g3/${refKey(FB_REF)}.json`, `meta/g4/${refKey(FB_REF)}.json`,
+    `meta/${nextGen}/${refKey(FB_REF)}.json`,
+  ]) {
     const r2 = fakeR2([[older, JSON.stringify({ title: 'PRE-BUMP TITLE' })]])
     const { seen, binding } = fakeResolver()
     const html = await (await handle(req(FB_PATH), envWith(binding, r2), ctx, deps())).text()
     assert.equal(seen.meta, 1, `a pre-bump entry must be invisible: ${older}`)
     assert.ok(!html.includes('PRE-BUMP TITLE'), `a pre-bump entry must never reach the card: ${older}`)
     assert.ok(r2.store.has(key), 'and the fresh answer lands under the CURRENT generation')
+    // THE INSTANCE HALF STILL HAS A GENERATION OF ITS OWN TO BUMP. Deleting RESOLVER_GENERATION and
+    // pointing the DO name at META_GENERATION would re-couple the two under a new name, which is the
+    // regression the split exists to prevent — and it would be invisible while both hold 'g13'.
+    assert.match(seen.names[0], /^resolver-g\d+-\d+$/, 'the DO name carries its own generation segment')
   }
 })
 

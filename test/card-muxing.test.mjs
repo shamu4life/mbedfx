@@ -1,7 +1,10 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { handle, HTML_DEADLINE_MS, MUX_WAIT_BOT_MS } from '../src/worker.ts'
+import {
+  handle, HTML_DEADLINE_MS, MUX_WAIT_BOT_MS, YT_META_BOT_MS, YT_MUX_BOT_MS,
+} from '../src/worker.ts'
 import { refKey } from '../src/refkey.ts'
+import { encodeStatusId } from '../src/statusid.ts'
 
 /**
  * `muxing` ON /_card — THE ONE WAY THE CONVERTER PAGE CAN KNOW A VIDEO IS COMING.
@@ -432,6 +435,109 @@ test('A CRAWLER IS NOT MADE TO WAIT OUT A COLD MUX — the ceiling is the bot bu
     'and the wait it does spend is the bot budget')
 })
 
+/* ================= AND THE SECOND CRAWLER REQUEST, WHICH IS A DIFFERENT BET =================
+ *
+ * 553bd2e put ONE budget on both crawler seams. They are not the same bet, and the production
+ * counters say so: of the 139 successful yt muxes recorded since 2026-08-24, ZERO finished inside
+ * 1500ms and the fastest finished in 4200ms. On the HEAD that is fine — the head carries no
+ * `media_attachments`, and losing the mux there costs the og:video upgrade on a document Discord
+ * mostly ignores for a post with media. On the ACTIVITY document it is the whole game: that is where
+ * `media_attachments[].type` decides player-or-photo, and Discord freezes the answer in the message
+ * forever. YT_MUX_BOT_MS carries the measurement and the trade.
+ *
+ * THESE FOUR REQUESTS RUN CONCURRENTLY, deliberately. Serially they cost 8.5s of pure timer; together
+ * they cost the longest one. Nothing here is CPU-bound — every arm is a `setTimeout` against a
+ * container that never answers — so overlapping them changes no timing that matters, and the gap the
+ * assertions rest on is 2500ms wide. Each request has its OWN id, for the muxInflight reason this
+ * file's header gives: a shared key would hand one seam's parked promise to another as its answer.
+ */
+test('THE yt ACTIVITY DOCUMENT GETS THE LONGER BUDGET, AND THE OTHER THREE SEAMS DO NOT', async () => {
+  const ae = recordingAE()
+  const env = () => envWith({ resolver: silentResolver(), ae })
+  const ytRef = id => ({ p: 'yt', id })
+  const xRef = id => ({ p: 'x', kind: 'status', id })
+  const activity = ref => `https://mbedfx.app/users/anyone/statuses/${encodeStatusId(refKey(ref))}`
+  const oembed = ref => `https://mbedfx.app/_oembed/${encodeStatusId(refKey(ref))}`
+  const bot = url => new Request(url, {
+    headers: { 'user-agent': 'Mozilla/5.0 (compatible; Discordbot/2.0; +https://discordapp.com)' },
+  })
+
+  /**
+   * NO NETWORK, and it is worth saying why none is needed rather than stubbing fetch. The activity
+   * route's metadata arm is `youtubeMeta`, whose first gate returns null the moment the post already
+   * carries a real date — `videoPost` does — so Innertube and the container are both unreachable from
+   * here. The translation arm returns immediately too: the text is Latin script and this file runs
+   * with TRANSLATE_GOOGLE off and no AI binding. So the ONLY arm left holding a clock is the mux, and
+   * the elapsed time below is that arm's budget and nothing else.
+   */
+  const timed = async (req) => {
+    const t0 = Date.now()
+    const res = await handle(req, env(), retainingCtx(), depsFor(ref => videoPost(ref)))
+    return { ms: Date.now() - t0, res }
+  }
+
+  const [ytActivity, ytHead, ytOembed, xActivity] = await Promise.all([
+    timed(bot(activity(ytRef('muxbudget01')))),
+    timed(bot('https://mbedfx.app/shorts/muxbudget02')),
+    timed(bot(oembed(ytRef('muxbudget03')))),
+    timed(bot(activity(xRef('9200000000000000002')))),
+  ])
+
+  // NOT A VACUOUS PASS: every one of the four must have actually reached the race and lost it, or the
+  // timings below would be measuring four fast paths that happen to differ. One media entry per post,
+  // so one row per request.
+  const degraded = ae.rows.filter(r => r.blobs?.[1] === 'card_degraded')
+  assert.equal(degraded.length, 4, 'all four seams raced a cold mux and lost')
+  assert.equal(degraded.filter(r => r.blobs[0] === 'yt').length, 3)
+  assert.equal(degraded.filter(r => r.blobs[0] === 'x').length, 1)
+
+  /**
+   * THE LOWER BOUND IS THE ASSERTION; THE UPPER BOUND IS ONLY A SANITY RAIL, and that split is what
+   * this test got wrong the first time. A budget shows up as time SPENT, so `>= budget - 200` is what
+   * proves a seam waited the budget it was given. Overshoot proves nothing: the four requests share
+   * one event loop and the box underneath it, so a contended runner inflates every arm.
+   *
+   * MEASURED, Workers Builds on 2026-08-29 (build aeacb488): the head returned in 2408ms against a
+   * 1500ms budget and an upper band of `MUX_WAIT_BOT_MS + 900` = 2400. The build went red over 8ms of
+   * someone else's CPU. The budget was correct and the test was wrong.
+   *
+   * So each rail is now set at the OTHER budget rather than at a slack constant: a shared seam must
+   * come in under YT_MUX_BOT_MS, and that is the only thing an upper bound here can honestly claim.
+   * The rails move on their own if either constant is retuned, and the discrimination between the two
+   * budgets is carried by the gap assertion below, which is load-independent by construction.
+   */
+  assert.ok(ytActivity.ms >= YT_MUX_BOT_MS - 200,
+    `the yt activity document must spend YT_MUX_BOT_MS on the mux (${ytActivity.ms}ms, ` +
+    `YT_MUX_BOT_MS=${YT_MUX_BOT_MS})`)
+  assert.ok(ytActivity.ms < HTML_DEADLINE_MS + YT_MUX_BOT_MS,
+    `and it must still answer (${ytActivity.ms}ms)`)
+
+  for (const [name, got] of [['the HTML head', ytHead], ['/_oembed', ytOembed], ['a non-yt activity document', xActivity]]) {
+    assert.ok(got.ms >= MUX_WAIT_BOT_MS - 200,
+      `${name} must spend the shared crawler budget (${got.ms}ms, MUX_WAIT_BOT_MS=${MUX_WAIT_BOT_MS})`)
+    assert.ok(got.ms < YT_MUX_BOT_MS - 200,
+      `${name} must NOT have the longer budget (${got.ms}ms, YT_MUX_BOT_MS=${YT_MUX_BOT_MS})`)
+  }
+
+  /**
+   * THE LOAD-INDEPENDENT FORM OF THE FOUR ASSERTIONS ABOVE. All four ran on one machine at one moment,
+   * so a box slow enough to inflate one inflates all of them, and only a real budget change moves the
+   * GAP. This is the assertion that fails if someone widens `botBudget` instead of the scoped constant
+   * — the absolute bands would then fail too, but this one says WHY.
+   */
+  const shared = Math.max(ytHead.ms, ytOembed.ms, xActivity.ms)
+  assert.ok(ytActivity.ms - shared > 1200,
+    `only the yt activity document may have the longer budget (yt activity ${ytActivity.ms}ms vs ` +
+    `slowest shared-budget seam ${shared}ms)`)
+
+  // AND THE DEGRADE IS STILL A DEGRADE. A longer budget that quietly stopped swapping the unfinished
+  // video down to its still would pass every timing above while shipping Discord a player url that
+  // 503s — the poisoned-url defect stillOf exists for.
+  const attachments = (await ytActivity.res.json()).media_attachments
+  assert.equal(attachments.length, 1)
+  assert.equal(attachments[0].type, 'image', 'a mux that lost the longer race still degrades honestly')
+})
+
 test('A DEGRADED CARD IS COUNTED — the one outcome a reader sees, and it used to be recorded as `ok`', async () => {
   /**
    * THE HOLE. settleMux swapping the player for a still is the exact failure this whole workstream is
@@ -490,4 +596,39 @@ test('THE BOT BUDGET IS A FRACTION OF THE RESPONSE BUDGET, and stays one', () =>
   // on their own — which is exactly how it happened the first time.
   assert.ok(MUX_WAIT_BOT_MS < HTML_DEADLINE_MS / 2,
     'a crawler budget that approaches the response budget is not a crawler budget')
+})
+
+/**
+ * THE ONE NUMBER IN THIS REPOSITORY THAT CAME FROM DISCORD'S OWN BEHAVIOUR. 2026-08-09, against
+ * production: a cold YouTube head answered in 5.14-5.18s and the reader got NO CARD. That is not a
+ * measurement of the crawler's timeout, but it IS an upper bound on it — whatever the tolerance is,
+ * it is under 5.14s. Every other figure ever quoted for it in this repo ("Discord leaves at 3-4s")
+ * appears once, cites nothing, and is folklore.
+ */
+const DISCORD_ABANDONED_AT_MS = 5140
+/** A post-cache read and a JSON serialise, on top of whichever arm holds the clock. */
+const ROUTE_WORK_MS = 300
+
+test('THE ACTIVITY BUDGETS STAY UNDER THE ONLY BOUND DISCORD HAS EVER GIVEN US', () => {
+  /**
+   * WHAT THIS CATCHES, and it is not hypothetical: every timing assertion in the test above is
+   * expressed against YT_MUX_BOT_MS itself, so moving the constant to 8000 — the value its own
+   * docstring says "rebuilds the 8.19-8.29s activity document 553bd2e deleted" — leaves the whole
+   * suite green. There was no guard on either of the two new budgets, while the one they were split
+   * off from has had one since it was written (above). This is that guard.
+   *
+   * IT BOUNDS THE RESPONSE, NOT THE ARM. Both budgets sit in one Promise.all, so the document ends at
+   * the slowest of them plus the route's own work — which is the thing Discord is timing.
+   */
+  assert.ok(YT_MUX_BOT_MS + ROUTE_WORK_MS < DISCORD_ABANDONED_AT_MS,
+    `the yt activity document must answer inside the bound (${YT_MUX_BOT_MS}ms + route work)`)
+  assert.ok(YT_META_BOT_MS + ROUTE_WORK_MS < DISCORD_ABANDONED_AT_MS,
+    `and so must the metadata arm (${YT_META_BOT_MS}ms + route work)`)
+
+  // THE MUX ARM IS THE SLOWEST OF THE THREE, which is what makes the date arm free — it finishes
+  // inside a wait that is happening anyway. YT_META_BOT_MS's docstring claims that property; nothing
+  // held it, and raising the date arm past the mux arm would quietly cost every cold paste the
+  // difference. The head keeps the small one: a raise there is a different bet with a different bound.
+  assert.ok(YT_META_BOT_MS < YT_MUX_BOT_MS, 'the date arm hides inside the mux arm')
+  assert.ok(MUX_WAIT_BOT_MS < YT_MUX_BOT_MS, 'and the shared crawler budget is the floor, not the ceiling')
 })

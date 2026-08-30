@@ -263,6 +263,133 @@ test('THE AGE NOTE KEEPS THE TOP, and does not lose the description', () => {
   assert.equal(post.sensitive, true)
 })
 
+// ---- the live note, and the flag that goes with it ---------------------------------
+
+test('A LIVE STREAM IS MARKED ON THE MEDIA AND EXPLAINED IN THE BODY — one read, both jobs', () => {
+  /**
+   * The two must not be able to disagree. The flag is what settleMux refuses the mux on; the note is
+   * what stops the resulting picture being a silent degrade. A card with one and not the other is
+   * either a blank rectangle or a lie.
+   */
+  const post = normalizeYouTube({ ok: true, oembed: OE, isLive: true, description: 'Breaking news.' }, REF)
+  assert.equal(post.media[0].live, true, 'the entry settleMux reads')
+  assert.ok(post.media[0].remux, 'and the remux is kept — settleMux owns the degrade shape, not this')
+  assert.match(post.text, /^🔴 Live stream/, 'the note leads')
+  assert.match(post.text, /Breaking news\./, 'and the description survives under it')
+})
+
+test('AN ENDED STREAM IS AN ORDINARY VIDEO — false and absent both mean "mux it"', () => {
+  for (const got of [{ ok: true, oembed: OE, isLive: false }, { ok: true, oembed: OE }]) {
+    const post = normalizeYouTube(got, REF)
+    assert.equal(post.media[0].live, undefined)
+    assert.equal(post.text, '')
+  }
+})
+
+test('withLiveNote IS IDEMPOTENT, and reads the flag off the media when nobody hands it one', async () => {
+  /**
+   * The overlay seams pass `meta?.isLive`, and the meta call is correctly SKIPPED whenever the post
+   * already carries a date — the common path since Innertube landed. So the argument is undefined
+   * exactly when the note is needed, and the fallback is the media flag settleMux just acted on.
+   * Applied twice must not say it twice: the seams and the normalizer both run it.
+   */
+  const { withLiveNote } = await import('../src/platforms/youtube/normalize.ts')
+  const post = normalizeYouTube({ ok: true, oembed: OE, isLive: true }, REF)
+  assert.equal(withLiveNote(post, undefined), post, 'already noted, so the same reference comes back')
+  const bare = { ref: REF, text: 'body', media: [{ kind: 'video', url: 'u', w: 0, h: 0, live: true }] }
+  assert.match(withLiveNote(bare, undefined).text, /^🔴 Live stream/, 'the flag alone is enough')
+  const idle = { ref: REF, text: 'body', media: [] }
+  assert.equal(withLiveNote(idle, false), idle, 'neither flag nor argument: the SAME reference back')
+})
+
+test('NEITHER NOTE TOUCHES ANOTHER PLATFORM — both of them name YouTube in their own text', async () => {
+  /**
+   * THE DEFECT, found in review 2026-08-29 and reproduced through the real dispatcher before it was
+   * fixed. Both notes are applied at worker.ts's activity/oEmbed callback, which is NOT scoped to
+   * `ref.p === 'yt'` the way describeTarget is. That was harmless while their only supply was
+   * `meta?.duration` / `meta?.isLive` — youtubeMeta answers null for every other platform — so the
+   * seam was safe by accident. The media fallbacks removed the accident: `Media.duration` is written
+   * by the yt-dlp tier (dm/st/im), PeerTube, Twitch, Instagram, Facebook and mastoapi, so a 4830s
+   * Dailymotion video unfurled as "Too long to play here. Open it on YouTube" — and Discord freezes
+   * that sentence in the message forever.
+   *
+   * The live note is guarded for the same reason rather than because it was observed: nothing but
+   * normalizeYouTube writes `Media.live` today, and "safe until someone else writes the field" is the
+   * state the length note was in the day before this.
+   */
+  const { withLengthNote, withLiveNote } = await import('../src/platforms/youtube/normalize.ts')
+  const dm = {
+    ref: { p: 'dm', kind: 'video', id: 'x9abcde' },
+    text: 'A long Dailymotion upload.',
+    media: [{ kind: 'video', url: 'https://dm.test/v.mp4', w: 0, h: 0, duration: 4830, live: true }],
+  }
+  assert.equal(withLengthNote(dm, undefined, 1500), dm, 'the SAME reference back, note and stamp both')
+  assert.equal(withLiveNote(dm, undefined), dm)
+  // And the argument form cannot get round it either — the note is wrong for this card either way.
+  assert.equal(withLengthNote(dm, 4830, 1500), dm)
+  assert.equal(withLiveNote(dm, true), dm)
+})
+
+test('ONE REASON PER CARD — the length note stands down for the live note', async () => {
+  /**
+   * A live stream reports a length of 0 and cannot reach the length note on its own. A 30-day record
+   * written while it was live, read back beside a duration, can. Two "here is why there is no player"
+   * lines on one card is one too many, and the live one is the reason settleMux actually refused.
+   */
+  const { withLengthNote, withLiveNote } = await import('../src/platforms/youtube/normalize.ts')
+  const live = withLiveNote(normalizeYouTube({ ok: true, oembed: OE }, REF), true)
+  const both = withLengthNote(live, 3406, 1500)
+  assert.match(both.text, /^🔴 Live stream/)
+  assert.ok(!/Too long to play here/.test(both.text), 'and only the one note')
+  assert.equal(both.media[0].duration, 3406, 'the duration is still stamped — the next reader needs it')
+})
+
+test('THE FALLBACK READS A LENGTH, IT DOES NOT REDISTRIBUTE ONE', async () => {
+  /**
+   * withMuxDuration writes one number onto EVERY entry carrying a `remux`, which is right for a value
+   * that arrived from outside and wrong for one read back off the media: mediaDuration returns the
+   * FIRST usable length, so re-stamping copies entry 0's length onto its siblings and erases theirs.
+   *
+   * Inert on YouTube today — normalizeYouTube emits exactly one entry — and pinned anyway, because
+   * "inert until someone adds a second entry" is the state the cross-platform note above was in.
+   */
+  const { withLengthNote } = await import('../src/platforms/youtube/normalize.ts')
+  const two = {
+    ref: REF, text: '',
+    media: [
+      { kind: 'video', url: 'a', w: 0, h: 0, remux: { page: 'a' }, duration: 30 },
+      { kind: 'video', url: 'b', w: 0, h: 0, remux: { page: 'b' }, duration: 9000 },
+    ],
+  }
+  const out = withLengthNote(two, undefined, 1500)
+  assert.deepEqual(out.media.map(m => m.duration), [30, 9000], 'each entry keeps its own length')
+  // The ARGUMENT form still stamps every remux entry: that value came from outside and is the one
+  // settleMux is meant to judge them all by. Both halves are the contract, so both are pinned.
+  const stamped = withLengthNote(two, 42, 1500)
+  assert.deepEqual(stamped.media.map(m => m.duration), [42, 42])
+})
+
+test('A CORRUPT STORED DURATION IS IGNORED, wherever it is read', async () => {
+  /**
+   * The fallback reads a value that has crossed R2 and a post cache, so it gets the same predicate
+   * the argument does — one spelling of "finite, positive, seconds", or a record written by a
+   * different generation puts "🎬 Too long to play here" on an ordinary video. NaN and Infinity are
+   * what JSON round-trips of a bad number actually produce here (both serialise to null, but the
+   * in-memory post cache hands the value straight back).
+   */
+  const { withLengthNote } = await import('../src/platforms/youtube/normalize.ts')
+  for (const bad of [NaN, Infinity, -Infinity, 0, -5, '9000', null, {}, []]) {
+    const post = {
+      ref: REF, text: 'body',
+      media: [{ kind: 'video', url: 'a', w: 0, h: 0, remux: { page: 'a' }, duration: bad }],
+    }
+    assert.equal(withLengthNote(post, undefined, 1500), post,
+      `${String(bad)} is not a length: the SAME reference back`)
+  }
+  // Infinity IS greater than the ceiling, so a predicate that only tested `> maxSeconds` would note it.
+  assert.ok(Infinity > 1500)
+})
+
 // ---- withDescription: the first-paste overlay -------------------------------------
 
 test('withDescription FILLS AN EMPTY BODY, which is the whole point of the overlay', () => {
@@ -279,6 +406,32 @@ test('withDescription NEVER OVERWRITES A BODY THAT EXISTS', () => {
   // The only writer that gets in first is the age note, and it must keep the top.
   const gatedPost = { text: '🔞 Age-restricted on YouTube — sign-in required, so no preview here.', ref: { p: 'yt', id: 'x' } }
   assert.equal(withDescription(gatedPost, 'a description'), gatedPost, 'same reference back')
+})
+
+test('withDescription WRITES UNDER A BARE LIVE NOTE — the note is a marker, not a body', () => {
+  /**
+   * THE DEFECT, found in review 2026-08-29. LIVE_NOTE is unlike the age note in the one way that
+   * matters here: it is applied at BUILD TIME by normalizeYouTube, because Innertube answers the
+   * liveness question before the Post exists. So `text` is non-empty on every broadcast by the time
+   * this seam runs, and the "a body already present wins" rule silently dropped the description.
+   *
+   * REACHABLE ON /_card AND /_api/v1 and nowhere else: youtubeMeta returns null once the post carries
+   * a real date, which a live stream always does (microformat.publishDate), and only describeTarget
+   * falls back to readCachedMeta to supply a description anyway.
+   */
+  const live = normalizeYouTube({ ok: true, oembed: OE, isLive: true }, REF)
+  assert.equal(live.text, '🔴 Live stream, so no preview here. Open it on YouTube', 'the bare note')
+  const withBody = withDescription(live, 'Sky News is a 24-hour channel.')
+  assert.match(withBody.text, /^🔴 Live stream/, 'the note still leads')
+  assert.match(withBody.text, /Sky News is a 24-hour channel\./, 'and the body arrives under it')
+
+  // THE AGE NOTE IS STILL A BODY, deliberately — that one is a decision about what to show rather
+  // than an ordering accident, and an age-walled video has no description worth putting under it.
+  const gated = normalizeYouTube({ ok: true, oembed: OE, ageLimit: 18 }, REF)
+  assert.equal(withDescription(gated, 'a description'), gated, 'same reference back')
+  // And a note with a body already under it is left alone, or the seam would append twice.
+  const both = normalizeYouTube({ ok: true, oembed: OE, isLive: true, description: 'Breaking news.' }, REF)
+  assert.equal(withDescription(both, 'Sky News is a 24-hour channel.'), both)
 })
 
 test('withDescription IS TOTAL OVER JUNK and returns the SAME reference when idle', () => {

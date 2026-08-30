@@ -5,22 +5,33 @@ import { readFileSync } from 'node:fs'
 /**
  * THE yt-dlp PIN, AND THE JOB THAT BUMPS IT, PINNED TO EACH OTHER.
  *
- * WHAT WENT WRONG, measured 2026-08-17. container/Dockerfile carried
- * `yt-dlp[default,curl-cffi]>=2025.1.1`, which reads like "always current" and guarantees the
- * opposite. A floor is resolved ONCE, when the layer is first built; Docker then reuses that layer
- * on every later build because the instruction text never changed. So the running version froze on
- * the day the image was first built, and — because nothing recorded it — NOBODY COULD SAY WHICH
- * VERSION WAS LIVE.
+ * WHAT WENT WRONG, 2026-08-17. container/Dockerfile carried `yt-dlp[default,curl-cffi]>=2025.1.1`,
+ * which reads like "always current" and buys nothing. It is a FLOOR: pip picks whatever satisfies it
+ * at build time, and NOTHING ANYWHERE RECORDED WHAT THAT WAS — not the repo, not a commit, not a
+ * build log. NOBODY COULD TELL WHICH VERSION WAS RUNNING.
  *
- * The bill for that was every NEW YouTube video rendering as a thumbnail with no player, for weeks,
- * while previously-cached ones kept playing. Two things hid it: the card looked healthy (title,
- * channel, upload date and counts were all correct, because the metadata call passes
- * `--ignore-no-formats-error`), and the outage monitor checks a CACHED video and accepts any card
- * that merely drew.
+ * TWO CORRECTIONS TO THE STORY THIS FILE USED TO TELL, both made in the Dockerfile on 2026-08-29 and
+ * mirrored here because the assertion messages below were repeating the old version:
  *
- * SO THESE ARE NOT STYLE ASSERTIONS. An exact pin is the MECHANISM: rewriting that string is what
- * invalidates the cached pip layer, which is what makes a bump reach production at all. A floor is
- * indistinguishable from a pin that never moves.
+ *   1. IT WAS NOT DOCKER LAYER CACHING. There is no machine holding this repo's previous layers:
+ *      every merge runs `wrangler deploy` in a Workers Builds runner off a fresh clone, and this
+ *      repo's own build logs report `Image does not exist remotely, pushing:`. A floor here would
+ *      not freeze, it would FLOAT — each merge installs whatever pip resolves that day, two builds
+ *      of one commit can differ, and a bad release arrives with no commit to revert.
+ *   2. THE FLOOR DID NOT CAUSE THE 2026-08-17 OUTAGE. The running version was 2026.7.4, the newest
+ *      stable that day and what the pin first named, so pinning changed nothing installed. The cause
+ *      was that release's DEFAULT player clients — YouTube enforcing GVS PO tokens on `android_vr` —
+ *      and the fix was container/server.py naming `player_client=...`, not a version bump.
+ *
+ * The outage itself is real and worth keeping: every NEW YouTube video rendered as a thumbnail with
+ * no player for weeks while previously-cached ones kept playing. Two things hid it — the card looked
+ * healthy (title, channel, upload date and counts all correct, because the metadata call passes
+ * `--ignore-no-formats-error`), and the outage monitor checks a CACHED video. What the FLOOR cost was
+ * the diagnosis: "is yt-dlp simply stale?" could be neither confirmed nor ruled out.
+ *
+ * SO THESE ARE NOT STYLE ASSERTIONS. An exact pin makes the image reproducible (a commit names
+ * exactly one yt-dlp) and rollback-able (one line), and it is the only place the version is written
+ * down, which is what gives the weekly bump something to change.
  */
 
 const DOCKERFILE = readFileSync(new URL('../container/Dockerfile', import.meta.url), 'utf8')
@@ -34,7 +45,7 @@ test('yt-dlp IS PINNED EXACTLY — a floor here is a pin that never moves', () =
   const m = INSTALL.exec(DOCKERFILE)
   assert.ok(m, 'container/Dockerfile must install yt-dlp at an exact `==` version')
   assert.doesNotMatch(DOCKERFILE, /^RUN pip install .*yt-dlp\[[^\]]*\]>=/m,
-    'a `>=` floor resolves once and then freezes behind Docker layer caching — that is the 2026-08-17 defect')
+    'a `>=` floor leaves the installed version unrecorded and un-revertable — see the header')
 })
 
 test('THE PIN IS A STABLE RELEASE — this pipeline does not run nightlies', () => {
@@ -42,11 +53,12 @@ test('THE PIN IS A STABLE RELEASE — this pipeline does not run nightlies', () 
    * OWNER'S DECISION, 2026-08-18: "nightly is not acceptable for the pipeline releases only."
    *
    * WHY IT NEEDS A TEST RATHER THAN A COMMENT. Nightlies are genuinely tempting here, and the
-   * temptation has a specific shape: the fix for the 2026-08 YouTube outage (GVS PO-token handling
-   * for `android_vr`, merged 2026-07-20) is in NO stable release, so anybody debugging that outage
-   * will find that the nightly channel appears to solve it and that PyPI serves nightlies under the
-   * same package name. One `.dev0` string in the Dockerfile is all it takes. This is the guard that
-   * makes that a red suite instead of a quiet change of risk posture.
+   * temptation has a specific shape: when the 2026-08 YouTube outage was being debugged, the GVS
+   * PO-token handling for `android_vr` (merged 2026-07-20) was in no stable release, so the nightly
+   * channel appeared to solve it and PyPI serves nightlies under the same package name. One `.dev0`
+   * string in the Dockerfile is all it takes. That particular fix HAS shipped stable since (the pin
+   * is 2026.8.19), but the shape recurs on every upstream fight, which is why this is a guard rather
+   * than a note.
    *
    * WHAT IT COSTS, so the cost is not rediscovered as a bug: stable ships sparsely — 2026 gave
    * 2026.3.3, 2026.3.13, 2026.3.17, 2026.6.9 and 2026.7.4, an eleven-week gap between March and

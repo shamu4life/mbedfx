@@ -486,7 +486,7 @@ footer .fine { font-size: 12px; opacity: .8; }
          hardcoded because this page is a static asset with no template step — and pinned to
          package.json by a test, because a version number that silently disagrees with the release is
          worse than none at all. -->
-    <div class="server">mbedfx <span class="ver" id="ver">v1.11.0</span></div>
+    <div class="server">mbedfx <span class="ver" id="ver">v1.12.0</span></div>
     <div class="cat">Start here</div>
     <a href="#convert"><b>#</b> convert</a>
     <a href="#sites"><b>#</b> sites</a>
@@ -630,7 +630,8 @@ footer .fine { font-size: 12px; opacity: .8; }
             <div class="t">🎬 Video came back as a still</div>
             <div class="d">Carousels with video flatten to the cover. Instagram reels using
               major-label audio arrive with no video at all. Anything over 25 minutes or 375 MB
-              stays a still.</div>
+              stays a still. Live and scheduled streams show the cover, because there is no
+              finished file to play yet.</div>
           </div>
           <div class="embed wide" style="--c:var(--faint)">
             <div class="t">😕 "Couldn't load this post"</div>
@@ -984,7 +985,7 @@ function mbedfxConvert(input, host) {
     { name: 'Bluesky', host: 'bsky.app', icon: 'bluesky', rail: '#1185FE',
       paths: ['profile/alice.bsky.social/post/3k2a'], note: 'Handles and did:plc: both work.' },
     { name: 'YouTube', host: 'youtube.com · youtu.be', icon: 'youtube', rail: '#FF0000',
-      paths: ['watch?v=dQw4w9WgXcQ', 'shorts/dQw4w9WgXcQ', 'dQw4w9WgXcQ'], note: 'Age-restricted videos are thumbnail only.' },
+      paths: ['watch?v=dQw4w9WgXcQ', 'shorts/dQw4w9WgXcQ', 'dQw4w9WgXcQ'], note: 'Age-restricted videos and live streams are thumbnail only.' },
     { name: 'Facebook', host: 'facebook.com', icon: 'facebook', rail: '#0866FF',
       paths: ['watch?v=10153231379946729', 'reel/2209468366484962', 'share/v/Fixture03X', 'groups/328668786145521/posts/1391536379858751', 'photo/?fbid=1596906755391068'],
       note: 'Video, reels, photos, and page and group posts.' },
@@ -1395,7 +1396,7 @@ function mbedfxConvert(input, host) {
       : (j.muxDone
           ? '<div class="preplbl"><span>Video ready.</span></div>'
           : (j.muxSlow
-              ? '<div class="preplbl"><span>Still preparing after two minutes. This preview has stopped '
+              ? '<div class="preplbl"><span>Still preparing after six minutes. This preview has stopped '
                 + 'checking. The link works now and shows the video once it is ready.</span></div>'
               : ''));
     var body = (j.title ? '<b>' + esc2(j.title) + '</b>\n' : '') + esc2(j.text || '');
@@ -1520,27 +1521,49 @@ function mbedfxConvert(input, host) {
    * legitimately still be working, then went quiet and NEVER confirmed the video landed. A reader who
    * waited saw "still preparing" forever even when the video arrived two seconds later.
    *
-   * THESE TWO NUMBERS MIRROR src/muxpolicy.ts AND ARE ASSERTED AGAINST IT. A hand-picked number here
-   * is the defect itself (the same argument the deadline constants make), and this file cannot import
+   * THESE TWO NUMBERS MIRROR THE MUX SCHEDULE RATHER THAN BEING PICKED. A hand-picked number here is
+   * the defect itself (the same argument the deadline constants make), and this file cannot import
    * from src/ because it ships as one hand-written page with no build step. So a test parses the
-   * policy and fails when these drift, which is the pattern test/prep.test.mjs already uses to keep a
+   * sources and fails when these drift, which is the pattern test/prep.test.mjs already uses to keep a
    * literal in step with a union it cannot import.
-   *   MUX_WATCH_FAST_MS  = MUX_FIRST_ATTEMPT_MS        (35s)  the page-shape first attempt
-   *   MUX_WATCH_TOTAL_MS = MUX_FIRST_ATTEMPT_TRACKS_MS (140s) the slowest first attempt
+   *   MUX_WATCH_FAST_MS  = MUX_FIRST_ATTEMPT_MS (35s), src/muxpolicy.ts. The moment the first attempt
+   *                        starts, so it is how long the poll stays responsive.
+   *   MUX_WATCH_TOTAL_MS = MUX_FIRST_ATTEMPT_PAGE_TOTAL_MS (395s), src/muxpolicy.ts — the 35s alarm
+   *                        plus MUX_PAGE_WALL_MS, which mirrors container/server.py's
+   *                        MUX_PAGE_TIMEOUT (360s) and is pinned to it by the same test. That is when
+   *                        a `{page}` first attempt has certainly ended.
    * Past the first attempt the policy's own retries are 120s and 1200s away, and nobody watches a
    * page for twenty minutes, so the window deliberately stops at the end of the first attempt rather
    * than at the full horizon.
+   *
+   * 140s WAS THE WRONG END OF THE WRONG ATTEMPT, and YouTube is what it was wrong for. It was
+   * MUX_FIRST_ATTEMPT_TRACKS_MS, on the reasoning that the `{video}` tracks shape is the slowest first
+   * attempt. It is not, and it stopped being the slowest the moment the page mux got a wall it could
+   * actually reach. Every YouTube link is a `{page}` source — src/platforms/youtube/normalize.ts
+   * hardcodes `remux: { page }` — so its alarm fires at 35s and THEN runs the container's page mux,
+   * walled at MUX_PAGE_TIMEOUT. The first attempt ends at 395s, and the page was giving up at 35% of
+   * it, on exactly the long videos the raised wall exists to rescue.
+   *
+   * NO SLACK IS ADDED ON TOP, unlike the 20s inside MUX_FIRST_ATTEMPT_TRACKS_MS. That slack keeps an
+   * alarm from waking inside a live ffmpeg. Nothing starts when this spinner stops, so a few seconds
+   * either way costs a sentence, not a second mux.
+   *
+   * IT OVER-WATCHES THE TRACKS SHAPE, and that is the safe direction. /_card does not say which shape
+   * is being waited on, so one number has to cover both. A Bluesky mux that finishes at 140s is
+   * reported done by the poll itself; the only cost of the longer cap is that the give-up sentence
+   * arrives later for a mux that was never going to finish.
    *
    * CHEAP TO REPEAT, which is what makes a longer window affordable: a /_card for a muxing post does
    * no upstream fetch and no inference. The post is served from cache and the only question asked is
    * whether the Durable Object has finished. Polling does not start the work again, and since the
    * MuxRunner alarm landed the work genuinely continues between polls rather than dying with the
-   * request, so watching longer now watches something real.
+   * request, so watching longer now watches something real. A full watch is 14 polls at 2.5s and 36 at
+   * 10s: 50 cached reads spread over six and a half minutes, from one open tab.
    */
   var MUX_POLL_MS = 2500;         // while inside the fast window
   var MUX_POLL_SLOW_MS = 10000;   // after it: still watching, just not hovering
   var MUX_WATCH_FAST_MS = 35000;
-  var MUX_WATCH_TOTAL_MS = 140000;
+  var MUX_WATCH_TOTAL_MS = 395000;  // MUX_FIRST_ATTEMPT_PAGE_TOTAL_MS: 35s alarm + the 360s page wall
 
   /**
    * WHAT MEDIA-ONLY SHOWS INSTEAD OF A CARD. A d. link does not unfurl — Discord fetches the url and

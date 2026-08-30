@@ -184,7 +184,11 @@ export type Outcome2 =
    *   mux_ok       the container produced bytes and R2 stored them. double2 is the elapsed ms.
    *   mux_gate     502 + "mux failed" — yt-dlp exited non-zero. THEIRS: a 403, a PO-token demand, a
    *                sign-in wall, an nsig solve failure. A rise here on `yt` alone is YouTube moving.
-   *   mux_timeout  504 — the container's own 180s wall (PROC_TIMEOUT + 60). OURS.
+   *   mux_timeout  504 — one of the container's own walls, and there are two since 2026-08-29:
+   *                MUX_PAGE_TIMEOUT (360s) on a `{page}` mux, PROC_TIMEOUT (120s) on `{video}` tracks
+   *                and on a meta extract. OURS. It was one number, PROC_TIMEOUT + 60 = 180s, until
+   *                the page mux was split out — so a rise here on a `{page}` platform after that date
+   *                means something quite different from the same rise before it.
    *   mux_empty    502 + "empty or oversized result" — it ran and produced nothing usable.
    *   mux_pool     503 — a cold boot, or "Maximum number of running container instances exceeded".
    *                A rise here degrades EVERY platform's card, not just the one in blob1.
@@ -209,8 +213,10 @@ export type Outcome2 =
    * WHY NOT `mux_degraded`. `MuxOutcome` is `Extract<Outcome2, \`mux_${string}\`>`, so that name would
    * silently join the countMux domain while being emitted through plain `count()` — blob3 a real
    * client where METRICS.md promises `none`, double2 unset where METRICS.md promises elapsed ms, and
-   * the operator's `WHERE blob2 LIKE 'mux\\_%'` average quietly poisoned. The type system would not
-   * have caught it. The name is the guard.
+   * the operator's mux-rows-only average quietly poisoned. The type system would not have caught it.
+   * The name is the guard. (That filter is spelled as an eight-value `IN` list, not as
+   * `LIKE 'mux\\_%'` — Analytics Engine SQL refuses a backslash inside a string literal with a bare
+   * HTTP 422, which is how the published query in docs/METRICS.md turned out never to have run.)
    *
    * WHY THE CLIENT IS REAL HERE. countMux writes `none` because muxOnce collapses three callers onto
    * one piece of work, so no client owns a mux. A DEGRADE is owned: it happened to one render, for one
@@ -218,9 +224,10 @@ export type Outcome2 =
    * so `card_degraded/ok` on `blob3='discord'` IS the first-paste failure rate, and it is the single
    * number that says whether the alarm moved anything.
    *
-   * WHAT IT DELIBERATELY EXCLUDES: the over-ceiling rewrite. That path never calls the container and
-   * can never succeed, so counting it here would put a permanent floor under the ratio made of videos
-   * that are too long by design.
+   * WHAT IT DELIBERATELY EXCLUDES: the two settleMux rewrites — a video past MUX_MAX_SECONDS, and a
+   * live or scheduled broadcast. Neither path calls the container and neither can ever succeed, so
+   * counting them here would put a permanent floor under the ratio, made of videos that are too long
+   * by design and of channels that stream around the clock.
    */
   | 'card_degraded'
   /**

@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { handle, metaCacheKey } from '../src/worker.ts'
+import { handle, metaCacheKey, MUX_WAIT_BOT_MS, YT_META_BOT_MS } from '../src/worker.ts'
 import { refKey } from '../src/refkey.ts'
 import { encodeStatusId } from '../src/statusid.ts'
 import { normalizeYouTube, withMuxDuration } from '../src/platforms/youtube/normalize.ts'
@@ -244,21 +244,134 @@ test('A CONTAINER THAT NEVER ANSWERS still returns, honestly, and the work is ha
   const elapsed = Date.now() - t0
   assert.equal(await createdAt(res), '1970-01-01T00:00:00.000Z', 'no date is honest; a wrong one is not')
   /**
-   * THE BOUND MOVED 8000 -> 9000 when META_WAIT_API_MS went 4000 -> 8000, and the ASSERTION IS
-   * UNCHANGED IN INTENT: the wait must stay bounded rather than becoming the container's own timeout.
+   * THE BOUND IS THIS ARM'S OWN BUDGET NOW, and the old one could not fail for the bug it guarded.
    *
-   * 9000 is not an arbitrary bump — it is MUX_WAIT_API_MS, the ceiling this route already accepts on
-   * the very same Promise.all. That is the entire justification for raising the meta wait: on a first
-   * paste the mux is cold by definition, so the meta wait happens INSIDE a wait that is happening
-   * anyway. A number above 9000 here would stop expressing "bounded by the route" and start
-   * expressing nothing.
+   * It read `elapsed < 9000` — MUX_WAIT_API_MS, the ceiling the /_card surface accepts — while the
+   * arm it measures was actually capped at 1500. Six times the slack. The exact behaviour 553bd2e was
+   * written to remove, an 8.2s activity document, passes under 9000, so this assertion would have
+   * stayed green through the regression it exists to catch. It also stayed green through the reverse
+   * mistake: the arm being capped at 1500, BELOW the 1716ms median of its own successes.
    *
-   * 4000 was under the thing it was waiting for (`yt-dlp -J` measures 2.3-6.7s), which is why the
-   * first activity callback on a cold video rendered 1 January 1970 — the reported bug.
+   * YT_META_BOT_MS is what this route now gives the metadata arm, and 900ms is slack for a loaded box
+   * and nothing else. Anything wider stops expressing "bounded by its budget".
    */
-  assert.ok(elapsed < 9000, `the bounded wait must not become the container's own timeout (${elapsed}ms)`)
+  assert.ok(elapsed < YT_META_BOT_MS + 900,
+    `the metadata arm must stop at its own budget, not the container's timeout (${elapsed}ms)`)
   assert.equal(seen.meta, 1)
   assert.ok(waits.length > 0, 'the extract keeps running past the response rather than being abandoned')
+})
+
+test('THE METADATA ARM GETS ITS OWN BUDGET, AND THE TRANSLATION DOES NOT', async () => {
+  /**
+   * WHAT THIS PINS, and why one number for all three arms was wrong.
+   *
+   * The activity route runs settleMux, youtubeMeta and translationFor in one Promise.all. Until
+   * 2026-08-29 all three were handed MUX_WAIT_BOT_MS (1500) — chosen for the MUX. The metadata arm
+   * has a different distribution and it is recorded in the code it calls: innertube.ts measures its
+   * successes at a 1716ms MEDIAN, and aborts its own fetch at INNERTUBE_TIMEOUT_MS = 2500. A 1500
+   * cap therefore sat below the median cost of a hit and could never observe a successful call
+   * finish at all, which throttled the "second attempt per paste" resolveYouTubeMeta exists to buy.
+   *
+   * THE MUX ARM IS NOT WHAT ARM 2 BELOW MEASURES, and the title used to say it was. Later the same
+   * day the mux arm got a budget of its own too — YT_MUX_BOT_MS, 4000ms on the yt activity document —
+   * so "the other two" is now one. The seam-by-seam proof that only that document has it lives in
+   * test/card-muxing.test.mjs, which owns a container that genuinely never answers; the fake resolver
+   * in THIS file answers a mux instantly, so what arm 2 times is the TRANSLATION.
+   *
+   * The arms cannot be timed in one request — Promise.all ends at the slowest — so this drives two,
+   * and compares them. Absolute bands alone would be a 300ms margin on a loaded box; the RELATIVE gap
+   * is the real assertion, because both requests pay the same machine.
+   */
+  const rows = []
+  const ae = { writeDataPoint: x => rows.push(x.blobs?.[1]) }
+
+  /**
+   * ARM 1, AND IT IS THE PRODUCTION SHAPE RATHER THAN A STOPWATCH. Innertube is refused — the ~50%
+   * of pastes this whole path exists for — so `fetchInnertube` burns its shared 2500ms deadline and
+   * the CONTAINER answers. That total does not fit in 1500 and does fit in 2800, so the assertion
+   * that matters is the DATE, not the clock: this test renders 1 January 1970 if the arm is put back
+   * on the shared budget.
+   *
+   * The refusal honours the abort signal rather than hanging, which is not decoration — an ignored
+   * signal leaves the attempt in `metaInflight`, and SPECULATIVE_META_CAP is 2, so two stranded
+   * slots silently refuse every later test's container call. The neighbouring "A CONTAINER THAT
+   * NEVER ANSWERS" test spends one of those two on purpose; this one must not spend the other.
+   */
+  const metaRef = ytRef('budgetMeta1')
+  const hangMeta = fakeResolver()
+  const saved = globalThis.fetch
+  let metaMs = 0
+  let dated = ''
+  try {
+    globalThis.fetch = async (url, init) => {
+      if (!String(url).includes('/youtubei/')) return new Response('offline', { status: 503 })
+      return new Promise((_, reject) => {
+        init?.signal?.addEventListener('abort', () => reject(new Error('aborted')))
+      })
+    }
+    const t0 = Date.now()
+    const res = await handle(
+      req(activity(metaRef)),
+      { ...envWith(hangMeta.binding), AE: ae },
+      { waitUntil() {} },
+      deps(vouchedPost(metaRef)),
+    )
+    metaMs = Date.now() - t0
+    dated = await createdAt(res)
+  } finally {
+    globalThis.fetch = saved
+  }
+  assert.equal(dated, ISO_RICK,
+    'the second Innertube attempt plus its container fallback must fit inside the metadata budget')
+  assert.ok(metaMs > MUX_WAIT_BOT_MS + 400,
+    `so the arm must outlive the shared crawler budget (${metaMs}ms, MUX_WAIT_BOT_MS=${MUX_WAIT_BOT_MS})`)
+  assert.ok(metaMs < YT_META_BOT_MS + 900,
+    `and still stop inside YT_META_BOT_MS (${metaMs}ms)`)
+
+  /**
+   * ARM 2, THE TRANSLATION, and it is the one arm here that still holds the shared budget.
+   *
+   * The metadata answers instantly. The mux is COLD (muxWarm=false, so the R2 head misses) and
+   * degrades — but FAST, because this file's fake resolver answers a mux request the moment it
+   * arrives and only the fake R2's head is what refuses to confirm it. So the mux arm never reaches
+   * its own deadline here and cannot be timed from this file at all; card-muxing.test.mjs does that.
+   * What is left holding a clock is the translation: a Japanese title against a Workers AI binding
+   * that never returns, cut off at whatever budget translationFor was handed.
+   *
+   * NOT A VACUOUS PASS: `card_degraded` and `translate_pending` are only counted on the losing side
+   * of their races, so `translate_pending` is the proof that this arm actually raced and was cut off
+   * — without it a translation that silently no-opped would satisfy the timing on its own.
+   */
+  const otherRef = ytRef('budgetOther')
+  const hangMux = fakeResolver({ meta: () => Response.json({ timestamp: TS_RICK }) })
+  const jp = { ...vouchedPost(otherRef), text: '白菜おいしいね、今日もいい天気ですから散歩に行きます' }
+  const t1 = Date.now()
+  await handle(
+    req(activity(otherRef)),
+    {
+      ...envWith(hangMux.binding, fakeR2([], false)),
+      AE: ae,
+      AI: { run: () => new Promise(() => {}) },
+      // Google needs no binding, so it is the default path and would reach the live internet. Off
+      // here, which leaves the AI fallback — the half this test can hang deterministically.
+      TRANSLATE_GOOGLE: 'off',
+    },
+    { waitUntil() {} },
+    deps(jp),
+  )
+  const otherMs = Date.now() - t1
+
+  assert.ok(rows.includes('card_degraded'), 'the mux arm must have actually raced and lost')
+  assert.ok(rows.includes('translate_pending'), 'and the translation arm too, or its timing proves nothing')
+  assert.ok(otherMs > MUX_WAIT_BOT_MS - 300, `the translation must have waited its budget (${otherMs}ms)`)
+  assert.ok(otherMs < MUX_WAIT_BOT_MS + 900,
+    `and must not be given the metadata arm's (${otherMs}ms, YT_META_BOT_MS=${YT_META_BOT_MS})`)
+  // The load-independent form of the line above: both requests ran on the same machine seconds
+  // apart, so a box slow enough to inflate one inflates both, and only a real budget change moves
+  // the GAP. Nothing but a shared budget can make it vanish.
+  assert.ok(metaMs - otherMs > 600,
+    `the translation arm must NOT have been given YT_META_BOT_MS ` +
+    `(meta ${metaMs}ms vs translate ${otherMs}ms)`)
 })
 
 test('A JUNK OR MISSING timestamp is NEVER written — the self-healing rule', async () => {
@@ -525,6 +638,357 @@ test('A VIDEO INSIDE THE CEILING IS UNTOUCHED — the guard must not swallow ord
   const content = await contentOf(res)
 
   assert.ok(!/Too long to play here/.test(content), 'no note on a video that can play')
+})
+
+// ── The note and the description were alternatives, and both could be missing (2026-08-29).
+
+/**
+ * A VOUCHED POST THAT ALREADY CARRIES WHAT INNERTUBE SUPPLIES — a real upload date and a real body.
+ *
+ * NO TEST IN THIS FILE HAD THIS SHAPE, and that is why the two defects below survived. `vouchedPost`
+ * has no `uploadedAt`, so its createdAt is the epoch, so youtubeMeta's third gate ("the post does not
+ * already carry a real date") never fires and the meta call always runs. Since the Innertube source
+ * landed (#61-#64) the date arrives at FETCH time on the common path, that gate returns null, and the
+ * overlays above are all handed `undefined`. Every note test was therefore exercising the arm
+ * production mostly does not take.
+ */
+const innertubePost = (ref, description) => normalizeYouTube({
+  ok: true,
+  oembed: {
+    title: 'Rick Astley - Never Gonna Give You Up', author_name: 'Rick Astley',
+    author_url: 'https://www.youtube.com/@RickAstley',
+    thumbnail_url: `https://i.ytimg.com/vi/${ref.id}/hqdefault.jpg`,
+  },
+  uploadedAt: TS_RICK,
+  description,
+}, ref)
+
+/** 3406s = 56:46. Over MUX_MAX_SECONDS (1500) by enough that no future ceiling nudge silences this. */
+const TOO_LONG = 3406
+const DESC = 'The Sydney Opera House concert, in full.'
+
+test('THE NOTE AND THE DESCRIPTION BOTH SURVIVE — they were alternatives, and that was the bug', async () => {
+  /**
+   * withDescription bails with "A body already present wins", and both call sites nested
+   * withLengthNote INSIDE it — so on a long video the note landed first and the real description was
+   * then discarded. A reader got the note or the body, never both.
+   *
+   * Nothing about the note or the description changed to fix it; only which one runs first.
+   */
+  const ref = ytRef('longDesc001')
+  const { binding } = fakeResolver({
+    meta: () => Response.json({ timestamp: TS_RICK, duration: TOO_LONG, description: DESC }),
+  })
+  const res = await handle(req(activity(ref)), envWith(binding), ctx, deps(vouchedPost(ref)))
+  const content = await contentOf(res)
+
+  assert.match(content, /Too long to play here/, 'the card still says why it is a picture')
+  assert.match(content, /Sydney Opera House/, 'AND it keeps the description the note used to eat')
+})
+
+test('THE DURATION COMES OFF THE MEDIA ENTRY when no meta call happens — the common path', async () => {
+  /**
+   * THE NOTE WAS UNREACHABLE ON THE PATH MOST PASTES TAKE. withLengthNote returned early unless it
+   * was handed a usable `duration`, and its only supply was `meta?.duration` — which is undefined
+   * whenever youtubeMeta declines, i.e. whenever Innertube already dated the post at fetch time.
+   *
+   * The duration is not missing in that state, only elsewhere: liveFetchPost's yt arm stamps it onto
+   * the remux entry with withMuxDuration (`warm?.duration ?? got.duration`), which is exactly what
+   * this post is built with. Reading it back from there is the whole fix.
+   *
+   * `seen.meta` is asserted at 0 because that is the precondition, not a bonus: if the container is
+   * ever called here, the post did not have its date and this test stopped covering the defect.
+   */
+  const ref = ytRef('stampDur001')
+  const post = withMuxDuration(innertubePost(ref, DESC), TOO_LONG)
+  const { seen, binding } = fakeResolver()
+  const res = await handle(req(activity(ref)), envWith(binding), ctx, deps(post))
+  const content = await contentOf(res)
+
+  assert.equal(seen.meta, 0, 'a post that already carries its date makes NO meta call — that is the gate')
+  assert.match(content, /Too long to play here/, 'and the note fires anyway, off the stamped entry')
+  assert.match(content, /Sydney Opera House/, 'without costing the description')
+})
+
+test('BOTH SEAMS: /_card keeps the note AND the description', async () => {
+  /**
+   * The activity callback is not the only place the overlays are applied — describeTarget feeds
+   * /_card and /_api/v1 from the same record, with the same nesting and therefore the same defect.
+   * "BOTH SEAMS OR NEITHER" is the rule worker.ts states at the other site; this is the half of it
+   * that had no test.
+   *
+   * Unlike the activity route, this seam falls back to readCachedMeta when youtubeMeta declines, so a
+   * dated post with a warm record still gets the duration and the description as ARGUMENTS — which is
+   * the ordering half of the fix, on the other seam.
+   */
+  const ref = ytRef('cardBoth001')
+  const r2 = fakeR2([[metaCacheKey(ref),
+    JSON.stringify({ timestamp: TS_RICK, duration: TOO_LONG, description: DESC })]])
+  const { seen, binding } = fakeResolver()
+  const res = await handle(
+    new Request(`https://staging.megapenispoopenfarten.sex/_card?p=${encodeURIComponent(`/watch?v=${ref.id}`)}`),
+    { ...envWith(binding, r2), TRANSLATE_GOOGLE: 'off' }, ctx, deps(innertubePost(ref, '')),
+  )
+  const card = await res.json()
+
+  assert.equal(seen.meta, 0, 'the warm record answers; no container call')
+  assert.match(card.text, /Too long to play here/, 'the page is told why it will not get a player')
+  assert.match(card.text, /Sydney Opera House/, 'and still gets the description')
+})
+
+// ── A broadcast with no finished file behind it (2026-08-29).
+
+/**
+ * WHAT A COLD LIVE PASTE ACTUALLY LOOKS LIKE. `isLive` comes off the Innertube call inside
+ * fetchYouTube, so it is on the fetch result before the Post exists — no warm record, no container.
+ * This is the exact shape liveFetchPost's yt arm hands the normalizer on the FIRST paste.
+ */
+const broadcastPost = (ref, isLive) => normalizeYouTube({
+  ok: true,
+  oembed: {
+    title: 'Watch Sky News', author_name: 'Sky News',
+    author_url: 'https://www.youtube.com/@SkyNews',
+    thumbnail_url: `https://i.ytimg.com/vi/${ref.id}/hqdefault.jpg`,
+  },
+  uploadedAt: TS_RICK,
+  isLive,
+}, ref)
+
+test('A LIVE STREAM DISPATCHES NOTHING AND SAYS WHY — the doomed mux, on every paste, forever', async () => {
+  /**
+   * THE DEFECT, probed on yt:xDWQ3LkccY8 (Sky News, permanently live): pinned at `muxing: true`, ~1.7s
+   * of container round trip on EVERY render, never cached. A live stream reports `lengthSeconds: '0'`,
+   * so it carries no duration, so the over-ceiling arm — the only refusal settleMux had — never fired.
+   * The container then refuses it on its own `--match-filter "duration<?1500 & !is_live"`, the card is
+   * marked degraded, and worker.ts declines to cache a degraded card. So the next render repeats it.
+   * News channels post these constantly.
+   *
+   * `muxWarm: false` is load-bearing here for the reason the over-ceiling test records: fakeR2's
+   * default head() short-circuits muxOnce, which would make the dispatch assertion vacuous.
+   */
+  const ref = ytRef('liveNow0001')
+  const { seen, binding } = fakeResolver()
+  const res = await handle(
+    req(activity(ref)), envWith(binding, fakeR2([], false)), ctx, deps(broadcastPost(ref, true)))
+  const content = await contentOf(res)
+
+  assert.equal(seen.mux, 0, 'no container call for a stream the container will refuse')
+  assert.equal(seen.meta, 0, 'and none for the metadata either — the post already carries its date')
+  assert.match(content, /Live stream/, 'the card says why it is a picture, not a player')
+  assert.ok(!/Too long to play here/.test(content), 'and says it once — the length note stands down')
+})
+
+test('AND THE LIVE CARD CACHES — that is the half that stops it repeating', async () => {
+  /**
+   * `degraded` means "incomplete, something is still coming". A live stream is not that: the answer is
+   * final for as long as the broadcast runs, and re-deciding it every render is the cost this whole
+   * arm exists to stop paying. /_card's `muxing` is the flag the render path reads to decide whether
+   * the response may be cached, and it is what the fixer page spins on.
+   */
+  const ref = ytRef('liveNow0002')
+  const { binding } = fakeResolver()
+  const res = await handle(
+    new Request(`https://staging.megapenispoopenfarten.sex/_card?p=${encodeURIComponent(`/watch?v=${ref.id}`)}`),
+    { ...envWith(binding, fakeR2([], false)), TRANSLATE_GOOGLE: 'off' }, ctx, deps(broadcastPost(ref, true)),
+  )
+  const card = await res.json()
+
+  assert.equal(card.muxing, false, 'not degraded, so the response caches and the page stops spinning')
+  assert.match(card.text, /Live stream/)
+})
+
+test('AN ENDED STREAM IS AN ORDINARY VIDEO AND MUXES — the guard must not swallow the archive', async () => {
+  /**
+   * The other half, and the one that decides whether this is safe. A finished broadcast is a normal
+   * VOD: `isLiveContent` stays true forever, `isLive` goes false, and a real length appears. Refusing
+   * those would take the player away from every past stream a channel has published — a far bigger
+   * card regression than the one being fixed. Measured shape: yt:0cVnt1bUzLI, 3764s, endTimestamp set.
+   */
+  const ref = ytRef('wasLive0001')
+  const { seen, binding } = fakeResolver()
+  const post = withMuxDuration(broadcastPost(ref, false), 600)
+  const res = await handle(
+    req(activity(ref)), envWith(binding, fakeR2([], false)), ctx, deps(post))
+  const content = await contentOf(res)
+
+  assert.equal(seen.mux, 1, 'the mux runs exactly as it would for a video that was never live')
+  assert.ok(!/Live stream/.test(content), 'and the card carries no note about it')
+})
+
+/** Swap the module-level offline stub for one test, and put it back however the test ends. */
+const withFetch = async (impl, fn) => {
+  const prev = globalThis.fetch
+  globalThis.fetch = impl
+  try { return await fn() } finally { globalThis.fetch = prev }
+}
+
+/** A minimal `youtubei/v1/player` body the parser accepts. `extra` decides the broadcast state. */
+const innertubeBody = extra => JSON.stringify({
+  videoDetails: { lengthSeconds: '213', viewCount: '100', shortDescription: 'body', ...extra },
+  microformat: { playerMicroformatRenderer: { publishDate: '2009-10-24T23:57:33-07:00' } },
+})
+
+const answering = innertube => async (url) => {
+  const u = String(url)
+  if (u.includes('/youtubei/')) return innertube()
+  if (u.includes('youtube.com/oembed')) {
+    return Response.json({
+      title: 'Watch Sky News', author_name: 'Sky News',
+      author_url: 'https://www.youtube.com/@SkyNews',
+    })
+  }
+  throw new Error(`unexpected call: ${u}`)
+}
+
+test('A FRESH "NOT LIVE" BEATS A 30-DAY RECORD THAT SAYS LIVE — the one field the record loses', async () => {
+  /**
+   * Every other field on the meta record wins over the fetch because it cannot change. Liveness can,
+   * in the direction that matters: a stream ends and becomes a muxable VOD. The record lives 30 days,
+   * so preferring it would refuse a player for a month after the broadcast finished — a worse card
+   * than the one this change exists to fix.
+   *
+   * This goes through liveFetchPost rather than the routes because the routes stub fetchPost, so the
+   * merge itself has no coverage from them.
+   */
+  const ref = ytRef('endedRec001')
+  const r2 = fakeR2([[metaCacheKey(ref), JSON.stringify({ timestamp: TS_RICK, isLive: true })]])
+  const { liveFetchPost } = await import('../src/worker.ts')
+  const post = await withFetch(
+    answering(() => new Response(innertubeBody({}), { headers: { 'content-type': 'application/json' } })),
+    () => liveFetchPost(ref, envWith(fakeResolver().binding, r2), 'discord'))
+
+  assert.equal(post.media[0].live, undefined, 'the stale record does not pin the still')
+  assert.ok(post.media[0].remux, 'the video is kept, so it muxes on the next render')
+  assert.ok(!/Live stream/.test(post.text))
+})
+
+test('A REFUSED INNERTUBE CALL IS NOT A "NO" — then the record is the only answer there is', async () => {
+  /**
+   * The other side of the same `??`. Cloudflare's egress is refused on roughly half of these calls
+   * (see resolveYouTubeMeta), and a refusal carries `undefined`, not `false` — which is the entire
+   * reason the verdict is three-valued from the wire down. Collapse the two and persisting it buys
+   * nothing: the second paste would re-flip the same coin.
+   */
+  const ref = ytRef('liveRec0001')
+  const r2 = fakeR2([[metaCacheKey(ref), JSON.stringify({ timestamp: TS_RICK, isLive: true })]])
+  const { liveFetchPost } = await import('../src/worker.ts')
+  const post = await withFetch(
+    answering(() => new Response('nope', { status: 503 })),
+    () => liveFetchPost(ref, envWith(fakeResolver().binding, r2), 'discord'))
+
+  assert.equal(post.media[0].live, true, 'the record answers, so the mux is still refused')
+  assert.match(post.text, /Live stream/, 'and the card still says why')
+})
+
+test('A RECORD THAT SAYS LIVE EXPIRES IN AN HOUR — the one field that is not immutable', async () => {
+  /**
+   * THE DEFECT, found in review 2026-08-29 and the reason the yt reads pass a FUNCTION for their TTL.
+   * `isLive` is the only mutable field on a YouTubeMeta record and it moves in the direction that
+   * costs a card: the stream ends and becomes an ordinary muxable VOD. Nothing rewrites the record —
+   * metaAttempt runs only on a read miss, and youtubeMeta returns null the moment the post carries a
+   * real date, which a live stream always does. So under the flat 30-day TTL a finished broadcast kept
+   * saying "🔴 Live stream, so no preview here" on every render whose own Innertube call was refused,
+   * for up to a MONTH, on a card that caches.
+   *
+   * Both directions are pinned. An expired live record must not be believed, and a fresh one must —
+   * a fix that simply stopped reading the flag would pass half of this and re-flip the coin on every
+   * cold paste, which is what persisting it was for.
+   */
+  const { liveFetchPost } = await import('../src/worker.ts')
+  const refused = () => new Response('nope', { status: 503 })
+  const at = mins => new Date(Date.now() - mins * 60_000)
+  const rec = JSON.stringify({ timestamp: TS_RICK, isLive: true })
+
+  const stale = ytRef('liveTtl0001')
+  const post = await withFetch(answering(refused), () => liveFetchPost(
+    stale, envWith(fakeResolver().binding, fakeR2([[metaCacheKey(stale), rec, at(120)]])), 'discord'))
+  assert.equal(post.media[0].live, undefined, 'two hours on, the record no longer pins the still')
+  assert.ok(!/Live stream/.test(post.text), 'and the card stops claiming a broadcast that may be over')
+
+  const fresh = ytRef('liveTtl0002')
+  const post2 = await withFetch(answering(refused), () => liveFetchPost(
+    fresh, envWith(fakeResolver().binding, fakeR2([[metaCacheKey(fresh), rec, at(10)]])), 'discord'))
+  assert.equal(post2.media[0].live, true, 'ten minutes on, it is still the best answer there is')
+
+  // AND THE REST OF THE RECORD KEEPS THIRTY DAYS. Only liveness is short-lived; expiring an upload
+  // date every hour would re-pay the container/Innertube cost this cache exists to stop paying.
+  const old = ytRef('liveTtl0003')
+  const post3 = await withFetch(answering(refused), () => liveFetchPost(
+    old, envWith(fakeResolver().binding,
+      fakeR2([[metaCacheKey(old), JSON.stringify({ timestamp: TS_RICK }), at(120)]])), 'discord'))
+  assert.equal(post3.createdAt.toISOString(), ISO_RICK, 'a two-hour-old ordinary record is untouched')
+})
+
+test('THE LIVE VERDICT IS PERSISTED, which is what makes the SECOND paste of a stream free', async () => {
+  /**
+   * The render path's own Innertube call is refused on roughly half of requests from this egress, so
+   * without a record the liveness coin is re-flipped on every cold post fetch and half the pastes go
+   * back to dispatching a doomed mux. resolveYouTubeMeta is the rung that writes: it is reached from
+   * the activity route when the post has no date yet, asks Innertube again, and hands the answer to
+   * metaAttempt -> metaWork, which puts it in R2.
+   *
+   * The post here is VOUCHED and dateless, which is exactly the state a first paste is left in when
+   * the render's Innertube call was refused — the case this write exists for.
+   */
+  const ref = ytRef('liveWrite01')
+  const r2 = fakeR2()
+  const { seen, binding } = fakeResolver()
+  await withFetch(
+    answering(() => new Response(
+      innertubeBody({ lengthSeconds: '0', isLive: true }), { headers: { 'content-type': 'application/json' } })),
+    () => handle(req(activity(ref)), envWith(binding, r2), ctx, deps(vouchedPost(ref))))
+
+  const written = r2.store.get(metaCacheKey(ref))
+  assert.ok(written, 'the answer is persisted rather than re-derived per paste')
+  const got = JSON.parse(new TextDecoder().decode(written.bytes))
+  assert.equal(got.isLive, true, 'including the verdict the next cold render needs')
+  assert.equal(got.duration, undefined, "and lengthSeconds '0' is still absent, not a zero-second video")
+  assert.equal(seen.meta, 0, 'Innertube answered, so the container was never asked')
+})
+
+test('A "NOT LIVE" IS NEVER WRITTEN — absence is what every older record means', async () => {
+  /**
+   * The record is three-valued only because absence means "unknown". Writing `isLive: false` would
+   * make it two-valued from the storage side while every pre-2026-08-29 record and every container
+   * answer still means unknown by being absent — two spellings of one value, which is how the merge
+   * in liveFetchPost's yt arm would start believing silence.
+   */
+  const ref = ytRef('liveWrite02')
+  const r2 = fakeR2()
+  const { binding } = fakeResolver()
+  await withFetch(
+    answering(() => new Response(innertubeBody({}), { headers: { 'content-type': 'application/json' } })),
+    () => handle(req(activity(ref)), envWith(binding, r2), ctx, deps(vouchedPost(ref))))
+
+  const got = JSON.parse(new TextDecoder().decode(r2.store.get(metaCacheKey(ref)).bytes))
+  assert.equal('isLive' in got, false, 'an ordinary video stores no liveness key at all')
+})
+
+test('THE LIVE NOTE ARRIVES FROM THE RECORD TOO, on BOTH seams — not only from the fetch', async () => {
+  /**
+   * The other half of the overlay, and the one the route tests above cannot reach: `broadcastPost`
+   * gets its note at BUILD time from normalizeYouTube, so every assertion about it so far has been
+   * about the media-flag fallback. Both seams also pass the record's verdict as an ARGUMENT
+   * (`meta?.isLive` on the activity callback, `warm.isLive` in describeTarget), which is the supply
+   * on a post built before the record existed — a first paste whose Innertube call was refused,
+   * followed by a second that filled the record.
+   *
+   * The post here is deliberately NOT marked live, so only the argument can produce the note. That
+   * makes the card mildly incoherent (a playable video with a live note) and that is the point: it
+   * isolates the seam from the flag.
+   */
+  const seed = ref => fakeR2([[metaCacheKey(ref), JSON.stringify({ timestamp: TS_RICK, isLive: true })]])
+
+  const a = ytRef('liveSeam001')
+  const res = await handle(req(activity(a)), envWith(fakeResolver().binding, seed(a)), ctx, deps(vouchedPost(a)))
+  assert.match(await contentOf(res), /Live stream/, 'the activity document reads the record')
+
+  const c = ytRef('liveSeam002')
+  const card = await (await handle(
+    new Request(`https://staging.megapenispoopenfarten.sex/_card?p=${encodeURIComponent(`/watch?v=${c.id}`)}`),
+    { ...envWith(fakeResolver().binding, seed(c)), TRANSLATE_GOOGLE: 'off' }, ctx, deps(vouchedPost(c)),
+  )).json()
+  assert.match(card.text, /Live stream/, 'and so does /_card, through describeTarget — BOTH OR NEITHER')
 })
 
 // ── The date that arrives as `upload_date` instead of `timestamp` (2026-08-04).

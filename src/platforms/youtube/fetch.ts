@@ -1,4 +1,5 @@
 import type { PostRef } from '../../types.ts'
+import { askTwice } from '../../fetchretry.ts'
 import { fetchInnertube } from './innertube.ts'
 
 /**
@@ -67,8 +68,13 @@ export type YouTubeFetch =
   // settleMux REFUSE a mux the container would refuse anyway, and until there was a date source on the
   // render path that arm was unreachable on this platform because the only duration lived in a record
   // that was never written. See innertube.ts.
-  | { ok: true; oembed: unknown; uploadedAt?: string | number | null; ageLimit?: number | null; description?: string | null; counts?: unknown; duration?: number | null }
-  | { ok: false; uploadedAt?: string | number | null; ageLimit?: number | null; description?: string | null; counts?: unknown; duration?: number | null }
+  //
+  // `isLive` joined them 2026-08-29 for the same job on the case duration cannot cover: an unfinished
+  // broadcast reports lengthSeconds '0', so it has no duration to be over any ceiling, and every paste
+  // dispatched a mux the container refuses on `!is_live`. THREE-VALUED ON PURPOSE — true, false and
+  // absent are three different things here; see innertube.ts's liveVerdict and worker.ts's yt arm.
+  | { ok: true; oembed: unknown; uploadedAt?: string | number | null; ageLimit?: number | null; description?: string | null; counts?: unknown; duration?: number | null; isLive?: boolean | null }
+  | { ok: false; uploadedAt?: string | number | null; ageLimit?: number | null; description?: string | null; counts?: unknown; duration?: number | null; isLive?: boolean | null }
 
 /**
  * TWO CALLS TO youtube.com, CONCURRENTLY, AND THE SECOND ONE CANNOT HURT THE FIRST.
@@ -93,8 +99,18 @@ export async function fetchYouTube(
   if (!YT_ID.test(ref.id)) return { ok: false }
   const url = `https://www.youtube.com/oembed?format=json&url=${encodeURIComponent(ytPageUrl(ref))}`
 
+  // askTwice ON THE OEMBED LEG, added 2026-08-29, and this is the call in the repo with the most to
+  // lose to one refusal. oembed is YouTube's own existence check and the whole VOUCH: miss it and the
+  // post is built unvouched (author.url falls back to YT_FALLBACK_AUTHOR_URL), so youtubeMeta's vouch
+  // gate then refuses to recover the date on the activity route too, and the card renders 1 January
+  // 1970 — permanently, because Discord keeps the embed it drew. It is passed `fetchImpl` because
+  // that seam is how this file's tests answer with no network; see askTwice's third parameter.
+  //
+  // The Innertube leg beside it deliberately does NOT retry — different failure, different reason,
+  // written down at that call site.
   const [oembedRes, meta] = await Promise.all([
-    fetchImpl(url, { headers: { 'user-agent': CRAWLER_UA, accept: 'application/json' } }).catch(() => null),
+    askTwice(url, { headers: { 'user-agent': CRAWLER_UA, accept: 'application/json' } }, fetchImpl)
+      .catch(() => null),
     fetchInnertube(ref.id, fetchImpl),
   ])
 
@@ -105,6 +121,10 @@ export async function fetchYouTube(
     ...(meta?.description === undefined ? {} : { description: meta.description }),
     ...(meta?.ageLimit === undefined ? {} : { ageLimit: meta.ageLimit }),
     ...(meta?.duration === undefined ? {} : { duration: meta.duration }),
+    // ABSENT STAYS ABSENT, and `=== undefined` rather than a truthiness test is the whole point: a
+    // `false` here is the fresh negative that lets an ended stream out of a 30-day record that still
+    // says it is live. Dropping it would leave the record unopposed.
+    ...(meta?.isLive === undefined ? {} : { isLive: meta.isLive }),
     ...(meta?.views === undefined ? {} : { counts: { views: meta.views } }),
   }
 

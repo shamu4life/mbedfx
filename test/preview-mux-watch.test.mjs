@@ -1,7 +1,10 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
-import { MUX_FIRST_ATTEMPT_MS, MUX_FIRST_ATTEMPT_TRACKS_MS, MUX_TOTAL_HORIZON_MS } from '../src/muxpolicy.ts'
+import {
+  MUX_FIRST_ATTEMPT_MS, MUX_FIRST_ATTEMPT_PAGE_TOTAL_MS, MUX_FIRST_ATTEMPT_TRACKS_MS,
+  MUX_PAGE_WALL_MS, MUX_TOTAL_HORIZON_MS,
+} from '../src/muxpolicy.ts'
 
 /**
  * THE PREVIEW WATCHED FOR 25 SECONDS WHILE THE MUX RAN FOR UP TO 1460.
@@ -30,13 +33,39 @@ test('THE PREVIEW WATCHES THE WHOLE FIRST ATTEMPT, derived from the policy rathe
   /**
    * The window deliberately ends with the FIRST ATTEMPT rather than at MUX_TOTAL_HORIZON_MS: the
    * policy's own retries are 120s and 1200s away, and nobody watches a page for twenty minutes. What
-   * matters is that the page covers the whole span in which a mux is actively working the first time,
-   * which is 35s for a `{page}` source and 140s for the `{video}` tracks shape.
+   * matters is that the page covers the whole span in which a mux is actively working the first time.
+   *
+   * 140s WAS THE WRONG END OF THE WRONG ATTEMPT (corrected 2026-08-29). This asserted
+   * MUX_FIRST_ATTEMPT_TRACKS_MS, on the reasoning that the `{video}` tracks shape is the slowest. It
+   * stopped being the slowest the moment container/server.py's page mux got a wall it could actually
+   * reach: a `{page}` first attempt is the 35s alarm plus MUX_PAGE_WALL_MS (360s), so it ends at 395s
+   * and the page was giving up at 35% of it — on exactly the long YouTube videos that wall exists to
+   * rescue, since every YouTube link is a `{page}` source.
    */
   assert.equal(num('MUX_WATCH_FAST_MS'), MUX_FIRST_ATTEMPT_MS,
-    'the fast poll window is the page-shape first attempt')
-  assert.equal(num('MUX_WATCH_TOTAL_MS'), MUX_FIRST_ATTEMPT_TRACKS_MS,
-    'and watching stops at the end of the slowest first attempt')
+    'the fast poll window is when the first attempt STARTS')
+  assert.equal(num('MUX_WATCH_TOTAL_MS'), MUX_FIRST_ATTEMPT_PAGE_TOTAL_MS,
+    'and watching stops at the end of the slowest first attempt, which is now the page shape')
+  assert.ok(MUX_FIRST_ATTEMPT_PAGE_TOTAL_MS > MUX_FIRST_ATTEMPT_TRACKS_MS,
+    'the page shape IS the slowest — if this ever flips, the constant above is the wrong one to mirror')
+})
+
+test('THE PAGE WALL IS THE CONTAINER\'S OWN, not a number this repo picked twice', () => {
+  /**
+   * MUX_PAGE_WALL_MS mirrors container/server.py's MUX_PAGE_TIMEOUT, and nothing but this can make
+   * them agree — the container is reached over a binding, so there is no build step that could share
+   * the constant. Same situation as MAX_SECONDS / MUX_MAX_SECONDS, which test/smoke.test.mjs already
+   * pins this way.
+   *
+   * THE COST OF DISAGREEING is a converter page that stops watching before the work it is watching
+   * has stopped, which is the exact defect this whole file was written for. It is silent: the spinner
+   * simply gives up early and says the preview stopped checking.
+   */
+  const py = readFileSync('container/server.py', 'utf8')
+  const m = py.match(/MUX_PAGE_TIMEOUT = int\(os\.environ\.get\("MUX_PAGE_TIMEOUT", "(\d+)"\)\)/)
+  assert.ok(m, 'container/server.py declares a MUX_PAGE_TIMEOUT default')
+  assert.equal(MUX_PAGE_WALL_MS, Number(m[1]) * 1000,
+    `the mirrored wall (${MUX_PAGE_WALL_MS}ms) must equal the container's (${m?.[1]}s)`)
 })
 
 test('THE WINDOW IS LONGER THAN WHAT IT REPLACED, and shorter than the full horizon', () => {
@@ -49,14 +78,28 @@ test('THE WINDOW IS LONGER THAN WHAT IT REPLACED, and shorter than the full hori
 })
 
 test('THE POLL BACKS OFF, so a longer window is not a faster one', () => {
-  // A 140s window at the old 2.5s interval would be 56 requests. The backoff keeps the early seconds
-  // responsive, where most muxes land, and stops hovering after that.
+  /**
+   * A 395s window at the flat 2.5s interval would be 158 requests. The backoff keeps the early
+   * seconds responsive, where most muxes land, and stops hovering after that: 14 at 2.5s and 36 at
+   * 10s, so 50 over six and a half minutes from one open tab.
+   *
+   * THE BOUND WENT 30 -> 55 WITH THE WINDOW (2026-08-29), rather than the slow interval going up to
+   * squeeze under 30. Fitting 395s into 30 polls needs a 22.5s interval, which would make the COMMON
+   * case — a mux landing around a minute — up to 22 seconds slower to notice. Degrading the normal
+   * path to satisfy a threshold is the wrong direction; what the threshold is for is catching a
+   * hovering poll, and 50 cached /_card reads is not one. Each poll does no upstream fetch: the post
+   * is served from cache and the only question asked is whether the Durable Object has finished.
+   */
   const fast = num('MUX_POLL_MS')
   const slow = num('MUX_POLL_SLOW_MS')
   assert.ok(slow > fast, 'the slow interval is slower than the fast one')
   const requests = MUX_FIRST_ATTEMPT_MS / fast
     + (num('MUX_WATCH_TOTAL_MS') - MUX_FIRST_ATTEMPT_MS) / slow
-  assert.ok(requests < 30, `a full watch costs ${Math.ceil(requests)} polls, which stays affordable`)
+  assert.ok(requests < 55, `a full watch costs ${Math.ceil(requests)} polls, which stays affordable`)
+  // AND THE BACKOFF IS WHAT MAKES IT AFFORDABLE, which the bound above cannot say on its own — it
+  // would also pass with the window shortened back. A flat fast poll over this window is 3x the cost.
+  assert.ok(num('MUX_WATCH_TOTAL_MS') / fast > 100,
+    'without the backoff this window would be a hovering poll, which is what the two intervals exist for')
 })
 
 test('THE PAGE CONFIRMS THE VIDEO LANDED — the state that did not exist before', () => {

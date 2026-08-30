@@ -2,7 +2,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { accountPool, cookiesFor, parseAccounts, pickAccount, poolSetButUnused, twitterAccounts } from '../src/credentials.ts'
-import { handle, metaCacheKey } from '../src/worker.ts'
+import { handle, metaCacheKey, META_GENERATION } from '../src/worker.ts'
 import { refKey } from '../src/refkey.ts'
 import { encodeStatusId } from '../src/statusid.ts'
 import { normalizeYouTube } from '../src/platforms/youtube/normalize.ts'
@@ -599,31 +599,115 @@ test('NO COUNTER, ANYWHERE, EVER CARRIES THE CREDENTIAL ITSELF', async () => {
   }
 })
 
-test('THE META CACHE KEY IS GENERATION-SCOPED, so a PRE-COOKIE record is invisible rather than stale', () => {
+test('THE META CACHE KEY IS SCOPED BY META_GENERATION — a pre-cookie record is invisible, and the DO name is not what decides it', () => {
   /**
-   * WHY THE GENERATION HAD TO MOVE FOR THIS CHANGE, expressed as the thing that would break without
-   * it. Every warm meta record in R2 was produced by a container call that sent NO cookies, so a
-   * gated video's record says `age_limit: 18` and no jar can change that answer for the 30 days the
-   * record lives. Bumping the generation renames the key, which is the single documented invalidation
-   * switch for both halves of the container's output — the pooled instances that produce an answer,
-   * and the answers we kept.
+   * WHY THE GENERATION HAD TO MOVE FOR THE COOKIE CHANGE, expressed as the thing that would break
+   * without it. Every warm meta record in R2 was produced by a container call that sent NO cookies, so
+   * a gated video's record says `age_limit: 18` and no jar can change that answer for the 30 days the
+   * record lives. Renaming the key is the single documented invalidation switch for the answers we
+   * kept.
+   *
+   * REWRITTEN 2026-08-29 FOR THE SPLIT, not deleted, because what it guards is real and unchanged: the
+   * key must carry a generation, it must be one generation across every platform in the bucket, and g9
+   * must stay unreadable forever. What moved is WHICH constant supplies the segment. `metaCacheKey`
+   * used to interpolate RESOLVER_GENERATION, which also names the Durable Objects — so a bump aimed at
+   * evicting a broken container instance emptied this cache too, five times in 27 days against a
+   * 30-day TTL that was never once reached. Now it interpolates META_GENERATION.
    *
    * THE OLD GENERATION IS NAMED LITERALLY, and that is the point rather than brittleness: this test
-   * says "g9 records must not be readable", which stays true forever. What it must NOT do is pin the
-   * CURRENT generation, because that is expected to move again — so the current one is matched as a
-   * shape and only its difference from g9 is asserted.
+   * says "g9 records must not be readable", which stays true forever. It must NOT pin the current
+   * generation, which is expected to move again — so the current one is asserted to BE META_GENERATION
+   * rather than to be any particular string.
    */
   const ref = { p: 'yt', id: 'M7lc1UVf-VE' }
   const key = metaCacheKey(ref)
   assert.match(key, /^meta\/g\d+\/yt:M7lc1UVf-VE\.json$/, 'still generation-scoped and namespaced by refKey')
+  assert.equal(key, `meta/${META_GENERATION}/yt:M7lc1UVf-VE.json`, 'and the segment is META_GENERATION')
   assert.ok(!key.startsWith('meta/g9/'),
     'the cookie jar changed what the container returns for a gated id, so every pre-cookie record ' +
     'must be unreadable — a bump that did not happen is a month of 🔞 cards a filled pool cannot fix')
-  // The generation is SHARED, so the bump invalidates fb and the yt-dlp tier's records too. That is
-  // deliberate: the instances those calls land on are retired by the same string.
+
+  // ONE GENERATION ACROSS THE WHOLE BUCKET. Every record here is a container answer of the same
+  // vintage, and a per-platform generation would be five things to keep in step instead of one — the
+  // yt-dlp tier's four platforms share a code path with Facebook and would drift silently.
   const gen = key.split('/')[1]
-  assert.equal(metaCacheKey({ p: 'fb', kind: 'watch', id: 'x' }).split('/')[1], gen,
-    'one generation for one container pool — two would be two things to keep in step')
+  for (const other of [
+    { p: 'fb', kind: 'watch', id: 'x' }, { p: 'dm', id: 'xabcde' },
+    { p: 'st', id: 'st0001' }, { p: 'im', kind: 'post', id: 'im0001' },
+  ]) {
+    assert.equal(metaCacheKey(other).split('/')[1], gen, `${other.p} shares the one generation`)
+  }
+
+  /**
+   * THE DECOUPLING ITSELF, and it cannot be asserted on the key's VALUE. META_GENERATION and
+   * RESOLVER_GENERATION both hold 'g13' — the split was pinned at the shared value on purpose, so that
+   * splitting them invalidated nothing — which means every string this function returns is byte-identical
+   * either way and no comparison can tell which constant produced it. The function's own source can.
+   *
+   * The failure this catches is the whole point of the change: someone re-couples the meta key to the
+   * DO name (or writes a third call site that does), the two constants drift on the next container
+   * incident, and 30 days of dates, descriptions, durations, counts and gate verdicts across five
+   * platforms are thrown away to reboot a container. Silent, unfixable by re-pasting, and the reason
+   * production reads "9/10 correct on first paste".
+   */
+  const src = metaCacheKey.toString()
+  assert.match(src, /META_GENERATION/, 'metaCacheKey reads META_GENERATION')
+  assert.doesNotMatch(src, /RESOLVER_GENERATION/,
+    'and NOT the constant that names the container instances — bumping that must leave every stored ' +
+    'record readable, because evicting a bad instance says nothing about whether a record is wrong')
+})
+
+test('A META_GENERATION BUMP IS THE ONLY THING THAT THROWS THE RECORDS AWAY, and the mux bytes survive both', async () => {
+  /**
+   * THE TWO DIRECTIONS, behaviourally, through the real read path rather than off the key string.
+   *
+   * Records are seeded at HAND-BUILT keys, never through `metaCacheKey`, because a test that builds
+   * its fixture with the function under test passes no matter what that function returns. The keys
+   * here are what an object in the live bucket actually looks like the morning after a bump.
+   *
+   * WHY THERE IS NO "BUMP RESOLVER_GENERATION AND SEE" ARM: the constants are module-level and cannot
+   * be moved from a test. The property is proved as a conjunction instead — `metaCacheKey` contains no
+   * reference to RESOLVER_GENERATION (asserted above, on the function's source, for the reason given
+   * there), and the record under the CURRENT META_GENERATION hits (asserted here). A string that does
+   * not mention the constant cannot change when the constant does.
+   */
+  const TS = 1256453853
+  const nextGen = `g${Number(META_GENERATION.slice(1)) + 1}`
+  const datedFrom = async (id, keyFor) => {
+    const ref = { p: 'yt', id }
+    const env = countingEnv({}, {
+      MEDIA_CACHE: fakeR2([[keyFor(ref), JSON.stringify({ timestamp: TS })]]),
+    })
+    const post = await offline(
+      { title: 't', author_name: 'a', author_url: 'https://www.youtube.com/@a' },
+      () => import('../src/worker.ts').then(m => m.liveFetchPost(ref, env, 'discord')))
+    return post.createdAt.getTime()
+  }
+
+  assert.equal(await datedFrom('GENkey000001', r => `meta/${META_GENERATION}/${refKey(r)}.json`), TS * 1000,
+    'a record under the CURRENT meta generation is read — this is the state a RESOLVER_GENERATION bump ' +
+    'leaves behind, because it renames the Durable Objects and touches no key in R2')
+  assert.equal(await datedFrom('GENkey000002', r => `meta/${nextGen}/${refKey(r)}.json`), 0,
+    'a record under a DIFFERENT meta generation is invisible — which is what a META_GENERATION bump ' +
+    'does to every record already written, and the cost the split exists to stop paying by accident')
+  assert.equal(await datedFrom('GENkey000003', r => `meta/${refKey(r)}.json`), 0,
+    'and an ungenerationed key — the pre-g3 shape — stays unreadable')
+
+  /**
+   * PLAYBACK IS UNTOUCHED BY EITHER CONSTANT, which is worth a test rather than a comment because two
+   * separate analyses of the generation churn assumed a bump cost muxed video. `mux/{refKey}/{index}`
+   * has no generation segment at all: this seeds the key WITHOUT one and the /_media/ route serves it
+   * warm, so no bump can orphan a muxed mp4 or make one re-mux.
+   */
+  const muxRef = { p: 'yt', id: 'GENkey000004' }
+  const page = `https://www.youtube.com/watch?v=${muxRef.id}`
+  const { bodies, binding } = fakeResolver()
+  const r2 = fakeR2([[`mux/${refKey(muxRef)}/0`, 'MP4']])
+  const res = await handle(mediaReq(muxRef), envWith(binding, r2), ctx,
+    { cache: fakeCache(), fetchPost: async () => remuxPost(muxRef, page) })
+  assert.equal(res.status, 200, 'the generation-free mux key is served')
+  assert.equal(await res.text(), 'MP4', 'and it is the bytes that were already there')
+  assert.equal(bodies.length, 0, 'no container call — a bump cannot make a muxed video re-mux')
 })
 
 test('THE FILES THIS FEATURE MAKES SOMEBODY DOWNLOAD ARE GITIGNORED — .dev.vars matched none of them', () => {

@@ -42,7 +42,7 @@ import { ytDescriptionOf } from './platforms/youtube/description.ts'
 import { fetchInnertube } from './platforms/youtube/innertube.ts'
 import {
   normalizeYouTube, uploadDateFrom, withAgeNote, withCounts, withDescription, withLengthNote,
-  withMuxDuration,
+  withLiveNote, withMuxDuration,
   withUploadDate,
   youtubeVouched,
 } from './platforms/youtube/normalize.ts'
@@ -680,7 +680,7 @@ export async function liveFetchPost(
       // carrying a date.
       const [got, warm] = await Promise.all([
         fetchYouTube(ref),
-        readCachedMeta<YouTubeMeta>(ref, env, YT_META_TTL_MS, ytMetaUsable(env)),
+        readCachedMeta<YouTubeMeta>(ref, env, ytMetaTtl, ytMetaUsable(env)),
       ])
       if (!got.ok) count(env, 'yt', 'assert_fail', client)
       // Bounded exactly as assert_fail is — once per post-cache miss, not once per request. The DATE
@@ -747,6 +747,22 @@ export async function liveFetchPost(
             uploadedAt: warm.timestamp ?? got.uploadedAt,
             ageLimit: warm.ageLimit ?? got.ageLimit,
             description: warm.description ?? got.description,
+            /**
+             * THE ONE FIELD WHERE THE FETCH WINS AND THE RECORD LOSES, and the inversion is the whole
+             * correctness argument for storing it at all.
+             *
+             * Every other line here prefers the record because the answer cannot change: an upload
+             * instant, a duration, a gate verdict a credential was spent on. Liveness CAN change, in
+             * the one direction that matters — a stream ends and becomes an ordinary muxable VOD —
+             * and the record lives 30 days. Preferring it would refuse a player for a month after the
+             * broadcast finished, which is a worse card than the one this change exists to fix.
+             *
+             * `??`, so this is not "the fetch always wins": a request whose Innertube call was refused
+             * carries `undefined`, not `false`, and falls back to the record. Only an answer we
+             * actually got can overrule it — see innertube.ts's liveVerdict for why the three values
+             * are kept apart all the way from the wire.
+             */
+            isLive: got.isLive ?? warm.isLive,
             counts: {
               views: warm.views ?? gotCounts?.views,
               likes: warm.likes ?? gotCounts?.likes,
@@ -1318,6 +1334,11 @@ async function serveMuxed(
   const { MEDIA_RESOLVER: resolver, MEDIA_CACHE: cache } = env
   if (!resolver || !cache || !source) return notReady()
 
+  // NO GENERATION SEGMENT, unlike metaCacheKey, and that is not an oversight: an mp4 keyed by ref and
+  // index cannot go stale the way a record can, and re-muxing every video on a bump would be the most
+  // expensive no-op in the codebase. The consequence is worth stating plainly because two analyses of
+  // the generation churn got it backwards — no bump has ever cost a muxed video or forced a re-mux.
+  // Everything a bump discards is metadata. See META_GENERATION.
   const key = `mux/${refKey(ref)}/${index}`
   // EVERYTHING here degrades, never 500s: this route has the same total-failure contract as pickMedia,
   // but its work (an R2 read, a container call, an R2 write) can throw for reasons a corrupt-cache guard
@@ -1387,15 +1408,41 @@ async function serveMuxed(
  */
 const RESOLVER_SLOTS = 4
 /**
- * BUMP THIS WHENEVER container/ CHANGES BEHAVIOUR. Pooling gave instances STABLE names, and a container
- * instance keeps running the image it started with until it idles out (`sleepAfter`) — so with steady
- * traffic a redeploy never takes effect: the 20-min duration cap shipped and every mux kept enforcing the
- * old 10-min one, because the four pooled instances were still the previous build. (The per-key naming
- * this replaced hid the problem — a new video meant a new name meant a new instance on the new image.)
- * Changing this string changes the instance names, which forces the new image in immediately.
+ * THE GENERATION LOG — shared history for the TWO constants below (`RESOLVER_GENERATION` at the end of
+ * it, `META_GENERATION` beside it). Every entry from g3 to g13 was a bump of ONE string doing both
+ * jobs; the split happened after g13, and this log is what both of them inherit.
  *
- * IT IS ALSO THE META CACHE'S GENERATION — see metaCacheKey. Any container answer we PERSIST has to be
- * invalidated by the same switch that retires the instance that produced it, or the bump only half-works.
+ * WHY THE STRING EXISTS AT ALL. Pooling gave instances STABLE names, and a container instance keeps
+ * running the image it started with until it idles out (`sleepAfter`) — so with steady traffic a
+ * redeploy never takes effect: the 20-min duration cap shipped and every mux kept enforcing the old
+ * 10-min one, because the four pooled instances were still the previous build. (The per-key naming this
+ * replaced hid the problem — a new video meant a new name meant a new instance on the new image.)
+ * Changing the string changes the instance names, which forces the new image in immediately. It was
+ * also the meta cache's generation, so a persisted container answer was retired by the same switch
+ * that retired the instance that produced it.
+ *
+ * WHEN TO BUMP WHICH, now that there are two:
+ *
+ *   RESOLVER_GENERATION — to EVICT CONTAINER INSTANCES. An outage, a bad image, a warm pool still
+ *     serving code that has been fixed for ten minutes (that is g13, below). Costs nothing but a cold
+ *     boot on the next call.
+ *   META_GENERATION — when the SHAPE or MEANING of a STORED RECORD changed, i.e. when a record already
+ *     in R2 would now say something WRONG or be read wrong. Costs up to YT_META_TTL_MS (30 days) of
+ *     dates, descriptions, durations, counts and gate verdicts across yt, fb, dm, st and im.
+ *
+ * THE TEST IS WHAT A STALE RECORD WOULD SAY, NOT WHETHER container/ WAS TOUCHED. The old rule here was
+ * "bump whenever container/ changes behaviour", which is input-shaped: it fires on container changes
+ * that leave every record correct (see the two "no bump" notes below, both of which had to argue their
+ * way out of it) and it says nothing about a change that corrupts records without touching container/ —
+ * which is now possible, because the Innertube rung writes the same records and lives in src/. Ask
+ * instead: if a record written yesterday is read tomorrow, does it say something false? Bump on yes.
+ *
+ * AND THE SPLIT MAKES UNDER-INVALIDATION EXPRESSIBLE FOR THE FIRST TIME, which is the worse direction.
+ * Before it, forgetting to bump for a record change was impossible as long as you bumped for the
+ * container change beside it; now the two can be forgotten separately, and the failure is silent — a
+ * wrong value served for 30 days from every colo, unfixable by re-pasting, with a correct deploy live.
+ * Over-invalidating costs a container call and heals; under-invalidating costs a month. When it is
+ * genuinely unclear, bump META_GENERATION.
  *
  * g3 (2026-07-25): _meta_page returns width/height/uploader_id/uploader_url/description/timestamp.
  * g4 (2026-07-25): _meta_page's width/height fallback prefers the tallest format at or under 720, so the
@@ -1464,9 +1511,11 @@ const RESOLVER_SLOTS = 4
 // that will never set a secret), an absent `jarred` on an older record reads as "not logged in", which
 // is exactly what it was, and a gated record that DID carry a jar is kept. Rotating a dead pool is the
 // case this does not cover, and that one still wants a bump.
-// STILL g10 IN 1.9.0 EVEN THOUGH container/server.py's OUTPUT DICT CHANGED, and the rule at the top
-// of this log says to bump whenever container/ changes behaviour. Written down because a reader who
-// finds an unbumped generation next to a container change is right to assume it was forgotten.
+// STILL g10 IN 1.9.0 EVEN THOUGH container/server.py's OUTPUT DICT CHANGED, which was a departure
+// from the rule at the top of this log AS IT STOOD THEN ("bump whenever container/ changes
+// behaviour"). Written down because a reader who finds an unbumped generation next to a container
+// change is right to assume it was forgotten. The output-shaped rule the header carries today is the
+// one this note and the paragraph below argued their way to.
 //
 // The rule exists for two things, and this change needs neither. It retires STALE RECORDS — and there
 // are none, because the defect being fixed (`timestamp: null`) made the worker write nothing at all,
@@ -1497,9 +1546,26 @@ const RESOLVER_SLOTS = 4
 // broken generation for up to YT_META_TTL_MS (30 days) after the fix ships, which is most of the way
 // to the fix not having shipped.
 //
+// CORRECTION, 2026-08-29: that argument was about a field YouTube RECORDS DO NOT HAVE. `type
+// YouTubeMeta` has never carried w/h — it is timestamp, duration, isLive, ageLimit, jarred,
+// description, views, likes, replies — so no yt record was ever "sized by a broken generation". Width
+// and height live only on the yt-dlp tier's record (fb, dm, st, im), and a YouTube player-client list
+// cannot change what `-J` reports for a Facebook or Dailymotion page. So the bump discarded exactly
+// the records the change could not have made wrong, and found nothing to discard on the platform it
+// was about. Kept rather than rewritten, because a log entry that quietly becomes correct in
+// hindsight teaches nobody: this is one of the two bumps that bought YouTube nothing while throwing
+// away a month of its dates, and the split below exists because of it.
+//
 // g12 -> g13, 2026-08-28. NOT FOR THE USUAL REASON — the records are fine. This bump is being spent on
 // the OTHER thing the generation string does, which the paragraph above about instance names only
 // mentions in passing: it names the Durable Objects, so changing it forces brand-new instances.
+//
+// THE OTHER OF THE TWO, and this one says so in its own words. "The records are fine" is precisely
+// the case that must now bump RESOLVER_GENERATION and leave META_GENERATION where it is; in g13 the
+// two were one string, so ending a container outage cost every stored date, description, duration,
+// count and gate verdict on five platforms — 40 hours after #64 shipped the Innertube corpus that was
+// meant to make YouTube dates reliable. Production reads "9/10 correct on first paste" instead of
+// ~100% on anything seen before because of this line.
 //
 // WHAT HAPPENED. 1.11.0 shipped a container whose `do_GET`/`do_POST` had stopped being methods of the
 // Handler class (a patch spliced module-level functions into the class body), so BaseHTTPRequestHandler
@@ -1514,7 +1580,40 @@ const RESOLVER_SLOTS = 4
 // has not been put to before and is worth naming so the next reader does not think the records were
 // suspect. If this recurs, the cheaper permanent answer is a shorter `sleepAfter` (see
 // src/container.ts, which already argues 3m is available), not another bump.
+/**
+ * THE CONTAINER-INSTANCE HALF. It names the Durable Objects (`resolver-{gen}-{slot}`) and nothing
+ * else. Bumping it costs one cold boot per slot and invalidates NOTHING that is stored.
+ *
+ * SPLIT FROM META_GENERATION 2026-08-29 — see it for the measurement that forced the split.
+ */
 const RESOLVER_GENERATION = 'g13'
+/**
+ * THE STORED-RECORD HALF, pinned at the value the shared string had when it split, so the split
+ * itself invalidates nothing. Read by metaCacheKey and by nothing else.
+ *
+ * WHY THIS IS A SECOND CONSTANT. One string named the container instances AND scoped every meta
+ * record, so every bump aimed at a bad instance also threw away every cached date, description, view
+ * count, duration and age verdict on yt, fb, dm, st and im. Thirteen generations in 34 days, 2026-07-25
+ * g3 through 2026-08-28 g13. The five since the 1.0.0 squash are the ones git can still show —
+ * `git log -G"RESOLVER_GENERATION = 'g" --date=short -- src/worker.ts` — and the gaps between them, in
+ * days, are 1.0, 0.3, 15.4, 4.3, 5.9, against a YT_META_TTL_MS of 30 days that has NEVER ONCE BEEN
+ * REACHED. The TTL is a fiction: the real expiry was the generation, and it was set by container
+ * incidents.
+ *
+ * Two of those five bought YouTube nothing at all, and both are annotated in the log above — g11's
+ * stated reason was stored width/height that `type YouTubeMeta` has never had, and g13 says in its
+ * own comment that the records were fine.
+ *
+ * PLAYBACK HAS NEVER BEEN AFFECTED BY A BUMP, ONLY METADATA — worth writing down because two separate
+ * analyses got it backwards. The muxed MP4 lives at `mux/{refKey}/{index}` (serveMuxed, scheduleMux,
+ * settleMux, the prewarm), which carries NO generation segment. A bump cannot orphan a muxed video,
+ * cannot make one re-mux, and cannot cost a single byte of R2 egress on the video path. Everything a
+ * bump has ever discarded is `meta/{gen}/{refKey}.json`.
+ *
+ * WHEN TO BUMP: when the SHAPE or MEANING of a stored record changed — see the rule at the head of
+ * the log above, and note that the direction to fear is now UNDER-invalidation.
+ */
+export const META_GENERATION = 'g13'
 /** `slotKey` is the POST (refKey), never the operation — see RESOLVER_SLOTS for the 74% measurement. */
 function resolverStub(resolver: NonNullable<Env['MEDIA_RESOLVER']>, slotKey: string) {
   let h = 2166136261
@@ -1887,6 +1986,24 @@ const CARD_DEADLINE_MS = MUX_WAIT_API_MS
    * renders as nothing at all. Falls back to the video's dimensions, which is right for every
    * platform whose poster and video are the same shape.
    */
+/**
+ * `duration` IS CARRIED ACROSS, added 2026-08-29, and dropping it was load-bearing in the wrong
+ * direction. The over-ceiling arm below rewrites the remux entry into this still, so on exactly the
+ * videos that need the length note the length was erased one step before withLengthNote looked for
+ * it — the note fell back to nothing and the card went silent about why it was a picture. Nothing
+ * renders the field (no renderer reads Media.duration; settleMux and the yt overlays are its only
+ * consumers), so keeping it is free and it is honest: a still of a 56-minute video is still a still
+ * of a 56-minute video.
+ *
+ * `live` IS CARRIED FOR THE SAME KIND OF REASON and is NOT load-bearing today, which is worth saying
+ * plainly so the next reader neither deletes it as dead nor trusts it as a guarantee. withLiveNote's
+ * media fallback reads it, but on every reachable path the note is already in `post.text` before this
+ * runs: normalizeYouTube applies it at BUILD time, because Innertube answers the liveness question
+ * before the Post exists. So dropping it changes no output that any test or route can observe — I
+ * checked. It stays because it is honest (a still of a live stream is still a still of a live stream)
+ * and free, and because the moment anything builds a yt Post without going through normalizeYouTube,
+ * the fallback is what keeps the card from becoming the silent blank rectangle. Nothing renders it.
+ */
 function stillOf(m: Media): Media | null {
   if (!m.poster) return null
   return {
@@ -1896,6 +2013,8 @@ function stillOf(m: Media): Media | null {
     w: m.posterW ?? m.w,
     h: m.posterH ?? m.h,
     posterOnly: true as const,
+    ...(m.duration === undefined ? {} : { duration: m.duration }),
+    ...(m.live === undefined ? {} : { live: m.live }),
   }
 }
 
@@ -1944,9 +2063,11 @@ async function settleMux(
   /**
    * A SECOND FLAG, BECAUSE THE ARRAY CAN CHANGE WITHOUT THE CARD BEING INCOMPLETE.
    *
-   * `degraded` answers one question only: may this response be cached? The over-ceiling rewrite below
-   * must NOT set it, because that verdict is permanent and re-deciding it on every view was the cost
-   * this whole path exists to stop paying.
+   * `degraded` answers one question only: may this response be cached? NEITHER of the two rewrites
+   * below may set it — the over-ceiling one, and the live one — because both verdicts are final for
+   * as long as the card lives, and re-deciding them on every view was the cost this whole path exists
+   * to stop paying. (Final is not the same as permanent: an over-ceiling video is too long forever, a
+   * broadcast only until it ends, and RESP_TTL is what bounds the second.)
    *
    * But the early return was `if (!degraded) return { post }` — the ORIGINAL post — so a post whose
    * only video is over the ceiling had its rewrite computed and then thrown away. The card went on
@@ -1976,6 +2097,37 @@ async function settleMux(
      * will be identical in thirty days. Setting it would re-pay the cost forever for an outcome that
      * cannot change.
      */
+    /**
+     * A BROADCAST WITH NO FINISHED FILE IS NEVER MUXED EITHER, and the arm above could not cover it.
+     *
+     * THE DEFECT, measured on yt:xDWQ3LkccY8 (Sky News, permanently live): a live stream reports
+     * `lengthSeconds: '0'`, so it carries no duration, so `m.duration > MUX_MAX_SECONDS` is false and
+     * the dispatch went ahead. The container refuses it on its own `--match-filter
+     * "duration<?1500 & !is_live"`, the card degrades, a degraded card is deliberately not
+     * response-cached — so the next render repeats the whole ~1.7s round trip, and the one after
+     * that, forever. The probe found that id pinned at `muxing: true` and never cached. News channels
+     * post these constantly, and the same shape covers a SCHEDULED stream (see liveVerdict).
+     *
+     * IDENTICAL TREATMENT TO THE OVER-CEILING ARM because it is the identical KIND of answer: final,
+     * knowable without asking the container, and not "something is still coming". So no `degraded`,
+     * and the card caches. The two arms cannot both be right about one entry — a length only exists
+     * once the broadcast has ended — but they agree on the outcome, so the order is not load-bearing.
+     *
+     * THE RESIDUAL, written down because it is the remaining hole: renderPostRoute's PREWARM is keyed
+     * on the ref alone (prewarmable() never sees a Post), so a live stream is still dispatched once
+     * per colo on a response-cache miss. That is now bounded by RESP_TTL rather than unbounded, since
+     * this card caches — it was every render before. Closing it properly means reading the post cache
+     * entry before prewarming, which is the overlap the prewarm exists to avoid.
+     */
+    if (m.live) {
+      const still = stillOf(m)
+      // Same hole as the over-ceiling arm's: no poster, nothing to degrade to, leave the entry. See
+      // the comment there — it is a hole in theory before it is one in practice, and yt always has a
+      // thumbnail because normalizeYouTube derives one from the id.
+      if (!still) return m
+      rewritten = true
+      return still
+    }
     if (typeof m.duration === 'number' && m.duration > MUX_MAX_SECONDS) {
       // The same still the unfinished-mux path produces, from the same function, because the two
       // shapes MUST NOT DRIFT: this one was hand-rolled with a spread and so kept `remux` and lacked
@@ -2033,8 +2185,9 @@ async function settleMux(
      * RENDER, not per mux, so the real client is meaningful here where countMux's `none` is not. Only
      * the Discord render is the one Discord then freezes forever.
      *
-     * The over-ceiling rewrite above is deliberately NOT counted here. It never calls the container
-     * and can never succeed, so folding it in would put a permanent floor under the ratio.
+     * NEITHER OF THE TWO REWRITES ABOVE is counted here — the over-ceiling one, and the live one.
+     * Neither calls the container and neither can ever succeed, so folding them in would put a
+     * permanent floor under the ratio made of long videos and of channels that stream all day.
      */
     count(env, post.ref.p, 'card_degraded', client)
     degraded = true
@@ -2074,8 +2227,11 @@ async function settleMux(
  * THE COST, STATED PLAINLY: the very first paste of a video no longer overlaps its mux with its fetch,
  * so that first HTML render is likelier to degrade to the still. It is NOT the whole measurement
  * refunded — by the time Discord's activity callback arrives ~1s later the post IS cached, that
- * document is where `media_attachments[].type` is decided, and it waits MUX_WAIT_API_MS — and every
- * re-paste takes the warm path this gate is scoped to. Speculative work for a ref nobody has
+ * document is where `media_attachments[].type` is decided, and it waits YT_MUX_BOT_MS (4000) on yt
+ * and MUX_WAIT_BOT_MS (1500) elsewhere — and every re-paste takes the warm path this gate is scoped
+ * to. (It said MUX_WAIT_API_MS, 9000, until 2026-08-29; that stopped being true at 553bd2e. The ~1s
+ * of head this paragraph banks on is also the mux's head start against the budget it now names, and
+ * YT_MUX_BOT_MS is sized around it.) Speculative work for a ref nobody has
  * successfully fetched is not worth a shared, capped, cross-tenant resource.
  */
 function prewarmable(ref: PostRef): { index: number; source: NonNullable<Media['remux']> } | null {
@@ -2230,20 +2386,26 @@ const FB_META_TTL_MS = 86_400_000
  * instance names: a redeploy is not atomic, so during a rollout a PRE-BUMP instance still answers, and
  * without this its thinner dict — {title, thumbnail, uploader} from a pre-g3 image — is PERSISTED for a
  * full 24h. The rollout then completes and the card STILL ships with no dimensions, no caption and no
- * timestamp, on every colo, not fixable by re-pasting, and RESOLVER_GENERATION alone would not clear it.
+ * timestamp, on every colo, not fixable by re-pasting, and a new instance name alone would not clear it.
  *
- * With the generation in the key, bumping it is the SINGLE invalidation switch for both halves of the
- * container's output: the instances that produce an answer, and the answers we kept. Old objects are
- * simply never read again; R2 has no cost pressure to delete them urgently and a lifecycle rule is the
- * right eventual broom, not a delete on the request path.
+ * META_GENERATION, NOT RESOLVER_GENERATION, since 2026-08-29. It was one string, and every bump aimed
+ * at retiring a container instance also emptied this cache: five bumps in 27 days against a 30-day
+ * TTL, two of which had nothing to do with what is stored here. The two constants hold the same value
+ * today (both `g13`), so nothing moved when they split — see META_GENERATION for the measurement and
+ * for which one to bump.
+ *
+ * Bumping META_GENERATION is still the SINGLE invalidation switch for everything we persisted; old
+ * objects are simply never read again. R2 has no cost pressure to delete them urgently and a lifecycle
+ * rule is the right eventual broom, not a delete on the request path.
  *
  * Exported for the test that pins the miss — a key built by hand there would pass while this drifted.
  *
  * WIDENED to PostRef 2026-07-26 (it was fb-only) because YouTube now persists a container answer of
  * its own. refKey namespaces the platform (`yt:` vs `fb:watch:`), so no two platforms can collide
- * here, and a mux key (`mux/{refKey}/{i}`, no '.json', an index segment) cannot either.
+ * here, and a mux key (`mux/{refKey}/{i}`, no '.json', an index segment) cannot either — and that mux
+ * key has no generation segment at all, which is why a bump has never cost a muxed video.
  */
-export const metaCacheKey = (ref: PostRef) => `meta/${RESOLVER_GENERATION}/${refKey(ref)}.json`
+export const metaCacheKey = (ref: PostRef) => `meta/${META_GENERATION}/${refKey(ref)}.json`
 
 /**
  * ONE IMPLEMENTATION of "generation-scoped R2 meta with a TTL, a deadline, and never-cache-a-failure",
@@ -2253,18 +2415,30 @@ export const metaCacheKey = (ref: PostRef) => `meta/${RESOLVER_GENERATION}/${ref
  * THE READ IS try/catch, NOT `.catch()`, and that is not defensiveness: the injected MEDIA_CACHE
  * stand-in in test/pipeline.test.mjs provides only `head` and `put`, so `cache.get` is UNDEFINED and
  * calling it throws SYNCHRONOUSLY — a rejected-promise guard never sees it, and the route 500s.
+ *
+ * THE TTL MAY BE A FUNCTION OF THE RECORD, added 2026-08-29 for exactly one caller. Every field these
+ * records held was immutable, which is what a 30-day TTL was buying; `isLive` is not, and a record
+ * that says a broadcast is live has to expire on the timescale a broadcast ends on rather than the
+ * timescale an upload date stops being true on. See YT_LIVE_TTL_MS. Passing a number is unchanged and
+ * is what every other caller does.
+ *
+ * THE PARSE MOVED IN FRONT OF THE AGE CHECK to make that possible. The only cost is parsing a record
+ * that turns out to be expired — these are a few hundred bytes — and the outcome is identical either
+ * way, since both paths return null.
  */
 async function readCachedMeta<T>(
-  ref: PostRef, env: Env, ttlMs: number, valid: (j: unknown) => boolean,
+  ref: PostRef, env: Env, ttlMs: number | ((rec: T) => number), valid: (j: unknown) => boolean,
 ): Promise<T | null> {
   const cache = env.MEDIA_CACHE
   if (!cache) return null
   try {
     const obj = await cache.get(metaCacheKey(ref))
-    // R2 stamps `uploaded`, so no expiry field has to be stored or trusted.
-    if (!obj || Date.now() - obj.uploaded.getTime() >= ttlMs) return null
+    if (!obj) return null
     const j = await obj.json<T>().catch(() => null)
-    return j && valid(j) ? j : null
+    if (!j || !valid(j)) return null
+    // R2 stamps `uploaded`, so no expiry field has to be stored or trusted.
+    const ttl = typeof ttlMs === 'function' ? ttlMs(j) : ttlMs
+    return Date.now() - obj.uploaded.getTime() >= ttl ? null : j
   } catch {
     return null
   }
@@ -2768,14 +2942,50 @@ function cachedYtdlpMeta(
  * live 2026-07-26 on the field that actually renders (created_at on the activity callback: 2 of 3
  * probed videos were the epoch).
  *
- * ONLY THE TIMESTAMP IS STORED. oembed already supplies title/author/thumbnail and the mux supplies
- * the video; the upload instant of a published video id is the one field here that is genuinely
- * immutable, which is what a 30-day TTL is buying.
+ * ONLY THE TIMESTAMP WAS STORED when this was written; the record has since grown a description, a
+ * duration, counts, an age verdict and a liveness verdict. Every one of those but the last is as
+ * immutable as the upload instant, which is what a 30-day TTL is buying.
  *
- * 30 DAYS, versus Facebook's 24h, on purpose: the value cannot change, and the TTL is exactly what
+ * 30 DAYS, versus Facebook's 24h, on purpose: the values cannot change, and the TTL is exactly what
  * decides how often the one real latency trade below (a warm mux with a cold meta) can recur.
+ *
+ * EXCEPT FOR ONE FIELD — see YT_LIVE_TTL_MS, which is why the yt reads pass a function here rather
+ * than this number. "The value cannot change" is the whole argument for 30 days and it stopped being
+ * true of the whole record on 2026-08-29.
  */
 const YT_META_TTL_MS = 30 * 86_400_000
+
+/**
+ * A RECORD THAT SAYS "LIVE" EXPIRES IN AN HOUR, NOT IN THIRTY DAYS.
+ *
+ * THE DEFECT, found in review 2026-08-29. `isLive` is the one mutable field on a YouTubeMeta record,
+ * and it moves in the direction that costs a card: a stream ends and becomes an ordinary muxable VOD.
+ * The record cannot heal itself, because nothing rewrites it — metaAttempt only runs on a read MISS,
+ * and youtubeMeta returns null the moment the post carries a real date, which a live stream always
+ * does (Innertube's microformat.publishDate). So under the flat 30-day TTL a stream that ended kept
+ * saying "🔴 Live stream, so no preview here" on every render whose own Innertube call was refused —
+ * about half of them from this egress — for up to a month, on a card that CACHES (the live arm sets
+ * `rewritten`, not `degraded`, on purpose).
+ *
+ * ONE HOUR, and the number is bounded on both sides by things already measured here. Below: the flag
+ * exists to cover the render path's Innertube coin flip across cold post-cache windows, and POST_TTL
+ * is 900s, so an hour is four of them. Above: an expiry costs one cookie-free ~0.2s Innertube call
+ * (resolveYouTubeMeta tries it before the container) and no container slot, and only on a render that
+ * was going to make that call anyway — so the price of being wrong for less time is close to nothing.
+ *
+ * IT HEALS RATHER THAN JUST FORGETTING. When the record expires, youtubeMeta runs, Innertube is asked
+ * again, and the answer is rewritten with a fresh verdict: `isLive: true` for a stream still running
+ * (another hour), absent for one that ended (and then the 30-day TTL applies again, correctly). If
+ * Innertube is refused and the container answers instead, the new record carries no liveness at all,
+ * which is the honest "unknown" and exactly the behaviour that shipped before the flag existed.
+ */
+const YT_LIVE_TTL_MS = 3_600_000
+
+/**
+ * How long a stored YouTube record may be believed, given what it says. The only caller-visible shape
+ * of the split above, kept in one place so the three yt read sites cannot disagree about it.
+ */
+const ytMetaTtl = (rec: YouTubeMeta): number => (rec?.isLive ? YT_LIVE_TTL_MS : YT_META_TTL_MS)
 /**
  * `ageLimit` is OPTIONAL AND NOT PART OF THE VALIDITY TEST, deliberately. Records written before
  * g6 carry no such field and are still perfectly good dates; requiring it would throw away a
@@ -2795,6 +3005,21 @@ type YouTubeMeta = {
   timestamp: number
   /** Seconds, from the container's dict. Absent on a record written before 2026-08-03 (g8 -> g9). */
   duration?: number
+  /**
+   * WAS IT AN UNFINISHED BROADCAST WHEN THIS RECORD WAS WRITTEN — present only when true, like
+   * `jarred`, because absent already means "not known to be one".
+   *
+   * THE ONE FIELD HERE THAT IS NOT IMMUTABLE, and the only reason it is stored anyway is that the
+   * alternative is worse: without it the second paste re-asks Innertube, which Cloudflare's egress
+   * refuses on roughly half of requests (see resolveYouTubeMeta). So it is persisted AND it is the
+   * LOSER of the merge — a fresh `isLive: false` off the render path beats it, and only a request
+   * that got no answer at all falls back to it. See the yt arm in liveFetchPost.
+   *
+   * Written by the Innertube rung only. The container's `-J` dict does not forward `is_live`
+   * (container/server.py's _meta_page), so a record from that rung simply carries no verdict — which
+   * is correct rather than a gap: absent means unknown, and the rung that knows runs first.
+   */
+  isLive?: true
   ageLimit?: number
   /**
    * WAS THE EXTRACT THAT PRODUCED THIS RECORD LOGGED IN? Present only when true; absent means "no jar
@@ -2883,9 +3108,10 @@ const ytMetaValid = (j: unknown): boolean =>
  * fallback read. Putting the rule in the validator is what makes all three agree; a check bolted onto
  * one of them is exactly how this codebase got a head fixed and its twin left broken.
  *
- * ROTATING A DEAD POOL still needs the generation bump — a `jarred` record that says gated is trusted,
- * and swapping in working accounts does not make it untrue-looking. That is the documented rotation
- * path and it is unchanged by this.
+ * ROTATING A DEAD POOL still needs a META_GENERATION bump — a `jarred` record that says gated is
+ * trusted, and swapping in working accounts does not make it untrue-looking. That is the documented
+ * rotation path and it is unchanged by this. META_GENERATION and not RESOLVER_GENERATION since the
+ * 2026-08-29 split: the thing that has to go is the stored verdict, and the instances are innocent.
  */
 const ytMetaUsable = (env: Env) => (j: unknown): boolean => {
   if (!ytMetaValid(j)) return false
@@ -2949,6 +3175,16 @@ class MetaUnusable extends Error {}
  * Measured cost of what it is waiting for: `yt-dlp -J` on YouTube is 2.3-6.7s (5 runs, 2026-07-26;
  * the tail is the 4K/multi-format case). A bogus id fails in 1.9s. No download — -J is metadata only.
  *
+ * THE "MUX_WAIT_API_MS = 9000" ABOVE IS STALE, twice over — annotated rather than deleted, because
+ * the `yt-dlp -J` measurement it sits under is still the best data on record. 553bd2e cut the
+ * activity route's mux wait to MUX_WAIT_BOT_MS (1500) and did not rewrite this paragraph, which is
+ * how the "adds ZERO wall clock" argument outlived the thing that made it true. And since 2026-08-29
+ * this constant does not bound the activity route's date arm at all: that call site wraps it in
+ * `deadline(…, YT_META_BOT_MS)` (2800), and 8000 now governs only /_card and /_api/v1. The
+ * zero-wall-clock property is back on the activity route as of the same day, by a different route —
+ * YT_MUX_BOT_MS (4000) is larger than YT_META_BOT_MS (2800), so on a cold yt paste the date arm again
+ * finishes inside a wait the mux arm is spending anyway. Everything below is unchanged and still true.
+ *
  * IF THIS IS EVER JUDGED UNACCEPTABLE, the knob is 0: that reduces the design to "right on the next
  * view" with no other change, because the write is already inside the raced work.
  */
@@ -2963,6 +3199,14 @@ class MetaUnusable extends Error {}
 // MUX_WAIT_API_MS = 9000, so on a first paste — where the mux is cold by definition — this waits
 // inside a wait that is happening anyway and costs zero wall clock. It costs real latency only in the
 // warm-mux/cold-meta case, at most once per video per 30 days.
+//
+// THAT CEILING SENTENCE IS STALE ON THE ACTIVITY ROUTE, annotated 2026-08-29 and left in place because
+// the 2026-08-01 measurement above it still stands. It is still right about /_card and /_api/v1, which
+// do await settleMux on MUX_WAIT_API_MS = 9000. It stopped being right about the ACTIVITY route at
+// 553bd2e, which took that settleMux to 1500 and left this 8000 towering over the budget it was
+// supposed to hide inside. The activity route now bounds this arm at YT_META_BOT_MS (2800) against a
+// mux arm of YT_MUX_BOT_MS (4000), so "inside a wait that is happening anyway" is true there again —
+// with different numbers, and for a reason this comment does not give.
 const META_WAIT_API_MS = 8000
 
 /**
@@ -2989,10 +3233,15 @@ const META_WAIT_API_MS = 8000
  * budget a crawler tolerates was ever going to catch it. The old ceiling spent five seconds to lose
  * the same race it loses in one.
  *
- * NOTHING IS ABANDONED. Both the mux and the meta extract run under ctx.waitUntil with their R2 write
- * INSIDE the raced work, so a deadline this side of the answer still lands the record — the design
- * META_WAIT_API_MS's own comment describes as "right on the next view", and names as the knob to turn
- * if the ceiling is ever judged unacceptable. It is.
+ * NOTHING IS ABANDONED — FALSE AS WRITTEN, corrected 2026-08-29, and one of the two claims this cut
+ * rested on. Both the mux and the meta extract do run under ctx.waitUntil with their R2 write INSIDE
+ * the raced work; what was wrong is what waitUntil buys. Cloudflare cancels every unsettled waitUntil
+ * promise 30 seconds after the response, on a budget SHARED across the whole request (settleMux's
+ * alarm comment carries the 2026-08-23 diagnosis), and the yt mux distribution is a median of 18.2s
+ * with a p90 of 41.3s — so most of the muxes this paragraph promised would "land the record" were
+ * killed with zero bytes written and restarted from byte zero on the next render. What makes the
+ * design "right on the next view" today is the MuxRunner DO alarm (15 min), armed BEFORE the race for
+ * exactly this reason. The claim still holds for the meta extract, which costs seconds, not minutes.
  *
  * THE COST, STATED EXACTLY, because the imprecise version of it is flattering. A first paste of a cold
  * video shows the card with its THUMBNAIL instead of an inline player, without the counts, and dated
@@ -3003,8 +3252,14 @@ const META_WAIT_API_MS = 8000
  * That 1970 is the same sentinel Facebook cards already ship to Discord in production for every post
  * (facebook/normalize.ts argues it: an absent date beats a guessed one), so it is not a new shape --
  * but it IS a visible wrong-looking date, and CLAUDE.md records the YouTube epoch as a reported bug
- * once already. It is accepted here only because the alternative it replaces is NO CARD AT ALL, and
- * because it lasts exactly one view. Suppressing the field when the date is unknown is the real fix
+ * once already. It is accepted here only because the alternative it replaces is NO CARD AT ALL. The
+ * clause that used to follow — "and because it lasts exactly one view" — IS FALSE, corrected
+ * 2026-08-29: Discord stores the embed inside the message and never re-unfurls it
+ * (discord-api-docs#1663, already cited by fetchretry.ts, twitter/fetch.ts, youtube/innertube.ts and
+ * analytics.ts in this same tree), so the first paste is the only paste and a wrong date is frozen in
+ * that message forever. That is the second claim this cut rested on, and it cuts both ways: it is why
+ * these budgets are worth raising at all, and why losing the bet is permanent.
+ * Suppressing the field when the date is unknown is the real fix
  * and is NOT done here: Discord is the consumer, a Mastodon document missing a required field may be
  * rejected outright, and rejecting it reintroduces precisely the bug this constant exists to remove.
  * That change wants its own measurement against a live unfurl.
@@ -3012,8 +3267,139 @@ const META_WAIT_API_MS = 8000
  * NOT APPLIED TO /_api/v1 OR /_card. Those are read by the converter page with a human watching a
  * spinner, and they are the surface that WARMS a link deliberately; shortening them would make the
  * page worse at the one job it has. They keep MUX_WAIT_API_MS.
+ *
+ * NO LONGER THE ONLY BOT BUDGET, and both costs stated above are the part that moved. This still
+ * bounds the HTML head on every platform, the translation on the activity document, and the mux on
+ * every platform except YouTube — but the activity document split away from it twice on 2026-08-29.
+ * Its DATE arm went to YT_META_BOT_MS, because 1500 sat under that call's own measured median. Its
+ * MUX arm went to YT_MUX_BOT_MS on yt only, because the production counters say 0 of 139 successful
+ * yt muxes have ever finished inside 1500ms — "the wait buys almost nothing", measured, turns out to
+ * read "the wait cannot buy anything". Read both constants before assuming one number governs this
+ * route. The five-second cold-mux measurement above was taken on the HEAD, which is the seam this
+ * constant still governs; YT_MUX_BOT_MS is where the activity seam's version of it is re-argued.
  */
 export const MUX_WAIT_BOT_MS = 1500
+
+/**
+ * THE SAME CRAWLER BUDGET, FOR THE METADATA ARM ONLY — because one number was bounding three arms
+ * whose measured costs are not the same size.
+ *
+ * WAS: MUX_WAIT_BOT_MS, 1500ms, shared by all three arms of the activity route's Promise.all since
+ * 553bd2e. NOW: 2800ms on the metadata arm; the translation keeps 1500. The mux arm split away later
+ * the same day and did NOT keep 1500 — see YT_MUX_BOT_MS, which is 4000 on yt and sits deliberately
+ * above this number so a cold paste's date arm costs no wall clock at all.
+ *
+ * WHY IT WAS WRONG, from the metadata call's OWN recorded distribution (innertube.ts, measured against
+ * production on nine unseen ids immediately after the 1200 -> 2500 deploy):
+ *
+ *   innertube OK    n=3   min  281ms  median 1716ms  max 1723ms
+ *   innertube MISS  n=5   min 1661ms  median 1754ms  max 1912ms
+ *
+ * 1500 is BELOW THE MEDIAN COST OF A SUCCESS. The arm was cut off before the middle of its own
+ * hit distribution, so the "second attempt per paste" that reaching Innertube from resolveYouTubeMeta
+ * was built to buy (see its docstring: the render already tried, this route tries again seconds later)
+ * was throttled under the price of the thing it was buying. Worse, innertube.ts's hard abort is
+ * INNERTUBE_TIMEOUT_MS = 2500: under a 1500 budget this arm could not observe even a successful second
+ * attempt finish, ever, for any video. 2800 is that 2500 plus 300 — MUX_WAIT_FLOOR_MS's size, which is
+ * what an R2 read costs — so the warm-record read in front of the call fits and the call itself still
+ * clears its own abort. It is deliberately NOT written as `INNERTUBE_TIMEOUT_MS + MUX_WAIT_FLOOR_MS`:
+ * the two bound different things (that one aborts a single fetch in another module; this one bounds a
+ * whole arm that may also fall through to the container), and coupling them would make a change to
+ * either read as a change to both.
+ *
+ * WHY 2800 AND NOT 9000. 2800 sits inside the 3-4s everyone assumes is Discord's abandon point; 9000
+ * does not. AND NOBODY HAS EVER MEASURED THAT 3-4s. This file already admits as much twice, in these
+ * words: META_TIMEOUT_MS says "that is a separate measurement about Discord's tolerance that nobody
+ * has taken", and META_TIMEOUT_API_MS says "how much a crawler will tolerate there is unmeasured". So
+ * this number is chosen to stay inside the folklore bound rather than to test it. Testing it means an
+ * experiment against a live unfurl, and that wants its own change.
+ *
+ * WHAT IT COSTS, BOUNDED. youtubeMeta's first gate returns null the instant the post already carries a
+ * real date, before any R2 GET or container call — so the common warm path never enters this budget
+ * at all and the response still ends wherever the mux arm ends it, unchanged. The extra 1.3s is paid
+ * only where the RENDER's own Innertube call was refused, which the 2026-08-27 measurement across 22
+ * unseen ids puts at a bit over half of cold pastes (that call succeeds 40-50% of the time). Once per
+ * video: the record is written for 30 days and the gate above closes for good.
+ *
+ * Losing this race still writes: `deadline` leaves the loser running and metaWork's R2 put is inside
+ * the raced work, exactly as it was at 1500.
+ */
+export const YT_META_BOT_MS = 2800
+
+/**
+ * THE MUX ARM'S OWN CRAWLER BUDGET, on the one document and the one platform where that arm decides
+ * whether Discord draws a PLAYER or a photo — and the only budget in this file that can lose a card
+ * outright. Read all of this before moving it.
+ *
+ * WAS: MUX_WAIT_BOT_MS, 1500ms, on both crawler seams for every platform, since 553bd2e collapsed a
+ * 5000/9000 split into one number. NOW: 4000ms, on the yt ACTIVITY document only. The HTML head keeps
+ * 1500, the /_oembed callback keeps 1500, and every other platform keeps 1500 on both.
+ *
+ * WHY 1500 COULD NOT WIN. Analytics Engine, `mbedfx_counters`, every `mux_ok` row with blob1='yt'
+ * since the counter went live 2026-08-24, n=139, weighted by `_sample_interval`:
+ *
+ *   p10 6922ms   p50 18219ms   p90 41254ms   min 4200ms   max 168851ms
+ *
+ *   finished within 1500ms:   0 of 139     <- the budget this replaces
+ *   finished within 5000ms:   4 of 139
+ *   finished within 9000ms:  23 of 139     <- the budget 553bd2e replaced
+ *
+ * ZERO. Not a poor hit rate — an arithmetically lost race, on the arm that sets
+ * `media_attachments[].type`. The fastest yt mux ever recorded is 4200ms against a budget of 1500, so
+ * no cold YouTube first paste has ever been able to carry a video, and Discord freezes the embed in
+ * the message (see MUX_WAIT_BOT_MS's correction), so the first paste is the only one. `card_degraded`
+ * against `ok` on blob1='yt', blob3='discord' reads 336/583 all-time, and runs about 1:1 in the hours
+ * real pastes actually happened — the all-time ratio is flattered by the smoke cron, which renders
+ * with a Discordbot UA off a warm mux and so can only ever add to the `ok` side (src/smoke.ts).
+ *
+ * WHY 4000 AND NOT MORE — the ceiling first. The one number in this repository derived from Discord's
+ * own behaviour is the 2026-08-09 production run: a cold head answered in 5.14-5.18s and the reader
+ * got NO CARD. Whatever the crawler's per-request tolerance is, it is under 5.14s. 4000 plus this
+ * route's own work — a post-cache read and a JSON serialise — lands the response near 4.2-4.3s, which
+ * is the last value that clearly sits inside that bound. 8000 does not: it rebuilds the 8.19-8.29s
+ * activity document 553bd2e deleted, on the strength of the same production report ("YouTube links
+ * fail to embed until warmed on the site"). The widely-quoted "Discord leaves at 3-4s" is NOT a
+ * measurement — that phrase appears once in this repository and cites nothing — so it is not what
+ * bounds this number; 5.14s is.
+ *
+ * AND WHY 4000 IS A TOLERANCE STEP, NOT A WIN. The mux does not start from zero here: it is
+ * dispatched during the HTML head render, and Discord cannot request this document until it has
+ * parsed that head, so roughly 1-2s of head plus gap is already on the clock when this deadline
+ * fires — call it 5-6s of real extract time. Against the table above that is the fast tail and
+ * nothing more, perhaps 5 of 139. What it buys is a race that CAN be won (min 4200ms) in place of one
+ * that cannot, and a reading on Discord's tolerance that no budget in this file currently has. Anyone
+ * quoting the p50 as the thing this catches has read the headline and not the arithmetic.
+ *
+ * WHAT IT RISKS, and this is a real trade rather than a freebie. Today's failure is a frozen card
+ * that still carries the title, the description, the thumbnail and the link. An ABANDONED activity
+ * fetch is worse than a missing upgrade, because renderSpoof emits NO og:image on any post with
+ * usable media (the C1 suppression in render/discord.ts) and a yt post ALWAYS has usable media — so
+ * the thumbnail reaches Discord only through this document. Lose it and the head alone is a title, a
+ * colour stripe, and a description only where the render's own Innertube call was not refused, which
+ * is about half of cold pastes. No image, no player, frozen in that message forever.
+ *
+ * WHAT IT COSTS WHEN IT WINS: nothing. settleMux races muxOnce through `deadline`, which returns the
+ * instant muxOnce does, so a WARM mux still costs one R2 head (MUX_WAIT_FLOOR_MS sizes that at 300ms)
+ * and the re-pastes that are the overwhelming majority of unfurls are untouched. The extra wait is
+ * paid only on the cold pastes that are already failing.
+ *
+ * IT ALSO MAKES THE DATE ARM FREE AGAIN. YT_META_BOT_MS is 2800, below this, so on a cold paste the
+ * metadata arm once more finishes inside a wait that is happening anyway — the "adds ZERO wall clock"
+ * property META_WAIT_API_MS's comment claims and 553bd2e silently removed.
+ *
+ * WHAT WOULD JUSTIFY GOING PAST 4000, and it is an experiment rather than an argument: make this
+ * route sleep N seconds for one ref, paste that link into a real Discord client, and record what
+ * draws at N = 3, 5, 8, 12. That measures the crawler's actual per-request tolerance AND what an
+ * abandoned activity fetch renders — the two things every budget on this seam currently guesses at,
+ * using the same human-with-a-client oracle the head parity work used. Until someone runs it, the
+ * instrument is `card_degraded/ok` on blob1='yt', blob3='discord': if the raise works that ratio
+ * falls. If Discord is bailing instead, it will NOT show up there — a degrade we render is not an
+ * abandon — so pair it with client disconnects on this route.
+ *
+ * The counters, the queries and the archaeology on 553bd2e are written up once, in
+ * docs/research/2026-08-29-the-1500ms-crawler-cut.md. Read that before changing this number.
+ */
+export const YT_MUX_BOT_MS = 4000
 
 /**
  * The container call. IDENTICAL SURFACE to resolveFacebookMeta's — `{page, meta:true}` through the
@@ -3057,6 +3443,11 @@ async function resolveYouTubeMeta(ref: Extract<PostRef, { p: 'yt' }>, env: Env):
     return {
       timestamp: Math.floor(quickAt.getTime() / 1000),
       ...(quick.duration === undefined || quick.duration >= 86_400 ? {} : { duration: quick.duration }),
+      // ONLY WHEN TRUE, so the absence keeps meaning "unknown" for every record the container rung
+      // and every pre-2026-08-29 write produced. This is what makes the SECOND paste of a live stream
+      // free: the render path's own Innertube call is refused about half the time from this egress,
+      // and without the record that coin is re-flipped on every cold post fetch.
+      ...(quick.isLive ? { isLive: true as const } : {}),
       ...(quick.ageLimit === undefined ? {} : { ageLimit: quick.ageLimit }),
       ...(quick.description === undefined ? {} : { description: quick.description }),
       ...(quick.views === undefined ? {} : { views: quick.views }),
@@ -3199,7 +3590,7 @@ async function youtubeMeta(
   // age flag too — so there is nothing further to overlay. Widening it to also test the note would
   // dispatch a container call on every ordinary video, which is what this gate exists to prevent.
   if (post?.createdAt instanceof Date && post.createdAt.getTime() !== 0) return null
-  const warm = await readCachedMeta<YouTubeMeta>(ref, env, YT_META_TTL_MS, ytMetaUsable(env))
+  const warm = await readCachedMeta<YouTubeMeta>(ref, env, ytMetaTtl, ytMetaUsable(env))
   if (warm) return warm
   if (!youtubeVouched(post) || !metaDispatchable(metaCacheKey(ref))) return null
   const work = metaAttempt(ref, env, META_FAIL_TTL_MS, () => resolveYouTubeMeta(ref, env))
@@ -3965,11 +4356,18 @@ async function describeTarget(
       // pool-aware validator existed — so on this branch the two changes met and the third seam
       // silently went back to trusting a pre-jar gate verdict. The sweep test is what caught it,
       // which is the entire reason that test greps for a fourth spelling rather than testing three.
-      ?? await readCachedMeta<YouTubeMeta>(post.ref, env, YT_META_TTL_MS, ytMetaUsable(env))
+      ?? await readCachedMeta<YouTubeMeta>(post.ref, env, ytMetaTtl, ytMetaUsable(env))
     if (warm) {
+      // withDescription BEFORE withLengthNote, and the reverse was a real defect (2026-08-29): the
+      // note prepends into `text`, withDescription then refuses to write a body that already exists
+      // ("A body already present wins"), so every long video traded its description for its note.
+      // The other seam below has the identical nesting for the identical reason — BOTH OR NEITHER.
+      //
+      // withLiveNote INSIDE withLengthNote, so the length note can see it and stand down. Both
+      // prepend, so nesting decides which one gets to be the only one — see withLengthNote.
       post = withAgeNote(
-        withCounts(withDescription(withLengthNote(withUploadDate(post, warm.timestamp),
-          warm.duration, MUX_MAX_SECONDS), warm.description), warm),
+        withCounts(withLengthNote(withLiveNote(withDescription(withUploadDate(post, warm.timestamp),
+          warm.description), warm.isLive), warm.duration, MUX_MAX_SECONDS), warm),
         warm.ageLimit,
       )
     }
@@ -4152,12 +4550,13 @@ function toApiPost(post: Post, origin: string) {
       /**
        * THIS PICTURE IS STANDING IN FOR A VIDEO — the one thing a consumer cannot otherwise work out.
        *
-       * settleMux rewrites an unfinished OR an over-ceiling video into its poster still, `kind:'image'`,
-       * and the payload is then indistinguishable from a post that only ever had a picture. `muxing`
-       * covers the first case and clears on its own. It does NOT cover the second: a video past
-       * MUX_MAX_SECONDS answers `muxing:false` on a cacheable 200, and the only trace that a video
-       * exists at all is an English sentence prepended to `text`. That is a card's answer, and a
-       * consumer parsing prose to find it is a consumer we have failed.
+       * settleMux rewrites an unfinished, an over-ceiling OR a live video into its poster still,
+       * `kind:'image'`, and the payload is then indistinguishable from a post that only ever had a
+       * picture. `muxing` covers the first case and clears on its own. It does NOT cover the other
+       * two: a video past MUX_MAX_SECONDS and an unfinished broadcast both answer `muxing:false` on a
+       * cacheable 200, and the only trace that a video exists at all is an English sentence prepended
+       * to `text`. That is a card's answer, and a consumer parsing prose to find it is a consumer we
+       * have failed.
        */
       still: !!m.posterOnly,
     })),
@@ -4266,9 +4665,13 @@ async function renderPostRoute(
    * HTML_DEADLINE_MS and overrunning it costs the whole embed, so the translation still may not
    * become the long pole once the mux is done.
    *
-   * NOT changed, deliberately: the activity route's uncapped MUX_WAIT_API_MS. There the mux and the
-   * translation are already concurrent on a 9s budget that a cold mux is expected to spend anyway, so
-   * capping the translation would abandon it early to save time the response is spending regardless.
+   * NOT changed, deliberately: the activity route's translation share. This used to read "the
+   * activity route's uncapped MUX_WAIT_API_MS … a 9s budget", which has been wrong since 553bd2e took
+   * that route to 1500, and is wrong in a second way since 2026-08-29 — its mux arm is YT_MUX_BOT_MS
+   * (4000) on yt and MUX_WAIT_BOT_MS (1500) on everything else. The ARGUMENT outlives all three
+   * numbers: over there the translation still overlaps a mux wait the response is spending anyway, so
+   * capping it separately would abandon it early to buy nothing. HERE the ceiling is HTML_DEADLINE_MS
+   * and overrunning it forfeits the whole embed, which is why the cap stays on this seam.
    */
   const [settled, xlate] = await Promise.all([
     settleMux(post, env, ctx, Math.max(MUX_WAIT_FLOOR_MS, Math.min(MUX_WAIT_BOT_MS, HTML_DEADLINE_MS - (Date.now() - started))), client),
@@ -4604,9 +5007,13 @@ export async function handle(req: Request, env: Env, ctx: ExecutionContext, d: D
       // now the mux started during the HTML render is usually done, so this normally KEEPS the video.
       /**
        * CONCURRENT WITH THAT WAIT, NOT AFTER IT — which is the whole latency argument for putting
-       * YouTube's date here. This route already waits up to MUX_WAIT_API_MS for every yt post, so a
-       * cold-mux callback pays ZERO extra wall clock for a correct timestamp, and the route's ceiling
-       * is unchanged. Scoped to 'activity' because that is the only document with a date field:
+       * YouTube's date here. The wait it rides has moved twice, so the numbers are written out rather
+       * than left as "MUX_WAIT_API_MS": that was 9000, 553bd2e took it to 1500 — which broke this
+       * argument silently, because 1500 is below the date arm's own 1716ms median (see
+       * YT_META_BOT_MS) — and since 2026-08-29 the yt mux arm is YT_MUX_BOT_MS (4000) against a date
+       * arm of 2800. So a cold-mux callback pays ZERO extra wall clock for a correct timestamp again,
+       * and the route's ceiling is set by the mux arm rather than by this one.
+       * Scoped to 'activity' because that is the only document with a date field:
        * toOEmbed's seven fields carry none, so the /_oembed callback makes no meta call at all.
        */
       /**
@@ -4626,34 +5033,87 @@ export async function handle(req: Request, env: Env, ctx: ExecutionContext, d: D
        * already spent. All three writes land in R2 under ctx.waitUntil regardless, so the next view is
        * complete; only the FIRST paste trades the date, the counts and the player for a card that
        * arrives at all.
+       *
+       * THREE BUDGETS, NOT ONE, both splits dated 2026-08-29. The three arms were given the same 1500
+       * because they share a response, not because they cost the same.
+       *
+       * The METADATA arm gets YT_META_BOT_MS (2800): its own recorded median for a SUCCESS is 1716ms,
+       * so 1500 cut it off below the middle of its hit distribution.
+       *
+       * The MUX arm gets YT_MUX_BOT_MS (4000) on yt, and keeps `botBudget` everywhere else. "A cold
+       * mux cannot finish inside any crawler budget, so spending more on it buys nothing" is what this
+       * comment used to say, and the production counters retired it: 0 of 139 successful yt muxes have
+       * ever finished inside 1500ms, but the fastest finished in 4200ms, and this arm has a head
+       * render's worth of head start on top of its budget. Read YT_MUX_BOT_MS — it is the one number
+       * here that can lose a card, and it carries the whole trade.
+       *
+       * The TRANSLATION keeps `botBudget`: it has a warm R2 path in front of it, and it is the least
+       * important thing on the card (see XLATE_MAX_WAIT_MS, which is the same 1500 anyway).
+       *
+       * The response ends at the SLOWEST arm, so the worst case on the yt activity document moved
+       * 1500 -> 4000, and it is paid only on a cold mux — which is exactly the paste that is failing
+       * today. Everywhere else it is unchanged at 1500.
        */
       const botBudget = Math.min(MUX_WAIT_BOT_MS, MUX_WAIT_API_MS)
+      /**
+       * THE MUX ARM'S BUDGET IS NOT THE SHARED ONE HERE — see YT_MUX_BOT_MS for the measurement and
+       * the trade. Scoped two ways, and both scopes are load-bearing.
+       *
+       * `p === 'yt'` because the raise is priced against YouTube's mux distribution and nothing
+       * else's, and because fb/dm/st/im pay META_TIMEOUT_MS (4700) inside the `getPost` above, which
+       * is awaited SEQUENTIALLY before this Promise.all. A global raise would take their activity
+       * worst case from ~6.2s to ~8.7s, past the 5.14s bound, for a budget nobody measured for them.
+       *
+       * `kind === 'activity'` because toOEmbed reads exactly two things off the post — the author
+       * name and the canonical url — and settleMux can change neither. That callback is a THIRD
+       * crawler request, already spending up to 1500ms of mux wait on a document that cannot differ;
+       * giving it 4000 would buy literally nothing and cost the reader 2.5 more seconds.
+       *
+       * The `Math.min` above stays as it is. Deleting it to widen the budget would be a silent 6x
+       * raise on every platform and both callback kinds — what remains is: the shared arms take
+       * MUX_WAIT_BOT_MS (1500), because it is the smaller of the two, on every route through here.
+       */
+      const muxBudget = r.kind === 'activity' && r.ref.p === 'yt' ? YT_MUX_BOT_MS : botBudget
       const [settledApi, meta, xlate] = await Promise.all([
-        settleMux(post, env, ctx, botBudget, client),
-        r.kind === 'activity' ? deadline(youtubeMeta(r.ref, post, env, ctx), botBudget) : null,
+        settleMux(post, env, ctx, muxBudget, client),
+        r.kind === 'activity' ? deadline(youtubeMeta(r.ref, post, env, ctx), YT_META_BOT_MS) : null,
         r.kind === 'activity' ? translationFor(post, env, ctx, botBudget) : null,
       ])
       return Response.json(
         r.kind === 'activity'
-          // ALL THREE overlays, from the one record. Each arrives after the Post was built, and
-          // applying only some of them leaves the card silent about the rest on every first paste.
-          // Translation is applied LAST so the marker trails the body the age note may have extended.
-          // FOUR overlays now, from the one record. withDescription runs BEFORE withAgeNote so the
-          // note keeps the top of the body on an age-gated video, and before withTranslation so a
-          // foreign-language description is what gets translated.
+          // ALL FIVE overlays, from the one record — it was three, then four, and the count is kept
+          // current here because "applying only some of them" is the recurring defect. Each arrives
+          // after the Post was built, and every one left out leaves the card silent about that fact
+          // on every first paste. Translation is applied LAST so the marker trails the body the age
+          // note may have extended. withDescription runs BEFORE withAgeNote so the note keeps the top
+          // of the body on an age-gated video, and before withTranslation so a foreign-language
+          // description is what gets translated.
+          //
+          // AND BEFORE withLengthNote, corrected 2026-08-29. The two were nested the other way round,
+          // so on a video past the ceiling the note went into an empty `text` first and
+          // withDescription then declined to overwrite it ("A body already present wins") — the card
+          // got the note or the description, never both. Only the order changed; both functions
+          // prepend, so the resulting body is note-then-description either way.
           ? toMastodonStatus(
             withTranslation(
               withAgeNote(
                 withCounts(
-                  withDescription(
-                    // BOTH SEAMS OR NEITHER. This is the document Discord reads for a post WITH media,
-                    // which is every video — so a length note applied only to the plain head would be,
-                    // from a reader's side, applied nowhere.
-                    withLengthNote(
-                      withUploadDate(settledApi.post, meta?.timestamp),
-                      meta?.duration, MUX_MAX_SECONDS,
+                  // BOTH SEAMS OR NEITHER. This is the document Discord reads for a post WITH media,
+                  // which is every video — so a length note applied only to the plain head would be,
+                  // from a reader's side, applied nowhere. describeTarget applies the same five in the
+                  // same order; a change here that is not made there re-splits them.
+                  //
+                  // withLiveNote sits INSIDE withLengthNote so the length note can see it and stand
+                  // down — one reason per card, and the live one is the reason the mux was refused.
+                  withLengthNote(
+                    withLiveNote(
+                      withDescription(
+                        withUploadDate(settledApi.post, meta?.timestamp),
+                        meta?.description,
+                      ),
+                      meta?.isLive,
                     ),
-                    meta?.description,
+                    meta?.duration, MUX_MAX_SECONDS,
                   ),
                   meta,
                 ),

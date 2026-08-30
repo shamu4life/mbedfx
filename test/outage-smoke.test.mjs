@@ -38,6 +38,51 @@ const FAILURE_CARD = '<html><head>'
   + '<meta name="theme-color" content="#657786"/>'
   + '</head><body></body></html>'
 
+/**
+ * A WARM YOUTUBE CARD, trimmed from the real bytes. Captured 2026-08-29 by fetching
+ * https://mbedfx.app/jNQXAC9IVRw with a Discordbot UA: 200, 1573 bytes, 0.50s, and a HEAD on the
+ * og:video url answered 200 with content-length 629172.
+ *
+ * THE og:video:* TAGS ARE KEPT DELIBERATELY. `og:video:width` is 0 on every remux platform (Discord
+ * reads the muxed mp4's own dimensions) and it is not a defect — but it means a sloppier regex than
+ * cardVerdict's could pass this fixture on the width tag alone while failing the degraded one below
+ * for the wrong reason. Keeping both spellings in the fixture is what makes that a real test.
+ */
+const WARM_VIDEO_CARD = '<html><head>'
+  + '<meta property="og:title" content="jawed (@jawed)"/>'
+  + '<meta property="og:description" content="Me at the zoo"/>'
+  + '<meta property="og:type" content="video.other"/>'
+  + '<meta property="og:video" content="https://mbedfx.app/_media/yt%3AjNQXAC9IVRw/0.mp4"/>'
+  + '<meta property="og:video:type" content="video/mp4"/>'
+  + '<meta property="og:video:width" content="0"/>'
+  + '<meta property="og:video:height" content="0"/>'
+  + '<link rel="alternate" type="application/activity+json" href="https://mbedfx.app/users/jawed/statuses/1"/>'
+  + '</head><body></body></html>'
+
+/**
+ * THE SAME CARD WITH NO PLAYER IN IT, which is what a cold mux produces and what this whole
+ * expectation exists to catch. It is the head renderSpoof emits when settleMux degraded the video to
+ * its poster still: the activity link, NO og:video, and NO og:image either — renderSpoof emits
+ * og:image only on a post with no media at all, and a degraded video post still has media.
+ *
+ * IT IS INDISTINGUISHABLE FROM A HEALTHY MEDIA POST to the default assertion, and that is the defect.
+ * Discord reads the picture off the activity document; the card looks fine and can never play.
+ */
+const DEGRADED_VIDEO_CARD = '<html><head>'
+  + '<meta property="og:title" content="jawed (@jawed)"/>'
+  + '<meta property="og:description" content="Me at the zoo"/>'
+  + '<link rel="alternate" type="application/activity+json" href="https://mbedfx.app/users/jawed/statuses/1"/>'
+  + '</head><body></body></html>'
+
+/**
+ * The healthy head for whatever row a url belongs to, so a test about SOMETHING ELSE does not
+ * accidentally become a test of the video expectation. Handing every row one fixture would report the
+ * yt row as `no-video` in tests whose subject is "every check ran" or "the timer is per check", and
+ * the failure would read as a bug in the thing being tested.
+ */
+const healthyCard = (url) =>
+  SMOKE_CHECKS.find(c => url.endsWith(c.path))?.expect === 'video' ? WARM_VIDEO_CARD : REAL_MEDIA_CARD
+
 test('THE FAILURE CARD IS CAUGHT, and it answers 200 with a title like any healthy card', () => {
   // This is the whole point. A monitor that checked status, or merely checked that og:title exists,
   // would have called the week Facebook was down a week of perfect health.
@@ -53,10 +98,77 @@ test('BOTH HEALTHY HEAD SHAPES PASS — a media post deliberately carries NO og:
   assert.equal(cardVerdict(REAL_IMAGE_CARD), 'ok')
 })
 
+test('A ROW THAT EXPECTS A VIDEO GOES RED ON A CARD WITH NO PLAYER', () => {
+  /**
+   * THE HOLE THIS CLOSES. Every Discord head this service emits carries the activity link
+   * unconditionally, and cardVerdict counts that link as "something to draw" — so on YouTube the
+   * default assertion was met by the head's own boilerplate and the row could not fail short of the
+   * upstream vanishing — through the three weeks after 553bd2e (2026-08-09) cut the crawler's mux
+   * budget and left first pastes structurally unable to carry a player.
+   *
+   * BOTH PLAYERLESS SHAPES ARE PINNED, and the first is the one that actually happens: renderSpoof
+   * emits og:image only on a post with no media at all, so a degraded video post carries the activity
+   * link and nothing else drawable. The og:image variant is checked too because a future normalizer
+   * change could start emitting one, and "there is a picture" must still not count as "there is a
+   * player" on a row that asked for a player.
+   */
+  assert.equal(cardVerdict(WARM_VIDEO_CARD, 'video'), 'ok')
+  assert.equal(cardVerdict(DEGRADED_VIDEO_CARD, 'video'), 'no-video')
+  assert.equal(cardVerdict(REAL_IMAGE_CARD, 'video'), 'no-video')
+  // Both count as smoke_fail, and the counter is the only thing the cron writes down. `no-video`
+  // exists so the log line and /_smoke can say WHICH half of the service to look at — the same reason
+  // `timeout` is not a second spelling of `threw`.
+  assert.equal(smokeOutcome(cardVerdict(DEGRADED_VIDEO_CARD, 'video')), 'smoke_fail')
+
+  // AND THE FAILURE CARD STILL WINS. "The upstream is gone" is a different repair from "the mux is
+  // cold", and an expectation must not relabel the first as the second.
+  assert.equal(cardVerdict(FAILURE_CARD, 'video'), 'failure-card')
+  assert.equal(cardVerdict('', 'video'), 'no-card')
+
+  /**
+   * THE CLOSING QUOTE IN THE og:video MATCH IS LOAD-BEARING, and the code says so — but nothing held
+   * it, because every fixture carrying `og:video:width` also carries a bare `og:video`. Dropping the
+   * quote left the whole suite green. This is the shape that can tell them apart: the satellite tags
+   * with no player tag between them. It cannot arise from spoofVideoTags, which emits the family
+   * together, and that is the point — a regex loose enough to pass this is loose enough to report a
+   * player on any head whose og:video was dropped while its siblings survived a future edit.
+   */
+  const SATELLITES_ONLY = '<html><head>'
+    + '<meta property="og:title" content="jawed (@jawed)"/>'
+    + '<meta property="og:video:type" content="video/mp4"/>'
+    + '<meta property="og:video:width" content="0"/>'
+    + '<link rel="alternate" type="application/activity+json" href="https://mbedfx.app/u/1"/>'
+    + '</head><body></body></html>'
+  assert.equal(cardVerdict(SATELLITES_ONLY, 'video'), 'no-video',
+    'og:video:width is not a player')
+  assert.equal(cardVerdict(SATELLITES_ONLY), 'ok', 'and without an expectation it is judged as before')
+})
+
+test('THE EXPECTATION IS OPT-IN, and every row without one is judged exactly as before', () => {
+  /**
+   * THE CONSTRAINT THAT MATTERS AS MUCH AS THE CHECK ITSELF. og:video must never become universal:
+   * the plain OpenGraph head carries og:image and no video, several platforms are image-only, and the
+   * Bluesky profile row is a profile. Eleven of the seventeen rows name no video in their own notes,
+   * so requiring it everywhere would turn most of the list red — the "alarm nobody believes" failure
+   * that keeps Streamable out of it entirely.
+   */
+  assert.equal(cardVerdict(DEGRADED_VIDEO_CARD), 'ok', 'no expectation, no video needed')
+  assert.equal(cardVerdict(REAL_MEDIA_CARD, undefined), 'ok')
+  assert.equal(cardVerdict(REAL_IMAGE_CARD), 'ok')
+
+  const strict = SMOKE_CHECKS.filter(c => c.expect)
+  assert.deepEqual(strict.map(c => c.name), ['yt'],
+    'exactly one row demands a player. Adding another is a decision to defend in SmokeExpect, not a '
+    + 'tidy-up: it must be a row whose media is durably warm, or the monitor starts crying on a timer.')
+  for (const c of strict) assert.equal(c.expect, 'video', 'the only expectation this file knows')
+})
+
 test('cardVerdict IS TOTAL OVER JUNK — a monitor must not throw on a bad answer', () => {
   // It runs unattended on a timer. A throw here is an alert nobody receives.
   for (const bad of [null, undefined, 42, '', {}, [], '<html></html>', '<!doctype html>']) {
     assert.equal(cardVerdict(bad), 'no-card', `${JSON.stringify(bad)} is not a card`)
+    // The strict row runs on the same timer and gets the same junk when an upstream misbehaves.
+    assert.equal(cardVerdict(bad, 'video'), 'no-card', `${JSON.stringify(bad)} is not a card`)
   }
 })
 
@@ -66,7 +178,7 @@ test('EVERY CHECK IS RUN AND EACH VERDICT IS REPORTED, so one broken platform ca
   const seen = []
   const render = async (u) => {
     seen.push(u)
-    return new Response(u.includes('/WYFF4/') ? FAILURE_CARD : REAL_MEDIA_CARD, { status: 200 })
+    return new Response(u.includes('/WYFF4/') ? FAILURE_CARD : healthyCard(u), { status: 200 })
   }
   return runSmoke('https://mbedfx.app', render).then(results => {
     assert.equal(results.length, SMOKE_CHECKS.length, 'every check ran')
@@ -87,6 +199,22 @@ test('A RENDER THAT THROWS IS A FAILED CHECK, not a dead run', () => {
     assert.equal(calls, SMOKE_CHECKS.length, 'it kept going after the first throw')
     assert.ok(results.every(r => r.verdict === 'threw'))
     assert.ok(results.every(r => smokeOutcome(r.verdict) === 'smoke_fail'))
+  })
+})
+
+test('runSmoke CARRIES EACH ROW\'S EXPECTATION, so the strict row is the only one that goes red', () => {
+  /**
+   * THE WIRING, END TO END, because a per-row expectation that cardVerdict honours and runSmoke never
+   * passes is a check that only exists in its own unit test. The head below is the SAME playerless
+   * shape for every row — the one a cold mux produces — and exactly one row must report it.
+   */
+  const render = async () => new Response(DEGRADED_VIDEO_CARD, { status: 200 })
+  return runSmoke('https://mbedfx.app', render).then(results => {
+    const yt = results.find(r => r.name === 'yt')
+    assert.equal(yt.verdict, 'no-video', 'the row that asked for a player is told it did not get one')
+    assert.equal(smokeOutcome(yt.verdict), 'smoke_fail')
+    assert.ok(results.filter(r => r.name !== 'yt').every(r => r.verdict === 'ok'),
+      'and no other row is made stricter by it — this head is a perfectly healthy media post for them')
   })
 })
 
@@ -191,7 +319,7 @@ test('A CHECK THAT NEVER ANSWERS IS A TIMEOUT, AND THE CHECKS BEHIND IT STILL RU
   const render = async (u) => {
     seen.push(u)
     if (u.includes('/WYFF4/')) return new Promise(() => {})
-    return new Response(REAL_MEDIA_CARD, { status: 200 })
+    return new Response(healthyCard(u), { status: 200 })
   }
   return runSmoke('https://mbedfx.app', render, 20).then(results => {
     assert.equal(seen.length, SMOKE_CHECKS.length, 'the hung check did not eat the ones behind it')
@@ -215,7 +343,7 @@ test('A RENDER THAT REJECTS AFTER LOSING THE RACE IS NOT AN UNHANDLED REJECTION'
   process.on('unhandledRejection', onUnhandled)
   const render = async (u) => u.includes('/WYFF4/')
     ? new Promise((_, reject) => setTimeout(() => reject(new Error('late-reset')), 15))
-    : new Response(REAL_MEDIA_CARD, { status: 200 })
+    : new Response(healthyCard(u), { status: 200 })
   return runSmoke('https://mbedfx.app', render, 5)
     .then(results => new Promise(done => setTimeout(() => done(results), 60)))
     .then(results => {
@@ -243,7 +371,7 @@ test('EVERY RESULT CARRIES ITS OWN ELAPSED TIME, so the budget can be re-measure
   const SLOW = SMOKE_CHECKS[1].path
   const render = async url => {
     if (url.endsWith(SLOW)) await new Promise(r => setTimeout(r, 30))
-    return new Response(REAL_IMAGE_CARD, { status: 200 })
+    return new Response(healthyCard(url), { status: 200 })
   }
   return runSmoke('https://mbedfx.app', render).then(results => {
     assert.ok(results.every(r => Number.isFinite(r.ms) && r.ms >= 0), 'every check reports a duration')

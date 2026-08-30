@@ -100,7 +100,7 @@ A bare `dai.ly` or `redd.it` code names no site on its own, and the converter pa
 
 ## Features
 
-The container remuxes the stream into one progressive faststart MP4, cached in R2 and served with `accept-ranges: bytes` for Discord's player to seek on. A cold video draws the cover image first, and the card is never response-cached, so a **later paste** of the same link plays. The message that was already posted does not heal: Discord caches an embed permanently in the message it was pasted into, and per-URL for about 30 minutes on top. For the reader who pasted first, the first paste is the only paste — which is why the mux is given a Durable Object alarm and 15 minutes rather than `waitUntil`'s 30 seconds, and why `card_degraded / ok` is the number that measures this. [container/README.md](container/README.md) has the resolver and its ceilings.
+The container remuxes the stream into one progressive faststart MP4, cached in R2 and served with `accept-ranges: bytes` for Discord's player to seek on. A cold video usually draws the cover image first, and a card that is still waiting is never response-cached, so a **later paste** of the same link plays. The message that was already posted does not heal: Discord caches an embed permanently in the message it was pasted into, and per-URL for about 30 minutes on top. For the reader who pasted first, the first paste is the only paste — which is why the mux is given a Durable Object alarm and 15 minutes rather than `waitUntil`'s 30 seconds, why YouTube's crawler callback is allowed four seconds to catch a mux that finishes fast, and why `card_degraded / ok` is the number that measures both. A card that is *final* rather than incomplete — too long to mux, or a live broadcast with no finished file behind it — does cache, deliberately. [container/README.md](container/README.md) has the resolver and its ceilings.
 
 Posts that can't be read get a card naming the reason: 🔒 private or friends-only, 🔞 age-restricted, or deleted and never existed. Where the platform gives no reason the card lists the likely ones and picks none. A path two sites both claim is not guessed either ([docs/API.md](docs/API.md#failures) has the codes; `src/render/chooser.ts` draws the human version).
 
@@ -141,7 +141,7 @@ Branch on `ok` and `error.code`, never on the HTTP status. The contract is [docs
 
 - Every platform here is read through an endpoint nobody documents, and those change without warning. When one breaks, the card says so rather than showing a wrong card.
 - An age-gated Instagram post needs an account to read. Nothing clever at the edge gets around that.
-- Videos over 25 minutes come out as thumbnails. A mux that long doesn't fit inside a request deadline.
+- Videos over 25 minutes come out as thumbnails. Past that the download stops being worth a container slot, so the mux is never started.
 - Translation is machine translation. It gets things wrong, and the original sits underneath it.
 - There is no uptime guarantee. This is a Cloudflare Worker on a hobby budget. It will probably be fine.
 
@@ -172,11 +172,11 @@ FxEmbed goes deeper on Twitter than mbedfx goes on any single site. The remux is
 
 ## Official domains
 
-Only these two hosts run mbedfx:
+Only these three hosts run mbedfx:
 
-`mbedfx.app` · `megapenispoopenfarten.sex`
+`mbedfx.app` · `megapenispoopenfarten.sex` · `forsen.sex`
 
-`d.` works on both. A wildcard DNS record covers exactly one label; a deeper name such as `d.staging.mbedfx.app` would need a record of its own. Anything else using the name is not mbedfx.
+`d.` works on all three. A wildcard DNS record covers exactly one label; a deeper name such as `d.staging.mbedfx.app` would need a record of its own. Anything else using the name is not mbedfx.
 
 ### Optional configuration
 
@@ -188,7 +188,7 @@ Every setting below has a working default, and a fresh deploy needs none of them
 
 `IG_GRAPHQL_DOC_ID` pins Instagram's shortcode GraphQL query, which Meta rotates. When the pinned id dies, the older recoveries carry the card and the `copyright_gql` counter drops to zero. Re-pinning it is a config change and needs no release.
 
-`REDDIT_CLIENT_ID` / `REDDIT_CLIENT_SECRET` turn on Reddit's OAuth fallback. Both must be set for it to run at all (`src/platforms/reddit/fetch.ts:128`), and it runs only after the credential-free embed read comes back empty.
+`REDDIT_CLIENT_ID` / `REDDIT_CLIENT_SECRET` turn on Reddit's OAuth fallback. Both must be set for it to run at all (`src/platforms/reddit/fetch.ts:129`), and it runs only after the credential-free embed read comes back empty.
 
 `TRANSLATE_GOOGLE=off` leaves Workers AI serving translation on its own.
 
@@ -209,7 +209,7 @@ Both heads need the same fix, or half the posts stay broken. For a post with med
 - `src/translate.ts` holds detection, translation and the marker.
 - `public/index.html` is the converter page: one file, no framework.
 
-[CONTRIBUTING.md](.github/CONTRIBUTING.md) has the rest of the layout, the commands, the test count and why `npm run deploy` refuses on purpose. [docs/SELF-HOSTING.md](docs/SELF-HOSTING.md) walks `handle()` at `src/worker.ts:3358`, the eight Cloudflare surfaces behind it and `container/server.py`.
+[CONTRIBUTING.md](.github/CONTRIBUTING.md) has the rest of the layout, the commands, the test count and why `npm run deploy` refuses on purpose. [docs/SELF-HOSTING.md](docs/SELF-HOSTING.md) walks `handle()` in `src/worker.ts`, the eight Cloudflare surfaces behind it and `container/server.py`.
 
 ## Contributing
 

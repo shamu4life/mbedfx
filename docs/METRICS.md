@@ -1,12 +1,25 @@
 # Reading the counters
 
-`src/worker.ts` calls `count()` from 49 sites into the `mbedfx_counters` Analytics Engine dataset.
-Nothing in the Worker reads it back. The queries below do, run by hand from a laptop or a cron box
-against Cloudflare's account-level SQL API.
+`src/worker.ts` calls `count()` from 62 sites and `countMux()` from 3 more, into the
+`mbedfx_counters` Analytics Engine dataset. Nothing in the Worker reads it back. The queries below
+do, run by hand from a laptop or a cron box against Cloudflare's account-level SQL API. (This said
+49 until 2026-08-29 and had for some time; `grep -c 'count(env' src/worker.ts` is the check.)
 
-None of it has been run against the live account: every query comes from this repo's source and from
-Cloudflare's documentation, fetched 2026-08-03, those pages reading `Last updated Apr 23, 2026`.
-Correct one when it comes back wrong.
+These were written from this repo's source and from Cloudflare's documentation (fetched 2026-08-03,
+those pages reading `Last updated Apr 23, 2026`) and were first run against the live account on
+2026-08-29. Three things that page could not tell us, learned that day and now folded in above and
+below:
+
+- the table is `mbedfx_counters`, matching the binding in `wrangler.jsonc`. Every query here said
+  `FROM mbedfx` and errored;
+- a backslash in a string literal is rejected outright (HTTP 422), so `LIKE 'mux\_%'` never ran;
+- **the data is sampled.** `_sample_interval` took values from 1 to 12 in the first window read, so
+  a bare `COUNT()` under-reports badly. Every query below weights by it, and a ratio of two such
+  sums is why sampling largely cancels.
+
+`toDateTime('YYYY-MM-DD HH:MM:SS')` pins an absolute window; `NOW() - INTERVAL 'N' HOUR`,
+`toStartOfHour()` and `quantileExactWeighted()` all work. `toStartOfInterval(timestamp, INTERVAL 30
+MINUTE)` does not. Correct a query here when it comes back wrong.
 
 ---
 
@@ -27,7 +40,7 @@ nowhere.
   Worker's dashboard page. No per-request detail, three months of history, no configuration, no
   price.
 - **Analytics Engine** (stored, aggregate, on): the `mbedfx_counters` dataset `src/analytics.ts`
-  writes into (`wrangler.jsonc:178`). Own config key, own write and read APIs, three months of
+  writes into (`wrangler.jsonc:262`). Own config key, own write and read APIs, three months of
   retention, out of `observability.enabled`'s reach.
 - **Workers Logpush** (export, off, own flag): the same trace events shipped off Cloudflare to R2, S3
   or a log vendor.
@@ -45,9 +58,9 @@ Logs under Observability, real-time logs under Logs → Live. Analytics Engine h
 2026-08-04 (`398f971`). Measured against this account that day, a stored invocation log carries the
 full request URL including query string, the client IP (`cf-connecting-ip`), the verbatim user agent,
 the referer, and Cloudflare's geolocation block (city, latitude/longitude, ASN, timezone). On this
-Worker that url is the post somebody pasted, kept seven days. `src/analytics.ts:207` refuses to put
-any of it in a counter and records the precedent: TwitFix shut down in 2022 over a public log of
-processed urls, with zero legal contact.
+Worker that url is the post somebody pasted, kept seven days. `count()` in `src/analytics.ts`
+refuses to put any of it in a counter and records the precedent: TwitFix shut down in 2022 over a
+public log of processed urls, with zero legal contact.
 
 In exchange, a request that already failed cannot be searched for after the fact. The five
 `console.error` calls still run, and nothing stores them. Reproduce the problem with
@@ -73,14 +86,14 @@ and survives Cloudflare moving its field selection.
 ## What the Worker writes
 
 ```ts
-// src/analytics.ts:225
+// count(), src/analytics.ts
 env.AE?.writeDataPoint({ blobs: [platform, outcome, client], doubles: [1] })
 ```
 
 | Column | Holds | Values |
 |---|---|---|
 | `blob1` | platform | `x` `tt` `ig` `th` `rd` `bs` `yt` `fb` `dm` `st` `im` `tw` `lm` `pn` `ms` `mk` `pt`, or `none` |
-| `blob2` | outcome | one of the values in the `Outcome2` union (`src/analytics.ts:54`) |
+| `blob2` | outcome | one of the values in the `Outcome2` union (`src/analytics.ts`) |
 | `blob3` | client class | `discord` `telegram` `other-bot` `human`, or `none` on a `mux_*` row (`card_degraded` carries a real one — see below) |
 | `double1` | the literal `1` | always |
 | `double2` | elapsed milliseconds | `mux_*` rows only; `0` on every other row |
@@ -88,15 +101,18 @@ env.AE?.writeDataPoint({ blobs: [platform, outcome, client], doubles: [1] })
 
 Columns are 1-based: the first `blobs` element is `blob1`, and there is no `blob0`. `writeDataPoint`
 passes no `indexes` array, leaving no `index1` to filter or group on; `blob1`/`blob2`/`blob3` are the
-only dimensions. No urls, post ids, IPs or verbatim user agents (`src/analytics.ts:207`). Adding a url
-column breaks what that constraint protects.
+only dimensions. No urls, post ids, IPs or verbatim user agents (`count()`, `src/analytics.ts`).
+Adding a url column breaks what that constraint protects.
 
 `double1` is always 1. **`double2` is the one exception to "there are no durations here"**, added
 2026-08-23 with the `mux_*` outcomes: it carries the elapsed milliseconds of a video mux. Before it,
 nothing recorded how long a mux took even when it SUCCEEDED, so a report that a ten-minute video took
 ten minutes to warm could only be answered with arithmetic. Every non-`mux_*` row leaves it unset,
-which reads as `0` — so filter on `blob2 LIKE 'mux\_%'` before averaging it, or the zeros will drag
-every average to nothing.
+which reads as `0` — so filter to the mux rows before averaging it, or the zeros will drag every
+average to nothing. **Not with `LIKE 'mux\_%'`**: Analytics Engine SQL rejects a backslash in a
+string literal outright (HTTP 422, `backslash and single-quote characters in strings are
+unsupported`), so the escape that makes the underscore literal is not available. Enumerate the eight
+outcomes instead, as the query below does.
 
 ### The mux rows
 
@@ -114,10 +130,64 @@ rather than left as one number that points at the wrong system.
 SELECT blob1 AS platform, blob2 AS outcome,
        SUM(_sample_interval) AS n,
        SUM(_sample_interval * double2) / SUM(_sample_interval) AS avg_ms
-FROM mbedfx
-WHERE timestamp > NOW() - INTERVAL '24' HOUR AND blob2 LIKE 'mux\_%'
+FROM mbedfx_counters
+WHERE timestamp > NOW() - INTERVAL '24' HOUR
+  AND blob2 IN ('mux_ok','mux_gate','mux_timeout','mux_empty','mux_pool','mux_badsource','mux_error','mux_refused')
 GROUP BY platform, outcome ORDER BY platform, n DESC
 ```
+
+An average hides the shape here, and the shape is what decides whether a crawler budget can ever be
+met. Use `quantileExactWeighted`, which works:
+
+```sql
+-- How long a SUCCESSFUL YouTube mux takes, weighted for sampling. Compare against the budget.
+SELECT quantileExactWeighted(0.10)(double2, _sample_interval) AS p10,
+       quantileExactWeighted(0.50)(double2, _sample_interval) AS p50,
+       quantileExactWeighted(0.90)(double2, _sample_interval) AS p90,
+       MIN(double2) AS fastest, SUM(_sample_interval) AS n
+FROM mbedfx_counters
+WHERE blob1 = 'yt' AND blob2 = 'mux_ok'
+```
+
+Read 2026-08-29 over the counter's whole history (n=139): p10 6922 ms, p50 18219 ms, p90 41254 ms,
+fastest 4200 ms. **Zero of the 139 finished inside `MUX_WAIT_BOT_MS` (1500 ms), which was the crawler
+budget for three weeks.** That is the measurement `YT_MUX_BOT_MS` was sized against, and it is a
+better instrument than the `card_degraded` ratio below because it does not care about the traffic
+mix. Full working in `docs/research/2026-08-29-the-1500ms-crawler-cut.md`.
+
+### When `mux_gate` rises on `yt`: `/_clients`
+
+The counters say WHICH HALF of the pipeline failed. They cannot say which player client did, and on
+YouTube that is usually the question. `/_clients` answers it, and it is the only instrument here that
+measures from the egress that matters: every earlier argument in this project about `player_client`
+was settled on a laptop, and a laptop is a residential IP.
+
+```sh
+curl -s 'https://mbedfx.app/_clients' | jq '{ok, ms, ytdlp, serving, clients}'
+```
+
+It takes no input — the video id and the client list are constants in `container/server.py`, the same
+property that makes `/_smoke` comparable run to run. It rides the existing authenticated `/resolve`,
+so it opens no new container surface, and its range fetch goes through the same `_safe_url` SSRF gate
+as everything else the container fetches. It runs on a fixed resolver slot (`client-probe`) so two runs
+are comparable rather than landing on whichever instance was warm.
+
+**It asserts on BYTES, not on a format count**, and that distinction is the whole reason it works. Each
+client extracts, and then the chosen format url is range-fetched. A client that lists formats and is
+then refused by googlevideo reports `gvs: "http-403"` rather than looking healthy. The first run caught
+exactly that: `android_vr` reported `extracted: true, formats: 1` and served zero bytes.
+
+It is HAND-RUN, not scheduled, and deliberately so: it costs a real extraction per client on a shared
+container slot. Reach for it when the mux counters say `mux_gate` on `yt` and `/_smoke` says fine —
+which is the shape of every YouTube incident this project has had.
+
+It degrades rather than crashing: **503** when there is no container binding, **502** when the container
+is unreachable or answers non-ok. It never 500s, because a diagnostic that crashes tells an operator
+less than one that says it could not reach the thing it was asked about.
+
+Its first run, on 2026-08-28, is why the PO token question is closed. Five of six clients served bytes
+from Cloudflare egress with no token at all, including `tv_simply` and `mweb`, the two yt-dlp's own PO
+Token Guide lists as REQUIRING one. See `CLAUDE.md`.
 
 ### Reading `yt_innertube_ok` / `yt_innertube_fail`
 
@@ -126,14 +196,19 @@ from the media container (see `src/platforms/youtube/innertube.ts`). Every timin
 was taken residentially — nobody can measure what that endpoint does from a Cloudflare Worker's egress
 without shipping it, because Access fronts the preview hosts and `npm run deploy` refuses on purpose.
 
-So the change was built to be indistinguishable from never having shipped if it fails, and **this pair
+It has shipped and it has been measured, so this is no longer a pending experiment: on ten ids the
+service had never seen, WEB alone answered 5 of 10, and hits and misses both returned near 1700 ms,
+which is why MWEB was added as a second client rather than the timeout being raised. Treat 40 to 50%
+egress refusal as the number to compare against, and read a sustained move away from it as news.
+
+The change was built to be indistinguishable from never having shipped if it fails, and **this pair
 is how you find out which happened.** Read it as a ratio, per the house rule for `translate_*` and
 `smoke_*`:
 
 ```sql
 SELECT SUM(IF(blob2 = 'yt_innertube_ok', _sample_interval, 0)) AS ok,
        SUM(IF(blob2 = 'yt_innertube_fail', _sample_interval, 0)) AS fail
-FROM mbedfx
+FROM mbedfx_counters
 WHERE timestamp > NOW() - INTERVAL '1' HOUR AND blob1 = 'yt'
 ```
 
@@ -160,20 +235,46 @@ It is **not** a `mux_*` row, on purpose. It carries a real `blob3` — unlike a 
 by exactly one render for exactly one audience — and it leaves `double2` unset, so a `mux_`-prefixed
 name would have falsified both columns and silently poisoned the average in the query above.
 
-The over-ceiling rewrite (a video past `MUX_MAX_SECONDS`) is deliberately **excluded**. It never calls
-the container and can never succeed, so counting it would put a permanent floor under the ratio made
-entirely of videos that are too long by design.
+Two rewrites are deliberately **excluded**: a video past `MUX_MAX_SECONDS`, and a live or scheduled
+broadcast (added 2026-08-29). Neither ever calls the container and neither can ever succeed, so
+counting them would put a permanent floor under the ratio made entirely of videos that are too long,
+and of news channels that stream around the clock.
 
 ```sql
 -- The first-paste failure rate, per platform. This is the number the mux alarm has to move.
 SELECT blob1 AS platform,
        SUM(IF(blob2 = 'card_degraded', _sample_interval, 0)) AS degraded,
        SUM(IF(blob2 = 'ok', _sample_interval, 0)) AS ok
-FROM mbedfx
+FROM mbedfx_counters
 WHERE timestamp > NOW() - INTERVAL '24' HOUR
   AND blob3 = 'discord' AND blob2 IN ('card_degraded', 'ok')
 GROUP BY platform ORDER BY degraded DESC
 ```
+
+**Read 2026-08-29, the first time anyone ran it.** All time, `blob1='yt'`, `blob3='discord'`: 336
+degraded against 583 ok. Every other platform together contributes 5 degrades. Three things about
+that number before it is quoted anywhere.
+
+*The smoke cron is in the `ok` denominator.* `SMOKE_CLIENT` is `'other-bot'` so that a monitor never
+dilutes a reader, and that covers only the outer `smoke_ok`/`smoke_fail` pair. The inner render is
+driven with a Discordbot user-agent, so every tick fires `ok` with `blob3='discord'`. At two ticks an
+hour that was roughly 38 of the 144 `ok` rows in one measured day, and the YouTube check runs off a
+warm R2 object so it can never contribute a degrade. The published ratio is biased downward by it,
+and by more when traffic is thin. Either give the inner render a client class of its own or subtract
+the cron's known rate before quoting a ratio.
+
+*It now has two interventions to separate*, the MuxRunner alarm (2026-08-23) and the raised YouTube
+crawler budget (2026-08-29). They aim at different pastes: the alarm heals a LATER one, the budget
+aims at the FIRST. The ratio moves for either, so it cannot attribute on its own. Cut by day and read
+it beside the deploy dates.
+
+*It cannot see the failure a raised budget risks.* A degrade is a card we rendered; an abandon is
+Discord hanging up before we answer. Only the first is countable here, so a budget that loses more
+cards than it wins would show up as an improvement. Pair it with client disconnects on the activity
+route.
+
+The distribution that actually decides whether a budget can win is the `mux_*` one above, not this
+ratio. `docs/research/2026-08-29-the-1500ms-crawler-cut.md` has both, with the queries.
 
 ---
 
@@ -243,7 +344,7 @@ agreement can stop holding without the written data changing.
 migrate rows. As of 2026-08-03 `mbedfx_counters` holds at most about two days of data, so every
 `INTERVAL '7' DAY` example below returns a partial window that looks like a traffic collapse.
 
-`wrangler.jsonc:176` records that the historical counters "stay in `fxeverything_counters` and are
+`wrangler.jsonc:260` records that the historical counters "stay in `fxeverything_counters` and are
 still queryable there". Neither table has been confirmed to exist; `SHOW TABLES` settles both in one
 call. The Worker was renamed in the same commit, and the repo has no evidence the old script ever
 deployed and wrote a point. Retention is three months either way: anything before 2026-05-03 is gone
@@ -256,15 +357,16 @@ exact or lazy and what a query reaching past the window returns. Don't convert i
 ### Stacked counters
 
 `fetch_fail` is a superset, not a disjoint bucket. Every gate counter and every `assert_fail` is
-counted on top of it by design (`src/worker.ts:204`); one age-gated Instagram request can emit four
-points, `assert_fail`, `age_restricted`, `pool_unused` and `fetch_fail`. A total across `blob2` is
-therefore not a request count. Compare named pairs.
+counted on top of it by design (the `Outcome2` docstring, `src/analytics.ts`); one age-gated
+Instagram request can emit four points, `assert_fail`, `age_restricted`, `pool_unused` and
+`fetch_fail`. A total across `blob2` is therefore not a request count. Compare named pairs.
 
-Two counting rates also mix. Counters inside `liveFetchPost` (`src/worker.ts:209`) fire once per
+Two counting rates also mix. Counters inside `liveFetchPost` (`src/worker.ts`) fire once per
 post-cache miss; the route-level ones (`ok`, `media_hit`/`media_miss`, `api_hit`/`api_miss`,
 `fetch_fail`, `ambiguous`, `notfound`, `api_bad_id`) fire once per request, spread across
-`renderPostRoute`, `serveDirectMedia` and `handle()` from `src/worker.ts:3222` through `:4220`.
-A ratio across the two compares unlike things.
+`renderPostRoute`, `serveDirectMedia` and `handle()`. A ratio across the two compares unlike things.
+(Those three used to be cited by line range. `src/worker.ts` gained 460 lines on 2026-08-29 and the
+range stopped pointing at any of them, so this file cites `src/` symbols by name throughout.)
 
 ---
 
@@ -290,7 +392,7 @@ Most mean nothing as an absolute number, and several mislead alone.
 | `fullpage_recovered` | The primary surface failed but the full page carried the whole post. On `ig`, every count is a post that would previously have shown a false 🔒. | `private` |
 | `plugin_recovered` / `caption_recovered` | The second and third Facebook post surfaces. `plugin_recovered` is Meta's embed fragment, which measured 33 of 35 sampled post urls on 2026-08-12 and carries every `/photo/?fbid=` url the page surface answers with a login wall. `caption_recovered` is the narrow last resort (a page with a byline and a caption and no `og:image`), answers 2 of those 35 and fires on 1 of them, because the plugin reaches the other first and returns before this read runs. Expect it small. | each other, and `fb`/`ok` |
 | `translated` / `translate_fallback` | Which engine served a translation, Google or Workers AI as the fallback. Only the ratio means anything. | each other |
-| `smoke_ok` / `smoke_fail` | The scheduled self-check: did a known post on this platform still render a real card? Read per platform. | each other |
+| `smoke_ok` / `smoke_fail` | The scheduled self-check: did a known post on this platform still render a real card — and, on `yt` alone, one with a player in it? Read per platform. | each other |
 | `translate_pending` | A translation that lost its deadline race. The card went out untranslated **and uncached**, so every unfurl of that post re-runs the full render until the R2 entry lands. | `translated` + `translate_fallback` |
 
 ### `pool_unused` by platform
@@ -298,8 +400,8 @@ Most mean nothing as an absolute number, and several mislead alone.
 | `blob1` | What it means |
 |---|---|
 | `x` | Expected. The secret can be filled today; the Worker-side call that would spend it is a later phase. This counts the staging gap. |
-| `yt` | A real fault (`src/worker.ts:601`). The jar went with the container extract and the age wall held anyway: the accounts are signed out, rate-limited or flagged, and need rotating. |
-| `ig` | Neither (`src/worker.ts:351`). `IG_ACCOUNTS` is spent in the container, not on the page fetch that reads the gate. A rise means the credential is not reaching the request that needs it, and says nothing about whether the accounts are alive. |
+| `yt` | A real fault (the YouTube arm of `liveFetchPost`, `src/worker.ts`). The jar went with the container extract and the age wall held anyway: the accounts are signed out, rate-limited or flagged, and need rotating. |
+| `ig` | Neither (the Instagram arm of `liveFetchPost`, `src/worker.ts`). `IG_ACCOUNTS` is spent in the container, not on the page fetch that reads the gate. A rise means the credential is not reaching the request that needs it, and says nothing about whether the accounts are alive. |
 
 ### Zeros that do not mean health
 
@@ -309,30 +411,32 @@ Most mean nothing as an absolute number, and several mislead alone.
   `auth_token` and `ct0` (`src/credentials.ts:146`). An unparseable secret counts as an empty pool.
 - `copyright_gql` depends on a `doc_id` Meta rotates.
 - Every counter is zero if the `AE` binding is absent from the deployed bundle.
-  `env.AE?.writeDataPoint` is optional-chained (`src/analytics.ts:225`): a deploy without it writes
-  nothing and neither throws nor logs, and "zero rows" means "no traffic" or "no binding".
-  `wrangler.jsonc:178` declares it, prod can diverge from `main` here, and the deployed bundle has
+  `env.AE?.writeDataPoint` is optional-chained inside `count()` and `countMux()`
+  (`src/analytics.ts`): a deploy without it writes nothing and neither throws nor logs, and
+  "zero rows" means "no traffic" or "no binding".
+  `wrangler.jsonc:262` declares it, prod can diverge from `main` here, and the deployed bundle has
   not been checked.
 
 ### Known defects in the write shape
 
 No query works around either of these.
 
-- `media_hit`/`media_miss` carry two meanings. On `/_media/` (`src/worker.ts:3399`), cache-hit vs
-  upstream-fetch. On the direct-media `d.` host, matched by `DIRECT_MEDIA_HOST` at
-  `src/worker.ts:3306`, `media_miss` instead means the post has no usable media at all
-  (`src/worker.ts:3346`), the request answering 404 `no media: this post has nothing to serve`. Both
-  write identical blobs: no query separates them, and `d.` host traffic contaminates the
-  fetch-amplification ratio with nothing in the data to mark it.
-- `translated`/`translate_fallback`/`translate_pending` all say `discord`: `withTranslated` takes no client class and
-  `src/worker.ts:2755` passes the literal `'discord'`. Three callers reach it. Two are the seams
-  Discord really does read, where the label is accidentally true: `renderPostRoute`
-  (`src/worker.ts:3268`) and the activity callback (`:3519`, via `translationFor` at `:2686`). The
-  third is `describeTarget` (`:2936`), serving the converter preview (`:3723`) and `/_api/v1`
-  (`:3911`), where it is a lie. Never split the translation ratio by client.
+- `media_hit`/`media_miss` carry two meanings. On the `/_media/` arm of `handle()`, cache-hit vs
+  upstream-fetch. On the direct-media `d.` host, matched by `DIRECT_MEDIA_HOST`, `media_miss` instead
+  means the post has no usable media at all, the request answering 404 `no media: this post has
+  nothing to serve` inside `serveDirectMedia`. Both write identical blobs: no query separates them,
+  and `d.` host traffic contaminates the fetch-amplification ratio with nothing in the data to mark
+  it.
+- `translated`/`translate_fallback`/`translate_pending` all say `discord`: `withTranslated` takes no
+  client class and passes the literal `'discord'` to `count()` itself. Three callers reach it. Two are
+  the seams Discord really does read, where the label is accidentally true: `renderPostRoute`, and
+  the activity arm of `handle()` by way of `translationFor`. The third is `describeTarget`, serving
+  the converter preview and `/_api/v1`, where it is a lie. Never split the translation ratio by
+  client.
 
-`src/analytics.ts:36` still calls `fullpage_recovered` Instagram-only. It fires for Facebook too
-(`src/worker.ts:655`, `:709`), and a query filtered to `blob1='ig'` under-reports it.
+The `Outcome2` docstring in `src/analytics.ts` still calls `fullpage_recovered` Instagram-only. It
+fires for Facebook too, from two sites in the Facebook arm of `liveFetchPost` (`src/worker.ts`), and
+a query filtered to `blob1='ig'` under-reports it.
 
 ---
 
@@ -373,13 +477,18 @@ A cron runs every thirty minutes and renders a list of known posts through this 
 then counts whether a real card came back. `src/smoke.ts` holds the list and the assertion; `/_smoke`
 runs the same checks on demand and answers JSON.
 
-Sixteen checks across fifteen of the seventeen platforms, as of 2026-08-12. It was six for the first
+Seventeen checks across sixteen of the seventeen platforms, as of 2026-08-29. It was six for the first
 day, which left eleven platforms with no detector at all, the same position Facebook was in, and
-nobody would have known which eleven without rendering all seventeen by hand. Two platforms are
-deliberately unchecked and say so in `SMOKE_UNCHECKED`: Dailymotion and Streamable return the failure
-card on a COLD first render (measured 2026-08-12), and a cron is always cold, so a row for either
-would alarm most ticks while the platform works. A platform that is neither checked nor excused fails
-the test suite.
+nobody would have known which eleven without rendering all seventeen by hand. ONE platform is
+deliberately unchecked, and `SMOKE_UNCHECKED` says why: Streamable returns the failure card on a COLD
+first render (measured 2026-08-12), and `ST_META_TTL_MS` is 1_800_000 ms, EXACTLY the cron interval,
+so a scheduled check finds the meta record freshly expired on essentially every tick and would sit
+permanently on that cold path. A row for it would alarm every half hour while the platform works,
+which teaches its only reader to ignore the one instrument that has to be believed when the Facebook
+row fires. Dailymotion was excluded alongside it until 2026-08-12 on a rationale this repo's own
+constants contradicted (`DM_META_TTL_MS` is 86_400_000, a full day), and is checked now: read its
+note in `src/smoke.ts` before treating a red tick there as an outage, because one cold tick a day is
+the expected rate. A platform that is neither checked nor excused fails the test suite.
 
 It asserts on CONTENT. Every interesting failure on this service answers HTTP 200, whether the failure
 card, Meta's login wall or TikTok's 404 page, so a monitor watching status codes would have reported perfect
@@ -402,6 +511,15 @@ One platform failing while the others pass is either that platform's upstream or
 rotted, and both want a human. Every platform failing at once is this service rather than the
 platforms.
 
+ONE ROW ASKS FOR MORE THAN A CARD. `yt` carries `expect: 'video'` and reports `no-video` when the
+head renders without an `og:video` — a real card, no player. That is neither of the two causes above:
+it is the mux path or the crawler's mux budget, i.e. this service. It exists because every Discord
+head this worker emits carries an activity link unconditionally, so the ordinary assertion was met by
+the head's own boilerplate and the YouTube row could not go red short of YouTube disappearing —
+through the three weeks first pastes were structurally unable to carry a player. Expect one or two
+`no-video` ticks roughly every 60 days from R2's `expire-60d` lifecycle rule sweeping the muxed mp4;
+the MuxRunner alarm re-muxes it and the next tick is green.
+
 `smoke_fail` sitting at zero forever is not automatically good news. It is also what "the cron is not
 running" looks like, and the two are indistinguishable from the counters alone. Check that `smoke_ok`
 is climbing, not merely that `smoke_fail` is flat.
@@ -417,6 +535,25 @@ It runs inside the worker it is checking, so it cannot report that the worker is
 route binding, a failed deploy and a Cloudflare incident are all invisible to it. It is a
 platform-breakage detector, not an uptime monitor, and treating it as the second thing would be a
 worse mistake than not having it.
+
+**IT ALSO CANNOT SEE THE CONTAINER, and this is not theoretical.** On 2026-08-28 the resolver answered
+every request with `501 Unsupported method` for roughly forty minutes — every mux on every platform
+failed — and this ran 17/17 GREEN throughout. Two reasons compound. Most checks never reach the
+container at all, and YouTube's, which used to, now takes its metadata from Innertube in the Worker
+rather than from `yt-dlp` in the container, so the platform most likely to expose a dead resolver
+stopped depending on it. On top of that `cardVerdict` passed any card carrying a title and one thing
+to draw, and a video degraded to its poster still carries both, so a still and a player were the same
+verdict.
+
+Since 2026-08-29 the `yt` row carries `expect: 'video'` and `cardVerdict` answers `no-video` on a
+playerless card (`src/smoke.ts`), which retires the second half of that. It does not retire the
+first. The pinned video's mp4 is durable in R2, and a warm mux is one R2 head, so the row goes green
+whether or not the container is running. The only tick that reaches this image is the one that finds
+the mp4 swept by `expire-60d` — roughly one in sixty days.
+
+So a green `/_smoke` still means the heads render, not that the resolver is alive. `/_clients` is the
+check that reaches the container, and it is the one to run when the counters say mux and this says
+fine.
 
 The check urls are a permanent list of real posts. When one is deleted, that platform fails forever
 until somebody swaps the entry. The counter names the platform, which is the signal to go and look.
@@ -439,7 +576,7 @@ these ever needs a budget of its own.
 The run is SERIAL and stays that way. `/_smoke` reports its own elapsed `ms`, and each check reports
 its own, so the next person to widen the list can read the cost instead of inheriting a number that
 was true once. Each check has a 20s budget; a check that overruns it is reported as `timeout` and
-counted as `smoke_fail`, which bounds a whole run at 16 x 20s = 320s against Cloudflare's 15-minute
+counted as `smoke_fail`, which bounds a whole run at 17 x 20s = 340s against Cloudflare's 15-minute
 ceiling on a scheduled invocation. That bound is not decoration: an individual subrequest has no time
 limit of its own, so without it one hung upstream could consume the invocation and every check behind
 it would go uncounted, which looks exactly like the "cron is not running" case above.
@@ -463,6 +600,13 @@ curl -s 'https://mbedfx.app/_api/v1?url=<the post url>' | jq '{ok, pending, muxi
 `ok:false` names the layer immediately. `pending:true` is the one that matters here: the translation
 lost its race, so the card went out untranslated and uncached, and every unfurl re-runs the whole
 render. Check `translate_pending` against its siblings before concluding anything from one sample.
+
+`muxing:true` is not by itself a fault, and the honest wait behind it is minutes rather than seconds
+(`docs/API.md`, "`muxing` and `pending`"). Ask again after the alarm's first wake at 35 s before
+treating it as one. A `muxing:true` that never clears on repeated asks used to be the signature of a
+live stream, which was dispatched to a container that refuses it on every render; since 2026-08-29
+that case answers `still:true, muxing:false` with a 🔴 note in `text`, so a stuck `muxing:true` on
+YouTube now means something else and is worth chasing.
 
 **2. What does Discord actually receive?**
 
@@ -584,7 +728,8 @@ which is the pool working, or any reading under
 
 ### Is the Instagram copyright recovery still alive
 
-Emitted at `src/worker.ts:439`, `:445` and `:463`.
+Emitted at `src/worker.ts:423` and `:550` (`copyright_gql`), `:558` (`copyright_recovered`) and
+`:576` (`copyright_remux`).
 
 ```sql
 SELECT SUM(_sample_interval * (blob2 = 'copyright_gql')) AS gql,
@@ -630,7 +775,8 @@ shows what `index1` holds when no index is written.
 
 ### Fetch amplification
 
-The ratio the spec's fetch-amplification alert watches, written at `src/worker.ts:3399` and `:3478`.
+The ratio the spec's fetch-amplification alert watches, written by `handle()` on the `/_media/` and
+`/_api/v1` arms and by `serveDirectMedia`.
 
 ```sql
 SELECT SUM(_sample_interval * (blob2 = 'media_hit')) AS media_hit,
@@ -678,8 +824,8 @@ run on your own network. Off the public edge, none of the exposure below applies
 
 The `AE` binding is write-only; reads need the account-level SQL API and a bearer token. Add the
 route and `Env` grows an account-scoped Cloudflare API token, live on the public edge. The same
-token already pulls this data from a laptop, where it is not exposed. `src/analytics.ts:195`
-forbids the addition by name and records the precedent: the last secret-gated endpoint mounted here
+token already pulls this data from a laptop, where it is not exposed. The `Env` docstring
+in `src/analytics.ts` forbids the addition by name and records the precedent: the last secret-gated endpoint mounted here
 fetched a caller-supplied shortcode from the Worker's egress, and was deleted with its module, its
 mount in `worker.ts` and its wrangler secret. Its path stays unspelled in the source; a test fails
 the suite for any comment naming it (`test/pipeline.test.mjs:2621`).

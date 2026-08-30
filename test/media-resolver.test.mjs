@@ -245,7 +245,8 @@ test('BOTH ATTEMPTS FAILING IS STILL A 503, never a 302 to the still', async () 
 // ── MUX TELEMETRY — added 2026-08-23, after a reported "a 10-minute video took nearly ten minutes to
 //    warm" that could only be explained by arithmetic because nothing recorded what happened.
 //
-//    The video half of this service had no counters at all. Our own 180s container wall (504), the
+//    The video half of this service had no counters at all. Our own container wall (504; 180s then,
+//    MUX_PAGE_TIMEOUT = 360s on a {page} mux since 2026-08-29), the
 //    upstream's gate (502 "mux failed"), an empty result (502, same status), a cold container (503)
 //    and a refused store all reached the reader as the identical bodiless 503 no-store and left the
 //    identical unstored console.error behind. These tests pin the distinctions, because a counter
@@ -283,7 +284,8 @@ const muxRows = points => points.filter(p => String(p.blobs?.[1] || '').startsWi
 
 test('EVERY CONTAINER FAILURE GETS ITS OWN NAME — 504 is OURS, 502 is THEIRS, and they are not one number', async () => {
   /**
-   * THE WHOLE POINT. container/server.py answers 504 for its own PROC_TIMEOUT+60 wall and 502 for a
+   * THE WHOLE POINT. container/server.py answers 504 for its own wall — MUX_PAGE_TIMEOUT on a page
+   * mux, PROC_TIMEOUT on the other two subprocesses — and 502 for a
    * non-zero yt-dlp exit, and until now the Worker recorded neither. "Our clock ran out" and "YouTube
    * refused us" are opposite claims about which system to go and look at, and the reported incident
    * cost a night precisely because nothing had ever written down which one it was.
@@ -292,7 +294,7 @@ test('EVERY CONTAINER FAILURE GETS ITS OWN NAME — 504 is OURS, 502 is THEIRS, 
    * usable, so the body — not the status — is what separates mux_gate from mux_empty.
    */
   const cases = [
-    [504, '{"error":"mux timed out"}', 'mux_timeout', 'our own 180s wall'],
+    [504, '{"error":"mux timed out"}', 'mux_timeout', 'our own wall, not the upstream'],
     [502, '{"error":"mux failed"}', 'mux_gate', 'yt-dlp exited non-zero — the upstream refused'],
     [502, '{"error":"empty or oversized result"}', 'mux_empty', 'it ran and produced nothing usable'],
     [503, '', 'mux_pool', 'a cold boot or an exhausted instance pool'],

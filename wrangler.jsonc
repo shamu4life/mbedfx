@@ -160,8 +160,9 @@
   // whole job is to own an ALARM, because an alarm handler gets 15 minutes of wall clock where
   // `ctx.waitUntil` gets 30 seconds (both are Cloudflare's documented limits, and the 30 is shared
   // across every waitUntil in one request). Until 2026-08-23 every mux in this service ran under
-  // waitUntil, so the container's own 180s ceiling and the 1500s of video the duration filter admits
-  // were both unreachable — three ceilings, and only the smallest was ever real. A cancelled attempt
+  // waitUntil, so the container's own page-mux ceiling (180s then, MUX_PAGE_TIMEOUT = 360s since
+  // 2026-08-29) and the 1500s of video the duration filter admits were both unreachable — three
+  // ceilings, and only the smallest was ever real. A cancelled attempt
   // also left nothing behind (the container buffers the whole file, writes to a fresh mkstemp and
   // removes it), so every re-paste of a slow video restarted at byte zero. See src/muxrunner.ts.
   //

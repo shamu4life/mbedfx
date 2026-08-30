@@ -86,6 +86,110 @@ test('A LIVESTREAM\'S ZERO DURATION IS ABSENT, NOT ZERO', () => {
   assert.equal(parseInnertube(raw)?.duration, undefined)
 })
 
+// ── Is there a finished file to mux? (2026-08-29)
+
+/**
+ * THE FOUR BROADCAST STATES, ONE ID EACH, ALL CAPTURED THE SAME DAY. The two fixtures are real
+ * captures trimmed to the subtrees the parser reads, with no value edited; the scheduled body below
+ * is the measured shape written out inline, because it is four fields and a third fixture of a stream
+ * that has since aired would be a fixture nobody can re-capture.
+ *
+ * THE DEFECT ALL FOUR EXIST FOR: a live stream reports `lengthSeconds: '0'`, so settleMux's
+ * over-ceiling arm — the only refusal that existed — saw no duration and dispatched a mux the
+ * container refuses on `!is_live`. Measured on yt:xDWQ3LkccY8: pinned at `muxing: true`, never
+ * cached, every render, forever.
+ */
+test('A LIVE STREAM IS LIVE, AND ITS LENGTH IS STILL NOTHING', () => {
+  const got = parseInnertube(fixture('live'))
+  assert.equal(got.isLive, true, 'yt:xDWQ3LkccY8, Sky News, streaming when captured')
+  assert.equal(got.duration, undefined, "lengthSeconds '0' is unknown, not a zero-second video")
+  assert.ok(got.uploadedAt, 'and the rest of the card is perfectly readable')
+  assert.ok(got.description)
+})
+
+test('AN ENDED STREAM IS AN ORDINARY VOD — isLiveContent IS NOT THE DISCRIMINATOR', () => {
+  /**
+   * The case that decides whether this guard is safe to ship. yt:0cVnt1bUzLI is a NASA broadcast that
+   * ended an hour before it was captured: `isLiveContent: true`, `isLive` absent, and
+   * `liveBroadcastDetails.endTimestamp` set. Keying on `isLiveContent` — the field that looks like the
+   * obvious one — would refuse a mux for every past stream any channel has ever published.
+   */
+  const raw = fixture('endedlive')
+  assert.equal(raw.videoDetails.isLiveContent, true, 'the trap is present in the fixture')
+  const got = parseInnertube(raw)
+  assert.equal(got.isLive, false, 'an ended stream muxes like any other video')
+  assert.equal(got.duration, 3764, 'and it has a real length, which is what the ceiling then judges')
+})
+
+test('A SCHEDULED STREAM COUNTS AS LIVE — it fails the same way, so it is refused the same way', () => {
+  /**
+   * Measured on yt:wEpMzbXi1CM (Sky News "Mornings", captured the day before it aired). It reports
+   * NEITHER `isLive` nor `isLiveNow` — the two fields the obvious implementation reads — so the third
+   * arm is what catches it: a broadcast with no `endTimestamp` and no length. There is no file, so a
+   * dispatched mux downloads nothing and the card spins until the broadcast starts.
+   */
+  const got = parseInnertube({
+    videoDetails: { lengthSeconds: '0', isLiveContent: true, viewCount: '0', shortDescription: 'x' },
+    microformat: {
+      playerMicroformatRenderer: {
+        publishDate: '2026-08-29T02:22:54-07:00',
+        liveBroadcastDetails: { isLiveNow: false, startTimestamp: '2026-08-30T05:00:00+00:00' },
+      },
+    },
+  })
+  assert.equal(got.isLive, true)
+})
+
+test('AN ORDINARY VIDEO ANSWERS FALSE, NOT ABSENT — that is what overrules a stale record', () => {
+  /**
+   * The record keeps `isLive` for 30 days and a stream ends long before that, so the fresh answer has
+   * to be able to say NO. A missing field could not: absent means "this call learned nothing", and
+   * those two must never collapse into one value. See worker.ts's yt arm for the merge.
+   */
+  assert.equal(parseInnertube(fixture('ordinary')).isLive, false)
+  assert.equal(parseInnertube(fixture('agegated')).isLive, false, 'an age wall is not a broadcast')
+})
+
+test('A BODY WITH NO MICROFORMAT ABSTAINS — silence must not read as a fresh negative', () => {
+  /**
+   * THE COLLAPSE THIS PINS, found in review 2026-08-29. The verdict used to answer a confident
+   * `false` for any body carrying a `videoDetails` block, so the three values were only ever three
+   * for a response that happened to include a microformat. Every negative in liveVerdict's measured
+   * table comes OUT of that block — a microformat with no `liveBroadcastDetails` (dQw4w9WgXcQ) or one
+   * with an `endTimestamp` (0cVnt1bUzLI) — and no measured shape answers false from `videoDetails`
+   * alone.
+   *
+   * WHY IT MATTERS RATHER THAN BEING TIDY: a `false` here is the one value allowed to clear a stored
+   * `isLive: true` (worker.ts's yt arm merges `got.isLive ?? warm.isLive`). A client that answers
+   * without a microformat would therefore un-mark a stream that is still running and re-arm the
+   * pinned-`muxing: true` defect. INNERTUBE_CLIENTS asks MWEB second and its shape has not been
+   * measured against these four states, which is exactly the case this covers.
+   */
+  const noMicro = parseInnertube({ videoDetails: { shortDescription: 'hello', viewCount: '3' } })
+  assert.equal(noMicro.description, 'hello', 'the parts it can read are still read')
+  assert.equal(noMicro.isLive, undefined, 'but it says nothing about liveness, because it saw nothing')
+  // A microformat that HAS been read and carries no broadcast is still a real negative.
+  const micro = parseInnertube({
+    videoDetails: { shortDescription: 'hello' },
+    microformat: { playerMicroformatRenderer: { publishDate: '2020-01-02T03:04:05-00:00' } },
+  })
+  assert.equal(micro.isLive, false)
+  // And videoDetails.isLive alone is still believed — that is the field a live WEB response leads with.
+  assert.equal(parseInnertube({ videoDetails: { isLive: true, shortDescription: 'x' } }).isLive, true)
+})
+
+test('A VERDICT ALONE IS NOT AN ANSWER — an empty videoDetails must still fall through to MWEB', () => {
+  /**
+   * `videoDetails: {}` reads as not-live, and if that counted as something learned, parseInnertube
+   * would return a non-null object, fetchInnertube's `if (got) return got` would accept it, and the
+   * MWEB fallback would be retired for every response that carries nothing — which is the half of
+   * requests Cloudflare's egress gets refused on. Liveness is deliberately counted last and does not
+   * make an answer real.
+   */
+  assert.equal(parseInnertube({ videoDetails: {} }), null)
+  assert.equal(parseInnertube({ microformat: { playerMicroformatRenderer: {} } }), null)
+})
+
 test('JUNK PARSES TO NULL RATHER THAN TO A CARD — every read is guarded individually', () => {
   for (const junk of [null, undefined, 0, '', 'nope', [], {}, { videoDetails: 'string' },
     { videoDetails: { lengthSeconds: 'abc', viewCount: {} }, microformat: [] }]) {
@@ -150,6 +254,21 @@ test('A SUCCESSFUL INNERTUBE CALL JOINS THE DATE ONTO THE OEMBED RESULT', async 
   assert.equal(Date.parse(got.uploadedAt) / 1000, 1256453853)
   assert.equal(got.duration, 213)
   assert.deepEqual(got.counts, { views: parseInnertube(fixture('ordinary')).views })
+})
+
+test('THE LIVE VERDICT RIDES THE FETCH, BOTH WAYS — and a refusal carries neither', async () => {
+  /**
+   * The three values have to survive the enrichment block, not just the parser: `true` is what stops
+   * the mux, `false` is what lets an ended stream out of a 30-day record that still says live, and
+   * ABSENT is what makes that record the fallback rather than the loser. A truthiness test in the
+   * spread would have collapsed the last two.
+   */
+  const answer = name => stub(() =>
+    new Response(JSON.stringify(fixture(name)), { headers: { 'content-type': 'application/json' } }))
+  assert.equal((await fetchYouTube(REF, answer('live'))).isLive, true)
+  assert.equal((await fetchYouTube(REF, answer('ordinary'))).isLive, false)
+  assert.equal((await fetchYouTube(REF, stub(() => { throw new Error('refused') }))).isLive, undefined,
+    'no answer is not a "no" — the record has to be allowed to win')
 })
 
 test('AN OEMBED MISS STILL KEEPS THE INNERTUBE DATE — the union carries it on BOTH arms on purpose', async () => {
