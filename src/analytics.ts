@@ -65,6 +65,21 @@ export type Outcome2 =
   // purpose and then never called from anywhere, so it made nothing visible at all. A counter in the
   // arm that would have used the credential is the version that cannot rot the same way.
   | 'pool_unused'
+  // HOW MANY REDIRECTS TIKTOK PUTS BETWEEN DISCORD AND THE BYTES, counted because the answer went
+  // wrong silently and stayed wrong for three weeks.
+  //
+  // resolveAwemeUrl exists to turn TWO hops into one: the normalizer picks the cookie-free
+  // `/aweme/v1/play/` url, which is ITSELF a 302, and worker.ts's tt arm records the 2026-07-19
+  // measurement that two hops make Discord draw the OpenGraph card instead of the Mastodon activity
+  // card. On 2026-08-30 it was returning null for EVERY TikTok — 3 of 3 sampled live, including the
+  // one src/smoke.ts pins and reports `ok` — because that endpoint answers our egress with a 404 HTML
+  // page and the resolver degrades to its input on any no-answer.
+  //
+  // NOTHING COUNTED THAT DEGRADE, which is the whole reason it survived: the fallback is silent by
+  // design (it is the shipped behaviour, not an error), `/_smoke` only asserts a card came back, and
+  // no card ever says which url it names. `tt_twohop` climbing while `tt_onehop` sits at zero is the
+  // one signal that would have said so on day one.
+  | 'tt_onehop' | 'tt_twohop'
   // The three copyright recoveries, in the order they are tried. copyright_gql = the shortcode
   // GraphQL query answered (cheapest, and the only one with no window). copyright_recovered = it did
   // not, but the account feed had the post, so it was recent. copyright_remux = neither, and the page

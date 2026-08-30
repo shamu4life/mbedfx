@@ -654,6 +654,78 @@ def _probe_error(stderr):
     return text.strip().splitlines()[-1][:160] if text.strip() else "failed"
 
 
+PROBE_TIKTOK = "https://www.tiktok.com/@.g.r.b/video/7246058829106973978"
+
+
+def _probe_tiktok():
+    """CAN THIS CONTAINER SERVE A TIKTOK VIDEO? The one question the Worker half cannot answer.
+
+    WHY IT EXISTS, 2026-08-30. Every TikTok on the site hands Discord a TWO-HOP redirect, because
+    src/platforms/tiktok/fetch.ts's resolveAwemeUrl returns null for all of them: it fetches
+    `www.tiktok.com/aweme/v1/play/` expecting a 302 and gets a 404 HTML page instead. That is not our
+    bug — the SAME failure was reproduced against fxTikTok's own Cloudflare Worker
+    (fxtiktok-rewrite-dev.dargy.workers.dev, their `OFF_LOAD` staging target), which answered with
+    `location: https://www.tiktok.com/404?fromUrl=/aweme/v1/play/...` for the same video. Cloudflare
+    WORKER egress cannot resolve that endpoint, for them or for us.
+
+    fxTikTok's production works because it does not try to: `wrangler.toml` sets
+    `OFF_LOAD = "https://offload.tnktok.com"`, and `src/offload.ts` is a plain Bun server behind a
+    Dockerfile, i.e. their own box behind Cloudflare's proxy. This container is the equivalent box we
+    already own, so the whole question is whether ITS egress reaches TikTok where the Worker's does
+    not. Nothing short of running here can answer that, which is why this is a probe and not a guess.
+
+    WHAT IT REPORTS AND WHY IT IS TWO STEPS. `extracted` says yt-dlp got the metadata; `bytes` says a
+    format url actually served. Both matter and they fail independently — yt-dlp returns
+    `*-webapp-prime.us.tiktok.com` urls that tiktok/normalize.ts records as 403 WITHOUT A COOKIE, so
+    an extract that yields urls nobody can fetch is a false positive. `host` is published because
+    which CDN family answers is the thing a future reader needs; the url itself never is (it is
+    signed, and this string goes into an HTTP response).
+
+    Never raises: a diagnostic that 500s tells an operator less than one that says it could not run.
+    """
+    row = {"page": PROBE_TIKTOK, "extracted": False, "formats": 0, "host": "",
+           "fetch": "not-reached", "bytes": 0, "error": "", "ms": 0}
+    started = time.monotonic()
+    try:
+        cmd = ["yt-dlp", "--skip-download", "-J", "--no-warnings", "--", PROBE_TIKTOK]
+        out = subprocess.run(cmd, capture_output=True, timeout=PROBE_TIMEOUT, stdin=subprocess.DEVNULL)
+        if out.returncode != 0:
+            row["error"] = _probe_error(out.stderr)
+            return row
+        info = json.loads(out.stdout or b"{}")
+        row["extracted"] = True
+        row["formats"] = len(info.get("formats") or [])
+        url = info.get("url") or ((info.get("requested_formats") or [{}])[0].get("url"))
+        if not isinstance(url, str) or not url:
+            row["fetch"] = "no-url"
+            return row
+        try:
+            row["host"] = urlsplit(url).hostname or ""
+        except Exception:
+            row["host"] = ""
+        req = urllib.request.Request(_safe_url(url), headers={"range": f"bytes=0-{PROBE_RANGE}",
+                                                              "user-agent": _PROBE_UA})
+        try:
+            with urllib.request.urlopen(req, timeout=20) as r:
+                body = r.read(PROBE_RANGE + 1)
+            row["bytes"] = len(body)
+            row["fetch"] = "ok" if body else "empty"
+        except urllib.error.HTTPError as e:
+            # 403 here is the EXPECTED shape if the webapp-prime cookie gate applies to this egress
+            # too — see tiktok/normalize.ts. It is a real answer, not an error.
+            row["fetch"] = f"http-{e.code}"
+        except Exception as e:
+            row["fetch"] = "fetch-failed"
+            row["error"] = type(e).__name__
+    except subprocess.TimeoutExpired:
+        row["error"] = "timeout"
+    except Exception as e:
+        row["error"] = type(e).__name__
+    finally:
+        row["ms"] = int((time.monotonic() - started) * 1000)
+    return row
+
+
 def _probe_clients():
     """Every client in PROBE_CLIENTS, serially. Serial ON PURPOSE: the instance this runs on has a
     QUARTER of a vCPU (measured 2026-08-28: extraction alone costs 14-17s there against 5.7s at 1
@@ -661,12 +733,16 @@ def _probe_clients():
     numbers meaningless as well as slower."""
     started = time.monotonic()
     rows = [_probe_one(c) for c in PROBE_CLIENTS]
+    # SERIAL WITH THE REST, same one-vCPU reason as above. Last, so a TikTok change can never delay
+    # or fail the YouTube rows this endpoint already existed to report.
+    tiktok = _probe_tiktok()
     return {
         "video": PROBE_VIDEO,
         "ytdlp": _ytdlp_version(),
         "ms": int((time.monotonic() - started) * 1000),
         "serving": [r["client"] for r in rows if r["gvs"] == "ok"],
         "clients": rows,
+        "tiktok": tiktok,
     }
 
 
