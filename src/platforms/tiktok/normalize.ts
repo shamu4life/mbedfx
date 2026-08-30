@@ -218,7 +218,7 @@ export const AWEME_PLAY = '/aweme/v1/play/'
  * restated: an og:video pointing at something that cannot play renders a DEAD player AND
  * suppresses og:image, so the post shows nothing at all. A still is strictly better.
  */
-function videoMedia(item: Any): Media[] {
+function videoMedia(item: Any, page: string): Media[] {
   const v = item?.video
   const bitrate = Array.isArray(v?.bitrateInfo) ? v.bitrateInfo : []
   const urls: unknown[] = [
@@ -238,7 +238,50 @@ function videoMedia(item: Any): Media[] {
 
   if (aweme) {
     const duration = num(v?.duration)
-    const media: Media = { kind: 'video', url: aweme, w: dim(v?.width), h: dim(v?.height) }
+    /**
+     * A `{page}` REMUX, SINCE 2026-08-30, AND THE AWEME URL IS NOW ONLY THE FALLBACK.
+     *
+     * WHY THE 302 HAD TO STOP BEING THE ANSWER. resolveAwemeUrl was collapsing this url's own 302 so
+     * Discord saw ONE hop; worker.ts's tt arm records the 2026-07-19 measurement that TWO hops make
+     * Discord draw the OpenGraph card instead of the Mastodon activity card. On 2026-08-30 it was
+     * returning null for EVERY TikTok — 3 of 3 sampled live, including the id src/smoke.ts pins and
+     * reports `ok` — because `www.tiktok.com/aweme/v1/play/` answers Cloudflare WORKER egress with a
+     * 404 HTML page, and no Location means no resolution.
+     *
+     * IT IS NOT A BUG WE CAN FIX IN THE WORKER, and that is why this is an architecture change rather
+     * than a retry. The identical failure reproduces against fxTikTok's OWN Cloudflare Worker: their
+     * wrangler.toml names fxtiktok-rewrite-dev.dargy.workers.dev as the staging `OFF_LOAD`, and asked
+     * for the same video it answers `location: https://www.tiktok.com/404?fromUrl=/aweme/v1/play/…`.
+     * Same algorithm, same UA, same 404. Their production works only because it does not use a
+     * Worker for this: `OFF_LOAD = "https://offload.tnktok.com"` is a Bun server behind a Dockerfile.
+     *
+     * THE CONTAINER IS THE BOX WE ALREADY OWN, and it was MEASURED before this was written rather
+     * than assumed — the mistake tiktok/normalize.ts's own "Measure before building either" warns
+     * about. `/_clients`' TikTok arm, run on production container egress 2026-08-30:
+     * `extracted: true, formats: 10, ms: 2704` on the smoke id. The container reaches TikTok in under
+     * three seconds where the Worker gets a 404 page. Its `fetch: http-403` in that same reading is
+     * the probe's own artifact, not a gate: the probe pulls bytes with bare urllib and none of
+     * yt-dlp's headers, and yt-dlp downloading the same post normally returns 2,321,023 bytes of
+     * valid ISO Media. The mux path uses yt-dlp, so it is the second number that applies.
+     *
+     * WHAT THIS ALSO REPAIRS, for free. settleMux returns early on `if (!own.some(m => m?.remux))`,
+     * so a directly-playable source never reached its over-ceiling arm — `m.duration >
+     * MUX_MAX_SECONDS` has never once fired for TikTok. The post that triggered this whole
+     * investigation is 2139s and 206 MB, and it was being offered to Discord as a playable
+     * attachment. With a `remux` present it now degrades to its cover like any other over-long video.
+     *
+     * `url` STAYS THE AWEME URL. types.ts says `url` stays the plain source on a remux entry, and
+     * here it is also the safety net twice over: liveFetchPost downgrades a remux video to its poster
+     * still when MEDIA_RESOLVER is unset, and if the container ever refuses TikTok the worst case is
+     * the cover — a card that renders — rather than the two-hop url that renders nothing.
+     */
+    const media: Media = {
+      kind: 'video',
+      url: aweme,
+      w: dim(v?.width),
+      h: dim(v?.height),
+      remux: { page },
+    }
     // Omitted entirely rather than set to undefined, so a Post is structurally the same
     // whether duration was absent upstream or merely unusable (mediaObj's rule in Bluesky).
     if (duration !== undefined && duration > 0) media.duration = duration
@@ -548,7 +591,7 @@ export function normalizeTikTok(html: unknown, ref: PostRef): Post | null {
     },
     text: typeof item.desc === 'string' ? item.desc : '',
     createdAt,
-    media: isSlideshow ? slideshowMedia(item) : videoMedia(item),
+    media: isSlideshow ? slideshowMedia(item) : videoMedia(item, canonical),
     counts,
     // TikTok exposes no per-post sensitivity signal at all (spec §Sensitivity). Always false —
     // never inferred from a warnInfo/takeDown field, which mean moderation state, not NSFW.
