@@ -3180,9 +3180,9 @@ class MetaUnusable extends Error {}
  * activity route's mux wait to MUX_WAIT_BOT_MS (1500) and did not rewrite this paragraph, which is
  * how the "adds ZERO wall clock" argument outlived the thing that made it true. And since 2026-08-29
  * this constant does not bound the activity route's date arm at all: that call site wraps it in
- * `deadline(…, YT_META_BOT_MS)` (2800), and 8000 now governs only /_card and /_api/v1. The
+ * `deadline(…, YT_META_BOT_MS)` (4000), and 8000 now governs only /_card and /_api/v1. The
  * zero-wall-clock property is back on the activity route as of the same day, by a different route —
- * YT_MUX_BOT_MS (4000) is larger than YT_META_BOT_MS (2800), so on a cold yt paste the date arm again
+ * YT_MUX_BOT_MS (4000) is level with YT_META_BOT_MS (4000), so on a cold yt paste the date arm again
  * finishes inside a wait the mux arm is spending anyway. Everything below is unchanged and still true.
  *
  * IF THIS IS EVER JUDGED UNACCEPTABLE, the knob is 0: that reduces the design to "right on the next
@@ -3204,7 +3204,7 @@ class MetaUnusable extends Error {}
 // the 2026-08-01 measurement above it still stands. It is still right about /_card and /_api/v1, which
 // do await settleMux on MUX_WAIT_API_MS = 9000. It stopped being right about the ACTIVITY route at
 // 553bd2e, which took that settleMux to 1500 and left this 8000 towering over the budget it was
-// supposed to hide inside. The activity route now bounds this arm at YT_META_BOT_MS (2800) against a
+// supposed to hide inside. The activity route now bounds this arm at YT_META_BOT_MS (4000) against a
 // mux arm of YT_MUX_BOT_MS (4000), so "inside a wait that is happening anyway" is true there again —
 // with different numbers, and for a reason this comment does not give.
 const META_WAIT_API_MS = 8000
@@ -3285,9 +3285,9 @@ export const MUX_WAIT_BOT_MS = 1500
  * whose measured costs are not the same size.
  *
  * WAS: MUX_WAIT_BOT_MS, 1500ms, shared by all three arms of the activity route's Promise.all since
- * 553bd2e. NOW: 2800ms on the metadata arm; the translation keeps 1500. The mux arm split away later
- * the same day and did NOT keep 1500 — see YT_MUX_BOT_MS, which is 4000 on yt and sits deliberately
- * above this number so a cold paste's date arm costs no wall clock at all.
+ * 553bd2e. THEN: 2800ms on the metadata arm. NOW: 4000ms; the translation keeps 1500. The mux arm split
+ * the same day and did NOT keep 1500 — see YT_MUX_BOT_MS, which is 4000 on yt. Since 2026-08-30 this
+ * arm is LEVEL with it rather than under it, which keeps the response max unchanged; see below.
  *
  * WHY IT WAS WRONG, from the metadata call's OWN recorded distribution (innertube.ts, measured against
  * production on nine unseen ids immediately after the 1200 -> 2500 deploy):
@@ -3300,19 +3300,47 @@ export const MUX_WAIT_BOT_MS = 1500
  * was built to buy (see its docstring: the render already tried, this route tries again seconds later)
  * was throttled under the price of the thing it was buying. Worse, innertube.ts's hard abort is
  * INNERTUBE_TIMEOUT_MS = 2500: under a 1500 budget this arm could not observe even a successful second
- * attempt finish, ever, for any video. 2800 is that 2500 plus 300 — MUX_WAIT_FLOOR_MS's size, which is
+ * attempt finish, ever, for any video. 2800 was that 2500 plus 300 — MUX_WAIT_FLOOR_MS's size, which is
  * what an R2 read costs — so the warm-record read in front of the call fits and the call itself still
  * clears its own abort. It is deliberately NOT written as `INNERTUBE_TIMEOUT_MS + MUX_WAIT_FLOOR_MS`:
  * the two bound different things (that one aborts a single fetch in another module; this one bounds a
  * whole arm that may also fall through to the container), and coupling them would make a change to
  * either read as a change to both.
  *
- * WHY 2800 AND NOT 9000. 2800 sits inside the 3-4s everyone assumes is Discord's abandon point; 9000
- * does not. AND NOBODY HAS EVER MEASURED THAT 3-4s. This file already admits as much twice, in these
- * words: META_TIMEOUT_MS says "that is a separate measurement about Discord's tolerance that nobody
- * has taken", and META_TIMEOUT_API_MS says "how much a crawler will tolerate there is unmeasured". So
- * this number is chosen to stay inside the folklore bound rather than to test it. Testing it means an
- * experiment against a live unfurl, and that wants its own change.
+ * WHY 4000, RAISED FROM 2800 ON 2026-08-30, AND WHY THE RAISE IS FREE. The three arms race in one
+ * `Promise.all`, so the response ends at the SLOWEST of them and the number that matters is the max,
+ * not the sum. The mux arm is already YT_MUX_BOT_MS (4000) on this exact route. Taking the date arm
+ * from 2800 to 4000 therefore moves the max by ZERO on any card whose mux arm is running, which is
+ * every ordinary cold paste. It buys the arm 1.2 more seconds of the wait that was happening anyway.
+ *
+ * WHAT IT BUYS, AND WHY 2800 WAS THE WRONG SIZE FOR THIS ARM'S SECOND HALF. When the render's own
+ * Innertube call is refused, this arm falls through to the container's `yt-dlp -J`. That extract is
+ * 3.1-4.7s on standard-2 (measured 2026-08-28, see the container notes). 2800 sits UNDER the whole of
+ * that range, so on the path where Innertube failed the fall-through could essentially never land and
+ * the card rendered the epoch. 4000 reaches into it. This is the same shape of error as the
+ * 1500-under-a-1716ms-median above, one level down: a budget sized against the FIRST source while the
+ * arm's actual cost on the failing path is the SECOND one.
+ *
+ * HOW OFTEN THAT PATH IS TAKEN: `yt_innertube_fail` 324 vs `yt_innertube_ok` 293 all-time, and
+ * 170 vs 182 over the 24h to 2026-08-30. It is a coin flip, not the "9 of 10" an earlier note
+ * claimed. So about half of cold pastes depend entirely on this fall-through for their date.
+ *
+ * THE FOLKLORE BOUND IS NO LONGER THE REASON FOR THE NUMBER, because it finally got tested. 2800 was
+ * chosen "to stay inside the 3-4s everyone assumes is Discord's abandon point" while admitting in the
+ * same breath that NOBODY HAS EVER MEASURED THAT 3-4s (META_TIMEOUT_MS: "a separate measurement about
+ * Discord's tolerance that nobody has taken"; META_TIMEOUT_API_MS: "how much a crawler will tolerate
+ * there is unmeasured"). On 2026-08-30 the owner pasted a cold `youtu.be/MsqhUjjkDjI` into a real
+ * Discord client against this deployed build. THE CARD DREW, with a player, at an activity document
+ * measured at 4.03-4.15s across 15 probes the same hour. That is the first real-client observation on
+ * this seam in the project's history and it falsifies "Discord leaves at 3-4s" for this document. It
+ * is ONE observation and it does not license 9000; it licenses staying level with the mux arm, which
+ * is where the response already ends. Do not read it as headroom above 4000.
+ *
+ * WHAT IT COSTS WHERE IT IS NOT FREE, stated because "free" is only true while the mux arm runs. When
+ * settleMux REFUSES to dispatch — a live stream, or a video over MUX_MAX_SECONDS — the mux arm returns
+ * in ~0.1s and this arm alone decides the response. Such a card with no cached date now takes 4000ms
+ * instead of 2800ms. That is the one regression in the change, it is bounded by this constant, and it
+ * is paid exactly where the reader would otherwise be shown 1 January 1970.
  *
  * WHAT IT COSTS, BOUNDED. youtubeMeta's first gate returns null the instant the post already carries a
  * real date, before any R2 GET or container call — so the common warm path never enters this budget
@@ -3324,7 +3352,7 @@ export const MUX_WAIT_BOT_MS = 1500
  * Losing this race still writes: `deadline` leaves the loser running and metaWork's R2 put is inside
  * the raced work, exactly as it was at 1500.
  */
-export const YT_META_BOT_MS = 2800
+export const YT_META_BOT_MS = 4000
 
 /**
  * THE MUX ARM'S OWN CRAWLER BUDGET, on the one document and the one platform where that arm decides
@@ -3383,7 +3411,7 @@ export const YT_META_BOT_MS = 2800
  * and the re-pastes that are the overwhelming majority of unfurls are untouched. The extra wait is
  * paid only on the cold pastes that are already failing.
  *
- * IT ALSO MAKES THE DATE ARM FREE AGAIN. YT_META_BOT_MS is 2800, below this, so on a cold paste the
+ * IT ALSO MAKES THE DATE ARM FREE AGAIN. YT_META_BOT_MS is 4000, LEVEL with this, so on a cold paste the
  * metadata arm once more finishes inside a wait that is happening anyway — the "adds ZERO wall clock"
  * property META_WAIT_API_MS's comment claims and 553bd2e silently removed.
  *
@@ -5011,7 +5039,7 @@ export async function handle(req: Request, env: Env, ctx: ExecutionContext, d: D
        * than left as "MUX_WAIT_API_MS": that was 9000, 553bd2e took it to 1500 — which broke this
        * argument silently, because 1500 is below the date arm's own 1716ms median (see
        * YT_META_BOT_MS) — and since 2026-08-29 the yt mux arm is YT_MUX_BOT_MS (4000) against a date
-       * arm of 2800. So a cold-mux callback pays ZERO extra wall clock for a correct timestamp again,
+       * arm of 4000. So a cold-mux callback pays ZERO extra wall clock for a correct timestamp again,
        * and the route's ceiling is set by the mux arm rather than by this one.
        * Scoped to 'activity' because that is the only document with a date field:
        * toOEmbed's seven fields carry none, so the /_oembed callback makes no meta call at all.
@@ -5037,7 +5065,7 @@ export async function handle(req: Request, env: Env, ctx: ExecutionContext, d: D
        * THREE BUDGETS, NOT ONE, both splits dated 2026-08-29. The three arms were given the same 1500
        * because they share a response, not because they cost the same.
        *
-       * The METADATA arm gets YT_META_BOT_MS (2800): its own recorded median for a SUCCESS is 1716ms,
+       * The METADATA arm gets YT_META_BOT_MS (4000): its own recorded median for a SUCCESS is 1716ms,
        * so 1500 cut it off below the middle of its hit distribution.
        *
        * The MUX arm gets YT_MUX_BOT_MS (4000) on yt, and keeps `botBudget` everywhere else. "A cold

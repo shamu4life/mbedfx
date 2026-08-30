@@ -109,7 +109,7 @@ const INNERTUBE_CLIENTS = [
  * 2026-08-29: of 139 recorded yt muxes the fastest finished in 4200ms (p10 6922, p50 18219), so the
  * race is long, not unwinnable. Two things follow. The head keeps this trade because 4200ms does not
  * fit under HTML_DEADLINE_MS beside everything else it owes. The ACTIVITY document does not share a
- * budget with this call at all any more — see worker.ts's YT_META_BOT_MS (2800, sized around the
+ * budget with this call at all any more — see worker.ts's YT_META_BOT_MS (4000, sized around the
  * timeout here) and YT_MUX_BOT_MS (4000) — so on that seam neither arm is spending the other's time.
  *
  * `AbortSignal.timeout` rather than the `deadline()` helper used elsewhere in this repo: that one

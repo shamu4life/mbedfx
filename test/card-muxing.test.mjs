@@ -625,10 +625,17 @@ test('THE ACTIVITY BUDGETS STAY UNDER THE ONLY BOUND DISCORD HAS EVER GIVEN US',
   assert.ok(YT_META_BOT_MS + ROUTE_WORK_MS < DISCORD_ABANDONED_AT_MS,
     `and so must the metadata arm (${YT_META_BOT_MS}ms + route work)`)
 
-  // THE MUX ARM IS THE SLOWEST OF THE THREE, which is what makes the date arm free — it finishes
-  // inside a wait that is happening anyway. YT_META_BOT_MS's docstring claims that property; nothing
-  // held it, and raising the date arm past the mux arm would quietly cost every cold paste the
-  // difference. The head keeps the small one: a raise there is a different bet with a different bound.
-  assert.ok(YT_META_BOT_MS < YT_MUX_BOT_MS, 'the date arm hides inside the mux arm')
+  // THE DATE ARM NEVER EXCEEDS THE MUX ARM, which is what makes it free — it finishes inside a wait
+  // that is happening anyway. YT_META_BOT_MS's docstring claims that property; nothing held it, and
+  // raising the date arm PAST the mux arm would quietly cost every cold paste the difference.
+  // The head keeps the small one: a raise there is a different bet with a different bound.
+  //
+  // `<=`, NOT `<`, SINCE 2026-08-30, and the distinction is the whole point of the assertion. The
+  // property being protected is that the RESPONSE max does not move, and `Math.max(a, b) === b` holds
+  // when a === b. The date arm was taken from 2800 to 4000 — level with the mux arm — precisely
+  // because equality is the largest value that still costs zero. Writing this `<` would forbid the
+  // free case and permit nothing useful; writing it `<=` still catches the one mistake it exists to
+  // catch, which is a date arm that outlives the mux arm and starts setting the response time itself.
+  assert.ok(YT_META_BOT_MS <= YT_MUX_BOT_MS, 'the date arm never outlives the mux arm')
   assert.ok(MUX_WAIT_BOT_MS < YT_MUX_BOT_MS, 'and the shared crawler budget is the floor, not the ceiling')
 })

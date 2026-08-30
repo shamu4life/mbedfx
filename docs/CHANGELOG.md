@@ -11,6 +11,61 @@ Nothing yet.
 
 ---
 
+## [1.12.1] - 2026-08-30
+
+### A cold YouTube card still rendered 1 January 1970, and the arm that would have fixed it was budgeted under its own cost
+
+Reported from a real Discord client: a cold paste of `youtu.be/MsqhUjjkDjI` drew correctly, with a
+player, and carried the epoch as its timestamp.
+
+The date has two sources and 1.12.0 sized the budget against the wrong one. The render's own
+Innertube call answers in 281-1723 ms when it answers at all — but it is refused about half the
+time from this egress (`yt_innertube_fail` 324 vs `yt_innertube_ok` 293 all-time; 170 vs 182 over the
+24 h to 2026-08-30, a coin flip rather than the "9 of 10" an earlier note claimed). On the refused
+half the arm falls through to the container's `yt-dlp -J`, which takes **3.1-4.7 s** on standard-2.
+`YT_META_BOT_MS` was 2800 ms, which sits under the whole of that range, so the fall-through could
+essentially never land and the card rendered the epoch instead. It is the same error as the 1500-ms
+budget under a 1716-ms median that 1.12.0 fixed, one level down: sized against the FIRST source while
+the cost on the failing path belongs to the SECOND.
+
+#### Changed
+- **`YT_META_BOT_MS` is 4000 ms**, level with `YT_MUX_BOT_MS` rather than under it. The raise is free
+  on any card whose mux arm is running: the three arms race in one `Promise.all`, the response ends at
+  the slowest, and the mux arm was already 4000. The max does not move. Where it is NOT free is stated
+  in the docstring rather than glossed — when `settleMux` refuses to dispatch (a live stream, or a
+  video over `MUX_MAX_SECONDS`) the mux arm returns in ~0.1 s and this arm alone sets the response, so
+  such a card with no cached date now takes 4000 ms instead of 2800. That is the one regression, it is
+  bounded by this constant, and it is paid exactly where the reader would otherwise be shown 1970.
+- **The folklore bound stopped being the reason for the number, because it finally got tested.** 2800
+  was chosen "to stay inside the 3-4 s everyone assumes is Discord's abandon point" while admitting in
+  the same breath that nobody had ever measured that 3-4 s. The 2026-08-30 paste above is the first
+  real-client observation on this seam in the project's history, and the card drew against activity
+  documents measured at 4.03-4.15 s. It is ONE observation. It licenses staying level with the mux
+  arm, where the response already ends; it does not license 9000, and the docstring says so.
+- **`test/card-muxing.test.mjs` now asserts `YT_META_BOT_MS <= YT_MUX_BOT_MS`**, not `<`. The property
+  guarded is that the response max does not move, and `Math.max(a, b) === b` when `a === b`. Equality
+  is the largest value that still costs zero, so `<` would forbid the free case and permit nothing.
+
+#### Fixed
+- **The 1.12.0 entry denied a test that the same release merged in.** It said the version bump had
+  "only the badge has a test holding it there". That was true at the release commit `76840ab` and was
+  falsified an hour later by `73891c5`, the merge folding PR #72 in, which imported
+  `test/version-consistency.test.mjs` — the test pinning the lockfile's two copies, the package name,
+  `CLAUDE.md`'s version line and the existence of a dated changelog heading. A union merge that brings
+  in a test needs a pass over the sentences asserting what is untested; no conflict marker points at
+  one. Found by an adversarial audit of the shipped tree that re-verified ~25 constants against the
+  changelog and found this the only outright false claim.
+
+### Known, measured, and not fixed here
+- **The 4000 ms mux budget converts far less than the 1.12.0 entry implies.** Probed faithfully — head
+  and activity document issued back to back, as Discord issues them — **0 of 15 cold first pastes drew
+  a player**; larger samples reporting 1 in 44 and 1 in 29 were measuring their own probe gap, into
+  which a mux (p50 18.2 s) lands. It remains strictly better than 1500, where the race was
+  arithmetically unwinnable (fastest mux ever recorded 4200 ms), but "catches the fast tail" overstates
+  it. The lever worth pulling next is starting the mux earlier, not widening the budget further.
+
+---
+
 ## [1.12.0] - 2026-08-29
 
 ### A cold YouTube paste could not carry a player, and the budget that decided it was arithmetically lost
@@ -214,7 +269,12 @@ channels post these constantly.
 - `package-lock.json` was still on 1.10.1 at the 1.11.0 tag. npm writes the version in two places
   there and the cut moved neither, which nothing noticed because nothing reads it. Corrected with
   this release. Both copies, `package.json`, `CLAUDE.md` and the badge in `public/index.html` now say
-  1.12.0; only the badge has a test holding it there.
+  1.12.0, and two tests hold them there: `test/version-consistency.test.mjs` pins the lockfile's two
+  copies, the package name, `CLAUDE.md`'s version line and the existence of a dated changelog
+  heading, and `test/landing-convert.test.mjs` pins the badge. This sentence previously said only the
+  badge was guarded, which was TRUE when it was written at the release commit and was falsified an
+  hour later by the merge that folded PR #72 in — that merge imported the very test it denies. A
+  union merge that brings in a test needs a pass over the sentences asserting what is untested.
 - **A minor rather than a patch.** The live-stream guard, the 🔴 note, the three activity-document
   budgets and `MUX_PAGE_TIMEOUT` change what a reader sees on a card, and `META_GENERATION` is new
   public surface for anyone self-hosting. Not a major: no route, no field and no response shape
