@@ -643,7 +643,21 @@ test('A REAL TIKTOK PAGE BECOMES A POST — the fetch->normalize seam, not just 
     assert.equal(video.post.media[0].kind, 'video')
     // A page that answered is NOT a page failure. If a success ever counted assert_fail, the
     // counter would stop meaning "TikTok broke" and the split Task 4 paid for would be worthless.
-    assert.deepEqual(video.tt, [], 'a page that answered must emit no failure counter')
+    //
+    // CHANGED 2026-08-30: this read `deepEqual(video.tt, [])`. A success now also emits exactly one
+    // INFORMATIONAL counter — tt_onehop or tt_twohop, saying how many redirects the shipped url puts
+    // between Discord and the bytes — so "no counters at all" stopped being the property worth
+    // holding. The failure half is unchanged and still asserted; the hop counter is excluded by name
+    // rather than by relaxing the assertion, so a NEW failure counter on this path still fails here.
+    const HOP = ['tt_onehop', 'tt_twohop']
+    assert.deepEqual(video.tt.filter(c => !HOP.includes(c)), [],
+      'a page that answered must emit no failure counter')
+    // AND THE HOP COUNTER IS PINNED POSITIVELY, because its absence is the defect it exists for: it
+    // was added after resolveAwemeUrl was found returning null for every TikTok in production for
+    // three weeks with nothing counting it. Exactly one, so a refactor cannot double-count.
+    assert.deepEqual(video.tt.filter(c => HOP.includes(c)), ['tt_twohop'],
+      'a video post reports its hop count, and this fixture resolves to two (the stub answers the ' +
+      'aweme fetch with the page, so there is no Location to follow)')
 
     // The slideshow arm through the same seam: five images, proving the whole body reaches the
     // normalizer rather than a prefix of it that happens to satisfy the video branch.

@@ -11,6 +11,60 @@ Nothing yet.
 
 ---
 
+## [1.12.2] - 2026-08-30
+
+### Every TikTok has been handing Discord a two-hop redirect, and nothing counted it
+
+Reported: `tiktok.com/t/ZTDT2xNn3/` does not embed here while fxTikTok plays the same post. It is not
+that post. **Every TikTok video on the site is affected**, and has been since roughly 2026-08-08.
+
+`resolveAwemeUrl` exists to turn two redirect hops into one — the normalizer picks the cookie-free
+`/aweme/v1/play/` url, which is itself a 302, and the tt arm of `worker.ts` records the 2026-07-19
+measurement that two hops make Discord draw the OpenGraph card instead of the Mastodon activity card.
+It returns `null` for every TikTok in production. Verified by counting hops on the live `/_media/`
+`Location`: 3 of 3 sampled were two-hop, **including `7246058829106973978`, the post `/_smoke` pins
+and reports `ok`** — smoke only asserts a card came back, so it cannot see this.
+
+**It is not our bug, and that is the important part.** The same failure reproduces against fxTikTok's
+OWN Cloudflare Worker: their `wrangler.toml` names `fxtiktok-rewrite-dev.dargy.workers.dev` as the
+staging `OFF_LOAD`, and asked for this video it answered
+`location: https://www.tiktok.com/404?fromUrl=/aweme/v1/play/...` — the identical 404. Their algorithm
+is also identical to ours (fetch with `redirect: 'manual'`, follow `Location`). **Cloudflare Worker
+egress cannot resolve that endpoint, for them or for us.** Their production works because it does not
+try to: `OFF_LOAD = "https://offload.tnktok.com"`, and `src/offload.ts` is a plain Bun server behind a
+`Dockerfile` — their own box, behind Cloudflare's proxy.
+
+This release does not fix the embed. It makes the failure **visible and measurable**, and answers the
+one question that decides the fix, neither of which could be done from outside.
+
+#### Added
+- **`tt_onehop` / `tt_twohop` counters.** Read off the url actually shipped rather than a flag from
+  the resolver, so they cannot drift from what Discord fetches. `tt_twohop` climbing while
+  `tt_onehop` sits at zero is the signal that would have caught this on day one.
+- **A TikTok arm on the container probe** (`/_clients`). The container is the box we already own, and
+  the whole question is whether ITS egress reaches TikTok where the Worker's does not. The probe
+  reports `extracted` and `bytes` separately on purpose: yt-dlp returns
+  `*-webapp-prime.us.tiktok.com` urls that `tiktok/normalize.ts` records as **403 without a cookie**,
+  so an extract yielding urls nobody can fetch is a false positive. It runs last so a TikTok change
+  can never delay or fail the YouTube rows the endpoint already existed to report.
+
+#### Measured, so nobody repeats it
+- **The 35.7-minute / 206 MB length of the reported video is a red herring** (`duration: 2139`,
+  `size: 206325559`). Short TikToks are equally two-hop.
+- **TikTok's payload carries no direct CDN url.** Every entry in `playAddr`, `downloadAddr`,
+  `PlayAddrStruct.UrlList` and all six `bitrateInfo[].PlayAddr.UrlList` is either a cookie-gated
+  `*-webapp-prime` host or the same two-hop aweme url. Resolving the redirect is the only path.
+- **The Cloudflare MCP `execute` sandbox cannot measure egress** and silently looks like a real
+  answer. It refuses all outbound: `example.com` returns 403/50 bytes. Run that control first.
+
+#### Fixed
+- **`settleMux`'s over-length ceiling can never fire for TikTok**, found on the way. `settleMux`
+  returns early on `if (!own.some(m => m?.remux))`, and a directly-playable source carries no
+  `remux` — so `m.duration > MUX_MAX_SECONDS` only ever protected container-muxed video. Not changed
+  here (it needs the embed decision first), but written down where the guard is.
+
+---
+
 ## [1.12.1] - 2026-08-30
 
 ### A cold YouTube card still rendered 1 January 1970, and the arm that would have fixed it was budgeted under its own cost
