@@ -695,7 +695,9 @@ def _probe_tiktok():
         info = json.loads(out.stdout or b"{}")
         row["extracted"] = True
         row["formats"] = len(info.get("formats") or [])
-        url = info.get("url") or ((info.get("requested_formats") or [{}])[0].get("url"))
+        # THE FORMAT, NOT JUST ITS URL, because the headers below live on the format object.
+        fmt = info if info.get("url") else ((info.get("requested_formats") or [{}])[0])
+        url = fmt.get("url")
         if not isinstance(url, str) or not url:
             row["fetch"] = "no-url"
             return row
@@ -703,8 +705,25 @@ def _probe_tiktok():
             row["host"] = urlsplit(url).hostname or ""
         except Exception:
             row["host"] = ""
-        req = urllib.request.Request(_safe_url(url), headers={"range": f"bytes=0-{PROBE_RANGE}",
-                                                              "user-agent": _PROBE_UA})
+        # SEND YT-DLP'S OWN HEADERS, and this correction is the entire point of the second version
+        # of this probe. The first one fetched with a bare UA and a Range and reported
+        # `fetch: http-403` from production on 2026-08-30 -- which reads exactly like the
+        # `*-webapp-prime` cookie gate tiktok/normalize.ts documents, and is NOT that. yt-dlp hands
+        # back a `http_headers` dict per format (Referer, and whatever else the extractor negotiated)
+        # and the real mux path uses them because yt-dlp does the downloading. A probe that omits
+        # them measures a request nothing in this system ever makes, and answers 403 to a question
+        # nobody asked. Control, same yt-dlp, same post, run locally: the download completes at
+        # 2,321,023 bytes of valid ISO Media.
+        #
+        # `range` and the UA are set FIRST so a format that carries its own user-agent wins, and a
+        # format that does not still gets the one the rest of this file uses.
+        hdrs = {"range": f"bytes=0-{PROBE_RANGE}", "user-agent": _PROBE_UA}
+        for k, val in (fmt.get("http_headers") or {}).items():
+            # Never let an upstream header dictate the byte range we asked for.
+            if isinstance(k, str) and isinstance(val, str) and k.lower() != "range":
+                hdrs[k] = val
+        row["hdrs"] = sorted(h.lower() for h in hdrs)
+        req = urllib.request.Request(_safe_url(url), headers=hdrs)
         try:
             with urllib.request.urlopen(req, timeout=20) as r:
                 body = r.read(PROBE_RANGE + 1)
