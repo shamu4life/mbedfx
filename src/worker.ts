@@ -19,7 +19,7 @@ import {
 import { fetchBluesky, fetchBlueskyProfile } from './platforms/bluesky/fetch.ts'
 import { normalizeBluesky, normalizeBlueskyProfile } from './platforms/bluesky/normalize.ts'
 import { fetchTikTok, resolveTikTokShortlink, withResolvedVideo } from './platforms/tiktok/fetch.ts'
-import { normalizeTikTok, tiktokGate, tiktokRefFrom, videoDetailScope } from './platforms/tiktok/normalize.ts'
+import { AWEME_PLAY, normalizeTikTok, tiktokGate, tiktokRefFrom, videoDetailScope } from './platforms/tiktok/normalize.ts'
 import {
   fetchInstagram, fetchInstagramFullPage, fetchInstagramGraphQLMedia, fetchInstagramUserFeed,
 } from './platforms/instagram/fetch.ts'
@@ -316,7 +316,25 @@ export async function liveFetchPost(
        * resolution hands back the aweme URL — two hops, which is exactly what we ship today.
        */
       const post = normalizeTikTok(got.html, ref)
-      if (post) return await withResolvedVideo(post)
+      if (post) {
+        const resolved = await withResolvedVideo(post)
+        /**
+         * COUNT WHICH URL WE ACTUALLY SHIPPED, because the degrade above is silent by design and
+         * that is how it went unnoticed for three weeks. See Outcome2's tt_onehop/tt_twohop.
+         *
+         * READ OFF THE RESULT, not off a flag returned by the resolver, and the difference matters:
+         * withResolvedVideo is called from three places and only reports a Post. The url in hand is
+         * the thing Discord will fetch, so asking it directly cannot drift from what shipped — and it
+         * stays correct if a later change resolves the url somewhere else entirely.
+         */
+        const shipped = Array.isArray(resolved.media)
+          ? resolved.media.find(m => m?.kind === 'video' && typeof m.url === 'string')
+          : undefined
+        if (shipped) {
+          count(env, 'tt', String(shipped.url).includes(AWEME_PLAY) ? 'tt_twohop' : 'tt_onehop', client)
+        }
+        return resolved
+      }
       /**
        * No Post came back. BEFORE the generic fetch_fail, check the SAME page for a GATE signal —
        * TikTok's age (isContentClassified + no playable video) / private (statusCode 10216/10222)

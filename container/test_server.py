@@ -543,7 +543,7 @@ class HandlerShape(unittest.TestCase):
     def test_probe_helpers_are_module_level_and_not_swallowed_by_the_class(self):
         # The mirror of the above, and the half that localises the failure: if these ever became
         # attributes of Handler, the class body has eaten them again.
-        for name in ("_probe_one", "_probe_clients", "_probe_error"):
+        for name in ("_probe_one", "_probe_clients", "_probe_error", "_probe_tiktok"):
             self.assertTrue(callable(getattr(srv, name, None)), f"{name} must be module level")
             self.assertFalse(hasattr(srv.Handler, name), f"{name} must NOT be inside Handler")
 
