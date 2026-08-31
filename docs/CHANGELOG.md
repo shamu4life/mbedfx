@@ -11,6 +11,42 @@ Nothing yet.
 
 ---
 
+## [1.14.1] - 2026-08-31
+
+### Added — the crawler-patience experiment (`/_wait`)
+
+**The owner's verdict on 1.14.0, same day it shipped: the stock player re-wraps the YouTube
+playback Discord already has — the thing this project exists to replace. It stands as a stopgap
+only.** The goal remains the native muxed mp4 on a COLD first paste, and the only blocker is
+arithmetic against a number nobody has ever measured: mux p50 is 18.2s, Discord caches a message's
+embed from its first crawl forever, and every crawler budget in `src/worker.ts` descends from
+"Discord leaves at 3-4s" — folklore whose sole source is a commit message (553bd2e). The one real
+observation (2026-08-30) is that a ~4.1s activity document drew a full card.
+
+Three unlinked, `no-store` routes measure the real ceiling, one real-client paste per data point:
+
+- `/_wait/a/{n}/{videoId}[/{tag}]` — the production-shaped question. Instant head, **playerless on
+  purpose** (no `og:video`, no `twitter:player`), whose activity+json link points at a document
+  held {n} seconds. On a warm video, a player in the drawn card can only mean Discord waited.
+- `/_wait/h/{n}/{videoId}[/{tag}]` — the head itself held {n} seconds, ordinary instant activity
+  link. Separates the head fetch's budget from the activity fetch's.
+- `/_wait/act/{n}/{sid}` — the delayed activity document: sleeps, then re-enters `handle()` for
+  the real `/users/youtube/statuses/{sid}` (the `/_smoke` re-entry pattern), so the delayed bytes
+  cannot drift from the real ones. A test asserts the equality.
+
+{n} is capped at 60 (refused with 400 above that, before any sleep — an open-ended sleep parameter
+on a public route is an abuse handle). Humans are redirected to the real video. The optional {tag}
+busts Discord's per-URL unfurl cache for re-tests.
+
+**What the answer buys.** If Discord's real ceiling is ~20-30s, holding the activity document
+until the mux lands converts most cold pastes to the real native card — no stock player, no photo
+— and `YT_MUX_BOT_MS` gets re-sized around a measurement instead of folklore. If the ceiling is
+short, the answer closes this door the way `/_clients` closed the PO-token door: permanently, with
+data. Mutation-falsified before keeping: a player tag smuggled into the head fails 3 tests; a
+removed sleep fails the hold assertion.
+
+---
+
 ## [1.14.0] - 2026-08-31
 
 ### A cold YouTube paste plays, at full quality, for the first time
