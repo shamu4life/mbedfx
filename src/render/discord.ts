@@ -270,6 +270,61 @@ function spoofVideoTags(post: Post, origin: string, title: string): string[] {
 }
 
 /**
+ * THE STOCK PLAYER — YouTube's own embed iframe, for the yt cards that cannot carry an mp4.
+ *
+ * MEASURED IN A REAL DISCORD CLIENT, 2026-08-30, via the /_stock/{1|2|3} experiment (v1.13.1), and
+ * every claim below is that screenshot rather than a guess. Three heads, one video, one session:
+ *
+ *   v1  player tags alone                          -> PLAYABLE. Discord renders the iframe from OUR
+ *                                                     origin; playback is YouTube's own pop-out.
+ *   v2  v1 + the oEmbed callback link              -> PLAYABLE, and the counts row renders beside it.
+ *   v3  v2 + the activity+json link                -> the ACTIVITY card. The iframe is gone: Discord
+ *                                                     prefers the Mastodon document whenever the link
+ *                                                     is present.
+ *
+ * v3 is the whole design constraint. The iframe and the activity card cannot coexist on one head, so
+ * this is not an upgrade to the spoof — it is a REPLACEMENT head for exactly the yt states where the
+ * activity card has nothing to play: the mux still racing (a cold first paste), a live stream, and a
+ * video past MUX_MAX_SECONDS. Today all three render a photo, Discord caches the embed in the
+ * message forever (discord-api-docs#1663), and that photo never heals. The stock head trades the
+ * activity card's author row for a player that works — at FULL quality, because it is YouTube's own
+ * player, and at ZERO latency, because the url derives from the video id alone. The owner rated the
+ * warm activity card's inline mp4 the better experience, so the gate below leaves every warm video
+ * exactly as it was: this head exists only where the alternative is a frozen photo.
+ *
+ * AGE-GATED VIDEOS ARE EXCLUDED (post.sensitive, set by normalizeYouTube from the same signal as
+ * AGE_NOTE): YouTube's embed player refuses them with a sign-in wall, so the stock head would trade
+ * an honest note for a player that errors on tap. The note card stays.
+ *
+ * og:image IS DELIBERATE AND NOT A C1 VIOLATION. C1's suppression protects the activity card from
+ * an OpenGraph card outranking it; this head has no activity link to protect. The measured v1/v2
+ * head carried the thumbnail and Discord drew it as the player's poster frame. `{poster: 0}` is the
+ * one slot that serves in every gated state — a yt video's poster is mandatory (derived from the id
+ * by the normalizer), and settleMux's degraded still lives in the poster slot by construction.
+ *
+ * 1280x720 is the measured experiment's value, not the video's: the iframe is a viewport, not the
+ * file, and the real dimensions belong to a player YouTube lays out itself.
+ */
+function stockPlayerTags(post: Post, origin: string, vid: string): string[] {
+  // `vid` arrives from the gate, where `post.ref?.p === 'yt'` has already narrowed the union —
+  // the ref's other arms (ig's {code}, fb's {kind}) have no `id` for this function to read.
+  const embed = esc(`https://www.youtube.com/embed/${str(vid)}`)
+  return [
+    `<meta property="og:type" content="video.other"/>`,
+    `<meta property="og:video" content="${embed}"/>`,
+    `<meta property="og:video:secure_url" content="${embed}"/>`,
+    `<meta property="og:video:type" content="text/html"/>`,
+    `<meta property="og:video:width" content="1280"/>`,
+    `<meta property="og:video:height" content="720"/>`,
+    `<meta property="og:image" content="${esc(mediaUrl(origin, post, { poster: 0 }))}"/>`,
+    `<meta property="twitter:card" content="player"/>`,
+    `<meta property="twitter:player" content="${embed}"/>`,
+    `<meta property="twitter:player:width" content="1280"/>`,
+    `<meta property="twitter:player:height" content="720"/>`,
+  ]
+}
+
+/**
  * The Mastodon-spoof head. Emits NINE tags on a post with usable media, those nine plus exactly
  * ONE og:image (the author avatar) on a post without, and those nine plus a SIX-TAG og:video
  * fallback on a post whose own media is a playable video — never twitter:image, and never more
@@ -329,6 +384,13 @@ function renderSpoof(post: Post, origin: string): Response {
   // C1 suppression rather than needing a guard of its own.
   const videoOg = spoofVideoTags(post, origin, title)
 
+  // THE STOCK GATE — see stockPlayerTags. yt only; only when there is NO playable video (the three
+  // states the activity card renders as a frozen photo); never on an age-gated post. Mutually
+  // exclusive with videoOg by construction: `!videoOg.length` is in the predicate.
+  const stockOg = post.ref?.p === 'yt' && !videoOg.length && !post.sensitive
+    ? stockPlayerTags(post, origin, post.ref.id)
+    : []
+
   const tags = [
     `<meta property="og:title" content="${title}"/>`,
     // buildPlainText, never buildContentHtml: this value is COUNTS-FREE by contract (§3).
@@ -351,6 +413,7 @@ function renderSpoof(post: Post, origin: string): Response {
     // Kept with the other og: tags, immediately after the og:image branch it is mutually
     // exclusive with — a video post has media, so that branch is empty whenever this one is not.
     ...videoOg,
+    ...stockOg,
     // name=, NOT property= — CORRECTED 2026-08-01, and the old comment here was wrong on the one
     // point that mattered. It claimed each spelling was "the one its own head was observed working
     // with"; what was actually observed was the TAG being present, never the stripe appearing.
@@ -425,7 +488,9 @@ function renderSpoof(post: Post, origin: string): Response {
     // promote, so dropping it can lose us nothing — while keeping it demonstrably costs the whole
     // activity card. Do not "restore for consistency" with the no-video branch; the branches face
     // different Discord code paths.
-    ...(videoOg.length
+    // ALSO OMITTED ON THE STOCK BRANCH, which carries its own `twitter:card player` — a second
+    // twitter:card is the duplicate-tag hazard the whitelist test exists to catch.
+    ...(videoOg.length || stockOg.length
       ? []
       : [`<meta name="twitter:card" content="${hasMedia ? 'summary_large_image' : 'summary'}"/>`]),
     // C3: present in the proven head, so emit it. Redundant with og:url as far as any
@@ -442,10 +507,19 @@ function renderSpoof(post: Post, origin: string): Response {
     // Gated on `videoOg` rather than on a fresh playableVideo() call, like every other divergence
     // in this head, so one predicate decides all of them and they cannot drift apart branch by
     // branch. See twitter:card immediately above, which is gated the same way for the same reason.
-    ...(videoOg.length ? [] : [`<link rel="canonical" href="${canonical}"/>`]),
+    // The stock branch omits canonical too: the measured v1/v2 experiment head carried none and
+    // rendered, and this head is a reproduction of that artifact, same as the video branch is of
+    // production fxtiktok's.
+    ...(videoOg.length || stockOg.length ? [] : [`<link rel="canonical" href="${canonical}"/>`]),
     // The whole point of this head. router.ts's spoofShape() is the other half of both URLs,
     // and the id has to survive decodeStatusId -> parseRefKey to name the post again.
-    `<link rel="alternate" type="application/activity+json" href="${esc(`${origin}/users/${handle}/statuses/${id}`)}"/>`,
+    // OMITTED ON THE STOCK BRANCH, and this omission IS the stock feature: the v3 experiment
+    // measured that Discord prefers the activity document whenever this link is present, and the
+    // activity card is exactly the thing that has nothing to play in the gated states. The oEmbed
+    // link stays — v2 measured the counts row coexisting with the iframe.
+    ...(stockOg.length
+      ? []
+      : [`<link rel="alternate" type="application/activity+json" href="${esc(`${origin}/users/${handle}/statuses/${id}`)}"/>`]),
     oembedLink(origin, id),
   ]
   return html(tags.join(''))

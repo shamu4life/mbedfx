@@ -11,6 +11,54 @@ Nothing yet.
 
 ---
 
+## [1.14.0] - 2026-08-31
+
+### A cold YouTube paste plays, at full quality, for the first time
+
+The 1.13.1 experiment came back from a real Discord client (owner's screenshots, 2026-08-30), and
+its three variants decomposed the design exactly:
+
+| variant | head | verdict |
+|---|---|---|
+| v1 | player tags alone | **playable** — Discord renders the `youtube.com/embed` iframe from our origin |
+| v2 | + the oEmbed link | **playable, with the counts row beside it** |
+| v3 | + the activity+json link | the **activity card** — the iframe is suppressed whenever the link is present |
+
+v3 is the design constraint: the iframe and the activity card cannot coexist on one head. And v3's
+inline playback in the screenshot was our own muxed mp4 (that video was warm), which the owner rated
+the better experience — so the integration replaces nothing that works.
+
+#### Changed
+- **`stockPlayerTags` in the spoof head** (`src/render/discord.ts`): a yt post with NO playable
+  video — the mux still racing on a cold first paste, a live stream, a video past
+  `MUX_MAX_SECONDS` — now emits YouTube's own embed player (`twitter:card player`,
+  `twitter:player` → `youtube.com/embed/{id}`, `og:video` type `text/html`) and OMITS the
+  activity+json link, which v3 measured as the suppressor. The oEmbed link stays (v2). Full quality
+  because it is YouTube's player; zero latency because the url derives from the id. Today all three
+  states render a photo that Discord caches in the message forever.
+- **Warm videos are byte-for-byte unchanged**: the gate is `p === 'yt' && no playable video`, so a
+  settled mux keeps the activity card and the inline mp4. Later pastes of a video whose first paste
+  drew the stock player get the inline player as before — per-message caching means each message
+  keeps the best card available when it was pasted.
+- **Age-gated videos are excluded** (`post.sensitive`): YouTube's embed refuses them with a sign-in
+  wall, so stock would trade an honest note for a player that errors on tap. The note card stays.
+
+#### Rewritten, not deleted
+Two tests pinned `!html.includes('og:video')` on the cold/no-container yt head. The property they
+protect is that no url of OURS promises bytes that do not exist (the poisoned-media defect); the
+stock og:video points at youtube.com, cannot reach `/_media`, and cannot be a dead mp4 — so both now
+assert the sharpened hazard (`no og:video at _media`) plus the stock shape. A third test pins the
+gate's three boundaries, and all three were falsified by mutation before being kept: widening the
+gate onto warm videos, dropping the age exclusion, and keeping the activity link each fail exactly
+one named test.
+
+#### Known trade, stated
+The stock card has no author row and is click-to-play into YouTube's pop-out rather than inline.
+That is the v2 card from the measurement, chosen over a frozen photo. Live streams and >25-minute
+videos — never playable here before — now play through it.
+
+---
+
 ## [1.13.1] - 2026-08-30
 
 ### The stock-player experiment: can Discord be handed YouTube's own player?
