@@ -5027,6 +5027,85 @@ export async function handle(req: Request, env: Env, ctx: ExecutionContext, d: D
     }
   }
 
+  /**
+   * `/_wait/...` — THE CRAWLER-PATIENCE EXPERIMENT. How long will Discord actually wait for a
+   * card? Three routes, unlinked, no-store, outside every production path:
+   *
+   *   `/_wait/a/{n}/{videoId}[/{tag}]` — the PRODUCTION-SHAPED question. Serves a minimal head
+   *       instantly whose activity+json link points at `/_wait/act/{n}/{sid}`; that document is
+   *       the REAL activity status for the video, held {n} seconds first. Paste a WARM video and
+   *       the drawn card can only contain a player if Discord waited out the delay — the head
+   *       carries no player tags of any kind, deliberately, so a timeout-fallback to the head is
+   *       visibly playerless rather than a confound.
+   *   `/_wait/h/{n}/{videoId}[/{tag}]` — the same head, but the HEAD response itself is held
+   *       {n} seconds and the activity link points at the ordinary instant status URL. Separates
+   *       the head fetch's budget from the activity fetch's.
+   *   `/_wait/act/{n}/{sid}` — the delayed activity document: sleep, then re-enter handle() for
+   *       the real `/users/youtube/statuses/{sid}` (the same internal re-entry /_smoke uses), so
+   *       shape drift is impossible.
+   *
+   * WHY THIS EXISTS (2026-08-31). The owner's verdict on 1.14.0's stock player: it re-wraps the
+   * YouTube playback Discord already has, which is a stopgap and not the goal. The goal is the
+   * native muxed mp4 on a COLD first paste, and the only blocker is arithmetic against an
+   * UNMEASURED number: mux p50 is 18.2s, Discord caches a message's embed from its first crawl
+   * forever, and every budget in this file descends from "Discord leaves at 3-4s" — folklore
+   * whose sole source is a commit message (553bd2e). The one real observation (2026-08-30) is
+   * that a ~4.1s activity document drew a full card. If the true ceiling is ~20-30s, holding the
+   * activity document until the mux lands converts most cold pastes to the real card, and
+   * YT_MUX_BOT_MS gets re-sized around a measurement instead of folklore.
+   *
+   * {n} is capped at 60: a held Worker response idles and costs nothing, but an open-ended sleep
+   * parameter on a public route is an abuse handle. The optional {tag} exists because Discord
+   * caches unfurls per-URL — re-testing the same n needs a fresh URL, not a re-paste.
+   */
+  {
+    const wact = /^\/_wait\/act\/(\d{1,2})\/(\d+)$/.exec(url.pathname)
+    if (wact) {
+      const n = Number(wact[1])
+      if (n > 60) return new Response('n is 0-60', { status: 400 })
+      if (n) await new Promise(r => setTimeout(r, n * 1000))
+      return handle(new Request(`${url.origin}/users/youtube/statuses/${wact[2]}`, { headers: req.headers }), env, ctx, d)
+    }
+    const wait = /^\/_wait\/([ah])\/(\d{1,2})\/([\w-]{11})(?:\/[\w-]{1,24})?$/.exec(url.pathname)
+    if (wait) {
+      const [, surface, ns, vid] = wait
+      const n = Number(ns)
+      if (n > 60) return new Response('n is 0-60', { status: 400 })
+      // Local spelling again, for the same reason as /_stock: this block sits above the shared
+      // `client`/`origin` declarations that fifteen routes depend on.
+      const waitClient = classify(req.headers.get('user-agent'))
+      if (waitClient === 'human') return redirect(`https://www.youtube.com/watch?v=${vid}`)
+      if (surface === 'h' && n) await new Promise(r => setTimeout(r, n * 1000))
+      let title = 'YouTube video'
+      try {
+        const got = await fetchYouTube({ p: 'yt', id: vid })
+        if (got.ok) {
+          const j = got.oembed as Record<string, unknown>
+          if (typeof j?.title === 'string' && j.title) title = j.title
+        }
+      } catch { /* the static fallback is the answer */ }
+      const esc = (s: string) => s.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;')
+      const sid = encodeStatusId(refKey({ p: 'yt', id: vid }))
+      const actHref = surface === 'a'
+        ? `${url.origin}/_wait/act/${n}/${sid}`
+        : `${url.origin}/users/youtube/statuses/${sid}`
+      // NO og:video and NO twitter:player, on purpose: the drawn card can then only contain a
+      // player if the activity document was consumed, which is the entire measurement.
+      const tags = [
+        `<meta property="og:title" content="${esc(title)} [wait ${surface}/${n}]"/>`,
+        `<meta property="og:site_name" content="mbedfx patience experiment"/>`,
+        `<meta property="og:url" content="https://www.youtube.com/watch?v=${vid}"/>`,
+        `<meta property="og:image" content="https://i.ytimg.com/vi/${vid}/maxresdefault.jpg"/>`,
+        `<meta property="og:description" content="Surface ${surface}, ${n}s hold. A player on this card means Discord waited."/>`,
+        `<link rel="alternate" type="application/json+oembed" href="${url.origin}/_oembed/${sid}"/>`,
+        `<link rel="alternate" type="application/activity+json" href="${actHref}"/>`,
+      ]
+      return new Response(
+        `<!doctype html><html><head><meta charset="utf-8"/>${tags.join('')}</head><body>crawler-patience experiment ${surface}/${n}</body></html>`,
+        { headers: { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' } },
+      )
+    }
+  }
   if (url.pathname === '/_clients') {
     const resolver = env.MEDIA_RESOLVER
     if (!resolver) {
