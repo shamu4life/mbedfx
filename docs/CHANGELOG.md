@@ -11,6 +11,40 @@ Nothing yet.
 
 ---
 
+## [1.13.1] - 2026-08-30
+
+### The stock-player experiment: can Discord be handed YouTube's own player?
+
+The cold-paste problem is arithmetic that no budget fixes: extraction alone costs 3.1-4.7 s, mux
+p50 is 18.2 s, and the crawler window is ~5.8 s — so a first paste is a photo, and quality-lowering
+formats are both refused by YouTube (itag 18 answers 403 even to yt-dlp itself, measured 2026-08-30
+on three videos) and off the table anyway.
+
+The remaining full-quality, zero-latency candidate is the one koutube ships as its `stock` mode and
+its live-stream fallback: `twitter:player` pointing at `youtube.com/embed/{id}` — an iframe card
+whose url derives from the id alone. No extraction, no mux, no container, nothing to time out, and
+it is YouTube's own player, so the viewer gets every resolution the video has. It would work on a
+stone-cold paste, on a live stream, and on a video past `MUX_MAX_SECONDS` — the three cards this
+project cannot currently play.
+
+**Whether Discord renders it from this origin is unknowable from a shell** — iframe support is
+provider-whitelist-shaped, and the page carrying the tag is not youtube.com. koutube's users are
+evidence, not proof.
+
+#### Added
+- **`/_stock/{1|2|3}/{videoId}`**, an experiment route outside every production path: `no-store`,
+  never linked, touches no container and writes nothing, and `/watch` is byte-for-byte unchanged.
+  Three variants so one paste session answers the whole design question — v1 the player tags alone,
+  v2 plus the oEmbed callback (do the counts coexist with the iframe), v3 plus the activity+json
+  link (does the Mastodon document suppress it, which decides whether an integration replaces the
+  yt spoof or extends it). The title rides `fetchYouTube` — worker.ts performs no egress of its own,
+  and the probe enforcer holds that invariant against exactly this kind of addition.
+
+If the experiment wins, the integration is a separate, measured change. If it loses, the route is
+deleted and the answer written down here.
+
+---
+
 ## [1.13.0] - 2026-08-30
 
 ### TikTok's redirect is resolved by the container, because a Cloudflare Worker cannot resolve it

@@ -1879,6 +1879,69 @@ test('NO CONTAINER BINDING MEANS NO FALLBACK, AND NO CRASH — the self-host / d
   assert.ok(loc.includes('/aweme/v1/play/'), 'no binding: the aweme url, unchanged')
 })
 
+/**
+ * THE STOCK-PLAYER EXPERIMENT ROUTE. These pin the three variants' SHAPES, because the experiment's
+ * whole value is that one paste session discriminates between them — two variants that accidentally
+ * emit the same head answer nothing, and nobody would notice from a client.
+ */
+const stockServing = async (fn, { oembed = { title: 'Real Title', author_name: 'Real Author' } } = {}) => {
+  const real = globalThis.fetch
+  globalThis.fetch = async () => {
+    if (oembed === 'throw') throw new Error('ECONNRESET')
+    return Response.json(oembed)
+  }
+  try { return await fn() } finally { globalThis.fetch = real }
+}
+
+test('STOCK v1 EMITS THE IFRAME PLAYER AND NOTHING THAT COMPETES WITH IT', async () => {
+  const res = await stockServing(() => handle(req('/_stock/1/jNQXAC9IVRw', DISCORD), fakeEnv(), ctx, {}))
+  assert.equal(res.status, 200)
+  assert.equal(res.headers.get('cache-control'), 'no-store',
+    'an experiment result must never be pinned by a response cache')
+  const h = await res.text()
+  assert.ok(h.includes('twitter:player" content="https://www.youtube.com/embed/jNQXAC9IVRw"'),
+    'the player IS the experiment')
+  assert.ok(h.includes('og:video:type" content="text/html"'), 'an iframe, not an mp4')
+  assert.ok(h.includes('Real Title'), 'the oEmbed title reaches the card')
+  assert.ok(!h.includes('activity+json'), 'v1 must not carry the link v3 exists to test')
+  assert.ok(!h.includes('json+oembed'), 'v1 must not carry the link v2 exists to test')
+})
+
+test('STOCK v2 ADDS ONLY THE OEMBED LINK; v3 ADDS THE ACTIVITY LINK ON TOP', async () => {
+  const [v2, v3] = await stockServing(async () => [
+    await (await handle(req('/_stock/2/jNQXAC9IVRw', DISCORD), fakeEnv(), ctx, {})).text(),
+    await (await handle(req('/_stock/3/jNQXAC9IVRw', DISCORD), fakeEnv(), ctx, {})).text(),
+  ])
+  assert.ok(v2.includes('json+oembed') && !v2.includes('activity+json'), 'v2: oEmbed only')
+  assert.ok(v3.includes('json+oembed') && v3.includes('activity+json'), 'v3: both')
+  for (const h of [v2, v3]) {
+    assert.ok(h.includes('twitter:player" content="https://www.youtube.com/embed/'),
+      'every variant keeps the player — the links are the only variable')
+  }
+})
+
+test('A STOCK PASTE BY A HUMAN GOES TO YOUTUBE, AND A FAILED OEMBED STILL RENDERS', async () => {
+  const human = await stockServing(() =>
+    handle(req('/_stock/1/jNQXAC9IVRw', 'Mozilla/5.0 (Macintosh) Safari/605.1'), fakeEnv(), ctx, {}))
+  assert.equal(human.status, 302)
+  assert.equal(human.headers.get('location'), 'https://www.youtube.com/watch?v=jNQXAC9IVRw')
+  // The title fetch failing must not fail the experiment — a static fallback is the answer.
+  const res = await stockServing(() => handle(req('/_stock/1/jNQXAC9IVRw', DISCORD), fakeEnv(), ctx, {}),
+    { oembed: 'throw' })
+  assert.equal(res.status, 200)
+  assert.ok((await res.text()).includes('YouTube video'), 'the static title stands in')
+})
+
+test('A MALFORMED STOCK PATH NEVER REACHES THE EXPERIMENT', async () => {
+  // 10 chars, 12 chars, a bad variant — each must fall through to ordinary routing rather than
+  // render an experiment head for an id that is not a YouTube id.
+  for (const path of ['/_stock/1/shortid123', '/_stock/1/twelvechars12', '/_stock/9/jNQXAC9IVRw']) {
+    const res = await stockServing(() => handle(req(path, DISCORD), fakeEnv(), ctx, {}))
+    const h = await res.text()
+    assert.ok(!h.includes('stock-player experiment'), `${path} must not render the experiment`)
+  }
+})
+
 test('A SLIDESHOW IS UNTOUCHED — one hop already, and it must cost no extra fetch', async () => {
   // MUST NOT BREAK. Slideshows are the arm that already renders the activity card correctly, so
   // the fix must be invisible to them: their images are not aweme urls and nothing may probe.

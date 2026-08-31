@@ -19,6 +19,7 @@ import {
 import { fetchBluesky, fetchBlueskyProfile } from './platforms/bluesky/fetch.ts'
 import { normalizeBluesky, normalizeBlueskyProfile } from './platforms/bluesky/normalize.ts'
 import type { AwemeResolver } from './platforms/tiktok/fetch.ts'
+import { encodeStatusId } from './statusid.ts'
 import { fetchTikTok, isTikTokCdnHost, resolveTikTokShortlink, TIKTOK_UA, withResolvedVideo } from './platforms/tiktok/fetch.ts'
 import { AWEME_PLAY, normalizeTikTok, tiktokGate, tiktokRefFrom, videoDetailScope } from './platforms/tiktok/normalize.ts'
 import {
@@ -4937,6 +4938,95 @@ export async function handle(req: Request, env: Env, ctx: ExecutionContext, d: D
    * not linked from anywhere, answers JSON so nothing unfurls it, and needs MEDIA_RESOLVER — without
    * the binding it says so rather than pretending.
    */
+  /**
+   * `/_stock/{1|2|3}/{videoId}` — THE STOCK-PLAYER EXPERIMENT. Three head variants that hand
+   * Discord YouTube's OWN embed player instead of a muxed mp4, so a real client can say which (if
+   * any) renders a playable iframe.
+   *
+   * WHY IT MIGHT WORK, AND WHY ONLY A REAL PASTE CAN SAY. `twitter:player` pointing at
+   * `youtube.com/embed/{id}` is an IFRAME player card: no extraction, no mux, no container, no
+   * signature, nothing to time out — the url derives from the id alone — and it is YouTube's own
+   * player, so the viewer gets every resolution the video has. It would work on a stone-cold first
+   * paste, on a live stream, and on a video past MUX_MAX_SECONDS, which are exactly the three cards
+   * this project cannot currently play. koutube (iGerman00/koutube, videoHandler.ts) ships this as
+   * its `stock` mode AND as its live-stream fallback, which is evidence Discord renders it — but
+   * evidence is not proof, Discord's iframe support is provider-whitelist-shaped, and the page
+   * serving the tag here is not youtube.com. Nothing curl-shaped can answer that; a paste can.
+   *
+   * WHY THREE VARIANTS, one question each:
+   *   1 — the player tags alone (plus og:image, og:title). The minimal claim.
+   *   2 — variant 1 plus the oEmbed callback link, i.e. can the counts row coexist with the iframe.
+   *   3 — variant 2 plus the activity+json link. renderSpoof's whole path competes here: if Discord
+   *       prefers the Mastodon document it may draw the photo card and drop the iframe, and that
+   *       decides WHERE a real integration would have to sit (replace the yt spoof vs extend it).
+   *
+   * DELIBERATELY OUTSIDE every production path: nothing links here, nothing response-caches
+   * (`no-store`), no container is touched, no R2 is written, and the ordinary /watch route is
+   * byte-for-byte unchanged. The title comes from YouTube's cookie-free oEmbed with a static
+   * fallback, because a missing title must not fail the experiment. Humans are redirected to the
+   * real video, same as every other head. If the experiment wins, the integration is a separate,
+   * measured change; if it loses, this route is deleted and the answer gets written down.
+   */
+  {
+    const stock = /^\/_stock\/([123])\/([\w-]{11})$/.exec(url.pathname)
+    if (stock) {
+      const [, variant, vid] = stock
+      // Local spellings of `client` and `origin`: this block sits above the shared declarations,
+      // and hoisting those would reorder code that fifteen routes depend on for an experiment.
+      const stockClient = classify(req.headers.get('user-agent'))
+      const stockOrigin = url.origin
+      if (stockClient === 'human') return redirect(`https://www.youtube.com/watch?v=${vid}`)
+      // THROUGH THE PLATFORM FETCHER, not a bare fetch: worker.ts performs no egress of its own
+      // (the probe enforcer pins that invariant, and it is the architecture, not a lint). This is
+      // also more faithful — the title comes from the same call the real card makes.
+      let title = 'YouTube video'
+      let author = 'YouTube'
+      try {
+        const got = await fetchYouTube({ p: 'yt', id: vid })
+        if (got.ok) {
+          const j = got.oembed as Record<string, unknown>
+          if (typeof j?.title === 'string' && j.title) title = j.title
+          if (typeof j?.author_name === 'string' && j.author_name) author = j.author_name
+        }
+      } catch { /* the static fallback is the answer */ }
+      const esc = (s: string) => s.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;')
+      const embed = `https://www.youtube.com/embed/${vid}`
+      const thumb = `https://i.ytimg.com/vi/${vid}/maxresdefault.jpg`
+      const tags = [
+        `<meta property="og:title" content="${esc(title)} [stock v${variant}]"/>`,
+        `<meta property="og:site_name" content="mbedfx stock experiment"/>`,
+        `<meta property="og:url" content="https://www.youtube.com/watch?v=${vid}"/>`,
+        `<meta property="og:image" content="${thumb}"/>`,
+        `<meta property="og:description" content="Variant ${variant}: YouTube's own embed player via twitter:player. Uploaded by ${esc(author)}."/>`,
+        `<meta property="og:type" content="video.other"/>`,
+        `<meta property="og:video" content="${embed}"/>`,
+        `<meta property="og:video:secure_url" content="${embed}"/>`,
+        `<meta property="og:video:type" content="text/html"/>`,
+        `<meta property="og:video:width" content="1280"/>`,
+        `<meta property="og:video:height" content="720"/>`,
+        `<meta property="twitter:card" content="player"/>`,
+        `<meta property="twitter:title" content="${esc(title)} [stock v${variant}]"/>`,
+        `<meta property="twitter:player" content="${embed}"/>`,
+        `<meta property="twitter:player:width" content="1280"/>`,
+        `<meta property="twitter:player:height" content="720"/>`,
+      ]
+      if (variant !== '1') {
+        tags.push(
+          `<link rel="alternate" type="application/json+oembed" href="${stockOrigin}/_oembed/${encodeStatusId(refKey({ p: 'yt', id: vid }))}"/>`,
+        )
+      }
+      if (variant === '3') {
+        tags.push(
+          `<link rel="alternate" type="application/activity+json" href="${stockOrigin}/users/youtube/statuses/${encodeStatusId(refKey({ p: 'yt', id: vid }))}"/>`,
+        )
+      }
+      return new Response(
+        `<!doctype html><html><head><meta charset="utf-8"/>${tags.join('')}</head><body>stock-player experiment v${variant}</body></html>`,
+        { headers: { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' } },
+      )
+    }
+  }
+
   if (url.pathname === '/_clients') {
     const resolver = env.MEDIA_RESOLVER
     if (!resolver) {
