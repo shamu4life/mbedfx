@@ -1029,7 +1029,17 @@ test('a NOT-YET-MUXED {page} video renders the still (no og:video) and is NOT re
   const deps = { ...ytDeps(), cache }
   const html = await (await handle(req('/watch?v=dQw4w9WgXcQ', DISCORD), env, { waitUntil: (p) => waits.push(p) }, deps)).text()
   await Promise.allSettled(waits)
-  assert.ok(!html.includes('og:video'), 'no video is promised until one exists')
+  // SHARPENED 2026-08-31 from `!html.includes('og:video')`. The property this test protects is
+  // that no url of OURS promises bytes that do not exist — the poisoned-media defect above is
+  // specifically Discord caching "/_media/... is an image". The stock-player head (see
+  // stockPlayerTags) now puts an og:video on this card pointing at youtube.com/embed with type
+  // text/html: a static url that always exists, cannot reach /_media, and cannot be a dead mp4.
+  // That is not the hazard; assert the hazard.
+  assert.ok(!/og:video[^>]*_media/.test(html), 'no MUXED video is promised until one exists')
+  assert.ok(html.includes('youtube.com/embed/dQw4w9WgXcQ'),
+    'and the stock player stands in — measured playable in a real client, 2026-08-30')
+  assert.ok(!html.includes('activity+json'),
+    'the activity link must go with it: v3 measured that its presence suppresses the iframe')
   // The POST cache legitimately holds the post data (it is correct — only the RENDERED CARD is stale the
   // moment the mux lands), so assert precisely that: no HTML response was cached.
   const cachedHtml = [...cache.store.values()].filter(v => (v.headers.get('content-type') || '').includes('text/html'))
@@ -1094,14 +1104,58 @@ test('fetchYouTube NEVER fetches the watch page — the 1.58MB request is gone a
   }
 })
 
-test('YouTube degrades to the thumbnail still (no og:video) when no container is bound', async () => {
+test('YouTube with no container bound gets the STOCK player, and /_media still serves the thumbnail', async () => {
+  // REWRITTEN 2026-08-31; was 'degrades to the thumbnail still (no og:video)'. The no-container
+  // deploy is the self-hosting shape, and it used to be a permanent photo card. The stock head
+  // (measured playable 2026-08-30) means even a deploy with no container plays YouTube — the one
+  // platform where the player needs nothing from us. The media route's degrade is unchanged.
   const deps = ytDeps()
   const html = await (await handle(req('/watch?v=dQw4w9WgXcQ', DISCORD), fakeEnv(), ctx, deps)).text()
-  assert.ok(!html.includes('og:video'), 'no container -> no muxed video, never a dead player')
+  assert.ok(!/og:video[^>]*_media/.test(html), 'no container -> no muxed video url, never a dead player')
+  assert.ok(html.includes('twitter:player" content="https://www.youtube.com/embed/dQw4w9WgXcQ"'),
+    'the stock player carries the card instead of a frozen photo')
   // withResolver turned the remux video into the poster image; the /_media route 302s to the thumbnail.
   const m = await handle(req(`/_media/${encodeURIComponent(refKey(YT_REF))}/0`, DISCORD), fakeEnv(), ctx, deps)
   assert.equal(m.status, 302)
   assert.equal(m.headers.get('location'), YT_THUMB)
+})
+
+test('THE STOCK GATE: warm keeps the activity card, age-gated keeps the note, non-yt is untouched', async () => {
+  /**
+   * The three boundaries of stockPlayerTags, pinned because each was a deliberate decision from
+   * the 2026-08-30 measurement session and each has a plausible-looking "improvement" that
+   * reverses it:
+   *
+   *  - WARM: the owner rated the inline mp4 the better experience, and v3 measured that the
+   *    activity link suppresses the iframe — so a warm video must keep the activity card
+   *    UNCHANGED. Widening the stock gate to "all yt" would silently replace the best card with
+   *    the click-to-play one.
+   *  - AGE-GATED: YouTube's embed refuses those with a sign-in wall, so stock would trade an
+   *    honest note for a player that errors on tap.
+   *  - NON-YT: a cold Facebook remux has no youtube.com/embed to point at; the gate is p==='yt'.
+   */
+  // Warm: the muxed env from the surrounding tests — og:video is ours, activity link present,
+  // no stock tags.
+  const warm = await (await handle(req('/watch?v=dQw4w9WgXcQ', DISCORD), muxedEnv(), ctx, ytDeps())).text()
+  assert.ok(/og:video[^>]*_media/.test(warm), 'warm: the muxed mp4 is the card')
+  assert.ok(warm.includes('activity+json'), 'warm: the activity card stands')
+  assert.ok(!warm.includes('youtube.com/embed/'), 'warm: no stock player beside it')
+
+  // Age-gated: same post, sensitive:true — no stock, activity link stays with the note card.
+  const gated = {
+    cache: fakeCache(),
+    fetchPost: async () => ({ ...ytPost, sensitive: true }),
+    resolveShortlink: async () => ({ kind: 'unresolved' }),
+    resolveRedditShare: async () => null,
+  }
+  const aged = await (await handle(req('/watch?v=dQw4w9WgXcQ', DISCORD), fakeEnv(), ctx, gated)).text()
+  assert.ok(!aged.includes('youtube.com/embed/'), 'age-gated: the embed would demand a sign-in')
+  assert.ok(aged.includes('activity+json'), 'age-gated: the note card stands')
+
+  // Non-yt cold remux: Facebook's card is untouched, byte-for-byte concern-free.
+  const fb = await (await handle(req('/WYFF4/videos/10153231379946729', DISCORD), fakeEnv(), ctx, fbDeps())).text()
+  assert.ok(!fb.includes('youtube.com/embed/'), 'non-yt: the gate is the platform')
+  assert.ok(fb.includes('activity+json'), 'non-yt: the activity card stands')
 })
 
 // ---------------------------------------------------------------------------
