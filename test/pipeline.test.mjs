@@ -1996,6 +1996,66 @@ test('A MALFORMED STOCK PATH NEVER REACHES THE EXPERIMENT', async () => {
   }
 })
 
+/**
+ * THE CRAWLER-PATIENCE EXPERIMENT ROUTES (/_wait). These pin three properties the measurement
+ * depends on: the head must be PLAYERLESS (so a player in the drawn card is attributable to the
+ * activity document alone), the delayed activity document must be the real one's bytes (re-entry
+ * through handle(), so shape drift is impossible), and the hold must actually happen on whichever
+ * surface carries it. Two variants that accidentally emit the same shape answer nothing.
+ */
+test('WAIT a/{n}: an instant playerless head whose activity link carries the delay', async () => {
+  const res = await stockServing(() => handle(req('/_wait/a/0/dQw4w9WgXcQ', DISCORD), fakeEnv(), ctx, {}))
+  assert.equal(res.status, 200)
+  assert.equal(res.headers.get('cache-control'), 'no-store',
+    'an experiment result must never be pinned by a response cache')
+  const h = await res.text()
+  assert.ok(!h.includes('twitter:player') && !h.includes('og:video'),
+    'playerless ON PURPOSE: a player in the drawn card can then only come from the activity document')
+  assert.match(h, /activity\+json" href="[^"]*\/_wait\/act\/0\/\d+"/, 'the delay rides the activity href')
+  assert.ok(h.includes('json+oembed'), 'the counts link stays, production-shaped')
+})
+
+test('WAIT act/{n} SERVES THE REAL ACTIVITY DOCUMENT, DELAYED — the same bytes, later', async () => {
+  const head = await (await stockServing(() =>
+    handle(req('/_wait/a/1/dQw4w9WgXcQ', DISCORD), fakeEnv(), ctx, {}))).text()
+  const m = /activity\+json" href="[^"]*(\/_wait\/act\/1\/(\d+))"/.exec(head)
+  assert.ok(m, 'the head names the delayed activity url')
+  const [, actPath, sid] = m
+  const t0 = Date.now()
+  const delayed = await (await handle(req(actPath, DISCORD), muxedEnv(), ctx, ytDeps())).text()
+  assert.ok(Date.now() - t0 >= 900, 'the hold is real')
+  const direct = await (await handle(req(`/users/youtube/statuses/${sid}`, DISCORD), muxedEnv(), ctx, ytDeps())).text()
+  assert.equal(delayed, direct, 're-entry through handle() — drift from the real document is impossible')
+  assert.ok(direct.includes('/_media/'),
+    'and the document is the PLAYABLE warm card, or equality above proves nothing')
+})
+
+test('WAIT h/{n} HOLDS THE HEAD ITSELF and links the ordinary instant activity document', async () => {
+  const t0 = Date.now()
+  const h = await (await stockServing(() =>
+    handle(req('/_wait/h/1/dQw4w9WgXcQ', DISCORD), fakeEnv(), ctx, {}))).text()
+  assert.ok(Date.now() - t0 >= 900, 'the hold is real, on the head this time')
+  assert.match(h, /activity\+json" href="[^"]*\/users\/youtube\/statuses\/\d+"/,
+    'the activity document itself is instant — h measures the head fetch alone')
+  assert.ok(!h.includes('/_wait/act/'), 'no second delay may stack onto the activity fetch')
+})
+
+test('WAIT GUARDS: humans go to YouTube, n past 60 is refused, malformed paths fall through', async () => {
+  const human = await stockServing(() =>
+    handle(req('/_wait/a/30/dQw4w9WgXcQ', 'Mozilla/5.0 (Macintosh) Safari/605.1'), fakeEnv(), ctx, {}))
+  assert.equal(human.status, 302)
+  assert.equal(human.headers.get('location'), 'https://www.youtube.com/watch?v=dQw4w9WgXcQ')
+  // Refused BEFORE any sleep: an open-ended sleep parameter on a public route is an abuse handle.
+  for (const path of ['/_wait/a/61/dQw4w9WgXcQ', '/_wait/act/61/1234567890']) {
+    const res = await handle(req(path, DISCORD), fakeEnv(), ctx, {})
+    assert.equal(res.status, 400, path)
+  }
+  for (const path of ['/_wait/x/5/dQw4w9WgXcQ', '/_wait/a/5/shortid123', '/_wait/a/5/twelvechars12']) {
+    const res = await stockServing(() => handle(req(path, DISCORD), fakeEnv(), ctx, {}))
+    assert.ok(!(await res.text()).includes('patience experiment'), `${path} must not reach the experiment`)
+  }
+})
+
 test('A SLIDESHOW IS UNTOUCHED — one hop already, and it must cost no extra fetch', async () => {
   // MUST NOT BREAK. Slideshows are the arm that already renders the activity card correctly, so
   // the fix must be invisible to them: their images are not aweme urls and nothing may probe.
