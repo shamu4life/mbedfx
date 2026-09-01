@@ -5057,6 +5057,17 @@ export async function handle(req: Request, env: Env, ctx: ExecutionContext, d: D
    *       land on `/_wait/mediah/{n}/…`, which answers status and content-type IMMEDIATELY and
    *       starts the body {n} seconds later — a mux-in-progress streaming. This asks whether
    *       Discord's crawl-time validator needs the response or just its headers.
+   *   `/_wait/c/{n}/{videoId}[/{tag}]` — THE MOOV/MDAT SPLIT (added after b/8, b/20 and b/35
+   *       all lost the player: headers alone do not satisfy the validator). Via
+   *       `/_wait/cact/{n}/{sid}` the video urls land on `/_wait/mediac/{n}/…`, which serves
+   *       the file's `ftyp` and `moov` boxes IMMEDIATELY and the `mdat` {n} seconds later. Our
+   *       muxes are `+faststart`, so this is the real file's own shape, and it is what a
+   *       fragmented-mp4 stream would look like: the init segment in the first second, the
+   *       media as it is produced. It separates "the validator reads the moov" (dimensions,
+   *       duration — what a direct mp4 link must yield within seconds too) from "the validator
+   *       downloads the whole file". `b/0` is the CONTROL the b sweep lacked: every b paste was
+   *       chunked with no content-length, and a validator that refuses length-less video would
+   *       have failed them regardless of the stall. Paste b/0 alongside c.
    *
    * WHY THIS EXISTS (2026-08-31). The owner's verdict on 1.14.0's stock player: it re-wraps the
    * YouTube playback Discord already has, which is a stopgap and not the goal. The goal is the
@@ -5077,8 +5088,12 @@ export async function handle(req: Request, env: Env, ctx: ExecutionContext, d: D
    * instant document, video url stalled): NO PLAYER on any — Discord validates the video url
    * inside the same crawl window, so the media proxy's patience never enters into it. With only
    * 4 of 139 muxes inside 5s, neither holding a crawler response nor stalling a whole media
-   * response can carry a cold paste. The b surface (headers instant, body delayed) is the one
-   * seam left unmeasured, and it is the exact shape of a streaming-mux integration.
+   * response can carry a cold paste. Then b/8, b/20 and b/35 (headers instant, body delayed):
+   * NO PLAYER — the validator needs bytes, not just a content-type. What it has not said is
+   * WHICH bytes: the moov, or all of them. That is c. If c/20 keeps its player, a streaming
+   * fragmented-mp4 mux that gets its init segment out inside the window is the cold-paste
+   * answer; if c/8 loses it (and b/0 kept it), the whole file has to exist inside ~5s and the
+   * native-mp4-on-first-paste goal is measured-impossible for YouTube from this egress.
    *
    * {n} is capped at 60: a held Worker response idles and costs nothing, but an open-ended sleep
    * parameter on a public route is an abuse handle. The optional {tag} exists because Discord
@@ -5092,7 +5107,7 @@ export async function handle(req: Request, env: Env, ctx: ExecutionContext, d: D
       if (n) await new Promise(r => setTimeout(r, n * 1000))
       return handle(new Request(`${url.origin}/users/youtube/statuses/${wact[2]}`, { headers: req.headers }), env, ctx, d)
     }
-    const wmact = /^\/_wait\/(mact|bact)\/(\d{1,2})\/(\d+)$/.exec(url.pathname)
+    const wmact = /^\/_wait\/(mact|bact|cact)\/(\d{1,2})\/(\d+)$/.exec(url.pathname)
     if (wmact) {
       const n = Number(wmact[2])
       if (n > 60) return new Response('n is 0-60', { status: 400 })
@@ -5103,15 +5118,15 @@ export async function handle(req: Request, env: Env, ctx: ExecutionContext, d: D
       // segments stay on the real route, so the card's imagery cannot confound the reading —
       // what stalls is exactly what Discord fetches to play the video. mact stalls the whole
       // response; bact stalls only the BODY (headers instant), which is the shape a streaming
-      // mux integration would actually have.
-      const slot = wmact[1] === 'bact' ? 'mediah' : 'media'
+      // mux integration would actually have. cact splits inside the body: moov now, mdat later.
+      const slot = wmact[1] === 'bact' ? 'mediah' : wmact[1] === 'cact' ? 'mediac' : 'media'
       const stalled = body.replace(/\/_media\/([^"]*?\/)(\d+)"/g, `/_wait/${slot}/${n}/$1$2"`)
       // The rewrite changes the byte length; a stale content-length would truncate the document.
       const heads = new Headers(real.headers)
       heads.delete('content-length')
       return new Response(stalled, { status: real.status, headers: heads })
     }
-    const wmedia = /^\/_wait\/(media|mediah)\/(\d{1,2})\/(.+)$/.exec(url.pathname)
+    const wmedia = /^\/_wait\/(media|mediah|mediac)\/(\d{1,2})\/(.+)$/.exec(url.pathname)
     if (wmedia) {
       const n = Number(wmedia[2])
       if (n > 60) return new Response('n is 0-60', { status: 400 })
@@ -5119,6 +5134,72 @@ export async function handle(req: Request, env: Env, ctx: ExecutionContext, d: D
         if (n) await new Promise(r => setTimeout(r, n * 1000))
         // Re-entry adds no authority: this can only address our own public /_media route.
         return handle(new Request(`${url.origin}/_media/${wmedia[3]}`, { headers: req.headers }), env, ctx, d)
+      }
+      if (wmedia[1] === 'mediac') {
+        // mediac — THE MOOV/MDAT SPLIT (2026-09-01, after b/8 lost the player with instant
+        // headers): the validator wants bytes inside the crawl window, and this asks which. A
+        // faststart mp4 puts ftyp+moov first, and the moov is where a reader finds dimensions
+        // and duration — the same thing Discord must extract from a bare mp4 link within
+        // seconds without downloading a 100 MB file. The boxes through the end of moov go out
+        // at once; the mdat follows {n} seconds later, chunked. Range is stripped on purpose:
+        // a stream being produced cannot honour one either, so the experiment must not.
+        const inHeads = new Headers(req.headers)
+        inHeads.delete('range')
+        const real = await handle(new Request(`${url.origin}/_media/${wmedia[3]}`, { headers: inHeads }), env, ctx, d)
+        if (!real.body || real.status !== 200) return real
+        // Buffered whole so the cut can be computed; capped because a Worker holds 128 MiB and
+        // this is a public, unauthenticated route.
+        const cap = 32 << 20
+        const chunks: Uint8Array[] = []
+        let total = 0
+        const rd = real.body.getReader()
+        for (;;) {
+          const { done, value } = await rd.read()
+          if (done) break
+          total += value.byteLength
+          if (total > cap) { await rd.cancel(); return new Response('experiment video over 32 MiB', { status: 413 }) }
+          chunks.push(value)
+        }
+        const all = new Uint8Array(total)
+        let at = 0
+        for (const c of chunks) { all.set(c, at); at += c.byteLength }
+        // Walk the top-level boxes: [size u32][type 4cc], size 1 = 64-bit largesize follows,
+        // size 0 = to end of file. Stop past `moov`; a file with mdat before moov is not one of
+        // ours (the container writes +faststart), so 64 KiB is the fallback cut, not a guess.
+        const moovEnd = (b: Uint8Array): number => {
+          const dv = new DataView(b.buffer, b.byteOffset, b.byteLength)
+          let off = 0
+          while (off + 8 <= b.length) {
+            let size = dv.getUint32(off)
+            const type = String.fromCharCode(b[off + 4], b[off + 5], b[off + 6], b[off + 7])
+            if (size === 1) {
+              if (off + 16 > b.length) break
+              size = Number(dv.getBigUint64(off + 8))
+            } else if (size === 0) size = b.length - off
+            if (size < 8) break
+            if (type === 'moov') return Math.min(off + size, b.length)
+            if (type === 'mdat') break
+            off += size
+          }
+          return Math.min(65536, b.length)
+        }
+        const cut = moovEnd(all)
+        const { readable, writable } = new TransformStream()
+        const pump = (async () => {
+          const w = writable.getWriter()
+          await w.write(all.subarray(0, cut))
+          if (n) await new Promise(r => setTimeout(r, n * 1000))
+          await w.write(all.subarray(cut))
+          await w.close()
+        })()
+        ctx.waitUntil(pump)
+        const heads = new Headers(real.headers)
+        heads.delete('content-length')
+        heads.delete('content-range')
+        heads.delete('accept-ranges')
+        // Diagnostic for the verification probe: where the instant part ended.
+        heads.set('x-mbedfx-moov-cut', String(cut))
+        return new Response(readable, { status: 200, headers: heads })
       }
       // mediah — THE HEADER/BODY SPLIT (2026-09-01, after m/12 lost the player with an instant
       // document): the m sweep showed Discord validates the video url inside the same ~5s crawl
@@ -5142,7 +5223,7 @@ export async function handle(req: Request, env: Env, ctx: ExecutionContext, d: D
       heads.delete('content-length')
       return new Response(readable, { status: real.status, headers: heads })
     }
-    const wait = /^\/_wait\/([ahmb])\/(\d{1,2})\/([\w-]{11})(?:\/[\w-]{1,24})?$/.exec(url.pathname)
+    const wait = /^\/_wait\/([ahmbc])\/(\d{1,2})\/([\w-]{11})(?:\/[\w-]{1,24})?$/.exec(url.pathname)
     if (wait) {
       const [, surface, ns, vid] = wait
       const n = Number(ns)
@@ -5168,7 +5249,9 @@ export async function handle(req: Request, env: Env, ctx: ExecutionContext, d: D
           ? `${url.origin}/_wait/mact/${n}/${sid}`
           : surface === 'b'
             ? `${url.origin}/_wait/bact/${n}/${sid}`
-            : `${url.origin}/users/youtube/statuses/${sid}`
+            : surface === 'c'
+              ? `${url.origin}/_wait/cact/${n}/${sid}`
+              : `${url.origin}/users/youtube/statuses/${sid}`
       // NO og:video and NO twitter:player, on purpose: the drawn card can then only contain a
       // player if the activity document was consumed, which is the entire measurement.
       const tags = [

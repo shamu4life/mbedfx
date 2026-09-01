@@ -2104,13 +2104,67 @@ test('WAIT b/{n}: THE HEADER/BODY SPLIT — status and type instant, bytes later
   assert.equal(body, '0123456789abcdef', 'and it is the real media, complete')
 })
 
+test('WAIT c/{n}: THE MOOV/MDAT SPLIT — ftyp and moov instant, mdat later, whole file intact', async () => {
+  // b/8, b/20 and b/35 all lost the player: the crawl-time validator wants bytes, not just a
+  // content-type. This surface asks WHICH bytes. Our muxes are +faststart, so the moov (where
+  // dimensions and duration live) is at the front; a validator that only needs the moov keeps
+  // its player here, one that downloads the whole file does not.
+  const head = await (await stockServing(() =>
+    handle(req('/_wait/c/2/dQw4w9WgXcQ', DISCORD), fakeEnv(), ctx, {}))).text()
+  assert.match(head, /activity\+json" href="[^"]*\/_wait\/cact\/2\/\d+"/,
+    'the c head names the moov-split rewriting document')
+  const m = /\/_wait\/cact\/2\/(\d+)"/.exec(head)
+  const doc = await (await handle(req(`/_wait/cact/2/${m[1]}`, DISCORD), muxedEnv(), ctx, ytDeps())).text()
+  assert.match(doc, /\/_wait\/mediac\/2\/[^"]*\/0"/, 'cact lands the video on the moov-split route')
+  assert.ok(!/\/_media\/[^"]*?\/\d+"/.test(doc), 'no un-split video url remains')
+  // A synthetic faststart file: ftyp (16 bytes), moov (16), mdat (24). The cut must land at 32.
+  const box = (type, payload) => {
+    const b = new Uint8Array(8 + payload.length)
+    new DataView(b.buffer).setUint32(0, b.length)
+    b.set([...type].map(c => c.charCodeAt(0)), 4)
+    b.set(payload, 8)
+    return b
+  }
+  const enc = s => new TextEncoder().encode(s)
+  const file = new Uint8Array([...box('ftyp', enc('isom\0\0\0\0')), ...box('moov', enc('MOOVBODY')), ...box('mdat', enc('0123456789abcdef'))])
+  assert.equal(file.length, 56)
+  const env = {
+    ...muxedEnv(),
+    MEDIA_CACHE: {
+      head: async () => ({ size: file.length }),
+      get: async () => ({ body: new Blob([file]).stream() }),
+      put: async () => {},
+    },
+  }
+  const t0 = Date.now()
+  const ranged = new Request('https://staging.megapenispoopenfarten.sex/_wait/mediac/2/yt%3AdQw4w9WgXcQ/0', { headers: { 'user-agent': DISCORD, range: 'bytes=0-7' } })
+  const res = await handle(ranged, env, ctx, ytDeps())
+  assert.ok(Date.now() - t0 < 1500, 'headers must be immediate')
+  assert.equal(res.status, 200, 'a stream being produced cannot honour a range, so neither does the experiment')
+  assert.ok(!res.headers.get('content-length'), 'chunked, no length')
+  assert.equal(res.headers.get('x-mbedfx-moov-cut'), '32')
+  const rd = res.body.getReader()
+  const first = await rd.read()
+  const firstAt = Date.now() - t0
+  assert.ok(firstAt < 1500, `ftyp+moov must arrive at once; took ${firstAt}ms`)
+  assert.deepEqual([...first.value], [...file.subarray(0, 32)], 'exactly the boxes through the end of moov')
+  const rest = []
+  for (;;) {
+    const { done, value } = await rd.read()
+    if (done) break
+    rest.push(...value)
+  }
+  assert.ok(Date.now() - t0 >= 1900, 'the mdat carries the stall')
+  assert.deepEqual(rest, [...file.subarray(32)], 'and the mdat follows, complete')
+})
+
 test('WAIT GUARDS: humans go to YouTube, n past 60 is refused, malformed paths fall through', async () => {
   const human = await stockServing(() =>
     handle(req('/_wait/a/30/dQw4w9WgXcQ', 'Mozilla/5.0 (Macintosh) Safari/605.1'), fakeEnv(), ctx, {}))
   assert.equal(human.status, 302)
   assert.equal(human.headers.get('location'), 'https://www.youtube.com/watch?v=dQw4w9WgXcQ')
   // Refused BEFORE any sleep: an open-ended sleep parameter on a public route is an abuse handle.
-  for (const path of ['/_wait/a/61/dQw4w9WgXcQ', '/_wait/act/61/1234567890', '/_wait/mact/61/1234567890', '/_wait/media/61/x/0', '/_wait/bact/61/1234567890', '/_wait/mediah/61/x/0']) {
+  for (const path of ['/_wait/a/61/dQw4w9WgXcQ', '/_wait/act/61/1234567890', '/_wait/mact/61/1234567890', '/_wait/media/61/x/0', '/_wait/bact/61/1234567890', '/_wait/mediah/61/x/0', '/_wait/c/61/dQw4w9WgXcQ', '/_wait/cact/61/1234567890', '/_wait/mediac/61/x/0']) {
     const res = await handle(req(path, DISCORD), fakeEnv(), ctx, {})
     assert.equal(res.status, 400, path)
   }
