@@ -11,6 +11,39 @@ Nothing yet.
 
 ---
 
+## [1.14.4] - 2026-09-01
+
+### The b verdict and the moov/mdat split (`/_wait/c`)
+
+**b/8, b/20 and b/35 came back: three cards, zero players.** Instant `200 video/mp4` headers
+with the body delayed do not satisfy Discord's crawl-time validator. It wants bytes inside the
+same ~5 second window the document gets.
+
+Two things that sweep did not isolate, and this release does:
+
+- **Which bytes.** Our muxes are `+faststart`, so the `moov` — dimensions, duration, the thing a
+  reader must have before it can draw a player — sits at the front of the file. Discord embeds
+  a bare 100 MB mp4 link within seconds, so its validator plausibly reads the moov and stops.
+  `/_wait/c/{n}/{videoId}[/{tag}]`, via `/_wait/cact/{n}/{sid}` and `/_wait/mediac/{n}/…`,
+  serves the boxes through the end of `moov` at once and the `mdat` {n} seconds later. That is
+  exactly what a fragmented-mp4 stream produces: the init segment in the first second, media as
+  it lands. A player surviving c/20 means a streaming mux is the cold-paste answer; c/8 losing
+  it means the whole file has to exist inside the window.
+- **The control the b sweep lacked.** Every b paste was chunked with no `content-length`. A
+  validator that refuses length-less video would have failed all three regardless of the stall,
+  and `b/0` (already deployed: instant headers, instant chunked body) is the paste that tells.
+  If `b/0` loses the player, streaming is dead as a class — a stream cannot promise a length —
+  and the c readings are moot.
+
+`mediac` strips `Range` and answers `200` to everything, because a stream being produced cannot
+honour a range either; it buffers the warm file to compute the cut and refuses over 32 MiB on a
+public route. `x-mbedfx-moov-cut` on the response says where the instant part ended.
+
+Mutation-falsified: dropping the stall before the mdat, and cutting at a fixed 64 KiB instead of
+the parsed moov, each fail the c test alone. Production paths unchanged.
+
+---
+
 ## [1.14.3] - 2026-09-01
 
 ### The m verdict, a correction, and the header/body split (`/_wait/b`)
