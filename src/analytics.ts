@@ -80,6 +80,14 @@ export type Outcome2 =
   // no card ever says which url it names. `tt_twohop` climbing while `tt_onehop` sits at zero is the
   // one signal that would have said so on day one.
   | 'tt_onehop' | 'tt_twohop'
+  // WHICH PATH DISCORD FETCHES A STATUS FROM, counted from the /_wait experiment documents only
+  // (platform `none`). The activity link advertises `/users/{handle}/statuses/{id}`; this codebase
+  // has asserted since Phase 1 that Discord ignores it and calls `/api/v1/statuses/{id}`, and
+  // 2026-09-01 showed that Discord refuses a status served from any OTHER path — without ever
+  // showing which of the two it uses. Workers Logs is off here on purpose (the docstring on
+  // count()), so a counter is the only instrument. Two rows per paste is the expected shape
+  // if Discord tries both; one row says which.
+  | 'wait_users' | 'wait_api'
   // The three copyright recoveries, in the order they are tried. copyright_gql = the shortcode
   // GraphQL query answered (cheapest, and the only one with no window). copyright_recovered = it did
   // not, but the account feed had the post, so it was recent. copyright_remux = neither, and the page

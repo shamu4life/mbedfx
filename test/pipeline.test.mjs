@@ -1997,11 +1997,17 @@ test('A MALFORMED STOCK PATH NEVER REACHES THE EXPERIMENT', async () => {
 })
 
 /**
- * THE CRAWLER-PATIENCE EXPERIMENT ROUTES (/_wait). These pin three properties the measurement
+ * THE CRAWLER-PATIENCE EXPERIMENT ROUTES (/_wait). These pin four properties the measurement
  * depends on: the head must be PLAYERLESS (so a player in the drawn card is attributable to the
- * activity document alone), the delayed activity document must be the real one's bytes (re-entry
- * through handle(), so shape drift is impossible), and the hold must actually happen on whichever
- * surface carries it. Two variants that accidentally emit the same shape answer nothing.
+ * activity document alone), the experiment document must be the real one's bytes (re-entry
+ * through handle(), so shape drift is impossible), the hold must actually happen on whichever
+ * surface carries it — and, since 1.14.5, the document must be served from a CANONICAL status
+ * path. Four releases of this experiment linked `/_wait/act/{n}/{sid}` and Discord consumed none
+ * of them: on 2026-09-01 the owner pasted h/0 (real path) and a/0 (same bytes, experiment path)
+ * side by side, and only h/0 drew a player. The experiment now rides inside the status id, on
+ * `/users/youtube/statuses/9{surface}{nn}{realId}`, and these tests were rewritten from the
+ * `/_wait/act` shape to say so. A test that let an `/_wait/` activity href back in would ship
+ * a fifth release of nothing.
  */
 test('WAIT a/{n}: an instant playerless head whose activity link carries the delay', async () => {
   const res = await stockServing(() => handle(req('/_wait/a/0/dQw4w9WgXcQ', DISCORD), fakeEnv(), ctx, {}))
@@ -2011,23 +2017,37 @@ test('WAIT a/{n}: an instant playerless head whose activity link carries the del
   const h = await res.text()
   assert.ok(!h.includes('twitter:player') && !h.includes('og:video'),
     'playerless ON PURPOSE: a player in the drawn card can then only come from the activity document')
-  assert.match(h, /activity\+json" href="[^"]*\/_wait\/act\/0\/\d+"/, 'the delay rides the activity href')
+  assert.match(h, /activity\+json" href="[^"]*\/users\/youtube\/statuses\/9100\d+"/,
+    'the delay rides the activity href, ON THE CANONICAL PATH, as a 9-prefixed wait id')
+  assert.ok(!/href="[^"]*\/_wait\/[a-z]*act\//.test(h),
+    'never an /_wait/ activity url: Discord does not consume a status served from one (2026-09-01)')
   assert.ok(h.includes('json+oembed'), 'the counts link stays, production-shaped')
 })
 
-test('WAIT act/{n} SERVES THE REAL ACTIVITY DOCUMENT, DELAYED — the same bytes, later', async () => {
+test('WAIT a/{n} DOCUMENT: the real activity document, delayed, under its own wait id — on both status paths', async () => {
   const head = await (await stockServing(() =>
     handle(req('/_wait/a/1/dQw4w9WgXcQ', DISCORD), fakeEnv(), ctx, {}))).text()
-  const m = /activity\+json" href="[^"]*(\/_wait\/act\/1\/(\d+))"/.exec(head)
-  assert.ok(m, 'the head names the delayed activity url')
-  const [, actPath, sid] = m
+  const m = /activity\+json" href="[^"]*(\/users\/youtube\/statuses\/(9101(\d+)))"/.exec(head)
+  assert.ok(m, 'the head names the canonical status path with a wait id: 9, surface a=1, n=01, real id')
+  const [, actPath, waitSid, sid] = m
+  const rows = []
+  const env = { ...muxedEnv(), AE: { writeDataPoint: r => rows.push(r) } }
   const t0 = Date.now()
-  const delayed = await (await handle(req(actPath, DISCORD), muxedEnv(), ctx, ytDeps())).text()
+  const delayed = await (await handle(req(actPath, DISCORD), env, ctx, ytDeps())).text()
   assert.ok(Date.now() - t0 >= 900, 'the hold is real')
   const direct = await (await handle(req(`/users/youtube/statuses/${sid}`, DISCORD), muxedEnv(), ctx, ytDeps())).text()
-  assert.equal(delayed, direct, 're-entry through handle() — drift from the real document is impossible')
   assert.ok(direct.includes('/_media/'),
-    'and the document is the PLAYABLE warm card, or equality above proves nothing')
+    'the document is the PLAYABLE warm card, or the equality below proves nothing')
+  assert.ok(direct.startsWith(`{"id":"${sid}"`), 'the real document opens with its own id (the rewrite relies on it)')
+  assert.equal(delayed, direct.replace(`{"id":"${sid}"`, `{"id":"${waitSid}"`),
+    'the id is rewritten to the id it was fetched under, and NOTHING else differs from the real document')
+  // The same wait id on the API path: the codebase claims Discord rewrites onto /api/v1/ and
+  // has never measured it, so the experiment must answer there too, and count which was used.
+  const api = await (await handle(req(`/api/v1/statuses/${waitSid}`, DISCORD), env, ctx, ytDeps())).text()
+  assert.equal(api, delayed, 'the API path serves the identical experiment document')
+  assert.deepEqual(rows.map(r => r.blobs).filter(b => b[1].startsWith('wait_')),
+    [['none', 'wait_users', 'discord'], ['none', 'wait_api', 'discord']],
+    'each fetch counts the path it came in on — the only instrument, since Workers Logs is off')
 })
 
 test('WAIT h/{n} HOLDS THE HEAD ITSELF and links the ordinary instant activity document', async () => {
@@ -2037,26 +2057,26 @@ test('WAIT h/{n} HOLDS THE HEAD ITSELF and links the ordinary instant activity d
   assert.ok(Date.now() - t0 >= 900, 'the hold is real, on the head this time')
   assert.match(h, /activity\+json" href="[^"]*\/users\/youtube\/statuses\/\d+"/,
     'the activity document itself is instant — h measures the head fetch alone')
-  assert.ok(!h.includes('/_wait/act/'), 'no second delay may stack onto the activity fetch')
+  assert.ok(!/statuses\/9/.test(h), 'no wait id: no second delay may stack onto the activity fetch')
 })
 
 test('WAIT m/{n}: instant head, instant document — only the VIDEO url carries the stall', async () => {
   const head = await (await stockServing(() =>
     handle(req('/_wait/m/5/dQw4w9WgXcQ', DISCORD), fakeEnv(), ctx, {}))).text()
-  assert.match(head, /activity\+json" href="[^"]*\/_wait\/mact\/5\/\d+"/,
-    'the m head names the rewriting activity url')
+  assert.match(head, /activity\+json" href="[^"]*\/users\/youtube\/statuses\/9205\d+"/,
+    'the m head names the canonical path with wait id 9, m=2, n=05')
   assert.ok(!head.includes('twitter:player') && !head.includes('og:video'),
     'still playerless — the drawn card must come from the document')
-  const m = /\/_wait\/mact\/5\/(\d+)"/.exec(head)
+  const m = /statuses\/(9205(\d+))"/.exec(head)
   const t0 = Date.now()
-  const doc = await (await handle(req(`/_wait/mact/5/${m[1]}`, DISCORD), muxedEnv(), ctx, ytDeps())).text()
+  const doc = await (await handle(req(`/users/youtube/statuses/${m[1]}`, DISCORD), muxedEnv(), ctx, ytDeps())).text()
   assert.ok(Date.now() - t0 < 3000,
     'the DOCUMENT is instant — the m surface stalls nothing the crawler reads')
   assert.match(doc, /\/_wait\/media\/5\/[^"]*\/0"/, 'the video url is rewritten onto the stalling route')
   assert.ok(!/\/_media\/[^"]*?\/\d+"/.test(doc), 'no un-stalled video url remains')
-  const direct = await (await handle(req(`/users/youtube/statuses/${m[1]}`, DISCORD), muxedEnv(), ctx, ytDeps())).text()
-  assert.equal(doc.replace(/\/_wait\/media\/5\//g, '/_media/'), direct,
-    'the video rewrite is the ONLY difference from the real document — posters and avatars untouched')
+  const direct = await (await handle(req(`/users/youtube/statuses/${m[2]}`, DISCORD), muxedEnv(), ctx, ytDeps())).text()
+  assert.equal(doc.replace(/\/_wait\/media\/5\//g, '/_media/').replace(`{"id":"${m[1]}"`, `{"id":"${m[2]}"`), direct,
+    'the video rewrite and the id are the ONLY differences from the real document — posters and avatars untouched')
 })
 
 test('WAIT media/{n} DELAYS THE REAL /_media ANSWER — same status and location, later', async () => {
@@ -2072,16 +2092,16 @@ test('WAIT media/{n} DELAYS THE REAL /_media ANSWER — same status and location
 })
 
 test('WAIT b/{n}: THE HEADER/BODY SPLIT — status and type instant, bytes later', async () => {
-  // The m sweep lost the player even at m/12 with an instant document, so Discord validates the
-  // video url inside the crawl window. This surface asks the narrower question a streaming-mux
-  // integration depends on: does the validator need the response, or just its headers?
+  // This surface asks the question a streaming-mux integration depends on: does the crawl-time
+  // validator need the video response, or just its headers? (The m and b sweeps that preceded
+  // it measured nothing — see the block comment above — so the question is still open.)
   const head = await (await stockServing(() =>
     handle(req('/_wait/b/2/dQw4w9WgXcQ', DISCORD), fakeEnv(), ctx, {}))).text()
-  assert.match(head, /activity\+json" href="[^"]*\/_wait\/bact\/2\/\d+"/,
-    'the b head names the header-split rewriting document')
-  const m = /\/_wait\/bact\/2\/(\d+)"/.exec(head)
-  const doc = await (await handle(req(`/_wait/bact/2/${m[1]}`, DISCORD), muxedEnv(), ctx, ytDeps())).text()
-  assert.match(doc, /\/_wait\/mediah\/2\/[^"]*\/0"/, 'bact lands the video on the header-split route')
+  assert.match(head, /activity\+json" href="[^"]*\/users\/youtube\/statuses\/9302\d+"/,
+    'the b head names the canonical path with wait id 9, b=3, n=02')
+  const m = /statuses\/(9302\d+)"/.exec(head)
+  const doc = await (await handle(req(`/users/youtube/statuses/${m[1]}`, DISCORD), muxedEnv(), ctx, ytDeps())).text()
+  assert.match(doc, /\/_wait\/mediah\/2\/[^"]*\/0"/, 'the b document lands the video on the header-split route')
   assert.ok(!/\/_media\/[^"]*?\/\d+"/.test(doc), 'no un-split video url remains')
   // A warm R2 body the fake can actually serve, so the split itself is observable.
   const env = {
@@ -2105,17 +2125,17 @@ test('WAIT b/{n}: THE HEADER/BODY SPLIT — status and type instant, bytes later
 })
 
 test('WAIT c/{n}: THE MOOV/MDAT SPLIT — ftyp and moov instant, mdat later, whole file intact', async () => {
-  // b/8, b/20 and b/35 all lost the player: the crawl-time validator wants bytes, not just a
-  // content-type. This surface asks WHICH bytes. Our muxes are +faststart, so the moov (where
-  // dimensions and duration live) is at the front; a validator that only needs the moov keeps
-  // its player here, one that downloads the whole file does not.
+  // If the validator wants bytes and not just a content-type, this surface asks WHICH bytes.
+  // Our muxes are +faststart, so the moov (where dimensions and duration live) is at the front;
+  // a validator that only needs the moov keeps its player here, one that downloads the whole
+  // file does not.
   const head = await (await stockServing(() =>
     handle(req('/_wait/c/2/dQw4w9WgXcQ', DISCORD), fakeEnv(), ctx, {}))).text()
-  assert.match(head, /activity\+json" href="[^"]*\/_wait\/cact\/2\/\d+"/,
-    'the c head names the moov-split rewriting document')
-  const m = /\/_wait\/cact\/2\/(\d+)"/.exec(head)
-  const doc = await (await handle(req(`/_wait/cact/2/${m[1]}`, DISCORD), muxedEnv(), ctx, ytDeps())).text()
-  assert.match(doc, /\/_wait\/mediac\/2\/[^"]*\/0"/, 'cact lands the video on the moov-split route')
+  assert.match(head, /activity\+json" href="[^"]*\/users\/youtube\/statuses\/9402\d+"/,
+    'the c head names the canonical path with wait id 9, c=4, n=02')
+  const m = /statuses\/(9402\d+)"/.exec(head)
+  const doc = await (await handle(req(`/users/youtube/statuses/${m[1]}`, DISCORD), muxedEnv(), ctx, ytDeps())).text()
+  assert.match(doc, /\/_wait\/mediac\/2\/[^"]*\/0"/, 'the c document lands the video on the moov-split route')
   assert.ok(!/\/_media\/[^"]*?\/\d+"/.test(doc), 'no un-split video url remains')
   // A synthetic faststart file: ftyp (16 bytes), moov (16), mdat (24). The cut must land at 32.
   const box = (type, payload) => {
@@ -2164,9 +2184,24 @@ test('WAIT GUARDS: humans go to YouTube, n past 60 is refused, malformed paths f
   assert.equal(human.status, 302)
   assert.equal(human.headers.get('location'), 'https://www.youtube.com/watch?v=dQw4w9WgXcQ')
   // Refused BEFORE any sleep: an open-ended sleep parameter on a public route is an abuse handle.
-  for (const path of ['/_wait/a/61/dQw4w9WgXcQ', '/_wait/act/61/1234567890', '/_wait/mact/61/1234567890', '/_wait/media/61/x/0', '/_wait/bact/61/1234567890', '/_wait/mediah/61/x/0', '/_wait/c/61/dQw4w9WgXcQ', '/_wait/cact/61/1234567890', '/_wait/mediac/61/x/0']) {
+  for (const path of ['/_wait/a/61/dQw4w9WgXcQ', '/users/youtube/statuses/9161' + '1121116', '/api/v1/statuses/9261' + '1121116', '/_wait/media/61/x/0', '/_wait/mediah/61/x/0', '/_wait/c/61/dQw4w9WgXcQ', '/_wait/mediac/61/x/0']) {
     const res = await handle(req(path, DISCORD), fakeEnv(), ctx, {})
     assert.equal(res.status, 400, path)
+  }
+  // The old experiment paths are gone, not merely unlinked: Discord never consumed a status from
+  // them, and a route that still answered would invite a sixth paste of nothing.
+  for (const path of ['/_wait/act/0/1121116', '/_wait/mact/0/1121116', '/_wait/bact/0/1121116', '/_wait/cact/0/1121116']) {
+    const res = await stockServing(() => handle(req(path, DISCORD), fakeEnv(), ctx, {}))
+    // Content, not status: an unrouted path falls to the site assets at 200. What must be true
+    // is that nothing status-shaped comes back.
+    assert.ok(!(res.headers.get('content-type') || '').includes('activity+json'), path)
+    assert.ok(!(await res.text()).includes('media_attachments'), path)
+  }
+  // A 9-prefixed id that is not a wait id (surface digit 5, or no sentinel after the prefix)
+  // is an ordinary bad status id, not an experiment.
+  for (const path of ['/users/youtube/statuses/9505' + '1121116', '/api/v1/statuses/9105' + '2121116']) {
+    const res = await handle(req(path, DISCORD), fakeEnv(), ctx, {})
+    assert.equal(res.status, 404, path)
   }
   for (const path of ['/_wait/x/5/dQw4w9WgXcQ', '/_wait/a/5/shortid123', '/_wait/a/5/twelvechars12']) {
     const res = await stockServing(() => handle(req(path, DISCORD), fakeEnv(), ctx, {}))
