@@ -11,6 +11,39 @@ Nothing yet.
 
 ---
 
+## [1.14.2] - 2026-09-01
+
+### The a/h verdict, and the media-stall surface (`/_wait/m`)
+
+**The 1.14.1 sweep came back, and the blanks are the data.** The owner pasted a/10, a/20, a/30,
+a/45 and h/20 into a real client; none drew anything at all. Against `/_stock/3` — the same odd
+path with the same activity link and an *instant* document, which drew a card on 2026-08-30 — the
+only variable is the delay. Three findings, each of which resizes the problem:
+
+- The crawler's activity-document patience is **under 10 seconds**. Combined with 2026-08-09's
+  readings (a ~4.1s document drew, an ~8.2s one did not), the cliff sits in 4-8s.
+- The head fetch's patience is under 20 seconds (h/20 blank).
+- **Timeout means a BLANK message** — Discord does not fall back to the head's own og tags when
+  the advertised activity document fails. Over-holding is strictly worse than anything else this
+  project can serve.
+
+With only 23 of 139 muxes finishing inside 9s, holding a crawler response until the mux lands is
+dead as the cold-paste path. What remains is the client nobody has measured: **Discord's media
+proxy**, which fetches the mp4 itself and answers to different timeouts than the crawler.
+
+`/_wait/m/{n}/{videoId}[/{tag}]` serves an instant playerless head and an instant activity
+document (`/_wait/mact/{n}/{sid}`, the real document with only its VIDEO urls rewritten onto
+`/_wait/media/{n}/…`, which sleeps n seconds before re-entering the real `/_media/`). The crawler
+waits for nothing; only the media fetch stalls. Posters and avatars stay on the real route so the
+card's imagery cannot confound the reading. If the media proxy tolerates the mux p50 (18.2s), a
+cold paste can draw the complete native card instantly — author, caption, counts — with a video
+that serves the moment the mux lands.
+
+Mutation-falsified: disabling the video-url rewrite fails the m-surface test; removing the stall
+fails the media-route test. Everything production-facing is byte-for-byte unchanged.
+
+---
+
 ## [1.14.1] - 2026-08-31
 
 ### Added — the crawler-patience experiment (`/_wait`)
