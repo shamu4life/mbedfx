@@ -2040,13 +2040,44 @@ test('WAIT h/{n} HOLDS THE HEAD ITSELF and links the ordinary instant activity d
   assert.ok(!h.includes('/_wait/act/'), 'no second delay may stack onto the activity fetch')
 })
 
+test('WAIT m/{n}: instant head, instant document — only the VIDEO url carries the stall', async () => {
+  const head = await (await stockServing(() =>
+    handle(req('/_wait/m/5/dQw4w9WgXcQ', DISCORD), fakeEnv(), ctx, {}))).text()
+  assert.match(head, /activity\+json" href="[^"]*\/_wait\/mact\/5\/\d+"/,
+    'the m head names the rewriting activity url')
+  assert.ok(!head.includes('twitter:player') && !head.includes('og:video'),
+    'still playerless — the drawn card must come from the document')
+  const m = /\/_wait\/mact\/5\/(\d+)"/.exec(head)
+  const t0 = Date.now()
+  const doc = await (await handle(req(`/_wait/mact/5/${m[1]}`, DISCORD), muxedEnv(), ctx, ytDeps())).text()
+  assert.ok(Date.now() - t0 < 3000,
+    'the DOCUMENT is instant — the m surface stalls nothing the crawler reads')
+  assert.match(doc, /\/_wait\/media\/5\/[^"]*\/0"/, 'the video url is rewritten onto the stalling route')
+  assert.ok(!/\/_media\/[^"]*?\/\d+"/.test(doc), 'no un-stalled video url remains')
+  const direct = await (await handle(req(`/users/youtube/statuses/${m[1]}`, DISCORD), muxedEnv(), ctx, ytDeps())).text()
+  assert.equal(doc.replace(/\/_wait\/media\/5\//g, '/_media/'), direct,
+    'the video rewrite is the ONLY difference from the real document — posters and avatars untouched')
+})
+
+test('WAIT media/{n} DELAYS THE REAL /_media ANSWER — same status and location, later', async () => {
+  const { serving } = ttNetwork()
+  const deps = { cache: fakeCache(), fetchPost: liveFetchPost, resolveShortlink: liveResolveShortlink }
+  const direct = await serving(() => handle(req(`/_media/${TT_MEDIA_KEY}/0`, DISCORD), fakeEnv(), ctx, deps))
+  const t0 = Date.now()
+  const delayed = await serving(() =>
+    handle(req(`/_wait/media/1/${TT_MEDIA_KEY}/0`, DISCORD), fakeEnv(), ctx, { ...deps, cache: fakeCache() }))
+  assert.ok(Date.now() - t0 >= 900, 'the stall is real, and it lives on the media fetch alone')
+  assert.equal(delayed.status, direct.status, 're-entry: the same answer the real route gives')
+  assert.equal(delayed.headers.get('location'), direct.headers.get('location'))
+})
+
 test('WAIT GUARDS: humans go to YouTube, n past 60 is refused, malformed paths fall through', async () => {
   const human = await stockServing(() =>
     handle(req('/_wait/a/30/dQw4w9WgXcQ', 'Mozilla/5.0 (Macintosh) Safari/605.1'), fakeEnv(), ctx, {}))
   assert.equal(human.status, 302)
   assert.equal(human.headers.get('location'), 'https://www.youtube.com/watch?v=dQw4w9WgXcQ')
   // Refused BEFORE any sleep: an open-ended sleep parameter on a public route is an abuse handle.
-  for (const path of ['/_wait/a/61/dQw4w9WgXcQ', '/_wait/act/61/1234567890']) {
+  for (const path of ['/_wait/a/61/dQw4w9WgXcQ', '/_wait/act/61/1234567890', '/_wait/mact/61/1234567890', '/_wait/media/61/x/0']) {
     const res = await handle(req(path, DISCORD), fakeEnv(), ctx, {})
     assert.equal(res.status, 400, path)
   }
