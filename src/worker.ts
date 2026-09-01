@@ -5052,6 +5052,11 @@ export async function handle(req: Request, env: Env, ctx: ExecutionContext, d: D
    *       p50 (18.2s), a cold paste can draw the complete native card instantly — author,
    *       caption, counts — with a video that starts serving the moment the mux lands. Poster
    *       and avatar urls are left untouched so the card's image cannot confound the reading.
+   *   `/_wait/b/{n}/{videoId}[/{tag}]` — THE HEADER/BODY SPLIT (added after the m sweep lost
+   *       the player even at m/12). Same as m, but via `/_wait/bact/{n}/{sid}` the video urls
+   *       land on `/_wait/mediah/{n}/…`, which answers status and content-type IMMEDIATELY and
+   *       starts the body {n} seconds later — a mux-in-progress streaming. This asks whether
+   *       Discord's crawl-time validator needs the response or just its headers.
    *
    * WHY THIS EXISTS (2026-08-31). The owner's verdict on 1.14.0's stock player: it re-wraps the
    * YouTube playback Discord already has, which is a stopgap and not the goal. The goal is the
@@ -5063,14 +5068,17 @@ export async function handle(req: Request, env: Env, ctx: ExecutionContext, d: D
    * activity document until the mux lands converts most cold pastes to the real card, and
    * YT_MUX_BOT_MS gets re-sized around a measurement instead of folklore.
    *
-   * THE a/h VERDICT (owner's real-client pastes, 2026-08-31): a/10, a/20, a/30, a/45 and h/20
-   * all drew NOTHING. Against /_stock/3 (same odd path + activity link, instant document, card
-   * drew), the only variable is the delay — so the crawler's activity-document patience is UNDER
-   * 10s (consistent with the 2026-08-09 numbers: 4.1s drew, 8.2s did not; the cliff is in 4-8s),
-   * the head's is under 20s, and the failure mode is a BLANK message, not a fallback to the
-   * head's own tags. Holding a crawler response past the cliff is therefore strictly worse than
-   * anything else this project can serve, and with only 23 of 139 muxes finishing inside 9s,
-   * holding is dead as the cold-paste path. The m surface is what remains.
+   * THE VERDICTS SO FAR (owner's real-client pastes). 2026-08-31: a/10-a/45 and h/20 drew no
+   * player. 2026-09-01: a/5 and a/7 drew the small head-fallback card with counts and no player
+   * — which CORRECTS the first sweep's "blank" reading (timeout falls back to the head's own
+   * tags after all; the day-one blanks were an artifact) and pins the crawler cliff just under
+   * 5s: a ~4.1s activity document drew a player on 2026-08-30, a 5s one does not. YT_MUX_BOT_MS
+   * (4000) therefore already sits at the measured ceiling. And the m sweep (m/12, m/20, m/35,
+   * instant document, video url stalled): NO PLAYER on any — Discord validates the video url
+   * inside the same crawl window, so the media proxy's patience never enters into it. With only
+   * 4 of 139 muxes inside 5s, neither holding a crawler response nor stalling a whole media
+   * response can carry a cold paste. The b surface (headers instant, body delayed) is the one
+   * seam left unmeasured, and it is the exact shape of a streaming-mux integration.
    *
    * {n} is capped at 60: a held Worker response idles and costs nothing, but an open-ended sleep
    * parameter on a public route is an abuse handle. The optional {tag} exists because Discord
@@ -5084,31 +5092,57 @@ export async function handle(req: Request, env: Env, ctx: ExecutionContext, d: D
       if (n) await new Promise(r => setTimeout(r, n * 1000))
       return handle(new Request(`${url.origin}/users/youtube/statuses/${wact[2]}`, { headers: req.headers }), env, ctx, d)
     }
-    const wmact = /^\/_wait\/mact\/(\d{1,2})\/(\d+)$/.exec(url.pathname)
+    const wmact = /^\/_wait\/(mact|bact)\/(\d{1,2})\/(\d+)$/.exec(url.pathname)
     if (wmact) {
-      const n = Number(wmact[1])
+      const n = Number(wmact[2])
       if (n > 60) return new Response('n is 0-60', { status: 400 })
-      // INSTANT — the whole point of the m surface is that the crawler waits for nothing.
-      const real = await handle(new Request(`${url.origin}/users/youtube/statuses/${wmact[2]}`, { headers: req.headers }), env, ctx, d)
+      // INSTANT — the whole point of the m and b surfaces is that the crawler waits for nothing.
+      const real = await handle(new Request(`${url.origin}/users/youtube/statuses/${wmact[3]}`, { headers: req.headers }), env, ctx, d)
       const body = await real.text()
       // Only VIDEO urls (/_media/{key}/{digits}) carry the stall. Poster (/p0) and avatar
       // segments stay on the real route, so the card's imagery cannot confound the reading —
-      // what stalls is exactly what Discord's media proxy fetches to play the video.
-      const stalled = body.replace(/\/_media\/([^"]*?\/)(\d+)"/g, `/_wait/media/${n}/$1$2"`)
+      // what stalls is exactly what Discord fetches to play the video. mact stalls the whole
+      // response; bact stalls only the BODY (headers instant), which is the shape a streaming
+      // mux integration would actually have.
+      const slot = wmact[1] === 'bact' ? 'mediah' : 'media'
+      const stalled = body.replace(/\/_media\/([^"]*?\/)(\d+)"/g, `/_wait/${slot}/${n}/$1$2"`)
       // The rewrite changes the byte length; a stale content-length would truncate the document.
       const heads = new Headers(real.headers)
       heads.delete('content-length')
       return new Response(stalled, { status: real.status, headers: heads })
     }
-    const wmedia = /^\/_wait\/media\/(\d{1,2})\/(.+)$/.exec(url.pathname)
+    const wmedia = /^\/_wait\/(media|mediah)\/(\d{1,2})\/(.+)$/.exec(url.pathname)
     if (wmedia) {
-      const n = Number(wmedia[1])
+      const n = Number(wmedia[2])
       if (n > 60) return new Response('n is 0-60', { status: 400 })
-      if (n) await new Promise(r => setTimeout(r, n * 1000))
-      // Re-entry adds no authority: this can only address our own public /_media route.
-      return handle(new Request(`${url.origin}/_media/${wmedia[2]}`, { headers: req.headers }), env, ctx, d)
+      if (wmedia[1] === 'media') {
+        if (n) await new Promise(r => setTimeout(r, n * 1000))
+        // Re-entry adds no authority: this can only address our own public /_media route.
+        return handle(new Request(`${url.origin}/_media/${wmedia[3]}`, { headers: req.headers }), env, ctx, d)
+      }
+      // mediah — THE HEADER/BODY SPLIT (2026-09-01, after m/12 lost the player with an instant
+      // document): the m sweep showed Discord validates the video url inside the same ~5s crawl
+      // window, so a url that answers nothing in time loses the player before the media proxy
+      // matters. What m could not answer is whether the validator needs the whole response or
+      // just its headers. This serves status + content-type IMMEDIATELY and starts the body {n}
+      // seconds later — exactly how a mux-in-progress would stream. If the card keeps its player,
+      // a cold paste can answer 200 video/mp4 at crawl time and fill in bytes as the mux lands.
+      const real = await handle(new Request(`${url.origin}/_media/${wmedia[3]}`, { headers: req.headers }), env, ctx, d)
+      if (!real.body || (real.status !== 200 && real.status !== 206)) return real
+      const src = real.body
+      const { readable, writable } = new TransformStream()
+      const pump = (async () => {
+        if (n) await new Promise(r => setTimeout(r, n * 1000))
+        await src.pipeTo(writable)
+      })()
+      ctx.waitUntil(pump)
+      // No content-length: the split is served chunked, and a length promised before the body
+      // exists is the poisoned-media shape all over again.
+      const heads = new Headers(real.headers)
+      heads.delete('content-length')
+      return new Response(readable, { status: real.status, headers: heads })
     }
-    const wait = /^\/_wait\/([ahm])\/(\d{1,2})\/([\w-]{11})(?:\/[\w-]{1,24})?$/.exec(url.pathname)
+    const wait = /^\/_wait\/([ahmb])\/(\d{1,2})\/([\w-]{11})(?:\/[\w-]{1,24})?$/.exec(url.pathname)
     if (wait) {
       const [, surface, ns, vid] = wait
       const n = Number(ns)
@@ -5132,7 +5166,9 @@ export async function handle(req: Request, env: Env, ctx: ExecutionContext, d: D
         ? `${url.origin}/_wait/act/${n}/${sid}`
         : surface === 'm'
           ? `${url.origin}/_wait/mact/${n}/${sid}`
-          : `${url.origin}/users/youtube/statuses/${sid}`
+          : surface === 'b'
+            ? `${url.origin}/_wait/bact/${n}/${sid}`
+            : `${url.origin}/users/youtube/statuses/${sid}`
       // NO og:video and NO twitter:player, on purpose: the drawn card can then only contain a
       // player if the activity document was consumed, which is the entire measurement.
       const tags = [

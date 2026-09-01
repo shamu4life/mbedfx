@@ -2071,13 +2071,46 @@ test('WAIT media/{n} DELAYS THE REAL /_media ANSWER — same status and location
   assert.equal(delayed.headers.get('location'), direct.headers.get('location'))
 })
 
+test('WAIT b/{n}: THE HEADER/BODY SPLIT — status and type instant, bytes later', async () => {
+  // The m sweep lost the player even at m/12 with an instant document, so Discord validates the
+  // video url inside the crawl window. This surface asks the narrower question a streaming-mux
+  // integration depends on: does the validator need the response, or just its headers?
+  const head = await (await stockServing(() =>
+    handle(req('/_wait/b/2/dQw4w9WgXcQ', DISCORD), fakeEnv(), ctx, {}))).text()
+  assert.match(head, /activity\+json" href="[^"]*\/_wait\/bact\/2\/\d+"/,
+    'the b head names the header-split rewriting document')
+  const m = /\/_wait\/bact\/2\/(\d+)"/.exec(head)
+  const doc = await (await handle(req(`/_wait/bact/2/${m[1]}`, DISCORD), muxedEnv(), ctx, ytDeps())).text()
+  assert.match(doc, /\/_wait\/mediah\/2\/[^"]*\/0"/, 'bact lands the video on the header-split route')
+  assert.ok(!/\/_media\/[^"]*?\/\d+"/.test(doc), 'no un-split video url remains')
+  // A warm R2 body the fake can actually serve, so the split itself is observable.
+  const env = {
+    ...muxedEnv(),
+    MEDIA_CACHE: {
+      head: async () => ({ size: 16 }),
+      get: async () => ({ body: new Blob(['0123456789abcdef']).stream() }),
+      put: async () => {},
+    },
+  }
+  const t0 = Date.now()
+  const res = await handle(req('/_wait/mediah/2/yt%3AdQw4w9WgXcQ/0', DISCORD), env, ctx, ytDeps())
+  const headersAt = Date.now() - t0
+  assert.ok(headersAt < 1500, `headers must be immediate; took ${headersAt}ms`)
+  assert.equal(res.status, 200)
+  assert.ok(!res.headers.get('content-length'),
+    'chunked, no length — a length promised before the bytes exist is the poisoned-media shape')
+  const body = await res.text()
+  assert.ok(Date.now() - t0 >= 1900, 'the BODY carries the stall')
+  assert.equal(body, '0123456789abcdef', 'and it is the real media, complete')
+})
+
 test('WAIT GUARDS: humans go to YouTube, n past 60 is refused, malformed paths fall through', async () => {
   const human = await stockServing(() =>
     handle(req('/_wait/a/30/dQw4w9WgXcQ', 'Mozilla/5.0 (Macintosh) Safari/605.1'), fakeEnv(), ctx, {}))
   assert.equal(human.status, 302)
   assert.equal(human.headers.get('location'), 'https://www.youtube.com/watch?v=dQw4w9WgXcQ')
   // Refused BEFORE any sleep: an open-ended sleep parameter on a public route is an abuse handle.
-  for (const path of ['/_wait/a/61/dQw4w9WgXcQ', '/_wait/act/61/1234567890', '/_wait/mact/61/1234567890', '/_wait/media/61/x/0']) {
+  for (const path of ['/_wait/a/61/dQw4w9WgXcQ', '/_wait/act/61/1234567890', '/_wait/mact/61/1234567890', '/_wait/media/61/x/0', '/_wait/bact/61/1234567890', '/_wait/mediah/61/x/0']) {
     const res = await handle(req(path, DISCORD), fakeEnv(), ctx, {})
     assert.equal(res.status, 400, path)
   }
