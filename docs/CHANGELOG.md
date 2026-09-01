@@ -11,6 +11,38 @@ Nothing yet.
 
 ---
 
+## [1.14.3] - 2026-09-01
+
+### The m verdict, a correction, and the header/body split (`/_wait/b`)
+
+**The 2026-09-01 sweep (m/12, m/20, m/35, a/5, a/7) came back: five cards, zero players.** Three
+findings:
+
+- **Correction: timeout does NOT draw a blank.** Every timed-out paste drew the small
+  head-fallback card — title, description, oEmbed counts, thumbnail. The 08-31 "blank on
+  timeout" reading (1.14.2's changelog and the route comment) was wrong; those pastes most
+  likely fell to the same fallback and were read as "nothing" because no player appeared.
+- **The crawler cliff is just under 5 seconds.** a/5 and a/7 lost the player where a ~4.1s
+  activity document drew one on 2026-08-30. `YT_MUX_BOT_MS` (4000) already sits at the measured
+  ceiling; there is nothing to reclaim by raising it.
+- **The media proxy's patience is unreachable: Discord validates the video url inside the same
+  crawl window.** m served an instant head and an instant document, stalling only the video
+  response — and even m/12 lost the player. Stalling a whole media response is dead alongside
+  holding a crawler document (4 of 139 muxes finish inside 5s).
+
+What m could not answer is whether that crawl-time validator needs the *response* or just its
+*headers*. `/_wait/b/{n}/{videoId}[/{tag}]` asks exactly that: via `/_wait/bact/{n}/{sid}` the
+video urls land on `/_wait/mediah/{n}/…`, which answers status and content-type IMMEDIATELY and
+starts the body {n} seconds later (chunked, no content-length — a length promised before the
+bytes exist is the poisoned-media shape). That is byte-for-byte how a mux-in-progress would
+stream. If the player survives b/20, a cold paste can answer `200 video/mp4` at crawl time and
+fill in bytes as the mux lands: the full native card, cold, and the last open door to it.
+
+Mutation-falsified: stripping the body stall inside mediah fails the b test alone. Production
+paths unchanged.
+
+---
+
 ## [1.14.2] - 2026-09-01
 
 ### The a/h verdict, and the media-stall surface (`/_wait/m`)
