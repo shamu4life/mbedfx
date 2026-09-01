@@ -11,6 +11,51 @@ Nothing yet.
 
 ---
 
+## [1.14.5] - 2026-09-01
+
+### Four releases of the patience experiment measured nothing. This one can.
+
+**The finding.** A control ladder pasted on 2026-09-01 settled it: `h/0`, whose activity link is
+the real `/users/youtube/statuses/{id}`, drew the full native card with a playing video. `a/0` and
+`m/0` — the same playerless head, the same document bytes, fetched from `/_wait/act/0/{id}` and
+`/_wait/mact/0/{id}` — drew the playerless head fallback. The only difference between them was
+the url the status was served from. Discord does not consume an activity document from an
+experiment path, so **no a, m, b or c paste from 1.14.1 through 1.14.4 was ever read.**
+
+That voids the verdicts those releases recorded, and they are withdrawn here rather than
+edited away:
+
+- 1.14.2's "crawler cliff just under 5s" (a/5, a/7 lost the player) — unmeasured.
+- 1.14.3's "Discord validates the video url inside the crawl window" (m/12, m/20, m/35) —
+  unmeasured.
+- 1.14.4's "the validator needs bytes, not headers" (b/8, b/20, b/35) — unmeasured.
+
+What still stands: a ~4.1s production document drew a player (2026-08-30); h/20 did not, so the
+head fetch's patience is under 20s; and h/0 proves the playerless experiment head is sound.
+
+**The rebuild.** Which check Discord applies is still unknown — the path shape, the document's
+`id` against the url's id segment, or a rewrite of the advertised href onto
+`/api/v1/statuses/{id}` (asserted in this codebase since Phase 1 and never measured) — so the
+experiment now satisfies all three at once. It rides **inside the status id**: `9` + a surface
+digit (a=1, m=2, b=3, c=4) + two digits of `{n}` + the real id. The id stays all-digit, cannot
+collide with a real one (those start with the sentinel `1`), and survives whichever path Discord
+fetches it from. Both `/users/{handle}/statuses/{waitId}` and `/api/v1/statuses/{waitId}` serve
+it, the document's own `id` is rewritten to match, and each fetch **counts** the path it arrived
+on (`wait_users` / `wait_api`, platform `none`) — Workers Logs is off here on purpose, so a
+counter is the only instrument that can finally say which url Discord uses.
+
+The `/_wait/act`, `mact`, `bact` and `cact` routes are gone. The media routes (`/_wait/media`,
+`mediah`, `mediac`) are unchanged; the m, b and c documents still land their video urls there.
+
+**The lesson, so it is not paid for twice.** An experiment that can only produce the null
+result measures nothing. The n=0 positive control ships with the first sweep, not the fifth.
+
+Mutation-falsified: dropping the id rewrite, pointing the href back at `/_wait/act`, counting
+every path as `wait_users`, never sleeping on a, and accepting n>60 on a wait id each fail at
+least one WAIT test. Production paths unchanged.
+
+---
+
 ## [1.14.4] - 2026-09-01
 
 ### The b verdict and the moov/mdat split (`/_wait/c`)
