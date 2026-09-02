@@ -96,7 +96,7 @@ env.AE?.writeDataPoint({ blobs: [platform, outcome, client], doubles: [1] })
 | `blob2` | outcome | one of the values in the `Outcome2` union (`src/analytics.ts`) |
 | `blob3` | client class | `discord` `telegram` `other-bot` `human`, or `none` on a `mux_*` row (`card_degraded` carries a real one — see below) |
 | `double1` | the literal `1` | always |
-| `double2` | elapsed milliseconds | `mux_*` rows only; `0` on every other row |
+| `double2` | elapsed milliseconds, or the wait code | `mux_*` rows carry milliseconds; `wait_*` rows carry the surface digit × 100 + n (`105` = a/5; `/_wait` in `src/worker.ts`); `0` on every other row |
 | `timestamp` | set by the runtime | `DateTime`, always UTC |
 
 Columns are 1-based: the first `blobs` element is `blob1`, and there is no `blob0`. `writeDataPoint`
@@ -107,7 +107,7 @@ Adding a url column breaks what that constraint protects.
 `double1` is always 1. **`double2` is the one exception to "there are no durations here"**, added
 2026-08-23 with the `mux_*` outcomes: it carries the elapsed milliseconds of a video mux. Before it,
 nothing recorded how long a mux took even when it SUCCEEDED, so a report that a ten-minute video took
-ten minutes to warm could only be answered with arithmetic. Every non-`mux_*` row leaves it unset,
+ten minutes to warm could only be answered with arithmetic. Since 1.14.6 the `wait_*` rows use it too, for the wait experiment's surface-and-hold code rather than a duration (`countWait`). Every other row leaves it unset,
 which reads as `0` — so filter to the mux rows before averaging it, or the zeros will drag every
 average to nothing. **Not with `LIKE 'mux\_%'`**: Analytics Engine SQL rejects a backslash in a
 string literal outright (HTTP 422, `backslash and single-quote characters in strings are

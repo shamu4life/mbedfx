@@ -11,6 +11,43 @@ Nothing yet.
 
 ---
 
+## [1.14.6] - 2026-09-02
+
+The first round that measured anything, and the instrument it showed was missing.
+
+### Measured (owner's real-client pastes, 2026-09-02, against 1.14.5)
+
+- **`a/0`, `m/0` and `a/5` each drew the full native card with a playing video.** The rebuilt
+  document is consumed; a 5-second hold on the activity document is inside the crawler's patience
+  (the 4.1s reading of 2026-08-30 was not the edge); a video url rewritten onto `/_wait/media/0/`
+  is accepted by whatever validates it.
+- **Discord fetches `/api/v1/statuses/{id}`, not the href.** The `wait_api` / `wait_users` counters
+  shipped in 1.14.5 read 5 of 5 real crawls on `/api/v1/` and none on the advertised `/users/`
+  path. The claim `src/render/mastodon.ts` has carried since Phase 1 is now a measurement, and it
+  explains 1.14.1-1.14.4 exactly: an `/_wait/act/…` href has no status id to parse, so nothing was
+  fetched.
+- The ceiling above 5s is still unmeasured. That is the next round.
+
+### Changed
+
+- The wait fetch row now carries a **wait code** in `double2`: surface digit × 100 + n (`105` =
+  a/5, `200` = m/0). Without it the first round's five `wait_api` rows for three pastes could not
+  be told apart, and a long hold cannot show whether the crawler re-fetches, at what spacing, or
+  gives up — which the timestamps now answer whatever the card did. `countWait` in
+  `src/analytics.ts`; `docs/METRICS.md` documents the second meaning of `double2`. No url, no post
+  id, no user agent: a code, not an identifier.
+- The `/_wait` block comment and the Mastodon `id` comment state the measurement instead of the
+  three candidate checks.
+
+### Tests
+
+- The a/{n} document test asserts the wait code on both status paths; the m/{n} test asserts its
+  own code (205), so a row from one surface cannot pass as another's. Mutation-falsified: code
+  without the surface digit, surface digits swapped, and the code dropped from the row each fail
+  a test.
+
+---
+
 ## [1.14.5] - 2026-09-01
 
 ### Four releases of the patience experiment measured nothing. This one can.

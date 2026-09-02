@@ -493,3 +493,24 @@ export type MuxOutcome = Extract<Outcome2, `mux_${string}`>
 export function countMux(env: Env, platform: Platform | 'none', outcome: MuxOutcome, ms: number): void {
   env.AE?.writeDataPoint({ blobs: [platform, outcome, 'none'], doubles: [1, Math.max(0, Math.round(ms))] })
 }
+
+/**
+ * A WAIT-EXPERIMENT FETCH, WITH ITS SURFACE AND HOLD — the second row shape that carries a
+ * `double2`, and the only one where it is not a duration.
+ *
+ * `double2` IS THE WAIT CODE: the surface digit × 100 + n, the four digits that open the wait id
+ * (`105` = a/5, `200` = m/0, `320` = b/20; the `/_wait` block in src/worker.ts names the surfaces).
+ * It rides in `double2` rather than a fourth blob because the blob vocabulary is a closed allowlist
+ * (docs/METRICS.md) and a number needs no entry in it. It is a code, not an identifier: it names no
+ * post and no reader.
+ *
+ * WHY (2026-09-02). The owner reports whether a paste drew a player; only this row can say how many
+ * times Discord fetched the held document, at what spacing, and from which path. The first round on
+ * 1.14.5 settled the path (5 of 5 real crawls on /api/v1/statuses/, none on the advertised /users/
+ * href) and could not say whether a long hold is re-fetched or abandoned, because its rows carried
+ * no n and five `wait_api` rows for three pastes could not be told apart. With the code, one round
+ * of long holds reads the crawler's own timeout off the timestamps, whatever the card did.
+ */
+export function countWait(env: Env, path: 'wait_users' | 'wait_api', client: ClientClass, code: number): void {
+  env.AE?.writeDataPoint({ blobs: ['none', path, client], doubles: [1, code] })
+}

@@ -536,6 +536,8 @@ export function toMastodonStatus(post: Post, origin: string): object {
   return {
     // The ONLY channel back to us: Discord ignores the href we advertise and calls
     // /api/v1/statuses/{id} with this segment, so it must round-trip through decodeStatusId.
+    // Measured 2026-09-02 (the wait_api / wait_users counters behind `/_wait` in src/worker.ts):
+    // 5 of 5 real crawls came to /api/v1/, none to the advertised /users/ path.
     id: encodeStatusId(refKey(post.ref)),
     url: post.canonical,
     uri: post.canonical,
