@@ -9,7 +9,7 @@ import { bytesIndex, byline, mediaOf, mediaUrl, str, themeColor, usable } from '
 import { statParts } from './render/text.ts'
 import { proxyableVideoUrl, serveDirectVideo } from './mediaproxy.ts'
 import { parseRefKey, refKey } from './refkey.ts'
-import { count, countMux, type Env, type GateReason, type MuxOutcome } from './analytics.ts'
+import { count, countWait, countMux, type Env, type GateReason, type MuxOutcome } from './analytics.ts'
 import { runSmoke, smokeOutcome, SMOKE_CHECKS, SMOKE_CLIENT } from './smoke.ts'
 import { cookiesFor, jarAvailable, poolSetButUnused, twitterAccounts, type CredentialPlatform } from './credentials.ts'
 import {
@@ -5054,10 +5054,14 @@ export async function handle(req: Request, env: Env, ctx: ExecutionContext, d: D
    * it is not paid for twice: an experiment that can only produce the null result measures
    * nothing, and the n=0 positive control ships with the FIRST sweep, not the fifth.
    *
-   * Which check Discord applies is still unknown — the path shape (`/users/X/statuses/DIGITS`),
-   * or the document's `id` against the url's id segment, or a rewrite of the href onto
-   * `/api/v1/statuses/{id}` (this file's own claim at src/render/mastodon.ts, never measured) —
-   * so the rebuild satisfies ALL of them at once: the experiment rides INSIDE the status id. A
+   * Which check Discord applies was unknown when this shipped, so the rebuild satisfied every
+   * candidate at once — the path shape (`/users/X/statuses/DIGITS`), the document's `id` against
+   * the url's id segment, and a rewrite of the href onto `/api/v1/statuses/{id}` — and the counter
+   * below then MEASURED it (2026-09-02, the first paste round on 1.14.5): Discord fetched
+   * `/api/v1/statuses/{id}` 5 times out of 5 and the advertised `/users/` href never. The claim at
+   * src/render/mastodon.ts is a measurement now, and it explains 1.14.1-1.14.4 exactly: nothing
+   * status-shaped can be parsed out of `/_wait/act/…`, so nothing was fetched. The experiment
+   * rides INSIDE the status id. A
    * wait id is `9` + one surface digit (a=1 m=2 b=3 c=4) + two digits of {n} + the real id, so
    * it stays all-digit, cannot collide with a real id (those start with the sentinel `1`), and
    * survives any path Discord chooses to fetch it from. Both `/users/{handle}/statuses/{waitId}`
@@ -5100,7 +5104,11 @@ export async function handle(req: Request, env: Env, ctx: ExecutionContext, d: D
    * THE VERDICTS THAT STAND (owner's real-client pastes). 2026-08-30: a ~4.1s production
    * activity document drew a player. 2026-08-31: h/20 drew no player, so the HEAD fetch's patience
    * is under 20s. 2026-09-01: h/0 drew the full native card, so the playerless experiment head is
-   * fine and the measurement design is sound. Everything else pasted before 1.14.5 was a document
+   * fine and the measurement design is sound. 2026-09-02, the first round on 1.14.5: a/0, m/0 and
+   * a/5 EACH drew the full native card with a playing video — the rebuilt document is consumed, a
+   * 5s hold on the activity document is inside the crawler's patience (the 4.1s reading was not
+   * the edge), and a video url rewritten onto `/_wait/media/0/` satisfies whatever validates it.
+   * The ceiling above 5s is still unmeasured. Everything else pasted before 1.14.5 was a document
    * served from a url Discord does not consume (above), and says nothing about patience.
    *
    * {n} is capped at 60: a held Worker response idles and costs nothing, but an open-ended sleep
@@ -5119,9 +5127,13 @@ export async function handle(req: Request, env: Env, ctx: ExecutionContext, d: D
       const surface = ({ '1': 'a', '2': 'm', '3': 'b', '4': 'c' } as const)[sdigit as '1' | '2' | '3' | '4']
       const n = Number(ns)
       if (n > 60) return new Response('n is 0-60', { status: 400 })
-      // Which path Discord fetches a status from has been asserted in this codebase for months
-      // and measured never. Counted, not logged: no url, no post id, no user agent leaves here.
-      count(env, 'none', path === 'api/v1' ? 'wait_api' : 'wait_users', classify(req.headers.get('user-agent')))
+      // Which path Discord fetches a status from was asserted in this codebase for months and
+      // measured on 2026-09-02: /api/v1/ every time (5 of 5 real crawls), the advertised /users/
+      // href never. Both paths keep answering — this counter is what would notice a change — and
+      // the row carries the wait code (surface digit × 100 + n) so a long hold's re-fetches can be
+      // read off the timestamps whatever the card did. Counted, not logged: no url, no post id, no
+      // user agent leaves here.
+      countWait(env, path === 'api/v1' ? 'wait_api' : 'wait_users', classify(req.headers.get('user-agent')), Number(sdigit + ns))
       // a holds the DOCUMENT; m, b and c are instant — the whole point of those surfaces is that
       // the crawler waits for nothing and only the media fetch carries the stall.
       if (surface === 'a' && n) await new Promise(r => setTimeout(r, n * 1000))

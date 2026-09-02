@@ -2045,9 +2045,9 @@ test('WAIT a/{n} DOCUMENT: the real activity document, delayed, under its own wa
   // has never measured it, so the experiment must answer there too, and count which was used.
   const api = await (await handle(req(`/api/v1/statuses/${waitSid}`, DISCORD), env, ctx, ytDeps())).text()
   assert.equal(api, delayed, 'the API path serves the identical experiment document')
-  assert.deepEqual(rows.map(r => r.blobs).filter(b => b[1].startsWith('wait_')),
-    [['none', 'wait_users', 'discord'], ['none', 'wait_api', 'discord']],
-    'each fetch counts the path it came in on — the only instrument, since Workers Logs is off')
+  assert.deepEqual(rows.filter(r => r.blobs[1].startsWith('wait_')).map(r => [r.blobs, r.doubles]),
+    [[['none', 'wait_users', 'discord'], [1, 101]], [['none', 'wait_api', 'discord'], [1, 101]]],
+    'each fetch counts the path it came in on AND the wait code (a=1, n=01 → 101) — the only instrument, since Workers Logs is off')
 })
 
 test('WAIT h/{n} HOLDS THE HEAD ITSELF and links the ordinary instant activity document', async () => {
@@ -2069,9 +2069,13 @@ test('WAIT m/{n}: instant head, instant document — only the VIDEO url carries 
     'still playerless — the drawn card must come from the document')
   const m = /statuses\/(9205(\d+))"/.exec(head)
   const t0 = Date.now()
-  const doc = await (await handle(req(`/users/youtube/statuses/${m[1]}`, DISCORD), muxedEnv(), ctx, ytDeps())).text()
+  const rows = []
+  const doc = await (await handle(req(`/users/youtube/statuses/${m[1]}`, DISCORD),
+    { ...muxedEnv(), AE: { writeDataPoint: r => rows.push(r) } }, ctx, ytDeps())).text()
   assert.ok(Date.now() - t0 < 3000,
     'the DOCUMENT is instant — the m surface stalls nothing the crawler reads')
+  assert.deepEqual(rows.filter(r => r.blobs[1] === 'wait_users').map(r => r.doubles), [[1, 205]],
+    'the wait code names the surface and the hold (m=2, n=05), so a row from one surface cannot pass as another one')
   assert.match(doc, /\/_wait\/media\/5\/[^"]*\/0"/, 'the video url is rewritten onto the stalling route')
   assert.ok(!/\/_media\/[^"]*?\/\d+"/.test(doc), 'no un-stalled video url remains')
   const direct = await (await handle(req(`/users/youtube/statuses/${m[2]}`, DISCORD), muxedEnv(), ctx, ytDeps())).text()
