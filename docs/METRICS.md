@@ -96,7 +96,7 @@ env.AE?.writeDataPoint({ blobs: [platform, outcome, client], doubles: [1] })
 | `blob2` | outcome | one of the values in the `Outcome2` union (`src/analytics.ts`) |
 | `blob3` | client class | `discord` `telegram` `other-bot` `human`, or `none` on a `mux_*` row (`card_degraded` carries a real one — see below) |
 | `double1` | the literal `1` | always |
-| `double2` | elapsed milliseconds, or the wait code | `mux_*` rows carry milliseconds; `wait_*` rows carry the surface digit × 100 + n (`105` = a/5; `/_wait` in `src/worker.ts`); `0` on every other row |
+| `double2` | elapsed milliseconds, or the wait code | `mux_*` rows carry milliseconds; `wait_users`/`wait_api` rows carry the digits between the wait id's `9` and the real id (`105` = a/5, `50406` = p/4/6); `wait_media` rows carry the slot digit × 100 + n (`206` = media/6, `506` = mediap/6); `/_wait` in `src/worker.ts`; `0` on every other row |
 | `timestamp` | set by the runtime | `DateTime`, always UTC |
 
 Columns are 1-based: the first `blobs` element is `blob1`, and there is no `blob0`. `writeDataPoint`
@@ -858,3 +858,34 @@ fxTikTok's ✅ names the same feature is unestablished, their metrics handler be
 
 For a route anyway, put it off this Worker: a separate unrouted Worker or a cron job holds the read
 token and writes a pre-aggregated summary, with no public surface and no account token at the edge.
+
+## Reading a hang-up: the invocation analytics
+
+The counters say when a fetch STARTED. They cannot say when the client left, because the runtime
+cancels the invocation the moment it does, and anything the handler would have written after that
+point is written never (`workerd` `drain()`; the Workers limits page: "when the client disconnects
+or the response is complete, tasks associated with that request may be canceled"). The `wait_*`
+rows are written before any hold for exactly that reason.
+
+The other half is in Cloudflare's own invocation analytics, which record every invocation's
+status and wall time with no url, no post id and no user agent. GraphQL, account scope:
+
+```graphql
+query($acct: String!, $from: Time!, $to: Time!) { viewer { accounts(filter: {accountTag: $acct}) {
+  workersInvocationsAdaptive(limit: 500, filter: {datetime_geq: $from, datetime_leq: $to, scriptName_like: "%mbedfx%"},
+                             orderBy: [datetime_ASC]) {
+    dimensions { datetime status }
+    sum { requests wallTime }
+    quantiles { wallTimeP50 wallTimeP99 }
+} } } }
+```
+
+`status` is `success`, `clientDisconnected`, `scriptThrewException` or `exceededResources`;
+`wallTime` is microseconds. A `clientDisconnected` row is a fetch the caller abandoned, and its
+wall time is how long the caller waited. Pair it with the `wait_*` row at the same second to know
+which fetch it was. This is how Discord's deadline was read on 2026-09-02: four held fetches, four
+`clientDisconnected` rows, wall times 9.67 s, 9.66 s (documents) and 9.15 s, 9.41 s (videos).
+
+Read the counters at least three minutes after the last event and away from :00 and :30 — the
+half-hourly smoke burst is sampled (`_sample_interval` 2-5) and a row written at t has been absent
+45 s later and present at two minutes.

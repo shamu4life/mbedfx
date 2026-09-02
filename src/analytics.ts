@@ -87,7 +87,7 @@ export type Outcome2 =
   // showing which of the two it uses. Workers Logs is off here on purpose (the docstring on
   // count()), so a counter is the only instrument. Two rows per paste is the expected shape
   // if Discord tries both; one row says which.
-  | 'wait_users' | 'wait_api'
+  | 'wait_users' | 'wait_api' | 'wait_media'
   // The three copyright recoveries, in the order they are tried. copyright_gql = the shortcode
   // GraphQL query answered (cheapest, and the only one with no window). copyright_recovered = it did
   // not, but the account feed had the post, so it was recent. copyright_remux = neither, and the page
@@ -498,8 +498,11 @@ export function countMux(env: Env, platform: Platform | 'none', outcome: MuxOutc
  * A WAIT-EXPERIMENT FETCH, WITH ITS SURFACE AND HOLD — the second row shape that carries a
  * `double2`, and the only one where it is not a duration.
  *
- * `double2` IS THE WAIT CODE: the surface digit × 100 + n, the four digits that open the wait id
- * (`105` = a/5, `200` = m/0, `320` = b/20; the `/_wait` block in src/worker.ts names the surfaces).
+ * `double2` IS THE WAIT CODE: the digits between the wait id's leading `9` and the real id, read
+ * as one number — surface digit × 100 + n for the one-hold surfaces (`105` = a/5, `200` = m/0,
+ * `320` = b/20), `5` + nn + mm for p's two holds (`50406` = p/4/6). On a `wait_media` row (the
+ * stall routes' entry row, 2026-09-02) it is the slot digit × 100 + n (`206` = media/6, `300` =
+ * mediah/0, `506` = mediap/6). The `/_wait` block in src/worker.ts names the surfaces and slots.
  * It rides in `double2` rather than a fourth blob because the blob vocabulary is a closed allowlist
  * (docs/METRICS.md) and a number needs no entry in it. It is a code, not an identifier: it names no
  * post and no reader.
@@ -511,6 +514,6 @@ export function countMux(env: Env, platform: Platform | 'none', outcome: MuxOutc
  * no n and five `wait_api` rows for three pastes could not be told apart. With the code, one round
  * of long holds reads the crawler's own timeout off the timestamps, whatever the card did.
  */
-export function countWait(env: Env, path: 'wait_users' | 'wait_api', client: ClientClass, code: number): void {
+export function countWait(env: Env, path: 'wait_users' | 'wait_api' | 'wait_media', client: ClientClass, code: number): void {
   env.AE?.writeDataPoint({ blobs: ['none', path, client], doubles: [1, code] })
 }
