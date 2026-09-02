@@ -2117,12 +2117,18 @@ test('WAIT b/{n}: THE HEADER/BODY SPLIT — status and type instant, bytes later
     },
   }
   const t0 = Date.now()
-  const res = await handle(req('/_wait/mediah/2/yt%3AdQw4w9WgXcQ/0', DISCORD), env, ctx, ytDeps())
+  // With a Range, on purpose: until 2026-09-02 this route passed a ranged GET through as a 206
+  // with content-range and accept-ranges, so every b paste measured a shape a mux in progress
+  // cannot produce. A stream being produced honours no range and promises no length.
+  const ranged = new Request('https://staging.megapenispoopenfarten.sex/_wait/mediah/2/yt%3AdQw4w9WgXcQ/0', { headers: { 'user-agent': DISCORD, range: 'bytes=0-7' } })
+  const res = await handle(ranged, env, ctx, ytDeps())
   const headersAt = Date.now() - t0
   assert.ok(headersAt < 1500, `headers must be immediate; took ${headersAt}ms`)
-  assert.equal(res.status, 200)
+  assert.equal(res.status, 200, 'never a 206: the range is stripped before re-entry')
   assert.ok(!res.headers.get('content-length'),
     'chunked, no length — a length promised before the bytes exist is the poisoned-media shape')
+  assert.ok(!res.headers.get('content-range') && !res.headers.get('accept-ranges'),
+    'and no range headers either: those three are exactly what a live stream cannot send')
   const body = await res.text()
   assert.ok(Date.now() - t0 >= 1900, 'the BODY carries the stall')
   assert.equal(body, '0123456789abcdef', 'and it is the real media, complete')
@@ -2182,13 +2188,58 @@ test('WAIT c/{n}: THE MOOV/MDAT SPLIT — ftyp and moov instant, mdat later, who
   assert.deepEqual(rest, [...file.subarray(32)], 'and the mdat follows, complete')
 })
 
+test('WAIT p/{ndoc}/{nmedia}: THE PRODUCTION SHAPE — document held, then a video that stalls on its own slot', async () => {
+  // The integration this measures for: keep the video attachment at the deadline (today it is
+  // degraded to a still) and let /_media answer when the mux lands. Two holds, one id, one code.
+  const head = await (await stockServing(() =>
+    handle(req('/_wait/p/1/2/dQw4w9WgXcQ', DISCORD), fakeEnv(), ctx, {}))).text()
+  assert.match(head, /activity\+json" href="[^"]*\/users\/youtube\/statuses\/950102\d+"/,
+    'the p head names the canonical path with wait id 9, p=5, ndoc=01, nmedia=02')
+  assert.ok(!head.includes('twitter:player') && !head.includes('og:video'), 'playerless, like every other surface')
+  assert.ok(head.includes('[wait p/1/2]'), 'the card title names both holds')
+  const m = /statuses\/(950102(\d+))"/.exec(head)
+  const rows = []
+  const env = { ...muxedEnv(), AE: { writeDataPoint: r => rows.push(r) } }
+  const t0 = Date.now()
+  const doc = await (await handle(req(`/api/v1/statuses/${m[1]}`, DISCORD), env, ctx, ytDeps())).text()
+  assert.ok(Date.now() - t0 >= 900, 'the DOCUMENT hold is real (ndoc = 1)')
+  assert.ok(doc.startsWith(`{"id":"${m[1]}"`), 'the id is the id it was fetched under')
+  assert.match(doc, /\/_wait\/mediap\/2\/[^"]*\/0"/, 'the video lands on the mediap slot with the VIDEO hold (nmedia = 2)')
+  assert.ok(!/\/_media\/[^"]*?\/\d+"/.test(doc), 'no un-stalled video url remains')
+  assert.ok(/\/_media\/[^"]*\/poster0"/.test(doc), 'the poster stays on the real route — imagery must not confound the reading')
+  assert.deepEqual(rows.filter(r => r.blobs[1] === 'wait_api').map(r => r.doubles), [[1, 50102]],
+    'the wait code is every digit between the 9 and the real id: 5, 01, 02')
+  // The direct document differs only in the id and the video url — the same equality the m test
+  // asserts, so p cannot drift into a different document than the one production serves.
+  const direct = await (await handle(req(`/users/youtube/statuses/${m[2]}`, DISCORD), muxedEnv(), ctx, ytDeps())).text()
+  assert.equal(doc.replace(/\/_wait\/mediap\/2\//g, '/_media/').replace(`{"id":"${m[1]}"`, `{"id":"${m[2]}"`), direct)
+})
+
+test('WAIT STALL ROUTES WRITE THEIR ENTRY ROW BEFORE THE SLEEP — an abandoned fetch still counts', async () => {
+  // Discord hangs up at ten seconds and the runtime cancels the invocation with it (measured
+  // 2026-09-02, docs/METRICS.md), so anything written after the sleep is written never. The
+  // entry row is the only thing that can say the video was asked for at all.
+  const { serving } = ttNetwork()
+  const deps = { cache: fakeCache(), fetchPost: liveFetchPost, resolveShortlink: liveResolveShortlink }
+  for (const [slot, code] of [['media', 201], ['mediap', 501], ['mediah', 301], ['mediac', 401]]) {
+    const rows = []
+    const env = { ...fakeEnv(), AE: { writeDataPoint: r => rows.push(r) } }
+    const pending = serving(() => handle(req(`/_wait/${slot}/1/${TT_MEDIA_KEY}/0`, DISCORD), env, ctx, { ...deps, cache: fakeCache() }))
+    await new Promise(r => setTimeout(r, 50))
+    assert.deepEqual(rows.filter(r => r.blobs[1] === 'wait_media').map(r => [r.blobs, r.doubles]),
+      [[['none', 'wait_media', 'discord'], [1, code]]], `${slot}: the row exists 50ms in, long before a 1s stall could end`)
+    await pending
+  }
+})
+
 test('WAIT GUARDS: humans go to YouTube, n past 60 is refused, malformed paths fall through', async () => {
   const human = await stockServing(() =>
     handle(req('/_wait/a/30/dQw4w9WgXcQ', 'Mozilla/5.0 (Macintosh) Safari/605.1'), fakeEnv(), ctx, {}))
   assert.equal(human.status, 302)
   assert.equal(human.headers.get('location'), 'https://www.youtube.com/watch?v=dQw4w9WgXcQ')
   // Refused BEFORE any sleep: an open-ended sleep parameter on a public route is an abuse handle.
-  for (const path of ['/_wait/a/61/dQw4w9WgXcQ', '/users/youtube/statuses/9161' + '1121116', '/api/v1/statuses/9261' + '1121116', '/_wait/media/61/x/0', '/_wait/mediah/61/x/0', '/_wait/c/61/dQw4w9WgXcQ', '/_wait/mediac/61/x/0']) {
+  for (const path of ['/_wait/a/61/dQw4w9WgXcQ', '/users/youtube/statuses/9161' + '1121116', '/api/v1/statuses/9261' + '1121116', '/_wait/media/61/x/0', '/_wait/mediah/61/x/0', '/_wait/c/61/dQw4w9WgXcQ', '/_wait/mediac/61/x/0',
+    '/_wait/p/61/0/dQw4w9WgXcQ', '/_wait/p/0/61/dQw4w9WgXcQ', '/users/youtube/statuses/956100' + '1121116', '/api/v1/statuses/950061' + '1121116', '/_wait/mediap/61/x/0']) {
     const res = await handle(req(path, DISCORD), fakeEnv(), ctx, {})
     assert.equal(res.status, 400, path)
   }
@@ -2201,9 +2252,9 @@ test('WAIT GUARDS: humans go to YouTube, n past 60 is refused, malformed paths f
     assert.ok(!(res.headers.get('content-type') || '').includes('activity+json'), path)
     assert.ok(!(await res.text()).includes('media_attachments'), path)
   }
-  // A 9-prefixed id that is not a wait id (surface digit 5, or no sentinel after the prefix)
-  // is an ordinary bad status id, not an experiment.
-  for (const path of ['/users/youtube/statuses/9505' + '1121116', '/api/v1/statuses/9105' + '2121116']) {
+  // A 9-prefixed id that is not a wait id (surface digit 6 — 5 became p on 2026-09-02, so the
+  // guard moved with it — or no sentinel after the prefix) is an ordinary bad status id.
+  for (const path of ['/users/youtube/statuses/9605' + '1121116', '/api/v1/statuses/9105' + '2121116', '/api/v1/statuses/950406' + '2121116']) {
     const res = await handle(req(path, DISCORD), fakeEnv(), ctx, {})
     assert.equal(res.status, 404, path)
   }

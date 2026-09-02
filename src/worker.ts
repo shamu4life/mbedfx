@@ -5090,6 +5090,17 @@ export async function handle(req: Request, env: Env, ctx: ExecutionContext, d: D
    *       shape, and it is what a fragmented-mp4 stream would look like: the init segment in the
    *       first second, the media as it is produced. It separates "the validator reads the moov"
    *       from "the validator downloads the whole file".
+   *   `/_wait/p/{ndoc}/{nmedia}/{videoId}[/{tag}]` — THE PRODUCTION SHAPE (2026-09-02). The document
+   *       is held {ndoc} seconds (4 is what YT_MUX_BOT_MS gives Discord today, ~4.2s at the
+   *       crawler) and then names a video on `/_wait/mediap/{nmedia}/…`, which stalls {nmedia}
+   *       seconds before re-entering `/_media/`. That is exactly what a promise-and-stall
+   *       integration would do on a cold paste: keep the video attachment at the deadline instead
+   *       of degrading it to a still, and let `/_media` (which already waits for the mux) answer
+   *       when the bytes land. It also separates two models the 18:18 round could not: ONE ~10s
+   *       deadline per FETCH (the document hold then adds runway, and p/4/6 plays) or one per
+   *       UNFURL (it subtracts, and p/4/6 loses). Wait id `9` `5` nn mm + real id; code 5nnmm.
+   *       `mediap` is a distinct slot so its urls never collide with m's — Discord caches a failed
+   *       fetch per url for a while. p/0/0 is its positive control (a/0 and m/0 folded together).
    *
    * WHY THIS EXISTS (2026-08-31). The owner's verdict on 1.14.0's stock player: it re-wraps the
    * YouTube playback Discord already has, which is a stopgap and not the goal. The goal is the
@@ -5108,8 +5119,14 @@ export async function handle(req: Request, env: Env, ctx: ExecutionContext, d: D
    * a/5 EACH drew the full native card with a playing video — the rebuilt document is consumed, a
    * 5s hold on the activity document is inside the crawler's patience (the 4.1s reading was not
    * the edge), and a video url rewritten onto `/_wait/media/0/` satisfies whatever validates it.
-   * The ceiling above 5s is still unmeasured. Everything else pasted before 1.14.5 was a document
-   * served from a url Discord does not consume (above), and says nothing about patience.
+   * 2026-09-02 18:18 UTC, the second round: a/10, a/20, m/10 and m/20 drew no player. Cloudflare's
+   * invocation analytics (`workersInvocationsAdaptive`, status clientDisconnected, wall time —
+   * docs/METRICS.md) put a number on it: the two held documents were cut at 9.67s and 9.66s, the
+   * two stalled videos at 9.15s and 9.41s. DISCORD HANGS UP AT TEN SECONDS. The video fetches
+   * were cut earlier by about what the head, document and poster had already taken, which is
+   * what one deadline per unfurl would produce and one per fetch would not — suggestive, and the
+   * p surface exists to settle it. Everything else pasted before 1.14.5 was a document served
+   * from a url Discord does not consume (above), and says nothing about patience.
    *
    * {n} is capped at 60: a held Worker response idles and costs nothing, but an open-ended sleep
    * parameter on a public route is an abuse handle. The optional {tag} exists because Discord
@@ -5121,22 +5138,28 @@ export async function handle(req: Request, env: Env, ctx: ExecutionContext, d: D
     // above the router, because the router would otherwise hand a `9…` id to decodeStatusId and
     // 404 it — and because the handle segment is decoration the router discards, which is why
     // the experiment cannot ride there if Discord rewrites onto /api/v1/.
-    const wsid = /^\/(users\/[^/]+|api\/v1)\/statuses\/(9([1-4])(\d\d)(1\d+))$/.exec(url.pathname)
+    const wsid = /^\/(users\/[^/]+|api\/v1)\/statuses\/(9(?:([1-4])(\d\d)|(5)(\d\d)(\d\d))(1\d+))$/.exec(url.pathname)
     if (wsid) {
-      const [, path, waitSid, sdigit, ns, realSid] = wsid
-      const surface = ({ '1': 'a', '2': 'm', '3': 'b', '4': 'c' } as const)[sdigit as '1' | '2' | '3' | '4']
-      const n = Number(ns)
-      if (n > 60) return new Response('n is 0-60', { status: 400 })
+      const [, path, waitSid, sdigit4, ns4, sdigit5, nds, nms, realSid] = wsid
+      const surface = sdigit5 ? 'p' : ({ '1': 'a', '2': 'm', '3': 'b', '4': 'c' } as const)[sdigit4 as '1' | '2' | '3' | '4']
+      // p carries two holds, the document's and the video's; the others carry one, and for them
+      // the document hold is the surface's own number (only a uses it).
+      const n = Number(sdigit5 ? nms : ns4)
+      const ndoc = Number(sdigit5 ? nds : ns4)
+      if (n > 60 || ndoc > 60) return new Response('n is 0-60', { status: 400 })
+      // The wait code is every digit between the `9` and the real id, as one number: 105 = a/5,
+      // 50406 = p/4/6. One rule for all six surfaces, so any row reads back to its url.
+      const code = Number(waitSid.slice(1, waitSid.length - realSid.length))
       // Which path Discord fetches a status from was asserted in this codebase for months and
       // measured on 2026-09-02: /api/v1/ every time (5 of 5 real crawls), the advertised /users/
       // href never. Both paths keep answering — this counter is what would notice a change — and
       // the row carries the wait code (surface digit × 100 + n) so a long hold's re-fetches can be
       // read off the timestamps whatever the card did. Counted, not logged: no url, no post id, no
       // user agent leaves here.
-      countWait(env, path === 'api/v1' ? 'wait_api' : 'wait_users', classify(req.headers.get('user-agent')), Number(sdigit + ns))
-      // a holds the DOCUMENT; m, b and c are instant — the whole point of those surfaces is that
-      // the crawler waits for nothing and only the media fetch carries the stall.
-      if (surface === 'a' && n) await new Promise(r => setTimeout(r, n * 1000))
+      countWait(env, path === 'api/v1' ? 'wait_api' : 'wait_users', classify(req.headers.get('user-agent')), code)
+      // a and p hold the DOCUMENT; m, b and c are instant — the whole point of those surfaces is
+      // that the crawler waits for nothing and only the media fetch carries the stall.
+      if ((surface === 'a' || surface === 'p') && ndoc) await new Promise(r => setTimeout(r, ndoc * 1000))
       const real = await handle(new Request(`${url.origin}/users/youtube/statuses/${realSid}`, { headers: req.headers }), env, ctx, d)
       if (real.status !== 200) return real
       // The document's id must be the id it was fetched under. The status is serialised with `id`
@@ -5149,7 +5172,7 @@ export async function handle(req: Request, env: Env, ctx: ExecutionContext, d: D
         // what stalls is exactly what Discord fetches to play the video. m stalls the whole
         // response; b stalls only the BODY (headers instant), which is the shape a streaming mux
         // integration would actually have. c splits inside the body: moov now, mdat later.
-        const slot = surface === 'b' ? 'mediah' : surface === 'c' ? 'mediac' : 'media'
+        const slot = surface === 'b' ? 'mediah' : surface === 'c' ? 'mediac' : surface === 'p' ? 'mediap' : 'media'
         body = body.replace(/\/_media\/([^"]*?\/)(\d+)"/g, `/_wait/${slot}/${n}/$1$2"`)
       }
       // The rewrites change the byte length; a stale content-length would truncate the document.
@@ -5157,11 +5180,19 @@ export async function handle(req: Request, env: Env, ctx: ExecutionContext, d: D
       heads.delete('content-length')
       return new Response(body, { status: 200, headers: heads })
     }
-    const wmedia = /^\/_wait\/(media|mediah|mediac)\/(\d{1,2})\/(.+)$/.exec(url.pathname)
+    const wmedia = /^\/_wait\/(media|mediah|mediac|mediap)\/(\d{1,2})\/(.+)$/.exec(url.pathname)
     if (wmedia) {
       const n = Number(wmedia[2])
       if (n > 60) return new Response('n is 0-60', { status: 400 })
-      if (wmedia[1] === 'media') {
+      // THE ENTRY ROW, before any sleep or work (2026-09-02). Without it an abandoned video fetch
+      // and one Discord never issued left identical rows — the hole every reading of the m
+      // surface had to assume away. Slot digit × 100 + n: 206 = media/6, 300 = mediah/0,
+      // 506 = mediap/6. The invocation analytics (docs/METRICS.md) then say how long it lived.
+      const slotDigit = { media: 2, mediah: 3, mediac: 4, mediap: 5 }[wmedia[1] as 'media' | 'mediah' | 'mediac' | 'mediap']
+      countWait(env, 'wait_media', classify(req.headers.get('user-agent')), slotDigit * 100 + n)
+      // mediap is media under another name: a distinct url so p's video fetches never share a
+      // url with m's — Discord caches a failed fetch per url for a while.
+      if (wmedia[1] === 'media' || wmedia[1] === 'mediap') {
         if (n) await new Promise(r => setTimeout(r, n * 1000))
         // Re-entry adds no authority: this can only address our own public /_media route.
         return handle(new Request(`${url.origin}/_media/${wmedia[3]}`, { headers: req.headers }), env, ctx, d)
@@ -5239,8 +5270,13 @@ export async function handle(req: Request, env: Env, ctx: ExecutionContext, d: D
       // just its headers. This serves status + content-type IMMEDIATELY and starts the body {n}
       // seconds later — exactly how a mux-in-progress would stream. If the card keeps its player,
       // a cold paste can answer 200 video/mp4 at crawl time and fill in bytes as the mux lands.
-      const real = await handle(new Request(`${url.origin}/_media/${wmedia[3]}`, { headers: req.headers }), env, ctx, d)
-      if (!real.body || (real.status !== 200 && real.status !== 206)) return real
+      // Range stripped, and only a 200 is split (2026-09-02): until then a ranged GET came back
+      // 206 with content-range and accept-ranges — three headers a mux in progress cannot send —
+      // so no b paste had ever measured the length-less shape this surface exists for.
+      const inHeads = new Headers(req.headers)
+      inHeads.delete('range')
+      const real = await handle(new Request(`${url.origin}/_media/${wmedia[3]}`, { headers: inHeads }), env, ctx, d)
+      if (!real.body || real.status !== 200) return real
       const src = real.body
       const { readable, writable } = new TransformStream()
       const pump = (async () => {
@@ -5252,13 +5288,20 @@ export async function handle(req: Request, env: Env, ctx: ExecutionContext, d: D
       // exists is the poisoned-media shape all over again.
       const heads = new Headers(real.headers)
       heads.delete('content-length')
-      return new Response(readable, { status: real.status, headers: heads })
+      heads.delete('content-range')
+      heads.delete('accept-ranges')
+      return new Response(readable, { status: 200, headers: heads })
     }
-    const wait = /^\/_wait\/([ahmbc])\/(\d{1,2})\/([\w-]{11})(?:\/[\w-]{1,24})?$/.exec(url.pathname)
+    // p takes two holds (document, then video); the others one. Parsed into one shape so the head
+    // below is the same head for all six surfaces, which is what makes their cards comparable.
+    const wait = /^\/_wait\/(?:([ahmbc])\/(\d{1,2})|(p)\/(\d{1,2})\/(\d{1,2}))\/([\w-]{11})(?:\/[\w-]{1,24})?$/.exec(url.pathname)
     if (wait) {
-      const [, surface, ns, vid] = wait
-      const n = Number(ns)
-      if (n > 60) return new Response('n is 0-60', { status: 400 })
+      const surface = (wait[1] || wait[3]) as 'a' | 'h' | 'm' | 'b' | 'c' | 'p'
+      const n = Number(surface === 'p' ? wait[5] : wait[2])
+      const ndoc = surface === 'p' ? Number(wait[4]) : n
+      const vid = wait[6]
+      const label = surface === 'p' ? `p/${ndoc}/${n}` : `${surface}/${n}`
+      if (n > 60 || ndoc > 60) return new Response('n is 0-60', { status: 400 })
       // Local spelling again, for the same reason as /_stock: this block sits above the shared
       // `client`/`origin` declarations that fifteen routes depend on.
       const waitClient = classify(req.headers.get('user-agent'))
@@ -5277,21 +5320,23 @@ export async function handle(req: Request, env: Env, ctx: ExecutionContext, d: D
       // h links the real document; the others link the SAME canonical path with the experiment
       // folded into the id (see the block comment). Never an /_wait/ url: Discord does not
       // consume a status from one, measured 2026-09-01.
-      const waitDigit = { a: '1', m: '2', b: '3', c: '4', h: '' }[surface as 'a' | 'm' | 'b' | 'c' | 'h']
-      const actHref = `${url.origin}/users/youtube/statuses/${waitDigit ? `9${waitDigit}${String(n).padStart(2, '0')}${sid}` : sid}`
+      const waitDigit = { a: '1', m: '2', b: '3', c: '4', p: '5', h: '' }[surface]
+      const nn = (x: number) => String(x).padStart(2, '0')
+      const waitPrefix = surface === 'p' ? `5${nn(ndoc)}${nn(n)}` : `${waitDigit}${nn(n)}`
+      const actHref = `${url.origin}/users/youtube/statuses/${waitDigit ? `9${waitPrefix}${sid}` : sid}`
       // NO og:video and NO twitter:player, on purpose: the drawn card can then only contain a
       // player if the activity document was consumed, which is the entire measurement.
       const tags = [
-        `<meta property="og:title" content="${esc(title)} [wait ${surface}/${n}]"/>`,
+        `<meta property="og:title" content="${esc(title)} [wait ${label}]"/>`,
         `<meta property="og:site_name" content="mbedfx patience experiment"/>`,
         `<meta property="og:url" content="https://www.youtube.com/watch?v=${vid}"/>`,
         `<meta property="og:image" content="https://i.ytimg.com/vi/${vid}/maxresdefault.jpg"/>`,
-        `<meta property="og:description" content="Surface ${surface}, ${n}s hold. A player on this card means Discord waited."/>`,
+        `<meta property="og:description" content="Surface ${label}. A player on this card means Discord waited."/>`,
         `<link rel="alternate" type="application/json+oembed" href="${url.origin}/_oembed/${sid}"/>`,
         `<link rel="alternate" type="application/activity+json" href="${actHref}"/>`,
       ]
       return new Response(
-        `<!doctype html><html><head><meta charset="utf-8"/>${tags.join('')}</head><body>crawler-patience experiment ${surface}/${n}</body></html>`,
+        `<!doctype html><html><head><meta charset="utf-8"/>${tags.join('')}</head><body>crawler-patience experiment ${label}</body></html>`,
         { headers: { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' } },
       )
     }

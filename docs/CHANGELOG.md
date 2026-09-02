@@ -11,6 +11,62 @@ Nothing yet.
 
 ---
 
+## [1.14.7] - 2026-09-02
+
+Discord's deadline is ten seconds, measured to the tenth. What is not yet known is whether that
+is ten seconds per fetch or ten per card, and the surface this release adds asks exactly that.
+
+### Measured (owner's real-client pastes, 2026-09-02 18:18 UTC, against 1.14.6)
+
+- **a/10, a/20, m/10, m/20: no player on any.** With a/5 and m/0 playing an hour earlier, the
+  crawler's patience for a held document and for a stalled video both end between 5 and 10 s.
+- **The exact number, from Cloudflare's invocation analytics** (`workersInvocationsAdaptive`,
+  status `clientDisconnected`, wall time; no code, no url, no paste): the two document holds were
+  cut at **9.67 s and 9.66 s**, the two stalled video fetches at **9.15 s and 9.41 s**. Discord
+  hangs up at ten seconds. The video fetches were cut earlier by about the time the head, document
+  and poster had already taken, which is what ONE deadline per unfurl would produce and what one
+  deadline per fetch would not — suggestive, not settled.
+- **The counters' absence rows were real.** A `curl --max-time 3` against a held document left the
+  `wait_api` row and no inner render row; a patient curl on the same surface got the document and
+  the inner rows after the hold. The runtime cancels the invocation, and the un-`waitUntil`'d
+  timer with it, the moment the client leaves (`workerd` `drain()`; Cloudflare limits page).
+- **The b surface had never measured what it claims.** A ranged GET on `/_wait/mediah/` came back
+  `206` with `content-range` and `accept-ranges` (production, 2026-09-02 18:47 UTC): the route
+  deleted only `content-length`. A mux in progress can send none of those three headers. Fixed
+  below; every earlier b reading was void twice over.
+
+### Added
+
+- **`/_wait/p/{ndoc}/{nmedia}/{videoId}[/{tag}]`**, the production shape: the document is held
+  `ndoc` seconds (4 is what `YT_MUX_BOT_MS` gives Discord today) and then names a video on
+  `/_wait/mediap/{nmedia}/…`, which stalls `nmedia` seconds before re-entering `/_media/`. That is
+  what a promise-and-stall integration would do on a cold paste: keep the video attachment at the
+  deadline instead of degrading it to a still, and let `/_media` (which already waits for the mux)
+  answer when the bytes land. Wait id `9` `5` `nn` `mm` + real id; wait code `5nnmm` (50406 =
+  p/4/6). `mediap` is a distinct slot so its urls never collide with m's: Discord caches a failed
+  fetch per url for a while.
+- **An entry row on every stall route** (`wait_media`, slot digit × 100 + n: 206 = media/6, 300 =
+  mediah/0, 506 = mediap/6), written before any sleep. Until now an abandoned video fetch and one
+  Discord never issued left identical rows, which every reading of the m surface had to assume
+  away. `docs/METRICS.md` carries the row and the invocation-analytics method.
+
+### Fixed
+
+- `/_wait/mediah/` strips the inbound `Range`, splits only a `200`, and drops `content-length`,
+  `content-range` and `accept-ranges`: the length-less, range-less, chunked `200` that is the only
+  honest shape of a stream being produced.
+
+### Tests
+
+- `WAIT p/{ndoc}/{nmedia}` pins the two-hold id, the `mediap` slot, both counter codes and the
+  playerless head; the entry-row test proves the `wait_media` row lands before the stall, not
+  after it; the b test now sends a `Range` and asserts the `200` shape; the guard that pinned
+  surface digit 5 as a bad id is rewritten for digit 6, because 5 is a surface now. Mutation
+  falsified: entry row after the sleep, mediap on the media slot, the p hold dropped, the Range
+  passed through, and the wait code without its document digits each fail a test.
+
+---
+
 ## [1.14.6] - 2026-09-02
 
 The first round that measured anything, and the instrument it showed was missing.
