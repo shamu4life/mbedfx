@@ -11,6 +11,83 @@ Nothing yet.
 
 ---
 
+## [1.15.0] - 2026-09-03
+
+A cold YouTube paste converted to the native player zero percent of the time, structurally, and no
+budget ever tuned could have changed that. This release lets Discord read the activity document
+again, promises the video on it, and counts what happens.
+
+### The finding that reorders everything
+
+On a cold paste the head's `settleMux` had at most 1500 ms. The fastest YouTube mux ever recorded
+is 4200 ms. So the entry always degraded to a still, the stock gate in `src/render/discord.ts`
+always fired, and the activity+json link was always omitted (v3 measured that its presence
+suppresses the iframe). Discord never fetched the activity document on the paste that mattered, and
+`YT_MUX_BOT_MS` — the number this workstream has sized since 2026-08-29 — was spent on a document
+nobody read.
+
+### Measured on 2026-09-02 (owner's real client, invocation analytics beside it; 1.14.7's `/_wait`)
+
+- One ~10 s budget per card, from the head fetch: head, document, poster and video must all
+  complete inside it. p/4/6 (4.1 s of document, then a video that stalls 6 s) was cut 5.65 s into
+  the video; p/4/3 and m/8 played. Holding the document buys nothing.
+- The validator downloads the whole video inside that budget: b/12 and c/12 (headers, or the moov,
+  at once; bytes at 12 s) lost; b/5 and c/5 played. Streaming past the deadline is closed.
+- A length-less, range-less chunked `200` video is accepted (b/0 played).
+- `mux_empty` (261 rows since standard-2) sits in a 3.0–9.3 s band, p50 4.0 s: one extraction and
+  no download — live and over-ceiling videos reaching the container blind, retried by the alarm.
+  They were never muxable, and they are not 261 videos.
+- `mux_ok` on standard-2 (n=296): p10 5.9 s, p25 6.8 s, p50 9.9 s; 41% inside 8 s.
+
+### Changed
+
+- **The stock player stands down while a promisable mux is in flight** (`Media.pendingMux`,
+  `pendingMuxIndex`). The head then carries the activity link, an `og:image` on the poster slot,
+  and neither `twitter:card` nor `rel=canonical` — the exact head every playing paste carried on
+  2026-09-02. A measured exception to C1's zero-og:image rule, scoped to this one state.
+- **The yt activity document promises the video** (`settleMux` mode `'promise'`): the entry keeps
+  `type:'video'` at `/_media/{key}/0`, counted `card_promised` (double2 = duration in seconds).
+  All three arms of that document drop to the floor on the promising path, because the response
+  ends at the slowest arm and every second here is one Discord cannot spend on the video.
+- **The vouch** (`promisable()` in `src/muxpolicy.ts`): a promise is made only with a KNOWN
+  duration under `YT_PROMISE_MAX_SECONDS` (240 s to start). No verdict — Innertube refused, about
+  half of cold pastes — means the stock player stays; a live stream reports `lengthSeconds: '0'`
+  and looks identical from here. A promise Discord abandons is frozen in the message forever.
+- **The mux is dispatched at T0**: yt skips the post-cache gate on the prewarm (it granted yt no
+  reachability — `normalizeYouTube` never fails and `settleMux` dispatched regardless) and the head
+  takes the floor instead of a 1500 ms wait that could only degrade. ~1.7 s of mux clock at the
+  production median, on every cold paste.
+- **`/_media` joins before it dispatches**: on a cold yt `{page}` video whose mux this isolate does
+  not hold, it polls the bucket up to 9 s for the bytes the head render's isolate is producing
+  (`MEDIA_JOIN_MS`) instead of starting a second yt-dlp on the same one-vCPU slot.
+- **The funnel**: `video_wait` (written BEFORE the wait, double2 = join code), `video_dispatch`,
+  `video_ok` and `video_fail` (double2 = the wall clock the client waited). `video_ok /
+  card_promised` on `yt` is the cold-paste conversion rate, readable within an hour of the deploy
+  with no paste. `card_degraded / ok` on `yt` no longer reads as the first-paste failure rate
+  (`docs/METRICS.md`). `count()` takes an optional `double2`.
+- `YT_PROMISE = false` in `src/muxpolicy.ts` is the rollback: one line, one merge, and the counters
+  and the T0 dispatch survive it.
+
+### What to expect
+
+Today's cold yt paste draws YouTube's own iframe and plays. After this release a promisable video
+(known duration ≤ 240 s) draws either the native player — when the muxed file is fully served
+about 9 s after the head fetch, roughly 40% of successful muxes on the standard-2 table with the
+T0 dispatch — or, when Discord abandons the video, whatever it draws for a document whose video
+never arrived, with the poster as `og:image` to fall back to. That is the trade the promise makes
+on the misses, and the gate constants are where it is widened or withdrawn.
+
+### Tests
+
+- `test/card-promise.test.mjs`: the vouch, the promised document at the floor, the counters, the
+  warm-not-a-promise case, seam scoping, the head's stock gate standing down (and standing for the
+  three residual states), the T0 dispatch, the funnel's entry row before the wait, the cross-isolate
+  join, and the warm/refusal rows. Eight mutations each fail at least one test: stock gate kept
+  firing, blind promise, document never promising, entry row after the wait, no join, T0 dispatch
+  dropped, no og:image, head keeps its wait.
+
+---
+
 ## [1.14.7] - 2026-09-02
 
 Discord's deadline is ten seconds, measured to the tenth. What is not yet known is whether that

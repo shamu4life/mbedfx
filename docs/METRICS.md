@@ -96,7 +96,7 @@ env.AE?.writeDataPoint({ blobs: [platform, outcome, client], doubles: [1] })
 | `blob2` | outcome | one of the values in the `Outcome2` union (`src/analytics.ts`) |
 | `blob3` | client class | `discord` `telegram` `other-bot` `human`, or `none` on a `mux_*` row (`card_degraded` carries a real one — see below) |
 | `double1` | the literal `1` | always |
-| `double2` | elapsed milliseconds, or the wait code | `mux_*` rows carry milliseconds; `wait_users`/`wait_api` rows carry the digits between the wait id's `9` and the real id (`105` = a/5, `50406` = p/4/6); `wait_media` rows carry the slot digit × 100 + n (`206` = media/6, `506` = mediap/6); `/_wait` in `src/worker.ts`; `0` on every other row |
+| `double2` | elapsed milliseconds, a code, or a duration | `mux_*` rows carry milliseconds; `wait_users`/`wait_api` rows carry the digits between the wait id's `9` and the real id (`105` = a/5, `50406` = p/4/6); `wait_media` rows carry the slot digit × 100 + n (`206` = media/6, `506` = mediap/6); since 1.15.0 `card_promised` carries the video's duration in seconds, `video_wait` a join code (3 warm, 0 held here, 1 polling another isolate), `video_ok`/`video_fail` the milliseconds the client waited; `0` on every other row |
 | `timestamp` | set by the runtime | `DateTime`, always UTC |
 
 Columns are 1-based: the first `blobs` element is `blob1`, and there is no `blob0`. `writeDataPoint`
@@ -217,10 +217,48 @@ failure mode a sibling client (ANDROID_VR) already exhibits, and counting it as 
 one thing worth watching. `fail` climbing toward the total means the cards have silently gone back to
 1 January 1970, which is the state this counter exists to make loud.
 
+### Reading the promise funnel (1.15.0)
+
+Since 1.15.0 a cold YouTube paste whose duration is known and under `YT_PROMISE_MAX_SECONDS`
+(`src/muxpolicy.ts`) is PROMISED: the head stands the stock player down and keeps the activity
+link, the activity document keeps `type:'video'`, and `/_media` waits for the mux. Discord gives
+the whole card one ~10 s budget and downloads the whole video inside it (measured 2026-09-02, the
+invocation-analytics section below), so the conversion rate is the share of promises whose bytes
+were served in time:
+
+```sql
+-- The cold-paste conversion rate on YouTube, and where the misses went.
+SELECT SUM(IF(blob2 = 'card_promised', _sample_interval, 0)) AS promised,
+       SUM(IF(blob2 = 'video_wait',    _sample_interval, 0)) AS asked,
+       SUM(IF(blob2 = 'video_ok',      _sample_interval, 0)) AS served,
+       SUM(IF(blob2 = 'video_fail',    _sample_interval, 0)) AS refused,
+       SUM(IF(blob2 = 'video_dispatch', _sample_interval, 0)) AS dispatched_here
+FROM mbedfx_counters
+WHERE timestamp > NOW() - INTERVAL '24' HOUR AND blob1 = 'yt'
+  AND blob2 IN ('card_promised', 'video_wait', 'video_ok', 'video_fail', 'video_dispatch')
+```
+
+`served / promised` is the number. `promised - asked` is documents Discord read without asking for
+the video; `asked - served - refused` is hang-ups, each of which pairs with a `clientDisconnected`
+invocation row at the same second (below) whose wall time is how long Discord waited. `video_wait`
+is written BEFORE the wait for exactly that reason. Note `blob3` is `human` on the `video_*` rows:
+Discord's media proxy wears a browser UA on purpose (`src/classify.ts`). `card_promised` carries the
+duration in `double2`, so the ceiling can be widened per length rather than by argument:
+
+```sql
+SELECT quantileExactWeighted(0.5)(double2, _sample_interval) AS wait_p50_ms,
+       quantileExactWeighted(0.9)(double2, _sample_interval) AS wait_p90_ms
+FROM mbedfx_counters WHERE blob1 = 'yt' AND blob2 = 'video_ok' AND timestamp > NOW() - INTERVAL '24' HOUR
+```
+
 ### Reading `card_degraded`
 
 **`mux_ok` can be high while every card is still a picture.** The two answer different questions, and
 conflating them is the mistake this row exists to make impossible.
+
+**Since 1.15.0 the yt HEAD still degrades by design while the DOCUMENT promises the player**, so on
+`blob1='yt'` the `card_degraded / ok` ratio below no longer reads as the first-paste failure rate.
+Read the funnel above for YouTube; this section stands for every other platform.
 
 `mux_ok` says the container produced bytes and R2 stored them. `card_degraded` says the render gave up
 waiting and served the poster still instead of the player. A mux that finishes at T+40s is *both* — a

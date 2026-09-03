@@ -426,6 +426,17 @@ export type Media = {
    * after the post cache is written.
    */
   posterOnly?: true
+  /**
+   * "A MUX FOR THIS ENTRY IS RUNNING, AND THE ACTIVITY DOCUMENT IS GOING TO PROMISE THE VIDEO."
+   *
+   * Set by settleMux's deadline degrade, on the STILL, when promisable() holds (src/muxpolicy.ts).
+   * The head and the document are two independent renders of one post, and the head must tell
+   * this still from the three others that look identical — the live rewrite, the over-ceiling
+   * rewrite, and withResolver's no-container degrade all produce a `posterOnly` still, and only
+   * this one has a video coming. renderSpoof reads it to stand the stock player down and keep the
+   * activity link (src/render/discord.ts). Transient like `posterOnly`: never persisted.
+   */
+  pendingMux?: true
 }
 
 /**

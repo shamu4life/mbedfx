@@ -138,9 +138,12 @@ export const SMOKE_CHECKS: readonly SmokeCheck[] = [
    * og:video IS THE TAG THAT SEPARATES THE TWO OUTCOMES, which is why the expectation is spelled as
    * the video and not as anything about the picture. A YouTube head carries og:video only when
    * settleMux found the muxed mp4 already in R2 inside the crawler budget; when it did not, the entry
-   * is degraded to its poster still and the head comes back with the activity link, NO og:video and NO
-   * og:image (renderSpoof emits og:image only on a post with no media at all). Playing card and
-   * thumbnail card differ by that one tag and nothing else a regex can see.
+   * is degraded to its poster still. WHAT THE DEGRADED HEAD CARRIES HAS CHANGED TWICE: until 1.14.0
+   * it was the activity link, no og:video and no og:image; from 1.14.0 the stock gate put a
+   * youtube.com/embed og:video on it (so this row's `expect: 'video'` was satisfiable by the iframe,
+   * and nobody noticed); since 1.15.0 a head whose mux the document will promise carries the activity
+   * link and an og:image on the poster slot and NO og:video, while the no-verdict, live and
+   * over-ceiling states keep the iframe. On the warm video this row checks, og:video is OUR mp4.
    *
    * IT IS SAFE BECAUSE THE MUX IS DURABLE. Verified 2026-08-29 through production, Discordbot UA, the
    * same method as the rest of this list: the card answered 200 in 0.50s carrying

@@ -265,6 +265,16 @@ export const playableVideo = (post: Post): Media | undefined =>
   mediaOf(post).find(m => usable(m) && m.kind === 'video')
 
 /**
+ * The index of the entry whose mux is still running and will be PROMISED by the activity document,
+ * or -1. Read by the spoof head to stand the stock player down and to put the poster in og:image
+ * (Media.pendingMux). Same list as playableVideo, for the same reason: the index has to be taken off
+ * the array that mints /_media/ urls. Null-guarded because media[] is never validated on the way
+ * out of the cache.
+ */
+export const pendingMuxIndex = (post: Post): number =>
+  mediaOf(post).findIndex(m => m != null && typeof m === 'object' && m.pendingMux === true)
+
+/**
  * The embed's accent colour, per platform.
  *
  * #0085ff is the verified Bluesky head — the colour a real Discord client was observed
