@@ -10,6 +10,7 @@ import { statParts } from './render/text.ts'
 import { proxyableVideoUrl, serveDirectVideo } from './mediaproxy.ts'
 import { parseRefKey, refKey } from './refkey.ts'
 import { count, countWait, countMux, type Env, type GateReason, type MuxOutcome } from './analytics.ts'
+import { YT_PROMISE, promisable } from './muxpolicy.ts'
 import { runSmoke, smokeOutcome, SMOKE_CHECKS, SMOKE_CLIENT } from './smoke.ts'
 import { cookiesFor, jarAvailable, poolSetButUnused, twitterAccounts, type CredentialPlatform } from './credentials.ts'
 import {
@@ -1348,6 +1349,25 @@ function withResolver(post: Post, env: Env): Post {
  */
 const notReady = () => new Response(null, { status: 503, headers: { 'cache-control': 'no-store' } })
 
+/**
+ * How long a cold yt /_media request waits for ANOTHER isolate's mux before starting its own, and
+ * how often it looks. 9s is Discord's measured per-card budget less the head and document (it hangs
+ * up at ~10s from the head fetch; the video fetch opens ~1s later), so a poll that outlives it was
+ * never going to serve that crawl anyway. 250ms is one R2 head per tick — cheap, and finer than the
+ * mux's own granularity. See serveMuxed.
+ */
+const MEDIA_JOIN_MS = 9_000
+const MEDIA_JOIN_POLL_MS = 250
+async function pollHead(cache: R2Bucket, key: string, budgetMs: number): Promise<{ size: number } | null> {
+  const until = Date.now() + budgetMs
+  while (Date.now() < until) {
+    await new Promise(r => setTimeout(r, MEDIA_JOIN_POLL_MS))
+    const head = await cache.head(key)
+    if (head) return head
+  }
+  return null
+}
+
 async function serveMuxed(
   req: Request, env: Env, ctx: ExecutionContext, ref: PostRef, index: number, source: Media['remux'],
 ): Promise<Response> {
@@ -1387,14 +1407,46 @@ async function serveMuxed(
      * A warm range request pays one cheap DO wake that finds the R2 head and deletes itself.
      */
     ctx.waitUntil(scheduleMux(env, key, refKey(ref), source))
-    // `.catch(() => null)` for waitUntil only — handing the runtime a rejecting promise is not the
-    // same as keeping the work alive. The awaited `work` is the UNcaught one, so a throw still reaches
-    // the console.error below rather than being swallowed into an indistinguishable 503.
-    const work = muxOnce(env, key, source, refKey(ref), jarPlatform(ref))
-    ctx.waitUntil(work.catch(() => null))
-    const head = await work
-    if (!head) return notReady()
-    return await r2Range(cache, key, head.size, req.headers.get('range'))
+    /**
+     * THE FUNNEL'S ENTRY ROW, WRITTEN BEFORE ANY AWAIT A HANG-UP CAN CANCEL (1.15.0). Discord hangs
+     * up at ten seconds and the runtime ends the invocation with it, so a row written after the
+     * wait is written never for exactly the case being measured — the 1.14.7 `wait_*` lesson,
+     * docs/METRICS.md. `video_wait` -> `video_ok` | `video_fail` is the only way to read the
+     * promise's conversion rate without a paste. The join code says who is doing the work.
+     */
+    const client = classify(req.headers.get('user-agent'))
+    const enteredAt = Date.now()
+    let head: { size: number } | null = await cache.head(key)
+    const held = muxInflight.has(key)
+    count(env, ref.p, 'video_wait', client, head ? 3 : held ? 0 : 1)
+    /**
+     * JOIN ANOTHER ISOLATE'S BYTES BEFORE STARTING A SECOND DOWNLOAD. muxInflight is isolate-local
+     * and says so; Discord's media proxy lands wherever it lands. On a cold yt `{page}` video whose
+     * mux this isolate does not hold, the head render's isolate is almost certainly producing it
+     * right now on the same one-vCPU container slot — a second yt-dlp there is the CPU that decides
+     * whether either finishes in time. So poll the bucket first, and dispatch only if the poll
+     * expires (`video_dispatch`: rare, or the T0 dispatch is not reaching the proxy's isolate).
+     * Bounded to yt + page: for every other platform and source this route is the only dispatcher.
+     */
+    if (!head && !held && ref.p === 'yt' && source.page) {
+      head = await pollHead(cache, key, MEDIA_JOIN_MS)
+      if (!head) count(env, ref.p, 'video_dispatch', client)
+    }
+    if (!head) {
+      // `.catch(() => null)` for waitUntil only — handing the runtime a rejecting promise is not the
+      // same as keeping the work alive. The awaited `work` is the UNcaught one, so a throw still
+      // reaches the console.error below rather than being swallowed into an indistinguishable 503.
+      const work = muxOnce(env, key, source, refKey(ref), jarPlatform(ref))
+      ctx.waitUntil(work.catch(() => null))
+      head = await work
+    }
+    if (!head) {
+      count(env, ref.p, 'video_fail', client, Date.now() - enteredAt)
+      return notReady()
+    }
+    const res = await r2Range(cache, key, head.size, req.headers.get('range'))
+    count(env, ref.p, 'video_ok', client, Date.now() - enteredAt)
+    return res
   } catch (err) {
     // key holds the ref, never the source url; err carries no url either — safe to log (privacy).
     console.error('serveMuxed could not serve', key, err instanceof Error ? err.message : String(err))
@@ -2131,8 +2183,15 @@ function stillOf(m: Media): Media | null {
  */
 async function settleMux(
   post: Post, env: Env, ctx: ExecutionContext, budgetMs: number, client: ClientClass,
-): Promise<{ post: Post; degraded: boolean }> {
-  if (!env.MEDIA_RESOLVER || !env.MEDIA_CACHE) return { post, degraded: false }
+  /**
+   * 'promise' ON THE yt ACTIVITY SEAM ONLY (1.15.0): a `{page}` entry whose mux loses the race is
+   * KEPT as a video — Discord fetches /_media, which waits for the bytes — instead of degraded to
+   * its still. Only when promisable() vouches for it. See src/muxpolicy.ts for the measurement and
+   * the safety valve, and `promised` in the return for the cache rule.
+   */
+  mode: 'wait' | 'promise' = 'wait',
+): Promise<{ post: Post; degraded: boolean; promised: boolean }> {
+  if (!env.MEDIA_RESOLVER || !env.MEDIA_CACHE) return { post, degraded: false, promised: false }
   const own = Array.isArray(post.media) ? post.media : []
   /**
    * EVERY REMUX, NOT ONLY A `{page}` ONE — the guard used to read `m?.remux?.page`, and that single
@@ -2146,9 +2205,13 @@ async function settleMux(
    * on it would start degrading cards that render fine today, which is a behaviour change with its own
    * measurement to do. This change is strictly additive and cannot make a rendered card worse.
    */
-  if (!own.some(m => m?.remux)) return { post, degraded: false }
+  if (!own.some(m => m?.remux)) return { post, degraded: false, promised: false }
 
   let degraded = false
+  // A THIRD: the video was kept on a promise. Like `degraded` it forbids the response cache (a
+  // promised card must be re-evaluated on the next render, warm or failed); unlike it, the entry is
+  // the real video and the card may get a player.
+  let promised = false
   /**
    * A SECOND FLAG, BECAUSE THE ARRAY CAN CHANGE WITHOUT THE CARD BEING INCOMPLETE.
    *
@@ -2278,15 +2341,34 @@ async function settleMux(
      * Neither calls the container and neither can ever succeed, so folding them in would put a
      * permanent floor under the ratio made of long videos and of channels that stream all day.
      */
+    /**
+     * THE PROMISE (1.15.0). On the yt activity seam, a video the mux can be vouched for is KEPT: the
+     * document goes out with `type:'video'` at /_media/{key}/{i}, Discord fetches it, serveMuxed
+     * waits for the bytes, and the native player draws the moment they land — measured on
+     * 2026-09-02 (p/4/3, m/8: a video that started serving 3-8s after the document played). The
+     * budget above was the floor, so this is reached ~300ms in, and the one ~10s budget Discord
+     * gives the whole card goes to the video fetch instead of to a document that could only say no.
+     *
+     * NEVER BLIND: promisable() requires a known duration under YT_PROMISE_MAX_SECONDS. A promise
+     * Discord abandons is frozen in the message, and a live stream with no duration would be one.
+     */
+    if (mode === 'promise' && post.ref.p === 'yt' && promisable(m)) {
+      count(env, post.ref.p, 'card_promised', client, Math.round(m.duration as number))
+      promised = true
+      return m
+    }
     count(env, post.ref.p, 'card_degraded', client)
     degraded = true
-    return stillOf(m)
+    const still = stillOf(m)
+    // The HEAD's still carries the mark the spoof head reads to stand the stock player down and keep
+    // the activity link — only when the document is going to promise, so the two seams agree.
+    return still && post.ref.p === 'yt' && promisable(m) ? { ...still, pendingMux: true as const } : still
   }))
 
   // `rewritten` is checked too, or the over-ceiling still is computed and discarded. `degraded` is
   // returned as it stands: that rewrite is permanent and its card is meant to cache.
-  if (!degraded && !rewritten) return { post, degraded: false }
-  return { post: { ...post, media: media.filter((m): m is Media => m != null) }, degraded }
+  if (!degraded && !rewritten && !promised) return { post, degraded: false, promised: false }
+  return { post: { ...post, media: media.filter((m): m is Media => m != null) }, degraded, promised }
 }
 
 /**
@@ -3515,6 +3597,14 @@ export const YT_META_BOT_MS = 4000
  *
  * The counters, the queries and the archaeology on 553bd2e are written up once, in
  * docs/research/2026-08-29-the-1500ms-crawler-cut.md. Read that before changing this number.
+ *
+ * 1.15.0: ON THE PROMISING PATH THIS NO LONGER APPLIES. When the document is going to promise the
+ * video (src/muxpolicy.ts, promisable()), all three arms take MUX_WAIT_FLOOR_MS, because Discord
+ * gives the whole card ONE ~10s budget and a second spent here is a second the video fetch loses
+ * (measured 2026-09-02; see the /_wait block). And the finding that made this constant moot on a cold
+ * paste: the head's stock gate omitted the activity link whenever the mux had not landed in the
+ * head's own 1500ms, so Discord never fetched the document this number was sized for. It still
+ * governs the non-promising states: no duration verdict, live, over the ceiling, age-gated.
  */
 export const YT_MUX_BOT_MS = 4000
 
@@ -4727,7 +4817,15 @@ async function renderPostRoute(
    * like the response-cache match above it: a cache layer that throws is not a condition this route
    * pretends to survive in one place and not the other.
    */
-  if (pre && muxInflight.size < SPECULATIVE_MUX_CAP && await d.cache.match(cacheUrl(postCacheKey(ref)))) {
+  /**
+   * yt SKIPS THE POST-CACHE GATE (1.15.0): the T0 dispatch. The gate grants yt no reachability it
+   * does not already have — normalizeYouTube never returns null, so any 11 legal characters earn a
+   * post-cache entry on request #1, and settleMux dispatches for any yt `{page}` entry a few hundred
+   * milliseconds later regardless. What the gate cost was the whole of getPost: ~1.7s at the
+   * production median (Innertube's race, either way it ends), out of a mux window that is ~8s
+   * long. SPECULATIVE_MUX_CAP still bounds it.
+   */
+  if (pre && muxInflight.size < SPECULATIVE_MUX_CAP && (ref.p === 'yt' || await d.cache.match(cacheUrl(postCacheKey(ref))))) {
     const preKey = `mux/${refKey(ref)}/${pre.index}`
     // The alarm gets the same job the prewarm is about to start, for settleMux's reason: this render
     // may be cancelled, and the 30-second waitUntil ceiling means the videos most worth prewarming
@@ -4791,7 +4889,16 @@ async function renderPostRoute(
    * and overrunning it forfeits the whole embed, which is why the cap stays on this seam.
    */
   const [settled, xlate] = await Promise.all([
-    settleMux(post, env, ctx, Math.max(MUX_WAIT_FLOOR_MS, Math.min(MUX_WAIT_BOT_MS, HTML_DEADLINE_MS - (Date.now() - started))), client),
+    // A PROMISABLE yt VIDEO TAKES THE FLOOR (1.15.0): a wait here could only ever degrade — 0 of 139
+    // muxes have finished inside 1500ms — and Discord's one ~10s budget for the whole card is better
+    // spent on the video fetch the document is about to promise. The floor still catches a warm mux
+    // (one R2 head). Every other yt state keeps the wait it had, so the stock and gated cards are
+    // byte-for-byte what they were.
+    settleMux(post, env, ctx,
+      ref.p === 'yt' && Array.isArray(post.media) && post.media.some(m => m?.remux?.page && promisable(m))
+        ? MUX_WAIT_FLOOR_MS
+        : Math.max(MUX_WAIT_FLOOR_MS, Math.min(MUX_WAIT_BOT_MS, HTML_DEADLINE_MS - (Date.now() - started))),
+      client),
     // The pre-mux post: the mux rewrites media urls and never touches `text`.
     withTranslated(
       post, env, ctx,
@@ -4804,7 +4911,9 @@ async function renderPostRoute(
   )
   // `pending` joins `degraded` for the same reason: caching a card that is missing something still
   // arriving would pin the incomplete version for RESP_TTL.
-  if (!settled.degraded && !xlate.pending) {
+  // `promised` too: inert on this seam today (the head never promises), and the line that would
+  // otherwise pin a promised card for RESP_TTL the day the scope widens.
+  if (!settled.degraded && !settled.promised && !xlate.pending) {
     // clone() tees the body, so `res` stays readable after we cache a copy.
     const toCache = new Response(res.clone().body, res)
     toCache.headers.set('cache-control', `max-age=${RESP_TTL}`)
@@ -5593,11 +5702,23 @@ export async function handle(req: Request, env: Env, ctx: ExecutionContext, d: D
        * raise on every platform and both callback kinds — what remains is: the shared arms take
        * MUX_WAIT_BOT_MS (1500), because it is the smaller of the two, on every route through here.
        */
-      const muxBudget = r.kind === 'activity' && r.ref.p === 'yt' ? YT_MUX_BOT_MS : botBudget
+      /**
+       * THE PROMISING PATH (1.15.0) — see src/muxpolicy.ts. When this document is going to promise
+       * the video, ALL THREE arms drop to the floor, because the response ends at the slowest arm
+       * and every second spent here is a second Discord's one per-card budget cannot spend on the
+       * video fetch. Each cut is free on this path: the mux arm can only lose (the promise is what
+       * happens when it does); the date arm has the record already, since a known duration means
+       * Innertube answered; the translation has a warm R2 path and Discord re-fetches a successful
+       * card ~30s later anyway. Off this path — no duration verdict, live, over the ceiling, any
+       * other platform, /_oembed — every number is exactly what it was.
+       */
+      const promising = YT_PROMISE && r.kind === 'activity' && r.ref.p === 'yt'
+        && Array.isArray(post.media) && post.media.some(m => m?.remux?.page && promisable(m))
+      const muxBudget = promising ? MUX_WAIT_FLOOR_MS : r.kind === 'activity' && r.ref.p === 'yt' ? YT_MUX_BOT_MS : botBudget
       const [settledApi, meta, xlate] = await Promise.all([
-        settleMux(post, env, ctx, muxBudget, client),
-        r.kind === 'activity' ? deadline(youtubeMeta(r.ref, post, env, ctx), YT_META_BOT_MS) : null,
-        r.kind === 'activity' ? translationFor(post, env, ctx, botBudget) : null,
+        settleMux(post, env, ctx, muxBudget, client, promising ? 'promise' : 'wait'),
+        r.kind === 'activity' ? deadline(youtubeMeta(r.ref, post, env, ctx), promising ? MUX_WAIT_FLOOR_MS : YT_META_BOT_MS) : null,
+        r.kind === 'activity' ? translationFor(post, env, ctx, promising ? MUX_WAIT_FLOOR_MS : botBudget) : null,
       ])
       return Response.json(
         r.kind === 'activity'

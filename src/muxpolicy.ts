@@ -156,3 +156,48 @@ export function nextMuxDelayMs(spent: number): number | null {
  */
 export const MUX_TOTAL_HORIZON_MS =
   MUX_FIRST_ATTEMPT_TRACKS_MS + MUX_RETRY_MS.reduce((a, b) => a + b, 0)
+
+/**
+ * PROMISE-AND-STALL ON THE yt ACTIVITY SEAM — the switch, the ceiling, and the vouch.
+ *
+ * WHAT WAS MEASURED (2026-09-02, the owner's real Discord client with Cloudflare's invocation
+ * analytics beside it; the `/_wait` block in worker.ts carries the whole ladder). Discord gives a
+ * card ONE ~10s budget from the head fetch: head, activity document, poster and video must all
+ * COMPLETE inside it, and the validator downloads the WHOLE video before it draws a player. A
+ * document that keeps `type:'video'` at a url which only starts serving seconds later draws the
+ * native player the moment the bytes land — that is what every paste that played did.
+ *
+ * WHAT WAS FOUND IN THE CODE: on a cold YouTube paste the head's settleMux had at most 1500ms, the
+ * fastest mux ever recorded is 4200ms, so the entry ALWAYS degraded, the stock gate ALWAYS fired and
+ * the activity link was ALWAYS omitted. Discord never asked for the document on the paste that
+ * mattered — a structural 0%. YT_MUX_BOT_MS was tuned for a document nobody fetched.
+ *
+ * SO (1.15.0): the head stands the stock player down when a mux it can VOUCH for is in flight and
+ * keeps the activity link; the yt activity document answers at the floor and KEEPS the video
+ * attachment (`card_promised`); /_media waits for the mux and Discord waits ~9s for /_media. The mux
+ * is dispatched at T0. Conversion = the share of promised videos whose mux lands inside that window:
+ * `video_ok / card_promised` in the counters, readable within an hour of any deploy with no paste.
+ *
+ * THE VOUCH IS THE SAFETY VALVE. A promise that cannot be kept is frozen in Discord's message forever
+ * (it re-crawls successful cards, never failed ones), so a promise is made only when the duration is
+ * KNOWN — Innertube answered, or the 30-day record has it — and under YT_PROMISE_MAX_SECONDS. No
+ * verdict means Innertube was refused (about half of cold pastes from Cloudflare egress) and a live
+ * stream looks identical from here: `lengthSeconds: '0'`. Those keep today's stock player.
+ *
+ * YT_PROMISE_MAX_SECONDS is a starting point, not a measurement: the mux must land ~8s after the head
+ * fetch, extraction alone is 3.1-4.7s on standard-2, and download time scales with the file. 240s
+ * covers Shorts and short clips, the population most likely to make it. Widen it when the
+ * `card_promised` rows (double2 = duration) against `video_ok` say longer videos convert too.
+ *
+ * YT_PROMISE = false is the rollback: it restores the 1500ms head wait, the 4000ms document wait and
+ * the stock gate in one build, and keeps every counter and the T0 dispatch so the instrument
+ * survives the retreat. It heals nothing already pasted.
+ */
+export const YT_PROMISE = true
+export const YT_PROMISE_MAX_SECONDS = 240
+
+/** Can this entry's video be promised to Discord before the mux has finished? See YT_PROMISE. */
+export function promisable(m: { live?: true; duration?: number } | null | undefined): boolean {
+  if (!YT_PROMISE || !m || m.live) return false
+  return typeof m.duration === 'number' && m.duration > 0 && m.duration <= YT_PROMISE_MAX_SECONDS
+}

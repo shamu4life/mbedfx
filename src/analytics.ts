@@ -254,6 +254,33 @@ export type Outcome2 =
    */
   | 'card_degraded'
   /**
+   * THE PROMISE FUNNEL (1.15.0) — the four rows that say, without a paste, whether a cold YouTube
+   * paste is getting the native player. None is `mux_`-prefixed, for card_degraded's reason.
+   *
+   *   card_promised  the yt activity document KEPT the video attachment while the mux was still
+   *                  running (src/muxpolicy.ts, promisable()). Per render, real client. double2 is
+   *                  the video's DURATION in seconds — the conversion rate has to be read per length
+   *                  before YT_PROMISE_MAX_SECONDS can be widened.
+   *   video_wait     /_media was asked for a video and is about to wait for it. Written BEFORE the
+   *                  wait, because the runtime cancels the invocation the moment the client hangs up
+   *                  (docs/METRICS.md, the invocation-analytics section) and a row written after it is
+   *                  written never for exactly the case being measured. double2 is a JOIN CODE:
+   *                  3 = already in R2, 0 = this isolate holds the mux, 1 = no mux here, polling for
+   *                  another isolate's bytes. blob3 reads `human` for Discord's media proxy, which
+   *                  wears a browser UA on purpose (src/classify.ts).
+   *   video_dispatch the poll expired and this isolate started its own mux. Rare, or the T0 dispatch
+   *                  is not reaching the isolate the proxy lands on.
+   *   video_ok       the bytes were served. double2 is the wall clock the client waited, in ms —
+   *                  the number Discord's ~10s per-card budget is spent on.
+   *   video_fail     503: the mux produced nothing in time. double2 as above.
+   *
+   * READ: `video_ok / card_promised` on blob1='yt' is the cold-paste conversion rate;
+   * `card_promised - video_wait` is documents read with no video asked for; `video_wait - video_ok -
+   * video_fail` is hang-ups, and each pairs with a `clientDisconnected` invocation row at the same
+   * second whose wall time is how long Discord waited.
+   */
+  | 'card_promised' | 'video_wait' | 'video_dispatch' | 'video_ok' | 'video_fail'
+  /**
    * DID youtubei/v1/player ANSWER US? Per post-cache miss, on `yt` only.
    *
    * THIS PAIR EXISTS TO ANSWER ONE QUESTION THAT COULD NOT BE ANSWERED BEFORE SHIPPING. Every timing
@@ -464,8 +491,10 @@ export interface Env {
  * again, so treat the two as one decision: the honest version of "we have nothing to
  * leak" is "nothing here writes one, AND nothing under us is storing one either".
  */
-export function count(env: Env, platform: Platform | 'none', outcome: Outcome2, client: ClientClass): void {
-  env.AE?.writeDataPoint({ blobs: [platform, outcome, client], doubles: [1] })
+export function count(env: Env, platform: Platform | 'none', outcome: Outcome2, client: ClientClass, double2?: number): void {
+  // double2 is optional and documented per outcome (docs/METRICS.md): a duration on card_promised,
+  // a join code or a wait on the video_* rows. Every other caller leaves it unset.
+  env.AE?.writeDataPoint({ blobs: [platform, outcome, client], doubles: double2 === undefined ? [1] : [1, double2] })
 }
 
 /** The mux outcomes — the subset of Outcome2 that describes a video mux. Derived, so it cannot drift. */

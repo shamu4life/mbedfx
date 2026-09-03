@@ -3,7 +3,7 @@ import { mediaList } from '../media.ts'
 import { refKey } from '../refkey.ts'
 import { encodeStatusId } from '../statusid.ts'
 import { esc, html } from './fail.ts'
-import { byline, bytesIndex, describe, dimTags, mediaOf, mediaUrl, playableVideo, str, themeColor, usable } from './embed.ts'
+import { byline, bytesIndex, describe, dimTags, mediaOf, mediaUrl, pendingMuxIndex, playableVideo, str, themeColor, usable } from './embed.ts'
 import { buildPlainText } from './text.ts'
 
 /**
@@ -374,6 +374,15 @@ function renderSpoof(post: Post, origin: string): Response {
   const handle = handleSegment(post.author?.handle)
   const canonical = esc(str(post.canonical))
   const hasMedia = mediaList(post).some(usable)
+  /**
+   * A MUX IS RUNNING AND THE DOCUMENT WILL PROMISE IT (2026-09-02, the release that turned a
+   * structural 0% into a number). Until then a cold YouTube head had no playable video, so the
+   * stock gate below fired and the activity link was omitted — and Discord never fetched the
+   * document on the paste that mattered. This head is the measured shape of every paste that drew
+   * the native player that day: NO og:video, the activity link, an og:image on the poster slot, and
+   * neither twitter:card nor rel=canonical. See Media.pendingMux and src/muxpolicy.ts.
+   */
+  const pendingAt = pendingMuxIndex(post)
   // Computed once and shared with twitter:title, so the two cannot drift. Already esc()'d.
   const title = esc(byline(post.author))
 
@@ -387,7 +396,10 @@ function renderSpoof(post: Post, origin: string): Response {
   // THE STOCK GATE — see stockPlayerTags. yt only; only when there is NO playable video (the three
   // states the activity card renders as a frozen photo); never on an age-gated post. Mutually
   // exclusive with videoOg by construction: `!videoOg.length` is in the predicate.
-  const stockOg = post.ref?.p === 'yt' && !videoOg.length && !post.sensitive
+  // AND NEVER WHILE A PROMISABLE MUX IS IN FLIGHT: the iframe would be taken and the document
+  // never read. The stock player is now exactly the three states it was written for — live,
+  // over the ceiling, and no duration verdict — plus the no-container deploy.
+  const stockOg = post.ref?.p === 'yt' && !videoOg.length && !post.sensitive && pendingAt < 0
     ? stockPlayerTags(post, origin, post.ref.id)
     : []
 
@@ -409,6 +421,17 @@ function renderSpoof(post: Post, origin: string): Response {
     // keep in sync. No dimTags: we have no width/height for an avatar and will not guess.
     ...(!hasMedia && post.author?.avatar
       ? [`<meta property="og:image" content="${esc(mediaUrl(origin, post, 'avatar'))}"/>`]
+      : []),
+    // THE ONE OTHER og:image, AND A MEASURED EXCEPTION TO C1's ZERO-WHEN-MEDIA-EXISTS RULE. While a
+    // promisable mux is running the still IS usable media, so the avatar branch above is empty —
+    // and the poster goes here instead. Every `/_wait` head that drew the native player on
+    // 2026-09-02 carried an og:image beside its activity link (p/0/0, p/4/3, m/8, b/0, b/5, c/5), so
+    // on a yt video post the tag does not outrank the document the way C1 measured it does on a
+    // gallery; and when Discord abandons the promised video it is the picture the card can fall
+    // back to. twitter:card is omitted with it (below): og:image beside summary_large_image is the
+    // C1 hazard, and the measured head carried no twitter:card at all.
+    ...(pendingAt >= 0
+      ? [`<meta property="og:image" content="${esc(mediaUrl(origin, post, { poster: pendingAt }))}"/>`]
       : []),
     // Kept with the other og: tags, immediately after the og:image branch it is mutually
     // exclusive with — a video post has media, so that branch is empty whenever this one is not.
@@ -490,7 +513,8 @@ function renderSpoof(post: Post, origin: string): Response {
     // different Discord code paths.
     // ALSO OMITTED ON THE STOCK BRANCH, which carries its own `twitter:card player` — a second
     // twitter:card is the duplicate-tag hazard the whitelist test exists to catch.
-    ...(videoOg.length || stockOg.length
+    // AND ON THE PENDING-MUX HEAD, for the og:image reason above.
+    ...(videoOg.length || stockOg.length || pendingAt >= 0
       ? []
       : [`<meta name="twitter:card" content="${hasMedia ? 'summary_large_image' : 'summary'}"/>`]),
     // C3: present in the proven head, so emit it. Redundant with og:url as far as any
@@ -510,7 +534,8 @@ function renderSpoof(post: Post, origin: string): Response {
     // The stock branch omits canonical too: the measured v1/v2 experiment head carried none and
     // rendered, and this head is a reproduction of that artifact, same as the video branch is of
     // production fxtiktok's.
-    ...(videoOg.length || stockOg.length ? [] : [`<link rel="canonical" href="${canonical}"/>`]),
+    // The pending-mux head omits it too: the measured head carried none (see og:image above).
+    ...(videoOg.length || stockOg.length || pendingAt >= 0 ? [] : [`<link rel="canonical" href="${canonical}"/>`]),
     // The whole point of this head. router.ts's spoofShape() is the other half of both URLs,
     // and the id has to survive decodeStatusId -> parseRefKey to name the post again.
     // OMITTED ON THE STOCK BRANCH, and this omission IS the stock feature: the v3 experiment
