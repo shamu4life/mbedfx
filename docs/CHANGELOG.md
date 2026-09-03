@@ -11,6 +11,44 @@ Nothing yet.
 
 ---
 
+## [1.15.1] - 2026-09-03
+
+The owner's first real paste on 1.15.0 drew the stock iframe, and the counters said why twice.
+
+### Measured (2026-09-03 13:47 UTC, the owner's paste, read off the counters)
+
+- The converter page fetched the video at :23 and **Innertube answered** — duration known. Discord's
+  crawler fetched the head at :26 from another colo, its own Innertube call was **refused**
+  (`yt_innertube_fail`), no duration reached that render, the vouch said no, and the stock iframe
+  went out. The successful answer three seconds earlier had been thrown away: it was persisted only
+  when it came from the document route's retry, never from a render.
+- **Two muxes ran for one video** (`mux_ok` 13.6 s and 14.1 s, both started at :23 by two renders in
+  two isolates) on one one-vCPU container slot, finishing at :37. One would have landed near :32,
+  inside the window the crawler's head at :26 would have given it.
+
+### Changed
+
+- **Innertube's answer is persisted on every successful render**, any client, any colo
+  (`innertubeRecord`, one builder shared with the document route's rung). A record that already
+  exists is never overwritten — it may be the container's, written with a jar spent on it. So one
+  success anywhere fixes that video for everyone, which is what the record was always for.
+- **One mux per video worldwide.** The MuxRunner Durable Object (already one object per video) gains
+  `claim()`/`release()`; the first dispatcher runs the mux, every other isolate polls the bucket for
+  its bytes and counts `mux_joined` (double2 = the wait). A claim outlives a cancelled isolate by
+  `MUX_CLAIM_TTL_MS` (40 s, the inline attempt's ceiling plus slack). The alarm never claims: it runs
+  inside the object. A runner without `claim()` dispatches as before.
+- `docs/METRICS.md`: `mux_joined` in the mux vocabulary, and the sampling trap that ate 1.15.0's first
+  proof rows — never fire `/_smoke` in the same minute as a single-row measurement.
+
+### Tests
+
+- `test/persist-and-claim.test.mjs`: the record is written on a successful render and read back by
+  the refused render in the other colo (whose head then promises); nothing is written on a refusal;
+  a container record is never overwritten; `claimIsLive` bounds; a lost claim joins and counts, a
+  won claim dispatches and releases, the alarm never claims, an old-shaped runner still dispatches.
+
+---
+
 ## [1.15.0] - 2026-09-03
 
 A cold YouTube paste converted to the native player zero percent of the time, structurally, and no

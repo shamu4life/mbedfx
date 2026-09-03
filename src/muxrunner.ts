@@ -2,7 +2,7 @@ import { DurableObject } from 'cloudflare:workers'
 import type { Env } from './analytics.ts'
 import type { MuxJob } from './types.ts'
 import { runMuxJob } from './worker.ts'
-import { firstMuxDelayMs, nextMuxDelayMs } from './muxpolicy.ts'
+import { claimIsLive, firstMuxDelayMs, nextMuxDelayMs } from './muxpolicy.ts'
 
 /**
  * THE MUX RUNNER — one Durable Object per video, whose ALARM does the work a request is not allowed
@@ -38,6 +38,8 @@ import { firstMuxDelayMs, nextMuxDelayMs } from './muxpolicy.ts'
 /** How many alarm attempts have been spent. Storage, not the job — the Worker never sends it. */
 const ATTEMPT = 'attempt'
 const JOB = 'job'
+/** When the isolate currently muxing this video claimed it (ms epoch). See MUX_CLAIM_TTL_MS. */
+const CLAIM = 'claim'
 
 export class MuxRunner extends DurableObject<Env> {
   /**
@@ -54,6 +56,22 @@ export class MuxRunner extends DurableObject<Env> {
     // waitUntil ceiling, a {video} job's runs to the container's own 120s wall. firstMuxDelayMs holds
     // both derivations so neither call site has to remember which ceiling it is under.
     await this.ctx.storage.setAlarm(Date.now() + firstMuxDelayMs(!!job.source?.page))
+  }
+
+  /**
+   * THE GLOBAL CLAIM (1.15.1). One object per video, single-threaded, so this is the mutex
+   * `muxInflight` could never be. True = you run the mux; false = another isolate is already running
+   * it, poll the bucket for its bytes. See MUX_CLAIM_TTL_MS for why a stale claim is ignored, and
+   * why the alarm never calls this.
+   */
+  async claim(): Promise<boolean> {
+    if (claimIsLive(await this.ctx.storage.get<number>(CLAIM), Date.now())) return false
+    await this.ctx.storage.put(CLAIM, Date.now())
+    return true
+  }
+
+  async release(): Promise<void> {
+    await this.ctx.storage.delete(CLAIM)
   }
 
   /**

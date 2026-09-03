@@ -132,7 +132,7 @@ SELECT blob1 AS platform, blob2 AS outcome,
        SUM(_sample_interval * double2) / SUM(_sample_interval) AS avg_ms
 FROM mbedfx_counters
 WHERE timestamp > NOW() - INTERVAL '24' HOUR
-  AND blob2 IN ('mux_ok','mux_gate','mux_timeout','mux_empty','mux_pool','mux_badsource','mux_error','mux_refused')
+  AND blob2 IN ('mux_ok','mux_gate','mux_timeout','mux_empty','mux_pool','mux_badsource','mux_error','mux_refused','mux_joined')
 GROUP BY platform, outcome ORDER BY platform, n DESC
 ```
 
@@ -927,3 +927,10 @@ which fetch it was. This is how Discord's deadline was read on 2026-09-02: four 
 Read the counters at least three minutes after the last event and away from :00 and :30 — the
 half-hourly smoke burst is sampled (`_sample_interval` 2-5) and a row written at t has been absent
 45 s later and present at two minutes.
+
+**And never fire `/_smoke` yourself in the same minute as a single-row measurement.** Analytics
+Engine samples at WRITE time when the write rate spikes, and the sampling covers the whole window,
+not only the burst: on 2026-09-03 a verification script called `/_smoke` right after a cold-paste
+proof, and the proof's `video_wait`, `video_ok` and `mux_ok` rows were dropped while the rows beside
+them read `_sample_interval` 2-4. Aggregates over many events survive sampling (the weighted sums
+above); a single proof does not.

@@ -811,6 +811,29 @@ export async function liveFetchPost(
        * video still dispatches the doomed mux. POST_TTL is 900s and the record lives 30 days, so every
        * view after the activity route fills it is covered.
        */
+      /**
+       * PERSIST WHAT INNERTUBE JUST SAID (1.15.1) — the half of "the answer sticks" that was missing.
+       *
+       * resolveYouTubeMeta persists an Innertube answer, but only when it is reached: from the document
+       * route, and only after THIS render's own call failed. A render whose call SUCCEEDED threw the
+       * answer away, so every other colo re-rolled the coin Cloudflare's egress loses about half the
+       * time. Read off the counters on 2026-09-03 13:47 UTC: the converter page fetched a video at :23
+       * and Innertube answered; Discord's crawler fetched it at :26 from another colo, was refused, saw
+       * no duration, made no promise, and shipped the stock iframe — three seconds after the service
+       * held the duration. One write here, on any client, in any colo, and the next render reads it.
+       *
+       * `!warm`: a record that exists is never overwritten — it may be the container's, written with a
+       * jar spent on it, and this rung carries no jar (the record's `jarred` flag is what the age gate
+       * reads). Fire-and-forget in waitUntil, failure ignored: caching is optional, the answer is not.
+       */
+      if (!warm && env.MEDIA_CACHE && got.uploadedAt !== undefined) {
+        const rec = innertubeRecord(got)
+        if (rec) {
+          const cache = env.MEDIA_CACHE
+          const put = Promise.resolve().then(() => cache.put(metaCacheKey(ref), JSON.stringify(rec))).then(() => undefined, () => undefined)
+          if (ctx) ctx.waitUntil(put)
+        }
+      }
       // The record's duration first for the reason above; Innertube's is what makes this reachable at
       // all on a COLD paste, which is the only paste that matters.
       return ytPost ? withMuxDuration(ytPost, warm?.duration ?? got.duration) : ytPost
@@ -1978,12 +2001,54 @@ const muxInflight = new Map<string, Promise<{ size: number } | null>>()
 const SPECULATIVE_MUX_CAP = 2
 function muxOnce(
   env: Env, key: string, source: Media['remux'], slotKey: string, platform: CredentialPlatform | null,
+  /** false ONLY from the alarm, which runs inside the object it would be claiming from. */
+  claim = true,
 ): Promise<{ size: number } | null> {
   const running = muxInflight.get(key)
   if (running) return running
-  const p = ensureMuxed(env, key, source, slotKey, platform).finally(() => muxInflight.delete(key))
+  const work = claim ? muxClaimed(env, key, source, slotKey, platform) : ensureMuxed(env, key, source, slotKey, platform)
+  const p = work.finally(() => muxInflight.delete(key))
   muxInflight.set(key, p)
   return p
+}
+
+/**
+ * How long a request that LOST the claim waits for the winner's bytes. The inline winner cannot
+ * outlive the 30 s waitUntil ceiling, and this poll runs in the loser's own waitUntil with the same
+ * ceiling, so anything longer is unreachable. One R2 head per MEDIA_JOIN_POLL_MS.
+ */
+const MUX_JOIN_MS = 25_000
+
+/**
+ * ONE MUX PER VIDEO WORLDWIDE (1.15.1) — see MUX_CLAIM_TTL_MS in muxpolicy.ts for the measurement.
+ * The MuxRunner object for this key says who runs it. The winner runs ensureMuxed and releases when
+ * the attempt ends, success or failure; everyone else polls the bucket for the winner's bytes and
+ * counts the join (`mux_joined`, double2 = the wait). A runner with no claim() — a stand-in from
+ * before this — or a failed RPC dispatches exactly as before: the claim is an optimisation, and a
+ * second download is the failure it prevents, not a correctness bug.
+ */
+async function muxClaimed(
+  env: Env, key: string, source: Media['remux'], slotKey: string, platform: CredentialPlatform | null,
+): Promise<{ size: number } | null> {
+  const runner = env.MUX_RUNNER?.getByName(key)
+  let mine = true
+  if (runner?.claim) {
+    try { mine = await runner.claim() } catch { mine = true }
+  }
+  if (!mine) {
+    const cache = env.MEDIA_CACHE
+    if (!cache) return null
+    const t0 = Date.now()
+    const head = await pollHead(cache, key, MUX_JOIN_MS)
+    const ref = parseRefKey(slotKey)
+    if (head && ref) countMux(env, ref.p, 'mux_joined', Date.now() - t0)
+    return head
+  }
+  try {
+    return await ensureMuxed(env, key, source, slotKey, platform)
+  } finally {
+    if (runner?.release) runner.release().catch(() => undefined)
+  }
 }
 
 /**
@@ -2034,7 +2099,10 @@ export async function runMuxJob(env: Env, job: MuxJob): Promise<boolean> {
   // An unparseable slotKey is a job from a build whose refKey allowlist has since changed. Refuse it
   // rather than muxing with no credential and no platform attribution — see parseRefKey.
   if (!ref) return false
-  const head = await muxOnce(env, job.key, job.source, job.slotKey, jarPlatform(ref))
+  // `claim = false`: this runs INSIDE the MuxRunner object's alarm, and an RPC back to the same object
+  // would wait on an object busy running this very alarm. The alarm is the durable executor; nothing
+  // it races is worth a second download.
+  const head = await muxOnce(env, job.key, job.source, job.slotKey, jarPlatform(ref), false)
   return head !== null
 }
 
@@ -3619,6 +3687,42 @@ export const YT_MUX_BOT_MS = 4000
  * `timestamp` in its dict; nothing validates, nothing is cached, no date, no throw, and it self-heals
  * when that instance idles out. Trusting the field instead would persist a hole for 30 days.
  */
+/**
+ * AN INNERTUBE ANSWER AS A STORED RECORD — one builder for both places one is persisted: the render
+ * path (liveFetchPost's yt arm, 1.15.1) and the document route's retry (resolveYouTubeMeta). Null when
+ * there is no usable date, which is the record's one required field.
+ *
+ * ONLY WHEN TRUE for isLive, so the absence keeps meaning "unknown" for every record the container
+ * rung and every pre-2026-08-29 write produced. This is what makes the SECOND paste of a live stream
+ * free: the render path's own Innertube call is refused about half the time from this egress, and
+ * without the record that coin is re-flipped on every cold post fetch.
+ *
+ * NO `jarred`, deliberately, and not an oversight: this rung sends no cookie. ytMetaUsable reads the
+ * flag's ABSENCE as "the gate verdict on this record is not one a credential has been tried against",
+ * which is exactly true here — so an age-gated id still falls through to the container on a
+ * deployment that has a pool, and an ungated one is kept. Writing `jarred` here would claim a
+ * credential was spent that never was.
+ *
+ * `null` fields (the YouTubeFetch shape) and `undefined` (the InnertubeMeta shape) are the same
+ * absence. A duration of a day or more is the DVR window of a broadcast, not a length, and is dropped.
+ */
+function innertubeRecord(q: {
+  uploadedAt?: string | number | null; duration?: number | null; isLive?: boolean | null
+  ageLimit?: number | null; description?: string | null; views?: number | null; counts?: unknown
+}): YouTubeMeta | null {
+  const at = q.uploadedAt === undefined || q.uploadedAt === null ? null : uploadDateFrom(q.uploadedAt)
+  if (!at) return null
+  const views = typeof q.views === 'number' ? q.views : (q.counts as { views?: unknown } | undefined)?.views
+  return {
+    timestamp: Math.floor(at.getTime() / 1000),
+    ...(typeof q.duration === 'number' && q.duration > 0 && q.duration < 86_400 ? { duration: q.duration } : {}),
+    ...(q.isLive ? { isLive: true as const } : {}),
+    ...(typeof q.ageLimit === 'number' ? { ageLimit: q.ageLimit } : {}),
+    ...(typeof q.description === 'string' ? { description: q.description } : {}),
+    ...(typeof views === 'number' ? { views } : {}),
+  }
+}
+
 async function resolveYouTubeMeta(ref: Extract<PostRef, { p: 'yt' }>, env: Env): Promise<YouTubeMeta | null> {
   /**
    * INNERTUBE FIRST, AND THIS IS WHAT MAKES THE DATE STICK RATHER THAN BEING RE-ROLLED EVERY PASTE.
@@ -3645,26 +3749,8 @@ async function resolveYouTubeMeta(ref: Extract<PostRef, { p: 'yt' }>, env: Env):
    * the rung that carries a cookie jar, which is the only thing that can answer an age-gated id.
    */
   const quick = await fetchInnertube(ref.id)
-  const quickAt = quick?.uploadedAt === undefined ? null : uploadDateFrom(quick.uploadedAt)
-  if (quick && quickAt) {
-    return {
-      timestamp: Math.floor(quickAt.getTime() / 1000),
-      ...(quick.duration === undefined || quick.duration >= 86_400 ? {} : { duration: quick.duration }),
-      // ONLY WHEN TRUE, so the absence keeps meaning "unknown" for every record the container rung
-      // and every pre-2026-08-29 write produced. This is what makes the SECOND paste of a live stream
-      // free: the render path's own Innertube call is refused about half the time from this egress,
-      // and without the record that coin is re-flipped on every cold post fetch.
-      ...(quick.isLive ? { isLive: true as const } : {}),
-      ...(quick.ageLimit === undefined ? {} : { ageLimit: quick.ageLimit }),
-      ...(quick.description === undefined ? {} : { description: quick.description }),
-      ...(quick.views === undefined ? {} : { views: quick.views }),
-      // NO `jarred`, deliberately, and not an oversight: this rung sends no cookie. ytMetaUsable
-      // reads the flag's ABSENCE as "the gate verdict on this record is not one a credential has been
-      // tried against", which is exactly true here — so an age-gated id still falls through to the
-      // container on a deployment that has a pool, and an ungated one is kept. Writing `jarred` here
-      // would claim a credential was spent that never was.
-    }
-  }
+  const quickRecord = quick ? innertubeRecord(quick) : null
+  if (quickRecord) return quickRecord
 
   const resolver = env.MEDIA_RESOLVER
   if (!resolver) return null
