@@ -201,3 +201,27 @@ export function promisable(m: { live?: true; duration?: number } | null | undefi
   if (!YT_PROMISE || !m || m.live) return false
   return typeof m.duration === 'number' && m.duration > 0 && m.duration <= YT_PROMISE_MAX_SECONDS
 }
+
+/**
+ * ONE MUX PER VIDEO WORLDWIDE — the claim, and how long it stays live.
+ *
+ * `muxInflight` in worker.ts dedupes a mux within ONE isolate and says so. On 2026-09-03 the owner's
+ * first real paste on 1.15.0 produced two `mux_ok` rows for one video, 13.6 s and 14.1 s, started
+ * within a second of each other by two renders in two isolates — the converter page and Discord's
+ * crawler — on the same one-vCPU container slot. One download would have landed around 9 s, inside
+ * Discord's window; two landed at 14 s, outside it. The MuxRunner Durable Object is already one
+ * object per video (it is addressed by the mux key), so it is where the claim lives: the first
+ * dispatcher wins, everyone else polls the bucket for the winner's bytes.
+ *
+ * THE TTL IS THE INLINE ATTEMPT'S MAXIMUM LIFE PLUS SLACK. An inline mux runs in `ctx.waitUntil`,
+ * which Cloudflare cancels 30 s after the response; a claim older than that belongs to an isolate
+ * that is gone, and honouring it would leave the video unmuxed until the alarm's own attempt. The
+ * claimant releases on completion, so the TTL only matters for a cancelled one. 40 s.
+ *
+ * THE ALARM NEVER CLAIMS: it runs inside the object, and an RPC to the object from its own alarm
+ * waits on an object busy running that alarm. runMuxJob passes `claim = false` for that reason.
+ */
+export const MUX_CLAIM_TTL_MS = 40_000
+export function claimIsLive(claimedAt: unknown, now: number): boolean {
+  return typeof claimedAt === 'number' && Number.isFinite(claimedAt) && now - claimedAt >= 0 && now - claimedAt < MUX_CLAIM_TTL_MS
+}

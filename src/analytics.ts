@@ -219,11 +219,14 @@ export type Outcome2 =
    *   mux_error    500, or a status this mapping does not know. Should stay at zero.
    *   mux_refused  the mux SUCCEEDED and we declined to store it (MUX_BUFFER_MAX). Not an
    *                extraction verdict, and it must never be read as one.
+   *   mux_joined   (1.15.1) this isolate found another isolate already muxing the video (the
+   *                MuxRunner claim) and served its bytes instead of downloading them again. double2
+   *                is how long it waited for them. Not an attempt: no container call was made.
    *
    * `blob3` IS `'none'` ON EVERY MUX ROW, deliberately — see countMux for why a mux has no client.
    */
   | 'mux_ok' | 'mux_gate' | 'mux_timeout' | 'mux_empty'
-  | 'mux_pool' | 'mux_badsource' | 'mux_error' | 'mux_refused'
+  | 'mux_pool' | 'mux_badsource' | 'mux_error' | 'mux_refused' | 'mux_joined'
   /**
    * THE CARD DEGRADED TO A STILL — per RENDER, and deliberately outside the `mux_*` block.
    *
@@ -334,7 +337,8 @@ export interface Env {
    * 30 seconds. That is what makes this safe to ship ahead of the binding, and it is what a
    * self-hosted deploy gets for free.
    */
-  MUX_RUNNER?: { getByName(name: string): { schedule(job: MuxJob): Promise<void> } }
+  // claim/release are optional so a stand-in from before 1.15.1 still dispatches (see muxClaimed).
+  MUX_RUNNER?: { getByName(name: string): { schedule(job: MuxJob): Promise<void>; claim?(): Promise<boolean>; release?(): Promise<void> } }
   /**
    * Workers AI, for translating a foreign-script post. OPTIONAL exactly as MEDIA_RESOLVER is:
    * absent means every card renders as it did before translation existed, so the binding can be
