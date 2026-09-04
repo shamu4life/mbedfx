@@ -163,8 +163,14 @@ Two separable layers; only one is datacenter-viable:
 - **Ad-free native stream (blocked).** `googlevideo` streams are behind BotGuard/PO-Token and are **IP-locked
   to the extracting client**, so a server-extracted URL often won't even play from Discord's proxy IP. yt-dlp's
   own wiki says PO tokens no longer bypass the bot check for most cases from datacenter IPs. Koutube only gets
-  an ad-free MP4 by running a private Invidious on residential egress — which we don't have. **Conclusion: no
-  ad-free self-served stream from CF.** And ads on the embed player are creator-controlled — `nocookie`,
+  an ad-free MP4 from one private Invidious + invidious-companion box — measured 2026-09-04: iv.igerman.cc, a
+  DataPacket DATACENTER IP (79.127.186.198, AS212238, Warsaw) presenting a companion-minted `pot=`, rotated by
+  hand after each ban (koutube issue #16); its API is auth-walled; `local=false` and `local=true` are both
+  proxied through `/companion/videoplayback`; itag 22 is gone so it is 360p only; the three public instances
+  koutube ships are dead; every listed public Invidious API is `api:false`. Not residential, and not liftable:
+  the Worker itself contains no YouTube egress. **Conclusion: no ad-free self-served stream from CF**, and the
+  koutube question is closed for code — it stays open only as a topology (a non-Cloudflare IP) behind an owner
+  decision. And ads on the embed player are creator-controlled — `nocookie`,
   `rel=0`, `modestbranding` do **not** remove them.
 - **Iframe player (the recommended path, viable).** `twitter:card=player` + `twitter:player=https://www.youtube-nocookie.com/embed/{id}`
   (+ `twitter:player:width/height`) renders an **inline player** in Discord, because `youtube.com` is on

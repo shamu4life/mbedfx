@@ -172,7 +172,7 @@ test('A COLD ENTRY on a VOUCHED post costs exactly ONE container call and is WRI
     { timestamp: TS_RICK }, 'ONLY the field we consume is persisted')
 })
 
-test('INNERTUBE ANSWERS AND THE CONTAINER IS NEVER ASKED — and the answer is WRITTEN', async () => {
+test('INNERTUBE ANSWERS AND ITS ANSWER IS THE ONE WRITTEN — the container beside it is not waited for', async () => {
   /**
    * THE POINT OF PUTTING INNERTUBE IN FRONT OF THE CONTAINER, which is not the same as the render
    * path already asking it. `fetchYouTube` asks on every cold render, but that answer was not
@@ -185,11 +185,16 @@ test('INNERTUBE ANSWERS AND THE CONTAINER IS NEVER ASKED — and the answer is W
    * the record for 30 days. A coin flip that STICKS is a different thing from one re-rolled forever:
    * one success, on any paste, in any colo, fixes that video permanently for everyone.
    *
-   * And it costs ZERO container calls, against a pool of four slots shared by ten platforms, on the
-   * rung that has not completed a request-scoped call since ~2026-08-18.
+   * REWRITTEN 2026-09-04. This used to assert ZERO container calls, because the container ran only
+   * after Innertube failed. That serial order is what drew the 1970 epoch on the owner's second paste
+   * that day (a 1.7-2.5s refusal in front of a 3.1-4.7s `-J` under a 4000ms deadline), so the two
+   * rungs now start together and the first usable record wins. The container may therefore be ASKED
+   * here (at most once, bounded by metaOnce); what this test now pins is that its answer is neither
+   * waited for nor written when Innertube's arrives first. The fake container is slow on purpose so
+   * the race has a loser.
    */
   const ref = ytRef('innertube01')
-  const { seen, binding } = fakeResolver()
+  const { seen, binding } = fakeResolver({ meta: () => new Promise(r => setTimeout(() => r(Response.json({ timestamp: TS_RICK })), 3100)) })
   const r2 = fakeR2()
 
   const saved = globalThis.fetch
@@ -205,9 +210,12 @@ test('INNERTUBE ANSWERS AND THE CONTAINER IS NEVER ASKED — and the answer is W
     })
   }
   try {
+    const t0 = Date.now()
     const res = await handle(req(activity(ref)), envWith(binding, r2), ctx, deps(vouchedPost(ref)))
+    const elapsed = Date.now() - t0
     assert.equal(await createdAt(res), ISO_RICK, 'the real date, on the first paste')
-    assert.equal(seen.meta, 0, 'and the container was never asked for it')
+    assert.ok(seen.meta <= 1, 'the container is asked beside Innertube, at most once')
+    assert.ok(elapsed < 2500, `and never waited for once Innertube answered (${elapsed}ms)`)
 
     const written = r2.store.get(metaCacheKey(ref))
     assert.ok(written, 'the answer is PERSISTED, which is what stops the next paste re-rolling it')
@@ -261,6 +269,27 @@ test('A CONTAINER THAT NEVER ANSWERS still returns, honestly, and the work is ha
   assert.ok(waits.length > 0, 'the extract keeps running past the response rather than being abandoned')
 })
 
+test("THE CONTAINER IS ASKED WHEN youtubeMeta RUNS, NOT AFTER INNERTUBE'S ABORT", async () => {
+  // The other half of the 2026-09-04 fix, pinned directly: the `-J` must be dispatched at once, or
+  // a 3.1-4.7s extract behind a 1.7-2.5s stall cannot fit any budget Discord tolerates.
+  const ref = ytRef('concurrnt01')
+  let askedAt = 0
+  const t0 = Date.now()
+  const { binding } = fakeResolver({ meta: () => { askedAt = Date.now() - t0; return Response.json({ timestamp: TS_RICK }) } })
+  const saved = globalThis.fetch
+  try {
+    globalThis.fetch = async (url, init) => {
+      if (!String(url).includes('/youtubei/')) return new Response('offline', { status: 503 })
+      return new Promise((_, reject) => { init?.signal?.addEventListener('abort', () => reject(new Error('aborted'))) })
+    }
+    const res = await handle(req(activity(ref)), envWith(binding), { waitUntil() {} }, deps(vouchedPost(ref)))
+    assert.equal(await createdAt(res), ISO_RICK)
+  } finally {
+    globalThis.fetch = saved
+  }
+  assert.ok(askedAt > 0 && askedAt < 500, `the container was asked ${askedAt}ms in — beside Innertube, not after its 2500ms abort`)
+})
+
 test('THE METADATA ARM GETS ITS OWN BUDGET, AND THE TRANSLATION DOES NOT', async () => {
   /**
    * WHAT THIS PINS, and why one number for all three arms was wrong.
@@ -298,7 +327,15 @@ test('THE METADATA ARM GETS ITS OWN BUDGET, AND THE TRANSLATION DOES NOT', async
    * NEVER ANSWERS" test spends one of those two on purpose; this one must not spend the other.
    */
   const metaRef = ytRef('budgetMeta1')
-  const hangMeta = fakeResolver()
+  /**
+   * THE CONTAINER ANSWERS IN 3100ms, NOT 0ms — REWRITTEN 2026-09-04. The fake used to answer the
+   * `-J` instantly, so this test passed while production rendered 1970 on the owner's second paste
+   * that day: the real `-J` is 3.1-4.7s (src/worker.ts, resolveYouTubeMeta), and it was SERIALIZED
+   * behind Innertube's 2500ms abort under a 4000ms deadline. 3100 is the fast end of the measured
+   * range. This is that paste reproduced offline; it was red on the serial code and is green only
+   * because the two rungs now start together.
+   */
+  const hangMeta = fakeResolver({ meta: () => new Promise(r => setTimeout(() => r(Response.json({ timestamp: TS_RICK, title: 'ignored' })), 3100)) })
   const saved = globalThis.fetch
   let metaMs = 0
   let dated = ''
@@ -322,7 +359,7 @@ test('THE METADATA ARM GETS ITS OWN BUDGET, AND THE TRANSLATION DOES NOT', async
     globalThis.fetch = saved
   }
   assert.equal(dated, ISO_RICK,
-    'the second Innertube attempt plus its container fallback must fit inside the metadata budget')
+    'a 3100ms container answer must land inside the metadata budget while Innertube burns its abort BESIDE it, not before it')
   assert.ok(metaMs > MUX_WAIT_BOT_MS + 400,
     `so the arm must outlive the shared crawler budget (${metaMs}ms, MUX_WAIT_BOT_MS=${MUX_WAIT_BOT_MS})`)
   assert.ok(metaMs < YT_META_BOT_MS + 900,
@@ -932,7 +969,9 @@ test('THE LIVE VERDICT IS PERSISTED, which is what makes the SECOND paste of a s
    */
   const ref = ytRef('liveWrite01')
   const r2 = fakeR2()
-  const { seen, binding } = fakeResolver()
+  // Slow on purpose (2026-09-04): the container now runs BESIDE Innertube, and an instant fake would
+  // win the race with a record that carries no live verdict — which is not the write under test.
+  const { seen, binding } = fakeResolver({ meta: () => new Promise(r => setTimeout(() => r(Response.json({ timestamp: TS_RICK })), 3100)) })
   await withFetch(
     answering(() => new Response(
       innertubeBody({ lengthSeconds: '0', isLive: true }), { headers: { 'content-type': 'application/json' } })),
@@ -943,7 +982,7 @@ test('THE LIVE VERDICT IS PERSISTED, which is what makes the SECOND paste of a s
   const got = JSON.parse(new TextDecoder().decode(written.bytes))
   assert.equal(got.isLive, true, 'including the verdict the next cold render needs')
   assert.equal(got.duration, undefined, "and lengthSeconds '0' is still absent, not a zero-second video")
-  assert.equal(seen.meta, 0, 'Innertube answered, so the container was never asked')
+  assert.ok(seen.meta <= 1, 'the container may be asked beside Innertube since 1.15.2; its slower answer is not the one written')
 })
 
 test('A "NOT LIVE" IS NEVER WRITTEN — absence is what every older record means', async () => {

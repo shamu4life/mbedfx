@@ -275,6 +275,18 @@ export const pendingMuxIndex = (post: Post): number =>
   mediaOf(post).findIndex(m => m != null && typeof m === 'object' && m.pendingMux === true)
 
 /**
+ * IS THIS THE STOCK-PLAYER CARD? yt, no playable video, not age-gated, no promise pending — the
+ * predicate the spoof head's stock gate applies, exported (2026-09-04) because two more places have
+ * to agree with it: og:title and the oEmbed author line. On the stock branch the activity link is
+ * omitted, so the OpenGraph tags and the oEmbed ARE the card, and the slots that are fallback
+ * insurance everywhere else are what Discord draws here. The owner's screenshot of 2026-09-04 showed
+ * the byline in the title slot and the literal 'Embed' in the author slot, and the video's title
+ * nowhere. One predicate, three consumers, so they cannot drift.
+ */
+export const stockState = (post: Post): boolean =>
+  post.ref?.p === 'yt' && !playableVideo(post) && !post.sensitive && pendingMuxIndex(post) < 0
+
+/**
  * The embed's accent colour, per platform.
  *
  * #0085ff is the verified Bluesky head — the colour a real Discord client was observed
