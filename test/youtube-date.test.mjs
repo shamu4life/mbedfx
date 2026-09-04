@@ -273,9 +273,10 @@ test("THE CONTAINER IS ASKED WHEN youtubeMeta RUNS, NOT AFTER INNERTUBE'S ABORT"
   // The other half of the 2026-09-04 fix, pinned directly: the `-J` must be dispatched at once, or
   // a 3.1-4.7s extract behind a 1.7-2.5s stall cannot fit any budget Discord tolerates.
   const ref = ytRef('concurrnt01')
-  let askedAt = 0
+  let asked = false
+  let askedAt = -1
   const t0 = Date.now()
-  const { binding } = fakeResolver({ meta: () => { askedAt = Date.now() - t0; return Response.json({ timestamp: TS_RICK }) } })
+  const { binding } = fakeResolver({ meta: () => { asked = true; askedAt = Date.now() - t0; return Response.json({ timestamp: TS_RICK }) } })
   const saved = globalThis.fetch
   try {
     globalThis.fetch = async (url, init) => {
@@ -287,7 +288,9 @@ test("THE CONTAINER IS ASKED WHEN youtubeMeta RUNS, NOT AFTER INNERTUBE'S ABORT"
   } finally {
     globalThis.fetch = saved
   }
-  assert.ok(askedAt > 0 && askedAt < 500, `the container was asked ${askedAt}ms in — beside Innertube, not after its 2500ms abort`)
+  // `asked`, not `askedAt > 0`: on a fast box the call lands in the same millisecond as t0, and 0 is
+  // the best value this can take (it went red on CI for exactly that on 2026-09-04).
+  assert.ok(asked && askedAt < 500, `the container was asked ${askedAt}ms in — beside Innertube, not after its 2500ms abort`)
 })
 
 test('THE METADATA ARM GETS ITS OWN BUDGET, AND THE TRANSLATION DOES NOT', async () => {
