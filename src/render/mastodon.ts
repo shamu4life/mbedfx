@@ -2,7 +2,7 @@ import type { Media, Platform, Post } from '../types.ts'
 import { mediaList } from '../media.ts'
 import { refKey } from '../refkey.ts'
 import { encodeStatusId } from '../statusid.ts'
-import { bytesIndex, fudge, isSensitive, mediaOf, mediaUrl, str, usable } from './embed.ts'
+import { byline, bytesIndex, fudge, isSensitive, mediaOf, mediaUrl, stockState, str, usable } from './embed.ts'
 import { buildContentHtml, statParts, withVideoGalleryMarker } from './text.ts'
 
 /**
@@ -630,11 +630,16 @@ function authorName(post: Post): string {
 export function toOEmbed(post: Post, origin: string): object {
   // Exactly seven fields. html/width/height are omitted despite type:'rich' because Discord
   // reads only these, and an `html` payload is a second body it could decide to render.
+  // ON THE STOCK CARD THE AUTHOR SLOT IS THE CHANNEL (2026-09-04). The activity card, which draws
+  // the author itself, is not fetched on that branch, so this line is the only author Discord sees —
+  // and authorName is a counts slot whose floor is the literal 'Embed'. See stockState.
+  const stock = stockState(post)
   return {
-    author_name: authorName(post),
+    author_name: stock ? byline(post.author) : authorName(post),
     // The POST url, unlike account.url above — this one is FxEmbed's shape and it is right:
-    // the oEmbed author line links to the thing being embedded.
-    author_url: post.canonical,
+    // the oEmbed author line links to the thing being embedded. On the stock card it links the
+    // channel, which is what the slot now names.
+    author_url: stock ? (str(post.author?.url) || post.canonical) : post.canonical,
     provider_name: 'mbedfx',
     // From the request, never a constant: a hardcoded origin would point a staging embed's
     // footer at prod.

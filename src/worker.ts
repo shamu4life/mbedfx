@@ -3723,35 +3723,48 @@ function innertubeRecord(q: {
   }
 }
 
+/**
+ * THE TWO RUNGS RUN BESIDE EACH OTHER (1.15.2). "Innertube first, then the container" was the shape
+ * until 2026-09-04, and it lost by arithmetic: youtubeMeta only reaches here after the render's own
+ * Innertube call already failed, so the re-roll here burned ~1.7-2.5 s (a refusal is a stall to the
+ * 2500 ms abort, not a fast 403 — innertube.ts) SERIALIZED in front of a 3.1-4.7 s container `-J`,
+ * under a 4000 ms deadline. 4.8-7.2 s against 4000 loses every time. The owner's second paste of a
+ * video on 2026-09-04 drew the native player with the 1970 epoch for exactly that reason, and
+ * test/youtube-date.test.mjs reproduces it offline with a 3100 ms container.
+ *
+ * Now both start at once and the first usable record wins. The Innertube leg aborts itself at
+ * 2500 ms. The container leg costs a slot on the ~half of these renders where the re-roll would have
+ * answered — bounded by metaOnce and SPECULATIVE_META_CAP, and stated here rather than hidden. Its
+ * result is discarded when it loses; metaWork writes whichever record this function returns.
+ *
+ * WHY THE INNERTUBE RUNG IS STILL HERE AT ALL: it is what makes the date STICK. Through metaWork the
+ * record lands in R2 for 30 days, so one success anywhere, on any paste, in any colo, fixes that
+ * video for everyone (and since 1.15.1 the render path persists its own successes too). The
+ * container rung is the one that carries a cookie jar, the only thing that can answer an age-gated
+ * id, and the one that takes a slot from a pool of four shared by ten platforms.
+ */
 async function resolveYouTubeMeta(ref: Extract<PostRef, { p: 'yt' }>, env: Env): Promise<YouTubeMeta | null> {
-  /**
-   * INNERTUBE FIRST, AND THIS IS WHAT MAKES THE DATE STICK RATHER THAN BEING RE-ROLLED EVERY PASTE.
-   *
-   * `fetchYouTube` already asks `youtubei/v1/player` on the render path, which is what stopped the
-   * cards saying 1 January 1970. But that answer was deliberately not persisted, so every cold paste
-   * was an INDEPENDENT attempt — and measured against production on 2026-08-27, across 22 ids the
-   * service had never seen, that attempt succeeds only about 40-50% of the time. Not a timeout: the
-   * post fetch returns in ~250ms and the ~1750ms card is `settleMux` waiting out MUX_WAIT_BOT_MS
-   * afterwards. Not a bad video either: every failing id answers perfectly from a residential IP,
-   * same request, same minute. Cloudflare's egress is simply refused on some fraction of requests,
-   * and neither raising the budget (1200ms -> 2500ms) nor adding a second client moved the ratio.
-   *
-   * A COIN FLIP THAT IS RE-ROLLED FOREVER IS A DIFFERENT BUG FROM A COIN FLIP THAT STICKS. Reaching
-   * it from HERE puts the answer through `metaAttempt` -> `metaWork`, which writes the record to R2
-   * for 30 days — so one success anywhere, on any paste, in any colo, fixes that video permanently
-   * for everyone. It also buys a SECOND attempt per paste at no extra cost, because the activity
-   * route calls this seconds after the render already tried.
-   *
-   * AND IT IS TRIED BEFORE THE CONTAINER ON PURPOSE. The container's `yt-dlp -J` is the thing that
-   * has not completed a request-scoped call since ~2026-08-18 (every MediaResolver invocation ends
-   * `canceled` at 1.3-1.8s), it costs a slot from a pool of four shared by ten platforms, and it
-   * takes 15.9s from this egress against Innertube's ~0.25s. It stays as the fallback because it is
-   * the rung that carries a cookie jar, which is the only thing that can answer an age-gated id.
-   */
-  const quick = await fetchInnertube(ref.id)
-  const quickRecord = quick ? innertubeRecord(quick) : null
-  if (quickRecord) return quickRecord
+  const quick = fetchInnertube(ref.id).then(q => (q ? innertubeRecord(q) : null), () => null)
+  const slow = resolveYouTubeMetaFromContainer(ref, env)
+  // The container leg's REJECTION is kept, not swallowed: MetaUnusable ("the extract answered with
+  // no usable date") is thrown so that metaAttempt does not negatively cache our own rejection as
+  // the video's verdict. When no leg produces a record, that rejection is what this function ends
+  // with; a plain null is only ever "both legs said no".
+  return new Promise<YouTubeMeta | null>((resolve, reject) => {
+    let left = 2
+    let failure: unknown
+    let failed = false
+    const settle = (rec: YouTubeMeta | null) => {
+      if (rec) resolve(rec)
+      else if (--left === 0) (failed ? reject(failure) : resolve(null))
+    }
+    quick.then(settle)
+    slow.then(settle, (e: unknown) => { failed = true; failure = e; settle(null) })
+  })
+}
 
+/** The container `-J` rung alone. See resolveYouTubeMeta for why it runs beside Innertube. */
+async function resolveYouTubeMetaFromContainer(ref: Extract<PostRef, { p: 'yt' }>, env: Env): Promise<YouTubeMeta | null> {
   const resolver = env.MEDIA_RESOLVER
   if (!resolver) return null
   try {

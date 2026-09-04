@@ -9,7 +9,7 @@ plays inline.
 - UI: `public/index.html`, one file of hand-written vanilla JS and CSS. Its visible copy carries no
   em dashes and no second person. The owner asked for that, later edits re-broke it within a day,
   and a test now asserts it.
-- Version: 1.15.1 (`package.json` is authoritative; this line has been stale before).
+- Version: 1.15.2 (`package.json` is authoritative; this line has been stale before).
 
 ## What gets a PR sent back
 
@@ -118,6 +118,11 @@ plays inline.
   failed residentially on the same video, and `android_vr` is refused from this egress although
   the table lists it as needing nothing. There is also no working YouTube age-gate bypass — 68
   candidate repositories were checked and none works.
+- koutube is closed for code (measured 2026-09-04). Its whole native player is one private Invidious
+  box on a hand-rotated datacenter IP, 360p, auth-walled, GPL-3, with no duration and no absolute
+  date, and its fallback is the iframe the owner rejected. What remains of that idea is a topology,
+  a non-Cloudflare IP for the container's YouTube traffic, and that is an owner decision (a proxy or
+  a box), not a lift. Do not re-open it as a code question; the July roadmap carries the measurement.
 - `git add -A` sweeps in agent scratch. `.gitignore` has four essays about this. Always use
   slashless patterns. A `dir/` pattern won't match a symlink or a path that doesn't exist yet.
 

@@ -3,7 +3,7 @@ import { mediaList } from '../media.ts'
 import { refKey } from '../refkey.ts'
 import { encodeStatusId } from '../statusid.ts'
 import { esc, html } from './fail.ts'
-import { byline, bytesIndex, describe, dimTags, mediaOf, mediaUrl, pendingMuxIndex, playableVideo, str, themeColor, usable } from './embed.ts'
+import { byline, bytesIndex, describe, dimTags, mediaOf, mediaUrl, pendingMuxIndex, playableVideo, stockState, str, themeColor, usable } from './embed.ts'
 import { buildPlainText } from './text.ts'
 
 /**
@@ -383,8 +383,17 @@ function renderSpoof(post: Post, origin: string): Response {
    * neither twitter:card nor rel=canonical. See Media.pendingMux and src/muxpolicy.ts.
    */
   const pendingAt = pendingMuxIndex(post)
+  /**
+   * ON THE STOCK BRANCH og:title IS THE VIDEO'S TITLE (2026-09-04). Everywhere else the byline: the
+   * activity card carries the title in its content and the author in its account block, and
+   * og:title is only the fallback insurance the docstring above describes. The stock branch omits the
+   * activity link, so the OpenGraph tags ARE the card — and the byline in the title slot is what the
+   * owner's screenshot showed, with the real title on the wire only inside og:description, which a
+   * player card does not draw. Falls back to the byline when there is no title at all.
+   */
+  const stock = stockState(post)
   // Computed once and shared with twitter:title, so the two cannot drift. Already esc()'d.
-  const title = esc(byline(post.author))
+  const title = esc(stock && str(post.title) ? str(post.title) : byline(post.author))
 
   // THE PRODUCTION-PARITY VIDEO BLOCK — see spoofVideoTags() above, and the PRODUCTION PARITY
   // section of this file's top docstring for why it is reproduced wholesale. Empty on any post
@@ -399,7 +408,7 @@ function renderSpoof(post: Post, origin: string): Response {
   // AND NEVER WHILE A PROMISABLE MUX IS IN FLIGHT: the iframe would be taken and the document
   // never read. The stock player is now exactly the three states it was written for — live,
   // over the ceiling, and no duration verdict — plus the no-container deploy.
-  const stockOg = post.ref?.p === 'yt' && !videoOg.length && !post.sensitive && pendingAt < 0
+  const stockOg = stock && !videoOg.length && post.ref?.p === 'yt'
     ? stockPlayerTags(post, origin, post.ref.id)
     : []
 
@@ -409,7 +418,9 @@ function renderSpoof(post: Post, origin: string): Response {
     // og:description and oEmbed author_name are not disjoint consumers — the OpenGraph path
     // reads the body from one and the author line from the other — so a count here would
     // print the engagement stats twice inside a single embed.
-    `<meta property="og:description" content="${esc(describe(post, buildPlainText(post)))}"/>`,
+    // On the stock branch the title is og:title (above), so it is dropped from the description
+    // rather than printed twice on one card.
+    `<meta property="og:description" content="${esc(describe(post, buildPlainText(stock ? { ...post, title: undefined } : post)))}"/>`,
     `<meta property="og:url" content="${canonical}"/>`,
     `<meta property="og:site_name" content="mbedfx"/>`,
     // C1's 0-media branch, and the ONLY og:image this head can ever emit. Positioned with the

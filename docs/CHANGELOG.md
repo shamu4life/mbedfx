@@ -11,6 +11,39 @@ Nothing yet.
 
 ---
 
+## [1.15.2] - 2026-09-04
+
+Two defects from the owner's screenshot, and the koutube question closed.
+
+### Measured (the owner's two pastes, 2026-09-04 ~01:51 local)
+
+- First paste (fresh video, straight into Discord): Innertube refused that render, so no duration, no
+  promise, the stock iframe — and the card's title slot showed the channel while the author slot
+  said "Embed". On the stock branch the activity link is omitted, so the OpenGraph tags and the
+  oEmbed ARE the card, and `og:title` was the byline everywhere while the oEmbed author line is a
+  counts slot whose floor is the literal `Embed`.
+- Second paste fifteen seconds later (a fresh url): the mux from the first paste's T0 was warm, the
+  native player drew, and the date read 1969: the document's date arm ran Innertube's ~1.7–2.5 s
+  refusal SERIALLY in front of the container's 3.1–4.7 s `-J` under a 4000 ms deadline.
+- koutube (iGerman00/koutube, current source, and its live deployment): the Worker contains no
+  YouTube egress at all; every field and byte comes from one private Invidious + companion box on a
+  hand-rotated DataPacket datacenter IP, auth-walled, 360p only, no duration, no absolute date,
+  GPL-3, iframe fallback; its shipped public instances are dead. Nothing to lift. The roadmap and
+  CLAUDE.md now carry the measurement.
+
+### Fixed
+
+- **The stock card names the video and the channel.** `stockState()` (one predicate for the gate,
+  `og:title` and the oEmbed author line): on that branch `og:title` is the video's title and the
+  oEmbed `author_name` is the byline, linking the channel. Every other head keeps the byline in
+  `og:title` — the activity card carries the title there.
+- **The document route asks the container beside Innertube, not after it**
+  (`resolveYouTubeMeta` races the two rungs; the first usable record wins). The test that guarded
+  this arm answered the `-J` in 0 ms and could not see the defect; it now answers in 3100 ms and
+  was red on the serial code.
+
+---
+
 ## [1.15.1] - 2026-09-03
 
 The owner's first real paste on 1.15.0 drew the stock iframe, and the counters said why twice.
