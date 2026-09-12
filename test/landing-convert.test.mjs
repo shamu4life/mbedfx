@@ -304,6 +304,50 @@ test('A BARE PATH AND A SCHEMELESS PASTE BOTH WORK', () => {
   assert.equal(convert('/jack/status/20', 'mbedfx.app').url, 'https://mbedfx.app/jack/status/20')
 })
 
+test('THE STILLS TOGGLE APPENDS /p, AND THE ROUTER READS BACK EXACTLY WHAT THE PAGE EMITTED', () => {
+  /**
+   * The page and the router are checked against EACH OTHER, never against a hand-written
+   * expectation — this file's founding rule. A suffix the page appends but the router does not
+   * strip would be a link that 404s, which is the one outcome the converter must never produce, and
+   * only running both halves can catch it.
+   */
+  for (const pasted of [
+    'https://www.instagram.com/p/DaQ5CPTki4E/',
+    'https://x.com/jack/status/20',
+    'https://www.reddit.com/r/pics/comments/haucpf/',
+  ]) {
+    const plain = convert(pasted, 'mbedfx.app')
+    const stills = convert(pasted, 'mbedfx.app', 'stills')
+    assert.equal(stills.path, `${plain.path}/p`, 'the toggle appends /p to the path the page already computes')
+    // The suffixed link must name the SAME post the unsuffixed one does, and carry the mode.
+    const a = routed(plain.path)
+    const b = routed(stills.path)
+    assert.deepEqual(b.ref, a.ref, `${stills.path} must resolve to the same post as ${plain.path}`)
+    assert.equal(b.gallery, 'stills')
+    assert.equal(a.gallery, undefined, 'and an unsuffixed link must name no mode at all')
+  }
+
+  // UNTICKED EMITS NOTHING, not /v. Videos-first is already the worker's default, and spelling it
+  // out would freeze today's default into every link ever shared — Discord caches an embed from its
+  // first crawl, so the link would keep rendering this default after the default moved.
+  assert.equal(convert('https://x.com/jack/status/20', 'mbedfx.app').path, '/jack/status/20')
+  assert.equal(convert('https://x.com/jack/status/20', 'mbedfx.app', undefined).path, '/jack/status/20')
+
+  // THE QUERY SURVIVES, and the suffix lands on the PATH. /watch?v=abc/p would strand the suffix
+  // inside the query string, where the router — which strips a trailing path segment — never sees it.
+  const yt = convert('https://www.youtube.com/watch?v=jNQXAC9IVRw', 'mbedfx.app', 'stills')
+  assert.equal(routed(yt.path).gallery, 'stills', `the youtube spelling must carry the mode: ${yt.path}`)
+  assert.equal(routed(yt.path).ref.id, 'jNQXAC9IVRw', 'and still name the video')
+
+  // IDEMPOTENT ROUND TRIP. Pasting one of our own suffixed links back in, with the box off, gives
+  // the bare post — not /post/v/p, which the router would read as "mode p on a post whose id is v".
+  assert.equal(convert('https://mbedfx.app/jack/status/20/p', 'mbedfx.app').path, '/jack/status/20')
+  assert.equal(convert('https://mbedfx.app/jack/status/20/v', 'mbedfx.app', 'stills').path, '/jack/status/20/p')
+
+  // AND /p ALONE IS STILL A REAL PATH, not a suffix on nothing — it is Instagram's shape.
+  assert.equal(convert('https://mbedfx.app/p/DaQ5CPTki4E', 'mbedfx.app').path, '/p/DaQ5CPTki4E')
+})
+
 test('THE UNSUPPORTED SHORTENERS ARE REFUSED WITH A REASON, NOT A BROKEN LINK', () => {
   /**
    * THE POINT: these hide the post behind an opaque code, so there is nothing in the path that names

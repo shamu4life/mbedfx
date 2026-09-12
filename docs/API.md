@@ -257,10 +257,34 @@ the platform.
 | images, avatars, posters, already-progressive video | `302` to the CDN under `cache-control: public, max-age=300` (`MEDIA_MAX_AGE`, `src/cache.ts:8`) |
 | Instagram, Twitch and Threads video | proxied rather than redirected (the `media` arm of `src/worker.ts`; the three platforms are scoped in `proxyableVideoUrl`, `src/mediaproxy.ts`) |
 
+### The `/v` and `/p` gallery suffix
+
+A trailing `/v` or `/p` on any post url picks how a MULTI-ITEM gallery holding a video is drawn.
+
+| url | what the card holds |
+|---|---|
+| `mbedfx.app/{post}` | the default, which is `/v` |
+| `mbedfx.app/{post}/v` | the first video of the post's own media plays; every other item is a still, and the body carries a fixed note that the post holds more |
+| `mbedfx.app/{post}/p` | every item is a still, marked "Contains video"; nothing plays |
+
+It changes nothing for a single-item post, or for a gallery with no video in it: both render
+identically under either spelling. Only one video ever plays, whatever the gallery holds — Discord
+draws a single player from a `media_attachments` array and discards the rest (measured 2026-07-20;
+`src/render/mastodon.ts` carries the evidence).
+
+`/_api/v1` is deliberately UNAFFECTED and takes no such suffix. It publishes each entry's true
+`kind` plus the `still` flag described above, which is the post as fetched; the mode is a property
+of one rendered card, not of the post, and a JSON consumer wants the former.
+
+The suffix is stripped ahead of every route matcher, and falls back to the unstripped path when the
+stripped one names no post — so the handful of live permalinks whose own last segment is `p` or `v`
+(`/p/v` is an Instagram shortcode; `/{host}/@user/v` is a fediverse id) are unaffected.
+
 ### The `d.` host
 
-`d.` in front of either official host serves the file itself, video or image, at its own url:
-`https://d.mbedfx.app/jack/status/20`, `https://d.megapenispoopenfarten.sex/jack/status/20`. Those
+`d.` in front of any of the three official hosts serves the file itself, video or image, at its own
+url: `https://d.mbedfx.app/jack/status/20`, `https://d.megapenispoopenfarten.sex/jack/status/20`,
+`https://d.forsen.sex/jack/status/20`. Those
 bytes answer range requests, and a client seeks and resumes properly. A `d.` url renders no card,
 and it serves crawlers and people the same bytes.
 
