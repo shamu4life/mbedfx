@@ -522,6 +522,36 @@ export type Post = {
 
 export type ClientClass = 'discord' | 'telegram' | 'other-bot' | 'human'
 
+/**
+ * WHICH WAY A MULTI-ITEM GALLERY IS RENDERED. A property of the RENDER, never of the post — the
+ * normalizers keep emitting the true `kind` for every entry and /_api/v1 keeps publishing it, so
+ * this changes what one card looks like and nothing about what was fetched. That boundary is why it
+ * keys the RESPONSE cache and not the post cache (see cache.ts).
+ *
+ *  'videos' — the DEFAULT since 2026-09-11. The first usable video is promoted to the front of
+ *             media_attachments as a real `type:'video'` so Discord draws a player; every other
+ *             video still flattens to its poster still, and the content body carries a fixed-prose
+ *             note that the post holds more.
+ *  'stills' — the behaviour that was the unconditional default from 2026-07-20 to 2026-09-11: every
+ *             video in a multi-item gallery becomes its poster still, so every item is visible and
+ *             none of them plays, marked by "🎬 Contains video — tap to watch".
+ *
+ * WHY 'videos' CANNOT MEAN "all of them". Measured 2026-07-20 and unrevised: "a 10-video post drew
+ * a single player" and "DISCORD KEEPS THE TYPE OF THE FIRST ATTACHMENT". One player is the whole
+ * inventory; promoting a second buys nothing and would reinstate the Imgur multi-mux latency bug
+ * (imgur/normalize.ts). The note is what covers the difference.
+ *
+ * A SINGLE-ITEM POST IGNORES THIS ENTIRELY. galleryHasVideo requires usableCount > 1, so a lone
+ * reel or TikTok renders its real player under both modes — the load-bearing line mastodon.ts says
+ * must not move.
+ *
+ * THE DEFAULT LIVES IN src/statusid.ts, not here. This file carries no runtime export at all — it is
+ * types only — and the codec that maps a mode onto a status-id sentinel is the one place that has to
+ * know every mode by name anyway, so it owns DEFAULT_GALLERY_MODE and the mode-to-wire mapping
+ * together rather than letting the two drift apart in two files.
+ */
+export type GalleryMode = 'videos' | 'stills'
+
 export type Route =
   | { kind: 'site'; path: string }
   | { kind: 'media'; ref: PostRef; index: MediaIndex }
@@ -530,9 +560,14 @@ export type Route =
    * <link rel="alternate"> tags. Machine-facing siblings of 'media': the ref is the
    * whole payload, there is no canonical to redirect a human to, and neither carries
    * the advertised handle — that segment is decoration (see router.ts).
+   *
+   * `gallery` is the mode the HEAD minted this id with, absent when the id names none. It rides in
+   * the id rather than the path because Discord rebuilds these urls from the {id} and discards the
+   * href we advertise (measured 2026-09-02, 5 of 5) — so for a gallery, this field is the ONLY way
+   * a /p or /v the reader typed reaches the document their card is actually drawn from.
    */
-  | { kind: 'activity'; ref: PostRef }
-  | { kind: 'oembed'; ref: PostRef }
+  | { kind: 'activity'; ref: PostRef; gallery?: GalleryMode }
+  | { kind: 'oembed'; ref: PostRef; gallery?: GalleryMode }
   /**
    * A spoof-SHAPED path whose {id} did not decode. Separate from 'notfound' because the
    * shape already tells us the caller is a JSON consumer, and handing that caller the HTML
@@ -567,7 +602,7 @@ export type Route =
    * wrongly all the time, and telling the caller so is most of what makes it usable.
    */
   | { kind: 'api'; target: string | null }
-  | { kind: 'post'; ref: PostRef; canonical: string }
+  | { kind: 'post'; ref: PostRef; canonical: string; gallery?: GalleryMode }
   /**
    * AN ACCOUNT PAGE — `/profile/{handle}`, which is bsky.app's own permalink with the host swapped
    * and nothing else edited.
@@ -606,7 +641,7 @@ export type Route =
    * url itself (a human resolves it in their own browser at zero upstream cost); `sub` is carried for
    * clarity only — the resolver reads the post id from the redirect, never from these fields.
    */
-  | { kind: 'redditshare'; sub: string; code: string; canonical: string }
+  | { kind: 'redditshare'; sub: string; code: string; canonical: string; gallery?: GalleryMode }
   /**
    * META'S BARE SHARE CODE — `/share/{code}`, which BOTH Threads and Facebook mint in the identical
    * shape. Like 'redditshare' the code is an OPAQUE token naming no post until a network hop resolves
@@ -622,7 +657,7 @@ export type Route =
    * last-resort failure link, never as the card's canonical — a resolved share takes the ordinary
    * post path and gets that platform's own canonical, with every share parameter stripped.
    */
-  | { kind: 'metashare'; code: string; canonical: string }
+  | { kind: 'metashare'; code: string; canonical: string; gallery?: GalleryMode }
   | { kind: 'ambiguous'; path: string; candidates: Platform[] }
   | { kind: 'notfound' }
 

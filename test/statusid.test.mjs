@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { encodeStatusId, decodeStatusId } from '../src/statusid.ts'
+import { encodeStatusId, decodeStatusId, statusIdMode } from '../src/statusid.ts'
 import { refKey } from '../src/refkey.ts'
 
 // The whole point of this codec is that the {id} segment of the spoofed Mastodon
@@ -96,16 +96,65 @@ test('numeric normalization of an encoded id is a no-op, so it still decodes', (
   }
 })
 
-test('decodeStatusId rejects an id that is missing the sentinel', () => {
+test('decodeStatusId rejects an id whose leading digit is not one of the three sentinels', () => {
   // C2 requires both halves: emit the sentinel AND refuse anything without it. Without
   // the reject half, a sentinel-less id from an older cache entry or a hand-built URL
   // would decode to a DIFFERENT key than the one it was minted for — '1065' is 'A' but
   // bare '065' would also be 'A', so two wire forms would alias to one key.
+  //
+  // REWRITTEN 2026-09-11. This asserted `decodeStatusId('2065') === null` under the rule "only the
+  // constant sentinel 1 is accepted". '2' and '3' are now the gallery-mode sentinels, so that
+  // assertion pinned the behaviour the mode carrier had to change, and it has been REPLACED rather
+  // than dropped: the rule it protected is still asserted, just over a SET of three accepted digits
+  // instead of one. '4' stands in for it below.
+  //
+  // The aliasing this guards has not been weakened. '1065', '2065' and '3065' do all yield key 'A',
+  // but they are three different REQUESTS for one post, the way ?v=1 and ?v=2 would be — not two
+  // spellings of one request, which is what C2 was written against. What still cannot happen is a
+  // MANGLED id decoding to anything: strip the leading digit off any of the three and the remainder
+  // no longer divides by 3, so it 404s.
   assert.equal(decodeStatusId('065'), null, 'bare 3-digit group must not decode')
   assert.equal(decodeStatusId('120058049'), null, "pre-sentinel form of 'x:1' must not decode")
   assert.equal(decodeStatusId('0' + encodeStatusId('x:1')), null, 'leading zero must not decode')
-  assert.equal(decodeStatusId('2065'), null, 'only the constant sentinel 1 is accepted')
+  assert.equal(decodeStatusId('4065'), null, 'a digit outside the sentinel set is not accepted')
+  assert.equal(decodeStatusId('9065'), null, 'nor is any other unassigned digit')
   assert.equal(decodeStatusId('1'), null, 'the sentinel alone is not a key — an empty id must 404')
+  assert.equal(decodeStatusId('2'), null, 'and a mode sentinel alone is not a key either')
+  assert.equal(decodeStatusId('3'), null, 'nor the other one')
+})
+
+test('A MODE SENTINEL CARRIES THE GALLERY MODE AND CHANGES NOTHING ABOUT THE KEY', () => {
+  /**
+   * The /p and /v suffix would be a no-op without this. Discord does not fetch the activity href we
+   * advertise — measured 2026-09-02, "/api/v1/statuses/{id} 5 times out of 5 and the advertised
+   * /users/ href never" — it rebuilds the url from {id}. So {id} is the only channel that reaches
+   * the document the gallery is drawn from, and the mode rides in its leading digit.
+   */
+  const key = 'ig:p:DaQ5CPTki4E'
+  assert.equal(decodeStatusId(encodeStatusId(key, 'videos')), key, 'the key survives a mode')
+  assert.equal(decodeStatusId(encodeStatusId(key, 'stills')), key, 'under either mode')
+  assert.equal(statusIdMode(encodeStatusId(key, 'videos')), 'videos')
+  assert.equal(statusIdMode(encodeStatusId(key, 'stills')), 'stills')
+
+  // The three forms differ ONLY in the first digit, which is what makes this safe to add to a codec
+  // whose framing is 3-digits-per-byte: nothing downstream of the first character moved.
+  assert.equal(encodeStatusId(key, 'videos').slice(1), encodeStatusId(key).slice(1))
+  assert.equal(encodeStatusId(key, 'stills').slice(1), encodeStatusId(key).slice(1))
+
+  /**
+   * UNSPECIFIED IS NOT 'videos', and this is the assertion that keeps the change backward
+   * compatible. Every id minted before 2026-09-11 starts with '1', including the ones frozen inside
+   * Discord's embed cache forever. They must report NO mode so the caller applies whatever the
+   * current default is, rather than being pinned to the default that happened to be live the day
+   * they were minted.
+   */
+  assert.equal(statusIdMode(encodeStatusId(key)), null, 'a plain id names no mode')
+  assert.equal(encodeStatusId(key).charAt(0), '1', 'and it is still the 1 form, byte for byte')
+
+  // Total over garbage, like every other reader of a raw path segment.
+  for (const junk of ['', 'abc', '0', '4', '9999', '1', null, undefined]) {
+    assert.equal(statusIdMode(junk), null, `statusIdMode(${JSON.stringify(junk)}) must be null`)
+  }
 })
 
 test('decodeStatusId returns null (never throws) on junk from the request path', () => {

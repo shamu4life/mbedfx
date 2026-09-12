@@ -1,4 +1,4 @@
-import type { ClientClass, Post } from '../types.ts'
+import type { ClientClass, GalleryMode, Post } from '../types.ts'
 import { mediaList } from '../media.ts'
 import { refKey } from '../refkey.ts'
 import { encodeStatusId } from '../statusid.ts'
@@ -369,8 +369,24 @@ function stockPlayerTags(post: Post, origin: string, vid: string): string[] {
  * nothing. Everything reads through str(): a renderer's input comes from the cache unvalidated
  * (see embed.ts), and esc() throws on a non-string.
  */
-function renderSpoof(post: Post, origin: string): Response {
-  const id = encodeStatusId(refKey(post.ref))
+function renderSpoof(post: Post, origin: string, mode?: GalleryMode): Response {
+  /**
+   * THE MODE IS MINTED INTO THE {id}, AND THAT IS THE WHOLE MECHANISM BEHIND /p AND /v.
+   *
+   * This head is the only place that knows what the reader typed. The card, for a gallery, is drawn
+   * from the ACTIVITY DOCUMENT — and Discord does not fetch the href advertised below: measured
+   * 2026-09-02, "/api/v1/statuses/{id} 5 times out of 5 and the advertised /users/ href never". It
+   * rebuilds that url from the {id} and nothing else. So the id is the only thing this head can say
+   * to that request, and a mode kept in the path would be a visible no-op on the surface it exists
+   * to change.
+   *
+   * UNDEFINED WHEN THE READER NAMED NO MODE, deliberately, and not DEFAULT_GALLERY_MODE. An id with
+   * no mode digit is byte-identical to every id this service has ever emitted, so the ordinary paste
+   * keeps its exact wire form and the callback applies whatever the default is AT READ TIME. Minting
+   * the default explicitly would instead freeze today's default into every link ever shared, and
+   * Discord caches a message's embed from its first crawl forever.
+   */
+  const id = encodeStatusId(refKey(post.ref), mode)
   const handle = handleSegment(post.author?.handle)
   const canonical = esc(str(post.canonical))
   const hasMedia = mediaList(post).some(usable)
@@ -561,7 +577,7 @@ function renderSpoof(post: Post, origin: string): Response {
   return html(tags.join(''))
 }
 
-export function renderPost(post: Post, client: ClientClass, origin: string): Response {
+export function renderPost(post: Post, client: ClientClass, origin: string, mode?: GalleryMode): Response {
 
   // The post's OWN media, hoisted quote media deliberately EXCLUDED — this list feeds the
   // plain-og head's single-picture choice, and §7 requires that choice to stay the post's own
@@ -636,7 +652,7 @@ export function renderPost(post: Post, client: ClientClass, origin: string): Res
   // A SLIDESHOW HAS NO VIDEO and always took the spoof; that is unchanged. A video post with only
   // a THUMBNAIL is also unchanged: the normalizer emits the cover as a lone kind:'image' entry and
   // it renders through the activity gallery as a one-image slideshow does.
-  if (client === 'discord') return renderSpoof(post, origin)
+  if (client === 'discord') return renderSpoof(post, origin, mode)
 
   const tags: string[] = []
   // str(post.author?.…), not a raw read. deserializePost validates ref, canonical and createdAt

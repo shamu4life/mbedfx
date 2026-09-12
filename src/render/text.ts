@@ -360,6 +360,67 @@ export function withVideoGalleryMarker(body: string): string {
 }
 
 /**
+ * THE 'videos'-MODE NOTE — the other half of the gallery decision, and the compensation the default
+ * flip was bought with.
+ *
+ * Since 2026-09-11 the default promotes ONE video of a multi-item gallery to a real player instead
+ * of stilling every video. Discord draws at most one player and, on the 2026-07-20 measurement,
+ * keeps only the first attachment's type — so what the reader is shown may be that one video and
+ * nothing else, where before they were shown every item and no motion. This note is what tells them
+ * the rest is there. Without it the change is a straight loss of information, and with it the trade
+ * is one playable item plus a pointer, against N still ones.
+ *
+ * THREE CONSTANT STRINGS, SELECTED BY A CATEGORY, NEVER A COUNT — owner's call 2026-09-11, holding
+ * the line VIDEO_GALLERY_MARKER's docstring records from 2026-07-20 ("The owner chose 'Contains
+ * video' over 'N videos'"). Beyond the owner's preference there is a correctness reason a number
+ * cannot be written here: the true number of hidden items is different on different heads. The
+ * activity card carries every attachment; the plain OpenGraph head and Telegram each carry exactly
+ * ONE image and silently drop the rest. A sentence saying "+5 photos" would be wrong on two of the
+ * three surfaces it could appear on. "More" is true on all of them.
+ *
+ * CODEPOINTS AS ESCAPES, matching this file's house style for characters an editor could silently
+ * corrupt: \u{1F5BC} is FRAME WITH PICTURE. It differs from the stills marker's clapper board on
+ * purpose — the two notes describe opposite renders and a reader who sees both cards in one channel
+ * should be able to tell them apart at a glance.
+ *
+ * NO EM DASH, unlike VIDEO_GALLERY_MARKER. That marker pairs a claim with an instruction ("Contains
+ * video — tap to watch") and needs the break; these are single clauses, and an em dash with nothing
+ * on the far side of it is punctuation for its own sake.
+ */
+const MORE_IN_POST_MARKER: Record<'pictures' | 'video' | 'both', string> = {
+  pictures: `\u{1F5BC} More pictures in the post`,
+  video: `\u{1F5BC} More video in the post`,
+  both: `\u{1F5BC} More pictures and video in the post`,
+}
+
+/**
+ * APPEND the 'videos'-mode note as a TRAILING block, in the SAME position and with the SAME GAP
+ * separator as withVideoGalleryMarker above.
+ *
+ * THE POSITION IS THE OWNER'S, TWICE. It was chosen on 2026-07-20 for the stills marker ("as a
+ * leading line it read like a headline and pushed the actual caption down; beside the counts it
+ * lands where the eye already goes for post metadata") and re-affirmed on 2026-09-11 for this one,
+ * when the ask said "header" and the alternatives were put side by side. The reason it is not the
+ * literal top of the card: on the activity path there is no title slot to be above, the top line is
+ * the account row (writing a note there would forge a byline), and oEmbed author_name — which IS
+ * the line above the title on the OpenGraph/stock card — has never been shown to draw at all while
+ * the activity document wins, which is the path every gallery takes. `content` is the surface this
+ * project has actually watched render, so it is the surface the note goes on.
+ *
+ * Same empty-body shape and same reason as its sibling: the note ALONE, with no dangling separator,
+ * because a caption-less carousel is a real post.
+ *
+ * The GATE lives in mastodon.ts (hiddenBehindVideo), which also chooses `which`. This function owns
+ * the SEPARATOR and the strings; that file owns the CONDITION — the same split of duties, spelled
+ * the same way, as withVideoGalleryMarker. And like it, buildPlainText never calls this: the note is
+ * a `content`-only surface and og:description must not carry it.
+ */
+export function withMoreInPostMarker(body: string, which: 'pictures' | 'video' | 'both'): string {
+  const marker = MORE_IN_POST_MARKER[which]
+  return body ? `${body}${GAP}${marker}` : marker
+}
+
+/**
  * The og:description source. MUST stay counts-free (wire spec §3): counts legitimately
  * appear in two places at once — Mastodon `content` and oEmbed `author_name` — because
  * those two surfaces have disjoint consumers. og:description is NOT disjoint from

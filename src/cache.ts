@@ -1,4 +1,4 @@
-import type { ClientClass, Post, PostRef } from './types.ts'
+import type { ClientClass, GalleryMode, Post, PostRef } from './types.ts'
 import { refKey, parseRefKey } from './refkey.ts'
 
 /** 15 min. Also the max age of a signed CDN URL we hand out (plus MEDIA_MAX_AGE). */
@@ -48,8 +48,29 @@ export const postCacheKey = (ref: PostRef) => `post:${refKey(ref)}`
  * The POST cache deliberately stays origin-free (postCacheKey above): it holds upstream platform
  * data, which is genuinely the same whoever asked, and sharing it is the point.
  */
-export const respCacheKey = (ref: PostRef, client: ClientClass, origin: string) =>
-  `resp:${refKey(ref)}:${client}:${origin}`
+/**
+ * THE GALLERY MODE IS THE FOURTH COMPONENT, since 2026-09-11, and leaving it out is a wrong-answer
+ * bug rather than a missed optimisation.
+ *
+ * `/{post}` and `/{post}/p` name the SAME ref and the same client and the same origin, and they are
+ * meant to render differently. Without the mode in the key they share one entry for RESP_TTL, so
+ * whichever spelling is pasted FIRST decides what the other one shows — "same post, same host, two
+ * answers, decided only by which url shape was pasted", which worker.ts calls out as the defect this
+ * file argues against everywhere else. It is worse than an ordinary stale read, because Discord
+ * caches a message's embed from its first crawl forever: the loser's card is wrong permanently.
+ *
+ * OMITTED FOR THE DEFAULT, so every key this service has ever written keeps its exact spelling and
+ * the deploy does not cold-start the entire response cache. Only an explicitly-moded request gets a
+ * suffix. That is safe precisely because an unsuffixed key can only ever hold a default render — the
+ * suffix is added by the same expression that chose the non-default mode.
+ *
+ * NOT ADDED TO postCacheKey, and that boundary is the point: the post cache "holds upstream platform
+ * data, which is genuinely the same whoever asked, and sharing is the point". A mode changes how one
+ * card is drawn, never what was fetched, so splitting the post cache on it would double every
+ * upstream fetch to buy nothing.
+ */
+export const respCacheKey = (ref: PostRef, client: ClientClass, origin: string, gallery?: GalleryMode) =>
+  `resp:${refKey(ref)}:${client}:${origin}${gallery ? `:${gallery}` : ''}`
 
 /**
  * A SHORT CODE IS A LOOKUP NAME, NOT AN IDENTITY, AND IT GETS ITS OWN NAMESPACE.
@@ -78,8 +99,8 @@ export const shortPostCacheKey = (p: 'tt', code: string) => `post:short:${p}:${e
 
 /** The rendered-response twin. Same namespace argument, plus the client class — and the origin, for
  *  exactly the reason respCacheKey carries one: this value is rendered markup with a hostname in it. */
-export const shortRespCacheKey = (p: 'tt', code: string, client: ClientClass, origin: string) =>
-  `resp:short:${p}:${encodeURIComponent(code)}:${client}:${origin}`
+export const shortRespCacheKey = (p: 'tt', code: string, client: ClientClass, origin: string, gallery?: GalleryMode) =>
+  `resp:short:${p}:${encodeURIComponent(code)}:${client}:${origin}${gallery ? `:${gallery}` : ''}`
 
 /** The Cache API needs a full URL as its key; this namespaces ours onto a fake origin. */
 export const cacheUrl = (key: string) => `https://cache.mbedfx.internal/${encodeURIComponent(key)}`

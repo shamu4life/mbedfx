@@ -149,13 +149,31 @@ test('SSR end-to-end: a Threads mixed carousel gets the "Contains video" marker 
         image_versions2: { candidates: [{ url: 'https://cdn.example/2.jpg', width: 2, height: 2 }] } },
     ],
   })) }, { p: 'th', code: 'DDYEM_foiI1' })
-  const s = toMastodonStatus(post, 'https://staging.megapenispoopenfarten.sex')
+  /**
+   * BOTH MODES, 2026-09-11. This test's real subject is the NORMALIZER — that a Threads carousel
+   * video reaches the renderer as kind:'video'+poster rather than pre-flattened to an image — and
+   * that subject is mode-independent. What the renderer then does with it is the mode's business, so
+   * both answers are pinned here, and either one going wrong still catches a normalizer that
+   * flattened too early: a pre-flattened child would produce two stills under BOTH modes and no
+   * promotion under either.
+   */
+  const s = toMastodonStatus(post, 'https://staging.megapenispoopenfarten.sex', 'stills')
   // The exact marker the IG mixed-carousel path emits — now reached by Threads because the video
   // child reaches the renderer as kind:'video'+poster rather than being pre-flattened to an image.
   assert.ok(s.content.includes('\u{1F3AC} Contains video — tap to watch'), `expected the marker in: ${s.content}`)
   // Both slides render (the video flattened to its poster still), not just the first type.
   assert.equal(s.media_attachments.length, 2, 'both carousel slides render')
   assert.ok(s.media_attachments.every(a => a.type === 'image'), 'the video slide is flattened to an image poster still')
+
+  // AND UNDER THE DEFAULT: the video slide leads as a real player, the image trails as a still, and
+  // the note names what is behind it. One picture is hidden and no other video, so the note is the
+  // pictures-only spelling — which is what makes this worth asserting on a TWO-item carousel: it is
+  // the smallest gallery that can produce a note at all.
+  const v = toMastodonStatus(post, 'https://staging.megapenispoopenfarten.sex', 'videos')
+  assert.deepEqual(v.media_attachments.map(a => a.type), ['video', 'image'], 'the video slide is promoted and leads')
+  assert.deepEqual(v.media_attachments.map(a => a.id), ['1', '0'], 'reordered output, SOURCE ids')
+  assert.ok(v.content.endsWith('\u{1F5BC} More pictures in the post'), `expected the pictures note in: ${v.content}`)
+  assert.ok(!v.content.includes('\u{1F3AC}'), 'and never both markers on one card')
 })
 
 test('SSR: a degenerate single-child carousel is one playable video (renderer flattens only multi-item)', () => {

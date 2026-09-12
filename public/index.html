@@ -708,24 +708,65 @@ footer .fine { font-size: 12px; opacity: .8; }
  * should read as pressed, `prefix` is what a toggle click must preserve.
  */
 /**
- * THE DOMAINS THIS PAGE OFFERS — deliberately NOT the list of domains the worker answers on.
+ * OUR_HOSTS — EVERY domain this worker answers on. PUBLIC_HOSTS — the subset this page NAMES.
  *
- * WHY IT IS NOT THE ROUTES ARRAY: a name written here ships to every reader of this page on every
- * domain — view-source does not care that a button is hidden — so a domain the worker serves but
- * which is not meant to be advertised must not appear here at all. The worker serving that domain is
- * a separate question, settled in wrangler.jsonc and fedihost.ts, and links pasted from it unfurl
- * exactly the same. All this array decides is which domains this page NAMES.
+ * TWO LISTS AGAIN, AND THE REASON THEY WERE MERGED IS THE REASON THEY ARE NOW NESTED. The merge
+ * comment used to read "ONE LIST, not the two that were here before: it was spelled once to pick the
+ * default domain and again to recognise a link that is already ours, and a host present in the first
+ * but missing from the second was not rejected — it was read as an unsupported SITE." That is a real
+ * defect and merging did fix it, but it fixed it by making the two jobs impossible to separate — so
+ * the moment a served domain was NOT meant to be advertised, the same defect came back through the
+ * other door. Nesting keeps the fix: PUBLIC_HOSTS is a SUBSET of OUR_HOSTS, asserted below, so a host
+ * can be recognised without being named but can never be named without being recognised.
  *
- * A visitor on an unlisted domain is handed mbedfx.app links, which is the same fallback localhost
+ * MEASURED 2026-09-11, the bug that forced this. forsen.sex has been served since 2026-08-03
+ * (wrangler.jsonc) and is in fedihost.ts's OWN_HOSTS, but was absent here, so:
+ *
+ *   mbedfxConvert('https://forsen.sex/alice/status/123')
+ *     -> https://mbedfx.app/forsen.sex/alice/status/123
+ *        "Unrecognised host, treated as a fediverse instance."
+ *
+ * and that emitted link renders "Not found" in production — the page handed back a DEAD link for one
+ * of our own domains. Worse on the fediverse-shaped path: /forsen.sex/@bob/{id} mints the canonical
+ * https://forsen.sex/statuses/{id}, which is OUR OWN domain answering notfound, and that canonical is
+ * what a human gets redirected to and what og:url advertises. fetchableInstance refuses it (forsen.sex
+ * is in OWN_HOSTS) so it dead-ends safely rather than self-fetching, but it dead-ends either way.
+ *
+ * WHY forsen.sex IS RECOGNISED BUT NOT ADVERTISED — owner's call, 2026-09-11, keeping the position the
+ * 2026-08-03 comment took: a name written here ships to every reader of this page on every domain
+ * (view-source does not care that a button is hidden), and this page's job is handing out links, so it
+ * hands out the two. Note the position is narrower than it was: forsen.sex is NOT secret — it is named
+ * in README.md and published as a base url in public/openapi.json — it is simply not offered here.
+ *
+ * A visitor on a host in NEITHER list is handed mbedfx.app links, which is the same fallback localhost
  * and a file:// open have always had, and they work — see the unrecognised-host test, which exists
- * because emitting links to a host that may not be ours is the one outcome worth ruling out.
+ * because emitting links to a host that may not be ours is the one outcome worth ruling out. A visitor
+ * on an OUR_HOSTS domain is handed THAT domain's links, per the owner's ask recorded above.
  *
- * ONE LIST, not the two that were here before: it was spelled once to pick the default domain and
- * again to recognise a link that is already ours, and a host present in the first but missing from
- * the second was not rejected — it was read as an unsupported SITE, so pasting one of our own links
- * back into the page answered "we don't do that one" about our own domain.
+ * DO NOT REPLACE EITHER LIST WITH location.hostname. Tried and reverted 2026-08-03 (baff668):
+ * "*.mbedfx.app is a wildcard, so d.mbedfx.app would have read as its own domain and media-only would
+ * compose a second prefix onto it: d.d.mbedfx.app."
  */
+var OUR_HOSTS = ['mbedfx.app', 'megapenispoopenfarten.sex', 'forsen.sex'];
 var PUBLIC_HOSTS = ['mbedfx.app', 'megapenispoopenfarten.sex'];
+
+/**
+ * The nesting invariant, asserted where it cannot rot rather than in a comment. A name in
+ * PUBLIC_HOSTS but not OUR_HOSTS is the exact 2026-08-03 defect — the page would offer a domain
+ * whose own links it then calls an unsupported site — so it is worth one loop at parse time.
+ * Throwing is right: this block is lifted and evaluated by test/landing-convert.test.mjs, so a
+ * violation fails the suite, and in a browser it is a mistake nobody should be shipped past.
+ */
+for (var _i = 0; _i < PUBLIC_HOSTS.length; _i++) {
+  if (OUR_HOSTS.indexOf(PUBLIC_HOSTS[_i]) < 0) {
+    throw new Error('PUBLIC_HOSTS must be a subset of OUR_HOSTS: ' + PUBLIC_HOSTS[_i]);
+  }
+}
+
+/** A host this worker answers on: recognised as already-ours, whether or not the page names it. */
+function mbedfxIsOurs(h) {
+  return OUR_HOSTS.indexOf(h) >= 0 || /(^|\.)workers\.dev$/.test(h);
+}
 
 function mbedfxDefaultHost(hostname) {
   var served = String(hostname == null ? '' : hostname).toLowerCase().replace(/\.$/, '');
@@ -733,8 +774,16 @@ function mbedfxDefaultHost(hostname) {
   if (/(^|\.)workers\.dev$/.test(served)) {
     return { host: served, prefix: '', family: 'mbedfx.app', preview: true };
   }
-  return PUBLIC_HOSTS.indexOf(served) >= 0
-    ? { host: served, prefix: '', family: served }
+  /**
+   * OUR_HOSTS, not PUBLIC_HOSTS: arriving on a served-but-unadvertised domain must still hand out
+   * THAT domain's links. `family` is which toggle button reads as pressed, and an unadvertised host
+   * has no button — so it falls back to mbedfx.app's, leaving the pair (host: forsen.sex,
+   * family: mbedfx.app). That is deliberate and is what the toggle needs: no button can claim to be
+   * pressed for a domain that is not on screen, and clicking either button moves you off forsen.sex
+   * onto the domain you clicked, which is the only thing a two-button toggle can mean.
+   */
+  return OUR_HOSTS.indexOf(served) >= 0
+    ? { host: served, prefix: '', family: PUBLIC_HOSTS.indexOf(served) >= 0 ? served : 'mbedfx.app' }
     : { host: 'mbedfx.app', prefix: '', family: 'mbedfx.app' };
 }
 
@@ -764,7 +813,10 @@ function mbedfxConvert(input, host) {
   // Already one of ours (or a bare path): pass the path straight through.
   // A preview host counts as ours too, or pasting a link copied FROM a preview back INTO it would
   // be read as an unsupported site rather than re-pointed. x.invalid is the tests' own stand-in.
-  if (PUBLIC_HOSTS.indexOf(h) >= 0 || /(^|\.)workers\.dev$/.test(h) || h === 'x.invalid') {
+  // OUR_HOSTS via mbedfxIsOurs, never PUBLIC_HOSTS: recognising a link is about whether WE serve it,
+  // not about whether this page offers it. Reading the advertise list here is the 2026-09-11
+  // forsen.sex bug, which handed back a dead link for one of our own domains.
+  if (mbedfxIsOurs(h) || h === 'x.invalid') {
     return out(path === '/' ? '/' : path + (u.searchParams.get('v') ? '?v=' + u.searchParams.get('v') : ''), null,
       'Already an mbedfx link. Re-pointed at the selected domain.');
   }

@@ -2735,7 +2735,17 @@ test('a TEN-item mixed carousel survives to media_attachments — past the >4 ga
   } finally {
     globalThis.fetch = real
   }
-  const st = toMastodonStatus(post, 'https://example.com')
+  /**
+   * BOTH MODES, ON THE REAL TEN-ITEM FIXTURE — 2026-09-11.
+   *
+   * This test used to call toMastodonStatus with two arguments and assert the flattening. That
+   * flattening is now the 'stills' MODE rather than the unconditional default, so the original
+   * assertions all survive below with the mode named, and the new default gets its own block after
+   * them. Naming the mode is also what keeps this test honest about which behaviour it is pinning:
+   * the interesting property here has always been that ten children survive the whole trip, and
+   * that is true under both modes and asserted under both.
+   */
+  const st = toMastodonStatus(post, 'https://example.com', 'stills')
 
   assert.equal(st.media_attachments.length, 10, 'all ten children must reach media_attachments')
   // FLATTENED TO ONE TYPE, 2026-07-20. This assertion used to pin the exact interleaving
@@ -2769,6 +2779,54 @@ test('a TEN-item mixed carousel survives to media_attachments — past the >4 ga
     assert.ok(a.url.includes('/_media/'), `attachment ${a.id} must be an origin /_media/ url, got ${a.url}`)
     assert.ok(!/cdninstagram|scontent/.test(a.url), `attachment ${a.id} must not leak the CDN host`)
   }
+
+  /**
+   * THE DEFAULT SINCE 2026-09-11 — 'videos'. Same ten children, same fixture, one of them playing.
+   *
+   * This is the shape the owner asked for, on the exact carousel the 2026-07-20 measurement was
+   * taken from: /p/DaQ5CPTki4E, ten items, videos at 2, 4, 6 and 8. What Discord is expected to draw
+   * from it is ONE player — "a 10-video post drew a single player" — with the content note naming
+   * the rest, which is why the count of type:"video" is pinned at exactly one rather than four.
+   */
+  const vids = toMastodonStatus(post, 'https://example.com', 'videos')
+  assert.equal(vids.media_attachments.length, 10, 'no child is lost to the promotion either')
+  assert.deepEqual(vids.media_attachments.map(a => a.type),
+    ['video', 'image', 'image', 'image', 'image', 'image', 'image', 'image', 'image', 'image'],
+    'exactly one player, and it LEADS — Discord keeps the type of the first attachment')
+
+  /**
+   * THE ID ARRAY IS THE WHOLE SAFETY ARGUMENT FOR REORDERING, and it is why this assertion is here
+   * rather than a spot check. Output position 0 carries id "2": the promoted entry keeps its SOURCE
+   * index, because that index is what /_media/{key}/{i} resolves through pickMedia. Renumbering ids
+   * to match the new positions would repoint every attachment after the promoted one at the wrong
+   * bytes — silently, and only for galleries, which is the failure class this codebase says it
+   * cannot debug.
+   */
+  assert.deepEqual(vids.media_attachments.map(a => a.id), ['2','0','1','3','4','5','6','7','8','9'],
+    'reordered output, SOURCE ids — the promoted video is index 2 and still says so')
+  assert.ok(vids.media_attachments[0].url.endsWith('/2'),
+    'and the promoted entry addresses the VIDEO slot, not poster2')
+  assert.ok(vids.media_attachments[0].preview_url.endsWith('/poster2'),
+    'with its poster as the preview frame, exactly as a lone reel ships')
+
+  // The three videos that were NOT promoted still flatten, so nothing points an image attachment at
+  // an mp4 — the 2026-07-19 defect, which the promotion must not reopen for its siblings.
+  for (const i of [4, 6, 8]) {
+    const a = vids.media_attachments.find(x => x.id === String(i))
+    assert.equal(a.type, 'image', `unpromoted video ${i} must still flatten`)
+    assert.ok(a.url.endsWith(`/poster${i}`), `and address its poster, got ${a.url}`)
+  }
+  for (const a of vids.media_attachments) {
+    assert.ok(a.url.includes('/_media/'), `attachment ${a.id} must be an origin /_media/ url`)
+    assert.ok(!/cdninstagram|scontent/.test(a.url), `attachment ${a.id} must not leak the CDN host`)
+  }
+
+  // AND THE NOTE, on the surface Discord draws: six pictures and three more videos are behind the
+  // one player, so the body must say both. Fixed prose, never a count — see text.ts.
+  assert.ok(vids.content.endsWith('\u{1F5BC} More pictures and video in the post'),
+    `the videos-mode note must trail the body: ${vids.content.slice(-80)}`)
+  assert.ok(!st.content.includes('\u{1F5BC}'), 'and stills mode carries the clapper marker instead')
+  assert.ok(st.content.includes('\u{1F3AC}'), 'which is the one it has always carried')
 })
 
 // ---------------------------------------------------------------------------
@@ -2891,10 +2949,30 @@ test('REAL FIXTURE: a mixed carousel becomes a gallery, all on our own origin', 
   // pair of assertions used to guard (`__typename`, which embed children do not carry) is caught at
   // the normalize seam instead, on post.media, where it originates.
   assert.equal(post.media.filter(m => m.kind === 'video').length, 4, 'the real carousel HAS videos in it')
-  assert.ok(json.media_attachments.every(a => a.type === 'image'),
+
+  /**
+   * THE DEFAULT FLIPPED 2026-09-11, so this whole test now drives 'stills' EXPLICITLY, through the
+   * /p suffix, rather than by taking whatever the default happens to be. Everything below is the
+   * original assertion set, unchanged, and it is now pinning a mode instead of a default. The new
+   * default gets its own round trip in the test that follows.
+   *
+   * DRIVEN THROUGH THE SUFFIX ON PURPOSE. Asking toMastodonStatus for 'stills' directly would prove
+   * the mapper works and nothing else; the thing most likely to break is the CARRIER — /p on the
+   * head must mint a mode-bearing {id}, and the callback must read it back — because Discord
+   * rebuilds this url from the id and never fetches the href we advertise. That is the seam a unit
+   * test structurally cannot see, and it is the seam this file exists for.
+   */
+  const stillsHead = await (await handle(req(`/p/${post.ref.code}/p`, DISCORD), fakeEnv(), ctx, w.deps(fakeCache()))).text()
+  const stillsCb = advertisedCallback(stillsHead)
+  assert.notEqual(stillsCb, advertised, '/p must mint a DIFFERENT {id} than the unsuffixed head')
+  w.seen = null
+  const stillsJson = await (await handle(req(stillsCb, DISCORD), fakeEnv(), ctx, w.deps(fakeCache()))).json()
+  assert.deepEqual(w.seen, post.ref, 'and it must still decode to the same post')
+
+  assert.ok(stillsJson.media_attachments.every(a => a.type === 'image'),
     'and every one of them reaches the viewer as an image, rather than not at all')
   const key = encodeURIComponent(refKey(post.ref))
-  json.media_attachments.forEach((a, i) => {
+  stillsJson.media_attachments.forEach((a, i) => {
     // FULL urls — origin and index — not a `/_media/ig%3Ap%3A` substring. A hardcoded prod origin
     // in embed.ts is invisible to a path-only match, and every attachment collapsing to /0 is a
     // ten-item gallery of one item. Same reasoning the TikTok slideshow test records.
@@ -2925,11 +3003,63 @@ test('REAL FIXTURE: a mixed carousel becomes a gallery, all on our own origin', 
   // meta block are all url-bearing, and a per-field check leaves each new field unguarded by
   // default. Instagram CDN urls carry a signed `oe=` expiry, so a leaked one is both a privacy
   // leak and a link that dies on its own schedule rather than ours.
-  assert.ok(!IG_CDN.test(JSON.stringify(json)), 'the callback body must not leak a CDN host')
+  assert.ok(!IG_CDN.test(JSON.stringify(stillsJson)), 'the callback body must not leak a CDN host')
   assert.ok(!IG_CDN.test(head), 'nor must the head that advertised it')
   // The APPLICATION row has been an unverified placeholder since Phase 3a because no ig Post could
   // reach it. A real one now does, all the way through the callback.
   assert.equal(json.application.name, 'Instagram')
+})
+
+test('REAL FIXTURE: the gallery mode survives the {id} round trip — /v, /p and the bare paste', async () => {
+  /**
+   * THE ASSERTION THE WHOLE /p /v FEATURE RESTS ON, and the one a unit test cannot make.
+   *
+   * A gallery card is drawn from the ACTIVITY DOCUMENT, and Discord does not fetch the href the head
+   * advertises: measured 2026-09-02, "/api/v1/statuses/{id} 5 times out of 5 and the advertised
+   * /users/ href never". It rebuilds that url from the {id} alone. So a mode kept anywhere but
+   * inside the id is a mode the gallery renderer never sees, and /p and /v would be a feature that
+   * demonstrably works in a browser and does nothing at all in Discord.
+   *
+   * This drives the real chain three times — suffix -> route() -> head -> encodeStatusId -> {id} ->
+   * decodeStatusId + statusIdMode -> the mapper — and asserts the ARRAY that comes back, not the
+   * plumbing. If any link drops the mode, two of these three collapse onto the third.
+   */
+  const post = igFixture('carousel', IG_CAROUSEL)
+  const w = igWatchingDeps(post)
+  const typesFor = async path => {
+    const head = await (await handle(req(path, DISCORD), fakeEnv(), ctx, w.deps(fakeCache()))).text()
+    const cb = advertisedCallback(head)
+    assert.ok(cb, `${path} must advertise a callback`)
+    w.seen = null
+    const json = await (await handle(req(cb, DISCORD), fakeEnv(), ctx, w.deps(fakeCache()))).json()
+    // Every spelling must name the SAME post. A mode that changed the ref would be far worse than
+    // a mode that did nothing.
+    assert.deepEqual(w.seen, post.ref, `${path} must decode to the same post`)
+    return { cb, types: json.media_attachments.map(a => a.type), ids: json.media_attachments.map(a => a.id), content: json.content }
+  }
+
+  const bare = await typesFor(`/p/${post.ref.code}`)
+  const vids = await typesFor(`/p/${post.ref.code}/v`)
+  const stills = await typesFor(`/p/${post.ref.code}/p`)
+
+  // THE THREE IDS ARE THREE DIFFERENT WIRE FORMS OF ONE KEY. If they were equal the modes could not
+  // possibly differ downstream, and the rest of this test would be asserting nothing.
+  assert.notEqual(vids.cb, stills.cb, '/v and /p must mint different ids')
+  assert.equal(bare.cb, `/users/${post.author.handle}/statuses/${encodeStatusId(refKey(post.ref))}`,
+    'and the bare paste must keep the exact id spelling it has always emitted')
+
+  assert.deepEqual(stills.types, Array(10).fill('image'), '/p flattens every child')
+  assert.deepEqual(vids.types, ['video', ...Array(9).fill('image')], '/v promotes exactly one player')
+  assert.deepEqual(bare.types, vids.types, 'and the bare paste is /v — that is what "default" means')
+
+  // SOURCE IDS SURVIVE THE REORDER. Output slot 0 holds source index 2, because /_media/{key}/{i}
+  // resolves by source index and renumbering would repoint every later attachment at wrong bytes.
+  assert.deepEqual(vids.ids, ['2','0','1','3','4','5','6','7','8','9'])
+  assert.deepEqual(stills.ids, ['0','1','2','3','4','5','6','7','8','9'])
+
+  // And the two notes are the two modes' own, never both and never the wrong one.
+  assert.ok(vids.content.endsWith('\u{1F5BC} More pictures and video in the post'))
+  assert.ok(stills.content.endsWith('\u{1F3AC} Contains video — tap to watch'))
 })
 
 test('REAL FIXTURE: a reel renders a player and /_media/ SERVES the video, never 302s to the CDN', async () => {

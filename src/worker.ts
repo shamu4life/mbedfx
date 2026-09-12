@@ -1,4 +1,4 @@
-import type { ClientClass, Media, MuxJob, Platform, Post, PostRef, Profile, ProfileRef, Route } from './types.ts'
+import type { ClientClass, GalleryMode, Media, MuxJob, Platform, Post, PostRef, Profile, ProfileRef, Route } from './types.ts'
 import { classify } from './classify.ts'
 import { route } from './router.ts'
 import { render } from './render/index.ts'
@@ -20,7 +20,7 @@ import {
 import { fetchBluesky, fetchBlueskyProfile } from './platforms/bluesky/fetch.ts'
 import { normalizeBluesky, normalizeBlueskyProfile } from './platforms/bluesky/normalize.ts'
 import type { AwemeResolver } from './platforms/tiktok/fetch.ts'
-import { encodeStatusId } from './statusid.ts'
+import { DEFAULT_GALLERY_MODE, encodeStatusId } from './statusid.ts'
 import { fetchTikTok, isTikTokCdnHost, resolveTikTokShortlink, TIKTOK_UA, withResolvedVideo } from './platforms/tiktok/fetch.ts'
 import { AWEME_PLAY, normalizeTikTok, tiktokGate, tiktokRefFrom, videoDetailScope } from './platforms/tiktok/normalize.ts'
 import {
@@ -4878,6 +4878,7 @@ function toApiPost(post: Post, origin: string) {
 
 async function renderPostRoute(
   ref: PostRef, canonical: string, d: Deps, env: Env, ctx: ExecutionContext, client: ClientClass, origin: string,
+  gallery?: GalleryMode,
 ): Promise<Response> {
   /**
    * THE d. HOST SHORT-CIRCUITS HERE, so it covers every route rather than the one it was first wired
@@ -4890,7 +4891,7 @@ async function renderPostRoute(
    * The host comes off `origin`, which is already the request's own rather than a constant.
    */
   if (isDirectMediaOrigin(origin)) return serveDirectMedia(ref, d, env, ctx, client, origin)
-  const rkey = cacheUrl(respCacheKey(ref, client, origin))
+  const rkey = cacheUrl(respCacheKey(ref, client, origin, gallery))
   const cached = await d.cache.match(rkey)
   if (cached) return cached
 
@@ -5006,7 +5007,7 @@ async function renderPostRoute(
   ])
   const res = render(
     { kind: 'post', post: withTranslation(settled.post, xlate.translated, xlate.source) },
-    client, origin,
+    client, origin, gallery,
   )
   // `pending` joins `degraded` for the same reason: caching a card that is missing something still
   // arriving would pin the incomplete version for RESP_TTL.
@@ -5862,6 +5863,12 @@ export async function handle(req: Request, env: Env, ctx: ExecutionContext, d: D
               xlate?.text, xlate?.source ?? '',
             ),
             origin,
+            // THE GALLERY MODE, off the {id} the head minted — see router.ts's spoof(). Falling back
+            // to the CURRENT default rather than to a literal is what keeps every id already frozen
+            // in Discord's embed cache rendering like a present-day card: those all carry the '1'
+            // sentinel, which names no mode, and re-crawling one must not pin it to whichever default
+            // happened to be live the day it was minted.
+            r.gallery ?? DEFAULT_GALLERY_MODE,
           )
           : toOEmbed(settledApi.post, origin),
       )
@@ -6260,7 +6267,7 @@ export async function handle(req: Request, env: Env, ctx: ExecutionContext, d: D
       // cache-check, fetch, render, cache — is renderPostRoute, shared with the reddit share route so
       // a fetch_fail gets the distinct 🔞/🔒 or generic card identically whichever url shape was pasted.
       if (!direct && client === 'human') return redirect(r.canonical)
-      return renderPostRoute(r.ref, r.canonical, d, env, ctx, client, origin)
+      return renderPostRoute(r.ref, r.canonical, d, env, ctx, client, origin, r.gallery)
     }
 
     /**
@@ -6342,7 +6349,7 @@ export async function handle(req: Request, env: Env, ctx: ExecutionContext, d: D
           client, origin,
         )
       }
-      return renderPostRoute(resolved.ref, resolved.canonical, d, env, ctx, client, origin)
+      return renderPostRoute(resolved.ref, resolved.canonical, d, env, ctx, client, origin, r.gallery)
     }
 
     case 'metashare': {
@@ -6421,7 +6428,7 @@ export async function handle(req: Request, env: Env, ctx: ExecutionContext, d: D
       // inner.canonical is rebuilt from ref fields by router.ts, so every share parameter the
       // redirect carried — share_url, rdid, xmt, slof — is already gone.
       if (!direct && client === 'human') return redirect(inner.canonical)
-      return renderPostRoute(inner.ref, inner.canonical, d, env, ctx, client, origin)
+      return renderPostRoute(inner.ref, inner.canonical, d, env, ctx, client, origin, r.gallery)
     }
 
     case 'shortlink': {
