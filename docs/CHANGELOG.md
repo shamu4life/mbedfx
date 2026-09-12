@@ -7,7 +7,29 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
-Nothing yet.
+### Fixed
+
+- **The README banner's mark was 72px left of centre**, and had been since the first commit. The
+  tile is 112 wide on a 1280 canvas, so it belongs at `translate(584 …)` with its centre on 640 —
+  the axis all three text lines already use. It sat at 512, centre 568. Measured from a render:
+  567.5 before, 639.5 after.
+
+  Reported three times and "fixed" twice without ever being touched, because both attempts measured
+  the GLYPH INSIDE the tile — 0.75px in `a52dc2b`, an alpha-weighted centroid in `e87b41b` — found
+  real sub-pixel errors, corrected them, and shipped. Both were right about the thing they measured.
+  Neither was pointed at the tile. Worth keeping as the lesson: "still wrong after a verified fix"
+  means the measurement was aimed at the wrong object.
+
+- **The mark is live text again; the embedded PNG is gone.** It was 3,069 bytes of base64, 51% of
+  the file, to draw two letters — and it made the card less consistent rather than more, since the
+  wordmark below it is live `system-ui` text and the site's own badge is too. The one genuinely
+  font-dependent part was a hardcoded `y="74"` baseline; `dominant-baseline="central"` replaces it
+  by asking the renderer to centre on the font it actually has. `xmlns:xlink` went with the
+  `<image>`. Both cards 6,027 → 3,968 bytes.
+
+  `test/social-preview.test.mjs` pins the invariant that was violated — everything centred shares
+  one axis, derived from the canvas width in the file rather than a number typed into a test — plus
+  no raster in an SVG, no hardcoded font metric, and the two variants geometrically identical.
 
 ---
 
