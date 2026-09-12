@@ -92,6 +92,43 @@ unadvertised, owner's call), with the subset relation asserted inside the page a
 outside it. The 1.7.0 entry above claimed this was already pinned by tests and named a symbol that
 does not exist in the page; that claim is corrected in place and is now true.
 
+### An age-gated video no longer offers a play button that plays nothing
+
+Reported by the owner: *"age-gated ones show a play button that confuses people and then the gallery
+has nothing."* Measured against production the same day on `yt:G0sORVBL4kM`:
+
+```
+activity doc   type:"video"   url .../_media/yt%3AG0sORVBL4kM/0   meta:null
+GET that url   -> HTTP 503, 0 bytes, and always will
+GET poster0    -> 302 to i.ytimg.com/vi/G0sORVBL4kM/hqdefault.jpg, fine
+GET /_api/v1   -> kind:"image", still:true, 480x360      <- already correct on that seam
+```
+
+Both halves of the report, one cause. The play button is `type:"video"`. "The gallery has nothing"
+is `meta:null` — Discord will not lay out an attachment it has no size for, so it drew nothing at
+all (measured 2026-07-31, recorded in `types.ts`).
+
+**Why only that seam.** The deadline degrade always handled the age gate correctly, which is why
+`/_api/v1` and the head were right and the activity document alone was wrong: under 1.15.0 that seam
+does not wait, it **promises**, and a promise keeps the video attachment by design. The gate slipped
+through `promisable()` because it is not `live` and its duration — 177s, straight off yt-dlp — sits
+comfortably inside the 240s promise window. An ordinary number on an impossible video.
+`promisable()`'s own docstring already stated the rule it was missing: *"A promise that cannot be
+kept is frozen in Discord's message forever (it re-crawls successful cards, never failed ones)."*
+
+`Media.gated` is now the sibling of `Media.live`: stamped by the normalizer at build time from the
+`ytAgeRestricted` read that already sets `sensitive`, so it rides the post cache and the very first
+render refuses. `settleMux` gains a `gated` arm beside the `live` one (degrade to the poster still,
+no container call), and `promisable()` refuses it. The card becomes the thumbnail at its own poster
+slot, with the poster's real dimensions, keeping the title, author, date and the existing
+`🔞 Age-restricted on YouTube` note.
+
+Refusing an age-gated entry inside `playableVideo()` was tried and reverted: it correctly drops
+`og:video`, but the image selector beside it matches only `kind:'image'`, so a raw gated entry fell
+past the picture too and one half of the report became the other. Making that fallback right meant
+spelling `stillOf` a second time in a renderer. `settleMux` owns the degrade shape; the reverted
+attempt is recorded in `embed.ts` so it is not re-tried.
+
 ### Also
 
 - `docs/API.md` documents the suffix, and corrects "either official host" to all three for `d.`

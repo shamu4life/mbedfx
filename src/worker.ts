@@ -2224,6 +2224,10 @@ function stillOf(m: Media): Media | null {
     posterOnly: true as const,
     ...(m.duration === undefined ? {} : { duration: m.duration }),
     ...(m.live === undefined ? {} : { live: m.live }),
+    // Carried for the same reason `live` is: a later overlay can still see WHY this entry is a
+    // picture. Nothing renders it today — AGE_NOTE is already in `text` by the time this runs — and
+    // it is what keeps the still honest about itself rather than looking like an ordinary photo.
+    ...(m.gated === undefined ? {} : { gated: m.gated }),
   }
 }
 
@@ -2344,6 +2348,33 @@ async function settleMux(
       // Same hole as the over-ceiling arm's: no poster, nothing to degrade to, leave the entry. See
       // the comment there — it is a hole in theory before it is one in practice, and yt always has a
       // thumbnail because normalizeYouTube derives one from the id.
+      if (!still) return m
+      rewritten = true
+      return still
+    }
+    /**
+     * AGE-GATED: THE SAME REFUSAL AS `live`, ADDED 2026-09-12 ON THE OWNER'S REPORT.
+     *
+     * "Age-gated ones show a play button that confuses people and then the gallery has nothing."
+     * Measured that day on yt:G0sORVBL4kM: the activity document shipped `type:"video"` addressing
+     * `/_media/yt%3AG0sORVBL4kM/0`, which answers HTTP 503 with zero bytes and always will, while
+     * `poster0` served the real thumbnail perfectly. Discord drew a player over a dead slot.
+     *
+     * IT SITS BESIDE `live` RATHER THAN INSIDE IT because the two are different facts with one
+     * consequence, and collapsing them would make the card lie: withLiveNote and AGE_NOTE say
+     * different things about why there is no player, and `live` is read by withLiveNote's media
+     * fallback.
+     *
+     * WHY THE DEADLINE ARM DID NOT ALREADY COVER IT. It does, on the /_api/v1 and head seams — the
+     * mux fails, the deadline passes, the entry degrades, and the API showed the correct still all
+     * along. What it could not cover is the ACTIVITY seam under 1.15.0's promise path: there
+     * settleMux is asked to PROMISE rather than wait, and a promise keeps the video attachment by
+     * design. So the one document Discord actually renders was the one place the degrade never
+     * reached. promisable() now refuses a gated entry too, which is the belt to this brace: this arm
+     * makes the card right, that check stops the promise being made in the first place.
+     */
+    if (m.gated) {
+      const still = stillOf(m)
       if (!still) return m
       rewritten = true
       return still

@@ -261,6 +261,21 @@ export const isSensitive = (post: Post): boolean =>
  * Returns the Media rather than a boolean so the caller can take its index off the same array
  * it was found in. An index recomputed against a different list is the other half of this bug.
  */
+/**
+ * DELIBERATELY DOES NOT TEST `m.gated`, and that was tried and reverted on 2026-09-12.
+ *
+ * An age-gated video genuinely is unplayable, so refusing it here reads as obviously right — and it
+ * is, for the tags: og:video vanishes. But this predicate only chooses the VIDEO, and the image
+ * selector beside it matches on `kind === 'image' || 'gif'`. A raw gated entry is still
+ * `kind: 'video'`, so refusing it here dropped the head past the picture as well, turning a dead
+ * player into an empty card — trading one half of the owner's report for the other.
+ *
+ * Making that fallback correct needed the poster slot AND the poster's dimensions, which is
+ * `stillOf` spelled a second time in a renderer. settleMux OWNS the degrade shape (its `gated` arm
+ * rewrites the entry to a posterOnly still before any renderer sees it, exactly as the `live` arm
+ * does), and normalizeYouTube's own comment already states the rule: a second spelling of the
+ * degrade is how the two drift. So the concept lives at the one seam that can express it fully.
+ */
 export const playableVideo = (post: Post): Media | undefined =>
   mediaOf(post).find(m => usable(m) && m.kind === 'video')
 

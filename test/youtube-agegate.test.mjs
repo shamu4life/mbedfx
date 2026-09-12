@@ -1,6 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { normalizeYouTube, withAgeNote, ytAgeRestricted } from '../src/platforms/youtube/normalize.ts'
+import { promisable } from '../src/muxpolicy.ts'
 import { render } from '../src/render/index.ts'
 
 const ORIGIN = 'https://mbedfx.app'
@@ -95,6 +96,79 @@ test('THE NOTE REACHES A RENDERED CARD, and promises no retry', async () => {
   assert.doesNotMatch(html, /try again|retry|loading|processing/i, 'and is not promised a retry')
   // The title is still the headline of the card.
   assert.match(html, /Help me Dr\. Dick/)
+})
+
+test('AN AGE-GATED ENTRY IS MARKED gated, AND IS THEREFORE NEVER PROMISED', () => {
+  /**
+   * THE PLAY BUTTON THAT PLAYED NOTHING — reported by the owner 2026-09-12, measured the same day
+   * against production on this exact video:
+   *
+   *   activity doc  type:"video"  url .../_media/yt%3AG0sORVBL4kM/0  meta:null
+   *   GET that url  ->  HTTP 503, 0 bytes  (and always will: there is no age-gate bypass)
+   *   GET poster0   ->  302 to i.ytimg.com/vi/G0sORVBL4kM/hqdefault.jpg, fine
+   *
+   * Discord drew a player over a slot that can never answer, and with meta:null it had no size to
+   * lay the attachment out with either — types.ts's 2026-07-31 measurement is that Discord "will not
+   * lay out an IMAGE attachment it has no size for, so it drew nothing at all". Hence the second
+   * half of the report: "and then the gallery has nothing".
+   *
+   * THE CAUSE WAS promisable(). 1.15.0 lets the activity document PROMISE a video whose mux is still
+   * running, and the promise is gated on `!live` and a duration inside 240s. This video's duration is
+   * 177s (recorded in the header above, straight off yt-dlp) — an ordinary number, comfortably inside
+   * the window — so it was promised. promisable()'s own docstring already stated the rule it was
+   * missing: "A promise that cannot be kept is frozen in Discord's message forever."
+   *
+   * MUTATION-CHECKED: dropping `m.gated` from either promisable() or normalizeYouTube's media entry
+   * turns this red.
+   */
+  const post = normalizeYouTube(gated({ ageLimit: 18, duration: 177 }), REF)
+  const m = post.media[0]
+  assert.equal(m.gated, true, 'the entry itself must carry the fact, not just the post')
+  assert.equal(m.kind, 'video', 'it is still a video in the POST — the degrade is the renderer\'s job')
+  assert.ok(m.remux?.page, 'and it keeps its remux, exactly as a live entry does')
+  assert.equal(promisable(m), false, 'but it must never be promised: the mux can never succeed')
+
+  // An ordinary video carries no flag at all — the change is additive and invisible without a gate.
+  assert.equal(normalizeYouTube(gated({}), REF).media[0].gated, undefined)
+  assert.equal(normalizeYouTube(gated({ ageLimit: 0 }), REF).media[0].gated, undefined, 'age_limit 0 is normal')
+
+  /**
+   * THE CONTROL, and it must be built by hand rather than by the normalizer: normalizeYouTube does
+   * NOT stamp `duration` onto the entry (withMuxDuration does that later, from the container's
+   * answer), so `normalizeYouTube(...).media[0]` is unpromisable for a reason that has nothing to do
+   * with the gate. Asserting promisable()===false on it would have been a test that passed without
+   * the fix. The duration is the one from the fixture header: 177s, straight off yt-dlp, comfortably
+   * inside the 240s window — which is exactly why this video was promised before the fix.
+   */
+  assert.equal(promisable({ ...m, duration: 177 }), false, 'gated: refused despite an ordinary duration')
+  assert.equal(promisable({ ...m, duration: 177, gated: undefined }), true,
+    'the SAME entry without the gate is promised, so the gate is what refused it')
+})
+
+test('ONCE DEGRADED, AN AGE-GATED CARD IS A PICTURE AND NO PLAYER', async () => {
+  /**
+   * The rendered half of the report. The DOCUMENT half — the seam Discord actually draws, and the
+   * one that was broken — is asserted in test/card-promise.test.mjs beside the safety valve that let
+   * it through, because only that file drives the real settleMux.
+   *
+   * RENDERED FROM THE DEGRADED ENTRY, which is what every production render is handed: settleMux's
+   * `gated` arm rewrites the video to a posterOnly still before any renderer sees it. Feeding
+   * render() the RAW normalizer output instead would assert a state the Worker never produces, and
+   * it is a state whose head is wrong in an uninteresting way (og:video at the video slot, w=0) for
+   * a reason no live path can reach.
+   */
+  const raw = normalizeYouTube(gated({ ageLimit: 18, duration: 177 }), REF)
+  const m = raw.media[0]
+  // The exact shape stillOf produces, spelled here rather than imported: worker.ts does not export
+  // it, and test/degraded-still-slot.test.mjs already keeps a hand-written copy for the same reason.
+  const post = { ...raw, media: [{ kind: 'image', url: m.poster, poster: m.poster, w: m.posterW, h: m.posterH, posterOnly: true, gated: true }] }
+
+  const html = await render({ kind: 'post', post }, 'other-bot', ORIGIN).text()
+  assert.doesNotMatch(html, /og:video/, 'no og:video on a card whose video can never exist')
+  assert.doesNotMatch(html, /twitter:player/, 'and no player card either')
+  assert.match(html, /og:image[^>]*\/poster0"/, 'the picture is the POSTER slot, which serves real bytes')
+  assert.match(html, /og:image:width" content="480"/, 'with the poster\'s own dimensions, not the video\'s 0x0')
+  assert.match(html, /Age-restricted on YouTube/, 'and the reason is on the card')
 })
 
 test('normalizeYouTube stays TOTAL when the meta call gave nothing at all', () => {

@@ -397,6 +397,40 @@ export type Media = {
    */
   live?: true
   /**
+   * "THIS VIDEO IS AGE-GATED, SO NO FINISHED FILE CAN EVER BE PRODUCED FOR IT." The sibling of
+   * `live`, added 2026-09-12, and it exists because the two refusals are the same shape: an entry
+   * carrying a `remux` that settleMux must not dispatch and that nothing may promise.
+   *
+   * REPORTED BY THE OWNER: an age-gated video drew a PLAY BUTTON that played nothing. Measured on
+   * yt:G0sORVBL4kM the same day, and it was two defects stacked on one entry:
+   *
+   *   activity doc  type:"video"  url .../_media/yt%3AG0sORVBL4kM/0  meta:null
+   *   GET that url  ->  HTTP 503, 0 bytes, permanently
+   *   GET poster0   ->  302 to i.ytimg.com/.../hqdefault.jpg, fine
+   *
+   * So Discord drew a player over a slot that can never answer — and with `meta:null` it had no
+   * dimensions to lay the attachment out with either, which is the second half of the report ("the
+   * gallery has nothing"): types.ts's own 2026-07-31 measurement is that Discord "will not lay out an
+   * IMAGE attachment it has no size for, so it drew nothing at all".
+   *
+   * WHY IT COULD NOT BE INFERRED FROM WHAT WAS ALREADY THERE. `duration` cannot express it (an
+   * age-gated video has a perfectly ordinary length, which is exactly why promisable() waved it
+   * through), `live` is false, and `sensitive` is a POST-level flag about content, not an
+   * entry-level statement about playability. /_api/v1 already showed the correctly degraded still,
+   * so the fact was reachable — just not on the seam Discord reads.
+   *
+   * WHY THE VIDEO CAN NEVER PLAY, so nobody re-opens it: yt-dlp's age-gate bypass died in 2024.10.22
+   * and `tv_embedded` was deleted in 2026.01.31. A partial `web_embedded` bypass survives only for
+   * videos whose uploader allows embedding. PO tokens are irrelevant — they address a different
+   * error. See AGE_NOTE in platforms/youtube/normalize.ts.
+   *
+   * PERSISTED and set by the normalizer, exactly like `live`: it rides the post cache, so the very
+   * first render refuses the mux with no container call, and a gate that is lifted is re-fetched at
+   * POST_TTL. Carried onto the still by stillOf for the same reason `live` is — a later overlay can
+   * still see WHY that entry is a picture.
+   */
+  gated?: true
+  /**
    * "THIS ENTRY'S BYTES ARE AT /_media/{refKey}/poster{i} — NOT AT /_media/{refKey}/{i}."
    *
    * Set by exactly ONE line: settleMux's DEADLINE degrade, which turns a `{page}` remux VIDEO into
