@@ -57,10 +57,29 @@ test('THE TRAILING SEGMENT IS AN ALLOWLIST, not "any third segment"', () => {
    * matcher reading one segment less carefully than it should.
    */
   assert.equal(r('/pin/66287425756772418/sent').kind, 'post')
-  for (const tail of ['post', 'clip', 'comments', 'status', 'p', 'anything']) {
+  for (const tail of ['post', 'clip', 'comments', 'status', 'anything']) {
     assert.equal(r(`/pin/66287425756772418/${tail}`).kind, 'notfound', `/pin/{id}/${tail} is nobody's`)
   }
   assert.equal(r('/pin/66287425756772418/sent/extra').kind, 'notfound', 'and depth stops at 3')
+
+  /**
+   * 'p' AND 'v' LEFT THIS LIST ON 2026-09-11, and they left it for a reason that is not Pinterest's.
+   *
+   * They used to be here as two more spellings nobody claims. They are now the GALLERY SUFFIX, which
+   * route() strips ahead of every matcher — so /pin/{id}/p is this same pin rendered stills-first,
+   * not a notfound. Pinterest's allowlist is unchanged and still an allowlist; what changed is that
+   * two tokens are now spoken for globally, before pinterest() is ever consulted.
+   *
+   * ASSERTED AS THE SAME PIN, which is the property that makes the suffix safe to add: the mode
+   * changes how the card is drawn and never which post it names. If a future strip ever resolved a
+   * suffixed url to a DIFFERENT ref, this is where it should go red.
+   */
+  for (const [tail, mode] of [['p', 'stills'], ['v', 'videos']]) {
+    const hit = r(`/pin/66287425756772418/${tail}`)
+    assert.equal(hit.kind, 'post', `/pin/{id}/${tail} is the gallery suffix now, not a notfound`)
+    assert.deepEqual(hit.ref, REF, `/pin/{id}/${tail} must name the SAME pin`)
+    assert.equal(hit.gallery, mode)
+  }
 })
 
 test('THE ID IS CANONICAL AND BOUNDED — junk never mints a ref', () => {

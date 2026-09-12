@@ -490,6 +490,11 @@ export function normalizeYouTube(got: YouTubeFetch, ref: PostRef): Post | null {
    * unreachable until a record existed.
    */
   const live = ytLive(got)
+  // ONE READ, TWO CONSUMERS, and they must not drift: the entry-level `gated` flag that stops the
+  // mux and the promise, and the post-level `sensitive` flag that makes Discord blur. This used to
+  // be spelled only at `sensitive` below, so the post could say "adult content" while its media
+  // entry still advertised a playable video — the two halves of the same fact disagreeing.
+  const gated = ytAgeRestricted(got)
   const o: Any = got.ok && got.oembed && typeof got.oembed === 'object' ? (got.oembed as Any) : {}
 
   const title = typeof o.title === 'string' && o.title ? o.title : 'YouTube video'
@@ -558,9 +563,17 @@ export function normalizeYouTube(got: YouTubeFetch, ref: PostRef): Post | null {
     // `live` marks the entry settleMux must not dispatch — see Media.live. The remux is KEPT rather
     // than rewritten to the thumbnail here: settleMux owns the degrade shape (posterOnly, the poster
     // slot the card then names), and a second spelling of it in a normalizer is how the two drift.
+    //
+    // `gated` is the same statement for the same reason (2026-09-12): an age-gated video can never
+    // be muxed, so it must not be dispatched and must never be promised. Stamped HERE, at build
+    // time, rather than left to withAgeNote — that overlay runs AFTER settleMux in the activity
+    // route's Promise.all, so a flag set there would arrive too late to refuse anything, which is
+    // precisely how the play button survived: the post KNEW it was age-gated (`sensitive` below is
+    // computed from the same call) and the one seam that had to act on it never saw the fact.
     media: [{
       kind: 'video', url: canonical, w: 0, h: 0, poster: thumb, posterW, posterH,
       remux: { page: canonical }, ...(live ? { live: true as const } : {}),
+      ...(gated ? { gated: true as const } : {}),
     }],
     /**
      * COUNTS, from the container's extract. This was hardcoded `{}` until 2026-08-01, and unlike the
@@ -575,7 +588,7 @@ export function normalizeYouTube(got: YouTubeFetch, ref: PostRef): Post | null {
     counts: ytCounts(got),
     // An age gate IS the platform telling us the content is adult, so the post carries the flag the
     // renderers already understand — Discord blurs, and the shared `[sensitive]` marker applies.
-    sensitive: ytAgeRestricted(got),
+    sensitive: gated,
   }
   // THROUGH withLiveNote RATHER THAN A THIRD TERNARY IN `text` ABOVE, so the prepend, the cap-safe
   // ordering and the idempotence have ONE spelling shared with the overlay seam. It is a no-op on

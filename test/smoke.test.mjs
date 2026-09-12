@@ -175,6 +175,69 @@ test('EVERY DOMAIN THE PAGE OFFERS IS ONE THE WORKER SERVES — a subset, delibe
     'the domain buttons and PUBLIC_HOSTS must be the same set')
 })
 
+test('EVERY DOMAIN THE WORKER SERVES IS ONE THE PAGE RECOGNISES AS OURS — the other direction, which shipped broken', () => {
+  /**
+   * THE DIRECTION THE SUBSET CHECK ABOVE DELIBERATELY DROPPED, AND THE BUG THAT PROVES IT WAS ONE
+   * DIRECTION TOO MANY TO DROP.
+   *
+   * The rewrite above is right that a served domain does not have to be ADVERTISED. It is wrong that
+   * nothing else follows from serving one, because public/index.html read a single array for two
+   * different questions — which domains to NAME, and which hosts to RECOGNISE as already ours. Making
+   * the first a subset silently made the second one too.
+   *
+   * MEASURED 2026-09-11 against production, on forsen.sex, served since 2026-08-03:
+   *
+   *   convert('https://forsen.sex/jack/status/20') -> https://mbedfx.app/forsen.sex/jack/status/20
+   *       "Unrecognised host, treated as a fediverse instance."
+   *   GET that url with a Discordbot UA          -> HTTP 200, og:title "Not found"
+   *   GET https://forsen.sex/jack/status/20      -> HTTP 200, og:title "jack (@jack)"
+   *
+   * The page handed back a DEAD link for a domain that works perfectly when pasted directly. The
+   * fediverse-shaped form is worse: /forsen.sex/@bob/{id} mints canonical https://forsen.sex/statuses/
+   * {id} — our own domain, answering notfound — and that is what og:url advertises and where a human
+   * gets redirected.
+   *
+   * docs/CHANGELOG.md 1.7.0 claimed this was already pinned ("All are pinned by tests now"), naming a
+   * symbol — OWN_HOSTS — that does not exist in public/index.html. It was never true for the page
+   * half. This test is that claim made real, and it asserts the two things the bug broke separately:
+   * a link from a served domain must be RE-POINTED, and a visitor arriving on one must be handed that
+   * domain's own links.
+   */
+  const cfg = JSON.parse(readFileSync('wrangler.jsonc', 'utf8').replace(/^\s*\/\/.*$/gm, ''))
+  const served = [...new Set((cfg.routes ?? []).map(r => r.pattern.split('/')[0]))]
+  const page = readFileSync('public/index.html', 'utf8')
+
+  // Lifted the same way test/landing-convert.test.mjs does — see its header for why `new Function`
+  // over a committed file in a test is not the vulnerability it resembles.
+  const block = page.match(/<script id="mbedfx-convert">([\s\S]*?)<\/script>/)
+  assert.ok(block, 'public/index.html must carry a <script id="mbedfx-convert"> block')
+  const { convert, defaultHost } = new Function(
+    `${block[1]}; return { convert: mbedfxConvert, defaultHost: mbedfxDefaultHost }`)()
+
+  assert.ok(served.length >= 3, 'this asserts over every served domain, so there must be some')
+  for (const host of served) {
+    const r = convert(`https://${host}/alice/status/123`, 'mbedfx.app')
+    assert.ok(r.ok, `${host} is served by this worker; the page must convert a link from it`)
+    assert.equal(r.path, '/alice/status/123',
+      `${host} is one of ours, so its path must be re-pointed, not swallowed as an instance name`)
+    assert.doesNotMatch(r.note ?? '', /fediverse/i,
+      `${host} is our own domain and must never be read as a fediverse instance`)
+    assert.equal(defaultHost(host).host, host,
+      `a visitor arriving on ${host} must be handed ${host} links, not another domain's`)
+  }
+
+  // And the nesting that makes both directions expressible at once. The page asserts this itself at
+  // parse time (the loop under OUR_HOSTS); this is the same claim from outside, so deleting that loop
+  // does not silently delete the invariant.
+  const ours = page.match(/var OUR_HOSTS = \[([^\]]*)\]/)
+  const pub = page.match(/var PUBLIC_HOSTS = \[([^\]]*)\]/)
+  assert.ok(ours && pub, 'the page declares OUR_HOSTS and PUBLIC_HOSTS')
+  const list = m2 => m2[1].split(',').map(x => x.trim().replace(/^'|'$/g, '')).filter(Boolean)
+  for (const h of list(pub)) {
+    assert.ok(list(ours).includes(h), `PUBLIC_HOSTS must be a subset of OUR_HOSTS; ${h} is not in it`)
+  }
+})
+
 test('EVERY SERVING ZONE IS REFUSED BY THE SSRF GUARD — the coupling wrangler.jsonc claims', () => {
   /**
    * THE HOLE THIS CLOSES. A fediverse ref NAMES ITS OWN ORIGIN, so `/{our-own-host}/post/1` would

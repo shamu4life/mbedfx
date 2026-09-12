@@ -69,6 +69,17 @@ function mediaOf(it: ImgurItem, alone: boolean): Media | null {
        * gallery to a still (Discord renders one player at most). Four muxes bought nothing and spent
        * the whole HTML deadline.
        *
+       * STILL TRUE AFTER THE 2026-09-11 GALLERY MODE, and it is worth saying why rather than leaving
+       * the reader to check. That change lets a multi-item gallery promote ONE video to a real
+       * player, so the sentence above ("converts every video ... to a still") is now the 'stills'
+       * mode rather than the only behaviour. The ARGUMENT is untouched, because the promotion is
+       * capped at one: whatever the mode, at most one album video can play, so at most one needs a
+       * mux, and remuxing the other three would still buy nothing and still spend the deadline.
+       *
+       * WHICH MAKES THIS THE THING THAT BREAKS if the cap is ever lifted. If promotedVideo is
+       * widened to promote more than one, this line has to be revisited in the same commit — the
+       * promoted entries would point at bare i.imgur.com mp4s with no remux behind them.
+       *
        * A lone video is the opposite case: it renders a real inline player, which is the one thing
        * that widening must not trade away (see galleryHasVideo's "A SINGLE video is deliberately NOT
        * covered"), and the .gifv page is the surface yt-dlp answers as a video for any animated Imgur

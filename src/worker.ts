@@ -1,4 +1,4 @@
-import type { ClientClass, Media, MuxJob, Platform, Post, PostRef, Profile, ProfileRef, Route } from './types.ts'
+import type { ClientClass, GalleryMode, Media, MuxJob, Platform, Post, PostRef, Profile, ProfileRef, Route } from './types.ts'
 import { classify } from './classify.ts'
 import { route } from './router.ts'
 import { render } from './render/index.ts'
@@ -20,7 +20,7 @@ import {
 import { fetchBluesky, fetchBlueskyProfile } from './platforms/bluesky/fetch.ts'
 import { normalizeBluesky, normalizeBlueskyProfile } from './platforms/bluesky/normalize.ts'
 import type { AwemeResolver } from './platforms/tiktok/fetch.ts'
-import { encodeStatusId } from './statusid.ts'
+import { DEFAULT_GALLERY_MODE, encodeStatusId } from './statusid.ts'
 import { fetchTikTok, isTikTokCdnHost, resolveTikTokShortlink, TIKTOK_UA, withResolvedVideo } from './platforms/tiktok/fetch.ts'
 import { AWEME_PLAY, normalizeTikTok, tiktokGate, tiktokRefFrom, videoDetailScope } from './platforms/tiktok/normalize.ts'
 import {
@@ -2224,6 +2224,10 @@ function stillOf(m: Media): Media | null {
     posterOnly: true as const,
     ...(m.duration === undefined ? {} : { duration: m.duration }),
     ...(m.live === undefined ? {} : { live: m.live }),
+    // Carried for the same reason `live` is: a later overlay can still see WHY this entry is a
+    // picture. Nothing renders it today — AGE_NOTE is already in `text` by the time this runs — and
+    // it is what keeps the still honest about itself rather than looking like an ordinary photo.
+    ...(m.gated === undefined ? {} : { gated: m.gated }),
   }
 }
 
@@ -2344,6 +2348,33 @@ async function settleMux(
       // Same hole as the over-ceiling arm's: no poster, nothing to degrade to, leave the entry. See
       // the comment there — it is a hole in theory before it is one in practice, and yt always has a
       // thumbnail because normalizeYouTube derives one from the id.
+      if (!still) return m
+      rewritten = true
+      return still
+    }
+    /**
+     * AGE-GATED: THE SAME REFUSAL AS `live`, ADDED 2026-09-12 ON THE OWNER'S REPORT.
+     *
+     * "Age-gated ones show a play button that confuses people and then the gallery has nothing."
+     * Measured that day on yt:G0sORVBL4kM: the activity document shipped `type:"video"` addressing
+     * `/_media/yt%3AG0sORVBL4kM/0`, which answers HTTP 503 with zero bytes and always will, while
+     * `poster0` served the real thumbnail perfectly. Discord drew a player over a dead slot.
+     *
+     * IT SITS BESIDE `live` RATHER THAN INSIDE IT because the two are different facts with one
+     * consequence, and collapsing them would make the card lie: withLiveNote and AGE_NOTE say
+     * different things about why there is no player, and `live` is read by withLiveNote's media
+     * fallback.
+     *
+     * WHY THE DEADLINE ARM DID NOT ALREADY COVER IT. It does, on the /_api/v1 and head seams — the
+     * mux fails, the deadline passes, the entry degrades, and the API showed the correct still all
+     * along. What it could not cover is the ACTIVITY seam under 1.15.0's promise path: there
+     * settleMux is asked to PROMISE rather than wait, and a promise keeps the video attachment by
+     * design. So the one document Discord actually renders was the one place the degrade never
+     * reached. promisable() now refuses a gated entry too, which is the belt to this brace: this arm
+     * makes the card right, that check stops the promise being made in the first place.
+     */
+    if (m.gated) {
+      const still = stillOf(m)
       if (!still) return m
       rewritten = true
       return still
@@ -4878,6 +4909,7 @@ function toApiPost(post: Post, origin: string) {
 
 async function renderPostRoute(
   ref: PostRef, canonical: string, d: Deps, env: Env, ctx: ExecutionContext, client: ClientClass, origin: string,
+  gallery?: GalleryMode,
 ): Promise<Response> {
   /**
    * THE d. HOST SHORT-CIRCUITS HERE, so it covers every route rather than the one it was first wired
@@ -4890,7 +4922,7 @@ async function renderPostRoute(
    * The host comes off `origin`, which is already the request's own rather than a constant.
    */
   if (isDirectMediaOrigin(origin)) return serveDirectMedia(ref, d, env, ctx, client, origin)
-  const rkey = cacheUrl(respCacheKey(ref, client, origin))
+  const rkey = cacheUrl(respCacheKey(ref, client, origin, gallery))
   const cached = await d.cache.match(rkey)
   if (cached) return cached
 
@@ -5006,7 +5038,7 @@ async function renderPostRoute(
   ])
   const res = render(
     { kind: 'post', post: withTranslation(settled.post, xlate.translated, xlate.source) },
-    client, origin,
+    client, origin, gallery,
   )
   // `pending` joins `degraded` for the same reason: caching a card that is missing something still
   // arriving would pin the incomplete version for RESP_TTL.
@@ -5862,6 +5894,12 @@ export async function handle(req: Request, env: Env, ctx: ExecutionContext, d: D
               xlate?.text, xlate?.source ?? '',
             ),
             origin,
+            // THE GALLERY MODE, off the {id} the head minted — see router.ts's spoof(). Falling back
+            // to the CURRENT default rather than to a literal is what keeps every id already frozen
+            // in Discord's embed cache rendering like a present-day card: those all carry the '1'
+            // sentinel, which names no mode, and re-crawling one must not pin it to whichever default
+            // happened to be live the day it was minted.
+            r.gallery ?? DEFAULT_GALLERY_MODE,
           )
           : toOEmbed(settledApi.post, origin),
       )
@@ -6260,7 +6298,7 @@ export async function handle(req: Request, env: Env, ctx: ExecutionContext, d: D
       // cache-check, fetch, render, cache — is renderPostRoute, shared with the reddit share route so
       // a fetch_fail gets the distinct 🔞/🔒 or generic card identically whichever url shape was pasted.
       if (!direct && client === 'human') return redirect(r.canonical)
-      return renderPostRoute(r.ref, r.canonical, d, env, ctx, client, origin)
+      return renderPostRoute(r.ref, r.canonical, d, env, ctx, client, origin, r.gallery)
     }
 
     /**
@@ -6342,7 +6380,7 @@ export async function handle(req: Request, env: Env, ctx: ExecutionContext, d: D
           client, origin,
         )
       }
-      return renderPostRoute(resolved.ref, resolved.canonical, d, env, ctx, client, origin)
+      return renderPostRoute(resolved.ref, resolved.canonical, d, env, ctx, client, origin, r.gallery)
     }
 
     case 'metashare': {
@@ -6421,7 +6459,7 @@ export async function handle(req: Request, env: Env, ctx: ExecutionContext, d: D
       // inner.canonical is rebuilt from ref fields by router.ts, so every share parameter the
       // redirect carried — share_url, rdid, xmt, slof — is already gone.
       if (!direct && client === 'human') return redirect(inner.canonical)
-      return renderPostRoute(inner.ref, inner.canonical, d, env, ctx, client, origin)
+      return renderPostRoute(inner.ref, inner.canonical, d, env, ctx, client, origin, r.gallery)
     }
 
     case 'shortlink': {

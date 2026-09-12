@@ -196,9 +196,23 @@ export const MUX_TOTAL_HORIZON_MS =
 export const YT_PROMISE = true
 export const YT_PROMISE_MAX_SECONDS = 240
 
-/** Can this entry's video be promised to Discord before the mux has finished? See YT_PROMISE. */
-export function promisable(m: { live?: true; duration?: number } | null | undefined): boolean {
-  if (!YT_PROMISE || !m || m.live) return false
+/**
+ * Can this entry's video be promised to Discord before the mux has finished? See YT_PROMISE.
+ *
+ * `gated` JOINED `live` HERE ON 2026-09-12, and the docstring above already stated the rule it was
+ * missing: "THE VOUCH IS THE SAFETY VALVE. A promise that cannot be kept is frozen in Discord's
+ * message forever (it re-crawls successful cards, never failed ones)." An age-gated video is the
+ * purest example of a promise that cannot be kept — not slow, not unlucky, IMPOSSIBLE, because
+ * yt-dlp has had no age-gate bypass since 2024.10.22 — and it slipped through every existing term:
+ * it is not `live`, and its `duration` is a perfectly ordinary number well inside the 240s window,
+ * which is exactly what made it promisable.
+ *
+ * The owner's report was the symptom: a play button that plays nothing, over a `/_media/{key}/0`
+ * slot measured answering HTTP 503 with zero bytes. Discord had been promised a video that no
+ * amount of waiting could produce, and it froze that card.
+ */
+export function promisable(m: { live?: true; gated?: true; duration?: number } | null | undefined): boolean {
+  if (!YT_PROMISE || !m || m.live || m.gated) return false
   return typeof m.duration === 'number' && m.duration > 0 && m.duration <= YT_PROMISE_MAX_SECONDS
 }
 

@@ -1,9 +1,9 @@
-import type { Media, Platform, Post } from '../types.ts'
+import type { GalleryMode, Media, Platform, Post } from '../types.ts'
 import { mediaList } from '../media.ts'
 import { refKey } from '../refkey.ts'
 import { encodeStatusId } from '../statusid.ts'
 import { byline, bytesIndex, fudge, isSensitive, mediaOf, mediaUrl, stockState, str, usable } from './embed.ts'
-import { buildContentHtml, statParts, withVideoGalleryMarker } from './text.ts'
+import { buildContentHtml, statParts, withMoreInPostMarker, withVideoGalleryMarker } from './text.ts'
 
 /**
  * The Mastodon-spoof payloads: a Mastodon API v1 `Status` and the oEmbed document whose
@@ -382,7 +382,7 @@ function attachment(post: Post, origin: string, m: Media, index: number, hasVide
  * without the hoist here a quote-only post advertises the author's avatar and the picture the
  * post is actually about reaches nobody.
  */
-function attachments(post: Post, origin: string): object[] {
+function attachments(post: Post, origin: string, mode: GalleryMode): object[] {
   /**
    * A POST WHOSE OWN MEDIA IS ONE VIDEO SHIPS THAT VIDEO ALONE — the quote's media is dropped.
    *
@@ -416,13 +416,138 @@ function attachments(post: Post, origin: string): object[] {
   // a video, or whose second usable item comes only from the quote, really does produce a
   // flattening gallery, so the question has to be asked of the array Discord actually receives, not
   // of post.media alone.
-  const hasVideo = galleryHasVideo(list) && !ownVideoLeads(post)
+  const galleryFlattens = galleryHasVideo(list) && !ownVideoLeads(post)
+
+  // THE PROMOTED VIDEO — 'videos' mode only, and at most one. -1 means nothing is promoted, which is
+  // every 'stills' render and every gallery with no video to promote.
+  //
+  // SPELLED `!== 'stills'`, NOT `=== 'videos'`, and it must match contentWithMarker's gate exactly.
+  // These two are the same decision read on two surfaces — what the array contains, and what the
+  // body says about it — and this file states three times that they must never disagree. Asking the
+  // question in two different polarities is how they would: any value that is neither literal would
+  // then flatten the array like 'stills' while captioning it like 'videos', which is a card whose
+  // note contradicts its own pictures. Both now ask "is this stills?", so every other value is the
+  // default on BOTH surfaces or on neither.
+  const promoted = mode !== 'stills' && galleryFlattens ? promotedVideo(list, mediaOf(post).length) : -1
+
+  /**
+   * THE PROMOTED ENTRY GOES FIRST, and the rest keep source order behind it.
+   *
+   * Reordering is not cosmetic and not a preference — it is forced by the 2026-07-20 measurement in
+   * galleryHasVideo's block: "DISCORD KEEPS THE TYPE OF THE FIRST ATTACHMENT. FxEmbed's array starts
+   * video and its 3 images drop; ours starts image and its 4 videos drop." Leaving a promoted video
+   * at position 3 of an image-led carousel would have Discord discard it exactly as it discards
+   * every video today, so 'videos' mode would render identically to 'stills' mode and the whole
+   * feature would be invisible.
+   *
+   * INDEX-SAFE BY CONSTRUCTION, and this is the part that would be easy to get wrong. The loop
+   * iterates over OUTPUT ORDER but keeps passing the SOURCE index `i` into attachment(), because
+   * that index is what /_media/{key}/{i} resolves through pickMedia and what `id: String(index)`
+   * publishes. Reordering the output while renumbering the ids would repoint every attachment after
+   * the promoted one at the wrong bytes — the same class of bug the no-compacting rule in
+   * attachment()'s docstring exists to prevent, arriving by a different door.
+   */
+  const order = [...list.keys()]
+  if (promoted >= 0) order.splice(0, 0, ...order.splice(promoted, 1))
+
   const out: object[] = []
-  for (let i = 0; i < list.length; i++) {
-    const a = attachment(post, origin, list[i], i, hasVideo)
+  for (const i of order) {
+    // Per ENTRY now, not per gallery: in 'videos' mode the promoted video is the one entry that does
+    // not flatten, and every other video in the same gallery still does. In 'stills' mode `promoted`
+    // is -1, so this is `galleryFlattens` for every entry — byte-identical to what shipped before.
+    const a = attachment(post, origin, list[i], i, galleryFlattens && i !== promoted)
     if (a) out.push(a)
   }
   return out
+}
+
+/**
+ * The index in `list` of the video to promote, or -1.
+ *
+ * THE FIRST USABLE VIDEO, and only ever one. "Include one or more videos" cannot be honoured
+ * literally: measured 2026-07-20, "an all-video Instagram post renders in Discord as ONE playable
+ * video with the other N-1 items HIDDEN (a 10-video post drew a single player)". A second promoted
+ * video would be drawn by nobody, and it would cost something real — imgur/normalize.ts omits
+ * `remux` on every item of a multi-item album precisely because "Four muxes bought nothing and spent
+ * the whole HTML deadline", an argument that holds only while at most one album video can play.
+ *
+ * NO POSTER REQUIREMENT, unlike the flattening path. A flattened video MUST have a poster or it is
+ * dropped (there would be nothing to show), but a promoted video is emitted as a real video pointing
+ * at its own bytes, and a missing poster costs only `preview_url` — which is exactly the state a
+ * lone reel has always shipped in.
+ *
+ * A DEGRADED STILL CANNOT BE PROMOTED, and it excludes itself without a special case: settleMux
+ * rewrites a video it could not mux into `kind: 'image'` upstream of this mapper, so attachmentType
+ * already answers 'image' for it and the scan passes it by. That is the right answer — promoting a
+ * slot whose bytes 503 would hand Discord a broken player instead of a visible frame.
+ *
+ * `ownCount` BOUNDS THE SCAN TO THE POST'S OWN MEDIA, and that bound is the whole reason this takes
+ * a second argument. `list` is mediaList — the post's own entries followed by its QUOTE's, hoisted
+ * on — and a quote is context, not content: this file's own rule, from the 2026-08-01 report where
+ * "a video quoting a post that carries a MAP IMAGE" drew the map. Promoting from the hoisted tail
+ * would make a quoted post's video the entire card of a post that never had one, which is that same
+ * defect wearing the opposite mask. So an image post quoting a video promotes NOTHING, and its
+ * gallery renders exactly as it did before the mode existed.
+ *
+ * The bound is a PREFIX LENGTH rather than a filter because mediaList is `[...own, ...quote]` by
+ * construction and every index in this file addresses that concatenated list — see mediaList's
+ * PARENT FIRST paragraph, which is what makes the prefix well defined.
+ */
+function promotedVideo(list: Media[], ownCount: number): number {
+  const end = Math.min(list.length, ownCount)
+  for (let i = 0; i < end; i++) {
+    if (usable(list[i]) && attachmentType(list[i]) === 'video') return i
+  }
+  return -1
+}
+
+/**
+ * WHAT IS LEFT IN THE POST BEHIND THE PROMOTED PLAYER — 'pictures', 'video', 'both', or null when
+ * nothing is. The gate AND the wording of the 'videos'-mode note, in one answer.
+ *
+ * IT IS THE EXACT MIRROR OF hasConvertedVideo(), and for the same stated reason: the visible note
+ * and the invisible attachment decision must never disagree. So it is derived from the same
+ * primitives, in the same order, over the same list — attachments() computes
+ * `galleryHasVideo(list) && !ownVideoLeads(post)` and then `promotedVideo(list)`, and this asks
+ * precisely "did that promote something, and was anything else usable left over".
+ *
+ * usable() FIRST, as everywhere in this file: a dead entry cannot vote a note into existence.
+ *
+ * NULL FOR EVERY SHAPE THAT PROMOTES NOTHING. A single video (ownVideoLeads, or usableCount === 1)
+ * has no hidden sibling and gets no note — that is the load-bearing line galleryHasVideo's block
+ * says must not move, arriving here by the same route. An all-IMAGE gallery promotes nothing either:
+ * Discord draws that gallery as it always has, so there is nothing to tell the reader about.
+ *
+ * FIXED PROSE, NOT A COUNT — owner's call, 2026-09-11, re-affirming the 2026-07-20 rule recorded at
+ * VIDEO_GALLERY_MARKER ("The owner chose 'Contains video' over 'N videos'"). This returns a
+ * CATEGORY, never a number, so text.ts picks one of three constant strings. That is not merely
+ * taste: a true count does not exist to be written. The count differs per surface — the activity
+ * card carries N attachments while the plain OpenGraph head and Telegram each carry exactly ONE
+ * image — so one sentence naming a number would be wrong on at least one head it appears on.
+ */
+function hiddenBehindVideo(post: Post): 'pictures' | 'video' | 'both' | null {
+  if (ownVideoLeads(post)) return null
+  const list = mediaList(post)
+  if (!galleryHasVideo(list)) return null
+  // THE SAME ownCount BOUND attachments() passes, and it must stay the same expression. If this
+  // scanned the whole list while attachments() scanned only the parent's prefix, an image post
+  // quoting a video would flatten every entry and then caption itself "More video in the post" —
+  // the note describing a promotion that never happened, which is the one mismatch the two-gate
+  // design exists to make impossible.
+  const promoted = promotedVideo(list, mediaOf(post).length)
+  if (promoted < 0) return null
+
+  let pictures = 0
+  let videos = 0
+  for (let i = 0; i < list.length; i++) {
+    if (i === promoted || !usable(list[i])) continue
+    if (attachmentType(list[i]) === 'video') videos++
+    else pictures++
+  }
+  if (pictures && videos) return 'both'
+  if (pictures) return 'pictures'
+  if (videos) return 'video'
+  return null
 }
 
 /**
@@ -497,7 +622,7 @@ function applicationName(post: Post): string {
  * `post.sensitive` alone gets wrong. See embed.ts for why that shape is ordinary rather than
  * hypothetical, and why the gallery is the only surface it can reach.
  */
-function contentWithMarker(post: Post): string {
+function contentWithMarker(post: Post, mode: GalleryMode): string {
   // The visible video-gallery marker is APPENDED to the body (below the caption and counts, next to
   // the engagement numbers — owner's call 2026-07-20; see withVideoGalleryMarker in text.ts) BEFORE
   // the `[sensitive]` label wraps it, so `[sensitive]` stays OUTERMOST. That ordering is unchanged by
@@ -510,14 +635,27 @@ function contentWithMarker(post: Post): string {
   // The SAME exception attachments() applies, for the reason this file states twice: the visible
   // marker and the invisible flattening must never disagree. A post whose own video still plays has
   // nothing flattened to warn about.
-  if (!ownVideoLeads(post) && hasConvertedVideo(mediaList(post))) body = withVideoGalleryMarker(body)
+  //
+  // TWO MODES, TWO NOTES, ONE GATE APIECE — and they are mutually exclusive by construction, because
+  // `mode` selects which branch can fire at all. Getting this wrong in the obvious way (editing the
+  // attachment gate and leaving this one alone) would ship "🎬 Contains video — tap to watch" on a
+  // card whose video is playing, which is the exact class of mismatch hasConvertedVideo() was written
+  // to shut out. Each branch asks the question its own surface answers:
+  //   'stills' — did anything actually convert to a still? (hasConvertedVideo, unchanged)
+  //   'videos' — is anything hidden behind the promoted player? (hiddenBehindVideo, below)
+  if (mode === 'stills') {
+    if (!ownVideoLeads(post) && hasConvertedVideo(mediaList(post))) body = withVideoGalleryMarker(body)
+  } else {
+    const hidden = hiddenBehindVideo(post)
+    if (hidden) body = withMoreInPostMarker(body, hidden)
+  }
   if (!isSensitive(post)) return body
   // No trailing space when there is no body: an image-only sensitive post is exactly the one
   // that most needs the label, and `[sensitive] ` alone would ship a dangling separator.
   return body ? `[sensitive] ${body}` : '[sensitive]'
 }
 
-export function toMastodonStatus(post: Post, origin: string): object {
+export function toMastodonStatus(post: Post, origin: string, mode: GalleryMode): object {
   // post.createdAt is a real Date on every path that reaches here: the normalizer rejects an
   // unparseable date outright, and cache.ts's hasValidIdentity requires a string that
   // Date.parse accepts before reviveDates turns it back into a Date. A value that parses can
@@ -550,7 +688,7 @@ export function toMastodonStatus(post: Post, origin: string): object {
     in_reply_to_id: null,
     in_reply_to_account_id: null,
     language: null,
-    content: contentWithMarker(post),
+    content: contentWithMarker(post, mode),
     // Empty, and there is deliberately no `sensitive` field: those two are Mastodon's content
     // WARNING mechanism, and a client that honours it blurs or collapses exactly the media
     // Discord came for. The sensitivity SIGNAL is not lost by omitting them — it rides
@@ -561,7 +699,7 @@ export function toMastodonStatus(post: Post, origin: string): object {
     // here. `website` stays null for every platform: it is the application's OWN homepage, and
     // we have no verified evidence any Discord surface reads it.
     application: { name: applicationName(post), website: null },
-    media_attachments: attachments(post, origin),
+    media_attachments: attachments(post, origin, mode),
     account: {
       id: handle,
       display_name: str(post.author?.name),

@@ -21,6 +21,8 @@
  * refKey() never produces an empty key.
  */
 
+import type { GalleryMode } from './types.ts'
+
 const utf8 = new TextEncoder()
 // fatal:true is load-bearing — the lenient decoder substitutes U+FFFD for invalid
 // sequences, which would turn attacker-chosen bytes into a *successful* decode to a
@@ -44,11 +46,74 @@ const utf8Strict = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true })
 // mangles every platform equally and loudly, rather than one platform silently.
 const SENTINEL = '1'
 
-/** Pure-digit encoding of a refKey. Inverse of decodeStatusId. */
-export function encodeStatusId(key: string): string {
-  let out = SENTINEL
+/**
+ * THE SENTINEL ALSO CARRIES THE GALLERY MODE, and that is the only channel that reaches the document
+ * Discord actually renders.
+ *
+ * WHY IT CANNOT RIDE IN THE PATH. The /p and /v suffix is on the url a person pastes, but the card
+ * is drawn from the ACTIVITY DOCUMENT, and Discord does not fetch the href we advertise: measured
+ * 2026-09-02, "Discord fetched /api/v1/statuses/{id} 5 times out of 5 and the advertised /users/
+ * href never" (worker.ts). It reconstructs that url from the {id} alone. So a mode kept anywhere
+ * except inside {id} is a mode the gallery renderer never sees, and /p and /v would be a visible
+ * no-op on the one surface they exist to change.
+ *
+ * WHY IT CANNOT RIDE IN THE refKey. refKey is simultaneously the post cache key, the /_media wire
+ * format, the mux R2 key `mux/{refKey}/{index}`, the meta record key and this status id. Forking it
+ * per mode would double every upstream fetch, orphan every warm mux, and need a parseRefKey arm
+ * whose omission is SILENT — the fb:group bug. The key stays one key; only its wrapper varies.
+ *
+ * WHY A SENTINEL DIGIT AND NOT A PATH SEGMENT. spoofShape accepts EXACTLY 2 segments for /_oembed
+ * and EXACTLY 4 for the activity forms, so an extra segment is refused by our own router before
+ * Discord's rewrite is even reached. A leading digit rides through both. The /_wait experiment
+ * already measured that a differently-prefixed all-digit id survives Discord's reconstruction.
+ *
+ * EVERY VALUE HERE MUST BE NONZERO, for the reason SENTINEL is: a layer that treats {id} as a number
+ * strips a leading zero, after which the 3-digit framing no longer divides and decode fails.
+ *
+ * '1' MEANS "UNSPECIFIED", NOT "videos", and the distinction is what makes this backward compatible.
+ * Every id already minted — including the ones frozen inside Discord's embed cache forever — starts
+ * with '1', and must keep decoding to the same key and to whatever the CURRENT default is, so that a
+ * card re-crawled after this ships renders like every other default card rather than like a
+ * pre-2026-09-11 one. An explicitly chosen mode gets its own digit so it cannot be re-read as the
+ * default if the default later moves.
+ */
+const MODE_SENTINEL: Record<GalleryMode, string> = { videos: '2', stills: '3' }
+const SENTINEL_MODE: Record<string, GalleryMode> = { 2: 'videos', 3: 'stills' }
+
+/**
+ * What a request naming no mode gets. Spelled ONCE, here, because this file is the only one that has
+ * to enumerate every mode anyway — see the note in types.ts, which deliberately keeps no runtime
+ * export of its own.
+ *
+ * FLIPPED TO 'videos' 2026-09-11 on the owner's call, reversing the 2026-07-20 decision recorded in
+ * mastodon.ts ("The owner has SEEN the one-player render and chosen every-item-visible over it").
+ * The reversal is deliberate and its cost is stated there: one player instead of N stills, with a
+ * content-body note naming what else the post holds.
+ */
+export const DEFAULT_GALLERY_MODE: GalleryMode = 'videos'
+
+/**
+ * Pure-digit encoding of a refKey, optionally carrying an EXPLICIT gallery mode. Inverse of
+ * decodeStatusId (for the key) and statusIdMode (for the mode).
+ *
+ * Called with no mode for every ordinary render, which keeps the wire form byte-identical to what
+ * this service has always emitted. Pass a mode only when the request named one.
+ */
+export function encodeStatusId(key: string, mode?: GalleryMode): string {
+  let out = mode ? MODE_SENTINEL[mode] : SENTINEL
   for (const b of utf8.encode(key)) out += String(b).padStart(3, '0')
   return out
+}
+
+/**
+ * The mode an id was minted with, or null when it names none (the '1' form, and every id predating
+ * 2026-09-11). Null is NOT 'videos': the caller applies DEFAULT_GALLERY_MODE, so the default can move
+ * again without rewriting what is already in Discord's cache.
+ *
+ * Same total-over-garbage contract as decodeStatusId — this reads a raw request-path segment.
+ */
+export function statusIdMode(id: string): GalleryMode | null {
+  return (typeof id === 'string' && SENTINEL_MODE[id.charAt(0)]) || null
 }
 
 /**
@@ -85,8 +150,16 @@ export function decodeStatusId(id: string): string | null {
   // '065' and '1065' would BOTH decode to 'A', so two distinct wire forms would alias to
   // one key. That is exactly the ambiguity a numeric-normalizing intermediary would
   // create, and silently accepting its output would hide the mangling instead of 404ing.
-  if (!id.startsWith(SENTINEL)) return null
-  const body = id.slice(SENTINEL.length)
+  //
+  // ANY OF THE THREE SENTINELS, since 2026-09-11. '2' and '3' name a gallery mode (see
+  // MODE_SENTINEL) and '1' names none. They are DIFFERENT WIRE FORMS OF THE SAME KEY, which is not
+  // the aliasing this check exists to stop: that one was two spellings of one REQUEST, and these are
+  // three distinct requests that happen to share a key. Anything outside the set is still refused,
+  // so a stripped leading zero still fails to divide and still 404s rather than decoding to
+  // something nobody minted.
+  const head = id.charAt(0)
+  if (head !== SENTINEL && !SENTINEL_MODE[head]) return null
+  const body = id.slice(1)
 
   // A bare sentinel carries no bytes. Rejecting it keeps "the empty string is not a
   // representable key" true — without this, decodeStatusId('1') would hand the router an

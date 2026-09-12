@@ -1,8 +1,8 @@
-import type { Platform, PostRef, Route } from './types.ts'
+import type { GalleryMode, Platform, PostRef, Route } from './types.ts'
 import {
   BS_ACTOR, DM_ID, FEDI_HOST, IM_ID, LEMMY_ID, MASTO_ID, PEERTUBE_ID, PIN_ID, ST_ID, TWITCH_SLUG, parseRefKey,
 } from './refkey.ts'
-import { decodeStatusId } from './statusid.ts'
+import { decodeStatusId, statusIdMode } from './statusid.ts'
 
 // A CLOSED ALLOWLIST, and og.jpg has to be in it. The asset binding only answers for paths this
 // set names, so an og:image pointing anywhere else 404s and the site's own card draws no picture —
@@ -1368,12 +1368,32 @@ function spoofShape(seg: string[]): { kind: 'activity' | 'oembed'; at: number } 
   return real || alias ? { kind: 'activity', at: 3 } : null
 }
 
-/** The spoof route itself. Null on a shape miss OR an id that does not decode — see route(). */
+/**
+ * The spoof route itself. Null on a shape miss OR an id that does not decode — see route().
+ *
+ * THE GALLERY MODE COMES OFF THE {id}, NOT OFF THE PATH, and this is the only place it can. These
+ * two routes ARE the card for a gallery, and Discord does not fetch the href the head advertises:
+ * measured 2026-09-02, "/api/v1/statuses/{id} 5 times out of 5 and the advertised /users/ href
+ * never". It rebuilds the url from the id alone, so any /p or /v the reader typed is long gone by
+ * the time this route is taken. statusIdMode reads it back out of the leading digit the head minted
+ * it with. See src/statusid.ts for why the sentinel and not a path segment or the refKey.
+ *
+ * `undefined` when the id names no mode — the '1' form, i.e. every id minted before 2026-09-11 and
+ * still frozen in Discord's embed cache. The WORKER applies DEFAULT_GALLERY_MODE, not this function,
+ * so an old id renders like a current default card rather than being pinned to a stale one.
+ */
 function spoof(seg: string[]): Route | null {
   const shape = spoofShape(seg)
   if (!shape) return null
-  const ref = spoofRef(seg[shape.at])
-  return ref ? { kind: shape.kind, ref } : null
+  const id = seg[shape.at]
+  const ref = spoofRef(id)
+  if (!ref) return null
+  // SPREAD, so an id naming no mode produces a Route with NO `gallery` key rather than one set to
+  // undefined. Those are the same to a reader and different to assert.deepEqual, and this union is
+  // compared that way all over test/router.test.mjs — an always-present key would have churned a
+  // dozen assertions that have nothing to do with galleries, and hidden any real change among them.
+  const mode = statusIdMode(id)
+  return { kind: shape.kind, ref, ...(mode ? { gallery: mode } : {}) }
 }
 
 /**
@@ -1496,7 +1516,71 @@ function safeDecode(s: string): string | null {
   }
 }
 
+/**
+ * THE VISIBLE GALLERY TOGGLE — a trailing `/v` or `/p` on any post url.
+ *
+ *   mbedfx.app/nasajpl/p/DaQ5CPTki4E/v   one playable video, plus a note about the rest
+ *   mbedfx.app/nasajpl/p/DaQ5CPTki4E/p   every item as a still, the pre-2026-09-11 default
+ *
+ * STRIP FIRST, THEN FALL BACK — and the order is forced by measurement, not preference. Running
+ * route() over the real tree on 2026-09-11 showed that the most-pasted platforms ALREADY absorb a
+ * trailing segment: /alice/status/123/v resolves to x post 123 today (x()'s arm is seg.length >= 3),
+ * as do /r/{sub}/comments/{id}/v (the title-slug position), PieFed, and /watch?v={id}/v. A strip
+ * placed after the matchers would therefore be a silent no-op on exactly the links people paste
+ * most — the feature would appear to do nothing, which is the worst of the three failure modes.
+ *
+ * AND THE FALLBACK IS WHAT MAKES STRIPPING FIRST SAFE. The same sweep found live posts whose LAST
+ * segment is literally 'p' or 'v': /p/v is an Instagram post with shortcode 'v', /alice/status/v and
+ * /mstdn.social/@bob/v are posts whose id is 'v', and bare /v is the ['x','ig'] handle chooser. In
+ * every one of those the STRIPPED path resolves to nothing post-shaped, so the fallback returns the
+ * original reading untouched and they keep working exactly as before.
+ *
+ * ONLY A POST-BEARING KIND ACCEPTS THE SUFFIX. That is what keeps the ambiguity chooser out of it:
+ * /gallery/v strips to /gallery, which is ambiguous rather than a post, so the suffix reading is
+ * discarded and the chooser still shows the path the reader actually typed. A chooser offering
+ * "instagram.com/gallery/p" would be worse than no feature.
+ *
+ * THE RESIDUE, written down rather than pretended away. A path where BOTH readings resolve to a post
+ * changes meaning — /e/reel/p is Streamable id 'reel' with the suffix, Instagram code 'p' without.
+ * Every such path needs a one-letter or router-token id that no upstream mints, so none is believed
+ * reachable; it is named here because "the wrong post, silently" is the one failure this codebase
+ * says it cannot debug, and an unwritten reservation is how it would arrive.
+ *
+ * THE SUFFIX ALONE IS NEVER ENOUGH TO CHANGE A CARD. It sets Route.gallery, which reaches the head —
+ * and the head mints it into the status id, because Discord rebuilds the activity url from that id
+ * and never fetches the href we advertise. See src/statusid.ts. A change here without that one is a
+ * feature that works in a browser and does nothing in Discord.
+ */
+const GALLERY_SUFFIX: Record<string, GalleryMode> = { v: 'videos', p: 'stills' }
+
+/**
+ * Route kinds that end up at renderPostRoute, i.e. the ones a gallery mode can mean anything to.
+ *
+ * A TYPE PREDICATE, not a plain boolean, and that is load-bearing rather than stylistic: it is what
+ * narrows the spread below to the three arms that actually declare a `gallery` field. Without it,
+ * `{ ...hit, gallery }` would type-check against every arm of the union and cheerfully attach the
+ * field to a 'site' or 'media' route — the kind of silently-widened shape this file's Route union
+ * exists to make impossible.
+ */
+const takesGallery = (r: Route): r is Extract<Route, { kind: 'post' | 'redditshare' | 'metashare' }> =>
+  r.kind === 'post' || r.kind === 'redditshare' || r.kind === 'metashare'
+
 export function route(url: URL): Route {
+  const seg = url.pathname.split('/').filter(Boolean)
+  const mode = seg.length >= 2 ? GALLERY_SUFFIX[seg[seg.length - 1]] : undefined
+  if (mode) {
+    // A NEW URL rather than a mutated one: routeInner reads searchParams too (/watch?v=), and the
+    // query must survive the strip untouched — /watch?v={id}/p is one of the shapes measured to
+    // absorb the segment today.
+    const stripped = new URL(url.toString())
+    stripped.pathname = `/${seg.slice(0, -1).join('/')}`
+    const hit = routeInner(stripped)
+    if (takesGallery(hit)) return { ...hit, gallery: mode }
+  }
+  return routeInner(url)
+}
+
+function routeInner(url: URL): Route {
   const path = url.pathname
   if (SITE_PATHS.has(path)) return { kind: 'site', path }
 

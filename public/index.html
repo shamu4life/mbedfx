@@ -486,7 +486,7 @@ footer .fine { font-size: 12px; opacity: .8; }
          hardcoded because this page is a static asset with no template step — and pinned to
          package.json by a test, because a version number that silently disagrees with the release is
          worse than none at all. -->
-    <div class="server">mbedfx <span class="ver" id="ver">v1.15.2</span></div>
+    <div class="server">mbedfx <span class="ver" id="ver">v1.16.0</span></div>
     <div class="cat">Start here</div>
     <a href="#convert"><b>#</b> convert</a>
     <a href="#sites"><b>#</b> sites</a>
@@ -545,6 +545,15 @@ footer .fine { font-size: 12px; opacity: .8; }
                    independent on/off that composes with whichever domain is selected. Making it a
                    third segment would say the three are alternatives, which they are not. -->
               <label class="mediaonly"><input type="checkbox" id="mediaOnly"> media only</label>
+              <!-- Same reasoning as media only, and the same class: an independent on/off, never a
+                   third .seg button. The domain toggle's handler reads data-host off ANYTHING inside
+                   .seg, so a checkbox in there would set the emitted host to the string "null".
+
+                   IT APPENDS /p, THE NON-DEFAULT. Galleries lead with a playable video now, and this
+                   asks for the older every-item-as-a-still rendering instead. Phrased as the thing it
+                   turns ON rather than as "video first" turned off, because a checkbox that is
+                   unticked in the default state is the only kind that reads honestly. -->
+              <label class="mediaonly"><input type="checkbox" id="stillsMode"> all as stills</label>
             </div>
             <label for="url" style="position:absolute;left:-9999px">Post link</label>
             <input id="url" type="url" spellcheck="false" autocomplete="off"
@@ -628,10 +637,17 @@ footer .fine { font-size: 12px; opacity: .8; }
           </div>
           <div class="embed wide" style="--c:var(--blurple)">
             <div class="t">🎬 Video came back as a still</div>
-            <div class="d">Carousels with video flatten to the cover. Instagram reels using
-              major-label audio arrive with no video at all. Anything over 25 minutes or 375 MB
-              stays a still. Live and scheduled streams show the cover, because there is no
-              finished file to play yet.</div>
+            <!-- FIRST SENTENCE REWRITTEN 2026-09-11, when the gallery default flipped. It read
+                 "Carousels with video flatten to the cover", which was true until galleries began
+                 promoting one video to a real player, and is now the OPPOSITE of what ships. The
+                 other three sentences were not touched and are still true: major-label audio, the
+                 25-minute ceiling and live streams are unrelated causes. Nothing in the suite pins
+                 this prose beyond the em-dash and second-person counts, so a limitation that stops
+                 being one can sit here indefinitely saying something false about our own product. -->
+            <div class="d">A carousel plays one of its videos and shows the rest as stills.
+              Instagram reels using major-label audio arrive with no video at all. Anything over 25
+              minutes or 375 MB stays a still. Live and scheduled streams show the cover, because
+              there is no finished file to play yet.</div>
           </div>
           <div class="embed wide" style="--c:var(--faint)">
             <div class="t">😕 "Couldn't load this post"</div>
@@ -708,24 +724,65 @@ footer .fine { font-size: 12px; opacity: .8; }
  * should read as pressed, `prefix` is what a toggle click must preserve.
  */
 /**
- * THE DOMAINS THIS PAGE OFFERS — deliberately NOT the list of domains the worker answers on.
+ * OUR_HOSTS — EVERY domain this worker answers on. PUBLIC_HOSTS — the subset this page NAMES.
  *
- * WHY IT IS NOT THE ROUTES ARRAY: a name written here ships to every reader of this page on every
- * domain — view-source does not care that a button is hidden — so a domain the worker serves but
- * which is not meant to be advertised must not appear here at all. The worker serving that domain is
- * a separate question, settled in wrangler.jsonc and fedihost.ts, and links pasted from it unfurl
- * exactly the same. All this array decides is which domains this page NAMES.
+ * TWO LISTS AGAIN, AND THE REASON THEY WERE MERGED IS THE REASON THEY ARE NOW NESTED. The merge
+ * comment used to read "ONE LIST, not the two that were here before: it was spelled once to pick the
+ * default domain and again to recognise a link that is already ours, and a host present in the first
+ * but missing from the second was not rejected — it was read as an unsupported SITE." That is a real
+ * defect and merging did fix it, but it fixed it by making the two jobs impossible to separate — so
+ * the moment a served domain was NOT meant to be advertised, the same defect came back through the
+ * other door. Nesting keeps the fix: PUBLIC_HOSTS is a SUBSET of OUR_HOSTS, asserted below, so a host
+ * can be recognised without being named but can never be named without being recognised.
  *
- * A visitor on an unlisted domain is handed mbedfx.app links, which is the same fallback localhost
+ * MEASURED 2026-09-11, the bug that forced this. forsen.sex has been served since 2026-08-03
+ * (wrangler.jsonc) and is in fedihost.ts's OWN_HOSTS, but was absent here, so:
+ *
+ *   mbedfxConvert('https://forsen.sex/alice/status/123')
+ *     -> https://mbedfx.app/forsen.sex/alice/status/123
+ *        "Unrecognised host, treated as a fediverse instance."
+ *
+ * and that emitted link renders "Not found" in production — the page handed back a DEAD link for one
+ * of our own domains. Worse on the fediverse-shaped path: /forsen.sex/@bob/{id} mints the canonical
+ * https://forsen.sex/statuses/{id}, which is OUR OWN domain answering notfound, and that canonical is
+ * what a human gets redirected to and what og:url advertises. fetchableInstance refuses it (forsen.sex
+ * is in OWN_HOSTS) so it dead-ends safely rather than self-fetching, but it dead-ends either way.
+ *
+ * WHY forsen.sex IS RECOGNISED BUT NOT ADVERTISED — owner's call, 2026-09-11, keeping the position the
+ * 2026-08-03 comment took: a name written here ships to every reader of this page on every domain
+ * (view-source does not care that a button is hidden), and this page's job is handing out links, so it
+ * hands out the two. Note the position is narrower than it was: forsen.sex is NOT secret — it is named
+ * in README.md and published as a base url in public/openapi.json — it is simply not offered here.
+ *
+ * A visitor on a host in NEITHER list is handed mbedfx.app links, which is the same fallback localhost
  * and a file:// open have always had, and they work — see the unrecognised-host test, which exists
- * because emitting links to a host that may not be ours is the one outcome worth ruling out.
+ * because emitting links to a host that may not be ours is the one outcome worth ruling out. A visitor
+ * on an OUR_HOSTS domain is handed THAT domain's links, per the owner's ask recorded above.
  *
- * ONE LIST, not the two that were here before: it was spelled once to pick the default domain and
- * again to recognise a link that is already ours, and a host present in the first but missing from
- * the second was not rejected — it was read as an unsupported SITE, so pasting one of our own links
- * back into the page answered "we don't do that one" about our own domain.
+ * DO NOT REPLACE EITHER LIST WITH location.hostname. Tried and reverted 2026-08-03 (baff668):
+ * "*.mbedfx.app is a wildcard, so d.mbedfx.app would have read as its own domain and media-only would
+ * compose a second prefix onto it: d.d.mbedfx.app."
  */
+var OUR_HOSTS = ['mbedfx.app', 'megapenispoopenfarten.sex', 'forsen.sex'];
 var PUBLIC_HOSTS = ['mbedfx.app', 'megapenispoopenfarten.sex'];
+
+/**
+ * The nesting invariant, asserted where it cannot rot rather than in a comment. A name in
+ * PUBLIC_HOSTS but not OUR_HOSTS is the exact 2026-08-03 defect — the page would offer a domain
+ * whose own links it then calls an unsupported site — so it is worth one loop at parse time.
+ * Throwing is right: this block is lifted and evaluated by test/landing-convert.test.mjs, so a
+ * violation fails the suite, and in a browser it is a mistake nobody should be shipped past.
+ */
+for (var _i = 0; _i < PUBLIC_HOSTS.length; _i++) {
+  if (OUR_HOSTS.indexOf(PUBLIC_HOSTS[_i]) < 0) {
+    throw new Error('PUBLIC_HOSTS must be a subset of OUR_HOSTS: ' + PUBLIC_HOSTS[_i]);
+  }
+}
+
+/** A host this worker answers on: recognised as already-ours, whether or not the page names it. */
+function mbedfxIsOurs(h) {
+  return OUR_HOSTS.indexOf(h) >= 0 || /(^|\.)workers\.dev$/.test(h);
+}
 
 function mbedfxDefaultHost(hostname) {
   var served = String(hostname == null ? '' : hostname).toLowerCase().replace(/\.$/, '');
@@ -733,12 +790,20 @@ function mbedfxDefaultHost(hostname) {
   if (/(^|\.)workers\.dev$/.test(served)) {
     return { host: served, prefix: '', family: 'mbedfx.app', preview: true };
   }
-  return PUBLIC_HOSTS.indexOf(served) >= 0
-    ? { host: served, prefix: '', family: served }
+  /**
+   * OUR_HOSTS, not PUBLIC_HOSTS: arriving on a served-but-unadvertised domain must still hand out
+   * THAT domain's links. `family` is which toggle button reads as pressed, and an unadvertised host
+   * has no button — so it falls back to mbedfx.app's, leaving the pair (host: forsen.sex,
+   * family: mbedfx.app). That is deliberate and is what the toggle needs: no button can claim to be
+   * pressed for a domain that is not on screen, and clicking either button moves you off forsen.sex
+   * onto the domain you clicked, which is the only thing a two-button toggle can mean.
+   */
+  return OUR_HOSTS.indexOf(served) >= 0
+    ? { host: served, prefix: '', family: PUBLIC_HOSTS.indexOf(served) >= 0 ? served : 'mbedfx.app' }
     : { host: 'mbedfx.app', prefix: '', family: 'mbedfx.app' };
 }
 
-function mbedfxConvert(input, host) {
+function mbedfxConvert(input, host, gallery) {
   host = host || 'mbedfx.app';
   var raw = String(input == null ? '' : input).trim();
   if (!raw) return { ok: false, kind: 'empty' };
@@ -756,16 +821,59 @@ function mbedfxConvert(input, host) {
    * `code` rides alongside the display name because the OVERRIDE needs it: forcing a different site
    * means emitting router vocabulary (/x/, /ig/, /tt/ …), and a display name cannot be forced.
    */
+  /**
+   * THE GALLERY SUFFIX, appended at the ONE choke point every answer passes through.
+   *
+   * `gallery` is 'stills' or 'videos' or nothing. Nothing means "do not say", which is what an
+   * ordinary paste emits: the worker's default already IS videos, so spelling it out would put a
+   * suffix on every link this page has ever handed out and change nothing about the card.
+   *
+   * INSERTED BEFORE THE QUERY, not after. The already-ours branch below can hand this a path that
+   * already carries `?v=` (a YouTube watch url pasted back in), and `/watch?v=abc/p` is not the same
+   * url as `/watch/p?v=abc` — the router strips a trailing PATH segment, and a suffix stranded
+   * inside the query would simply never be seen.
+   *
+   * NOT APPENDED TO THE BARE ROOT. `/` names no post, so a mode on it is meaningless, and
+   * `https://mbedfx.app/p` is a real Instagram-shaped path rather than the site front page.
+   */
+  var withGallery = function (p) {
+    if (!gallery || p === '/') return p;
+    var q = p.indexOf('?');
+    var head = q < 0 ? p : p.slice(0, q);
+    var tail = q < 0 ? '' : p.slice(q);
+    return head.replace(/\/+$/, '') + (gallery === 'stills' ? '/p' : '/v') + tail;
+  };
+
   var out = function (p, platform, note, code) {
-    return { ok: true, url: 'https://' + host + p, platform: platform, note: note || '', code: code || null, path: p };
+    var full = withGallery(p);
+    return { ok: true, url: 'https://' + host + full, platform: platform, note: note || '', code: code || null, path: full };
   };
   var no = function (why) { return { ok: false, kind: 'unsupported', why: why }; };
 
   // Already one of ours (or a bare path): pass the path straight through.
   // A preview host counts as ours too, or pasting a link copied FROM a preview back INTO it would
   // be read as an unsupported site rather than re-pointed. x.invalid is the tests' own stand-in.
-  if (PUBLIC_HOSTS.indexOf(h) >= 0 || /(^|\.)workers\.dev$/.test(h) || h === 'x.invalid') {
-    return out(path === '/' ? '/' : path + (u.searchParams.get('v') ? '?v=' + u.searchParams.get('v') : ''), null,
+  // OUR_HOSTS via mbedfxIsOurs, never PUBLIC_HOSTS: recognising a link is about whether WE serve it,
+  // not about whether this page offers it. Reading the advertise list here is the 2026-09-11
+  // forsen.sex bug, which handed back a dead link for one of our own domains.
+  if (mbedfxIsOurs(h) || h === 'x.invalid') {
+    /**
+     * A SUFFIX ALREADY ON THE PASTED PATH IS DROPPED, so the checkbox stays authoritative.
+     *
+     * Copying one of our own /v or /p links back into the box and toggling would otherwise compose:
+     * /post/v becomes /post/v/p, which the router reads as "mode p on a post whose id is v" and
+     * resolves to nothing. Stripping first makes the round trip idempotent — what comes out is
+     * always the pasted post at whatever the checkbox currently says, which is the only behaviour a
+     * reader can predict.
+     *
+     * Only ONE segment is stripped, and only when the path has something else left. /p alone stays
+     * /p: that is a real Instagram-shaped path, not a suffix on nothing.
+     */
+    var bareTail = path.replace(/^\/+|\/+$/g, '').split('/');
+    var stripped = bareTail.length > 1 && (bareTail[bareTail.length - 1] === 'p' || bareTail[bareTail.length - 1] === 'v')
+      ? '/' + bareTail.slice(0, -1).join('/')
+      : path;
+    return out(stripped === '/' ? '/' : stripped + (u.searchParams.get('v') ? '?v=' + u.searchParams.get('v') : ''), null,
       'Already an mbedfx link. Re-pointed at the selected domain.');
   }
 
@@ -907,6 +1015,18 @@ function mbedfxConvert(input, host) {
    */
   var mediaOnly = false;
   function sendHost() { return mediaOnly ? 'd.' + host : host; }
+
+  /**
+   * THE GALLERY MODE THE EMITTED LINK ASKS FOR — 'stills', or nothing at all.
+   *
+   * NOTHING, NOT 'videos', WHEN THE BOX IS UNTICKED. Videos-first is already the worker's default,
+   * so naming it would add a /v to every link this page hands out and change no card. Worse, it
+   * would FREEZE the default into every link ever shared: Discord caches a message's embed from its
+   * first crawl, so a link that spells out today's default keeps rendering today's default even
+   * after the default moves. Saying nothing keeps that decision at read time, where it belongs.
+   */
+  var stillsMode = false;
+  function sendGallery() { return stillsMode ? 'stills' : undefined; }
 
   /**
    * RE-POINT A WORKER-SUPPLIED URL AT THE HOST THE READER CHOSE.
@@ -1113,7 +1233,7 @@ function mbedfxConvert(input, host) {
     var b = e.target.closest && e.target.closest('[data-force]');
     if (!b) return;
     var code = b.getAttribute('data-force');
-    var r = mbedfxConvert(input.value, sendHost());
+    var r = mbedfxConvert(input.value, sendHost(), sendGallery());
     // Force by prefixing the router's escape token onto the path we already computed. A path we could
     // not read at all has none, so fall back to the pasted url's own path.
     var path = r.ok ? r.path : pathOf(input.value);
@@ -1132,7 +1252,7 @@ function mbedfxConvert(input, host) {
   var forced = null;
 
   function render() {
-    var r = mbedfxConvert(input.value, sendHost());
+    var r = mbedfxConvert(input.value, sendHost(), sendGallery());
     forced = null;
     hidePicker();
     if (!r.ok && r.kind === 'empty') { outClass(false); return; }
@@ -1344,6 +1464,7 @@ function mbedfxConvert(input, host) {
       syncSent();
       // A card that could not be drawn has no media to link to either.
       syncMediaOnlyAvailability(j);
+      syncStillsAvailability(j);
       return;
     }
     /**
@@ -1421,6 +1542,7 @@ function mbedfxConvert(input, host) {
     syncSent();
     // The media-only toggle tracks whatever is on screen: a post with nothing to serve disables it.
     syncMediaOnlyAvailability(j);
+      syncStillsAvailability(j);
   }
 
   /**
@@ -1625,6 +1747,7 @@ function mbedfxConvert(input, host) {
     cardUp = true; outClass(true);
     syncSent();
     syncMediaOnlyAvailability(j);
+      syncStillsAvailability(j);
   }
 
   /**
@@ -1699,7 +1822,7 @@ function mbedfxConvert(input, host) {
   function schedulePrep() {
     clearTimeout(prepTimer);
     clearTimeout(cardTimer);
-    var r = mbedfxConvert(input.value, sendHost());
+    var r = mbedfxConvert(input.value, sendHost(), sendGallery());
     if (!r.ok) { hidePreview(); return; }
     prepTimer = setTimeout(function () { prep(r.url); }, 600);
     // Later than prep, and deliberately: prep may REPLACE the url (a share code unfurls), and drawing
@@ -1852,6 +1975,61 @@ function mbedfxConvert(input, host) {
       preview.innerHTML = '';
       schedulePrep();
     });
+  }
+
+  /**
+   * THE STILLS TOGGLE. Same behavioural contract as media only above, for the same reasons — see its
+   * two comment blocks for why hidePreview() must not be called here and why cardSeq is bumped.
+   *
+   * ONE DELIBERATE DIFFERENCE: THERE IS NO REDRAW-FROM-lastCard SHORTCUT. Media only draws a second
+   * view of a payload already in hand, so it can switch instantly. This toggle changes the URL's
+   * PATH, so the payload itself is a different request — /_card for /post/p is not /_card for /post
+   * — and drawing the held card under the new link would show the reader a preview of the render
+   * they just turned OFF. The card is dropped and refetched instead.
+   *
+   * WHICH ALSO MEANS THE PREVIEW SHOWS THE MODE HONESTLY, and that matters more here than for any
+   * other control on this page: CLAUDE.md names the preview as the third seam, "fetched once per
+   * typing-settle and drawn, and nobody re-pastes to heal it". A toggle whose preview did not move
+   * would read as a toggle that does nothing.
+   */
+  var stillsBox = $('stillsMode');
+  if (stillsBox) {
+    stillsBox.addEventListener('change', function () {
+      stillsMode = stillsBox.checked;
+      cardUp = false;
+      render();
+      cardSeq++;
+      preview.className = 'preview';
+      preview.innerHTML = '';
+      schedulePrep();
+    });
+  }
+
+  /**
+   * DISABLED, NOT HIDDEN, on a post the mode cannot change — the same rule and the same reasoning as
+   * syncMediaOnlyAvailability. The mode only means something for a MULTI-item gallery that holds a
+   * video: a single reel plays under both settings, and an all-image carousel is identical under
+   * both. Leaving the box live on those posts would offer a choice with no consequence.
+   */
+  function syncStillsAvailability(j) {
+    var box = $('stillsMode');
+    if (!box) return;
+    var media = (j && j.ok && j.media) || [];
+    var has = media.length > 1 && media.some(function (m) { return m && m.kind === 'video'; });
+    var lab = box.parentNode;
+    box.disabled = !has;
+    if (lab && lab.setAttribute) {
+      lab.setAttribute('title', has
+        ? 'Show every item as a still instead of playing one video'
+        : 'This post has no gallery with video in it');
+      lab.style.opacity = has ? '' : '.5';
+      lab.style.cursor = has ? '' : 'not-allowed';
+    }
+    if (!has && box.checked) {
+      box.checked = false;
+      stillsMode = false;
+      render();
+    }
   }
 
   var segs = document.querySelectorAll('.seg button');

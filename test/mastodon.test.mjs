@@ -722,7 +722,7 @@ test('A MIXED CAROUSEL KEEPS EVERY ENTRY, IN ORDER, AND ON OUR OWN ORIGIN', () =
   // exactly that mutation: those three fail, this one does not. Claiming the coverage here would
   // have left this comment the only thing standing between a future reader and the belief that a
   // shape-agnostic hazard was pinned by a shape-specific fixture.
-  const s = toMastodonStatus(igMixed(), ORIGIN)
+  const s = toMastodonStatus(igMixed(), ORIGIN, 'stills')
   assert.equal(s.media_attachments.length, 5)
   // The ids are the raw mediaList indices, so this is the order-and-completeness claim that used
   // to ride on the type array.
@@ -741,7 +741,7 @@ test('EVERY video attachment gets a POSTER url, and every image keeps its own', 
   // preview_url = the video file is the measured defect that cost the rich card. Two videos at
   // DIFFERENT indices is the case a single-video platform could never have caught: an off-by-one
   // here would give attachment 4 attachment 2's poster and look entirely plausible.
-  const s = toMastodonStatus(igMixed(), ORIGIN)
+  const s = toMastodonStatus(igMixed(), ORIGIN, 'stills')
   assert.match(s.media_attachments[2].preview_url, /\/poster2$/)
   assert.match(s.media_attachments[4].preview_url, /\/poster4$/)
   assert.ok(!s.media_attachments[2].preview_url.endsWith('/2'), 'preview_url must NOT be the video itself')
@@ -759,7 +759,7 @@ test('ALL-VIDEO: a child with NO usable poster is DROPPED, its siblings converte
   const p = igAllVideo()
   delete p.media[0].poster
   let s
-  assert.doesNotThrow(() => { s = toMastodonStatus(p, ORIGIN) }, 'a posterless video must not throw')
+  assert.doesNotThrow(() => { s = toMastodonStatus(p, ORIGIN, 'stills') }, 'a posterless video must not throw')
   assert.equal(s.media_attachments.length, 1, 'the posterless video is the only thing that drops')
   assert.equal(s.media_attachments[0].type, 'image', 'the surviving video is flattened to a poster still')
   // The id is the RAW index, so the drop is a HOLE at 0 rather than a shift.
@@ -808,9 +808,25 @@ test('THE TWO DIMENSION CONVENTIONS CAN NO LONGER MEET IN ONE PAYLOAD — and th
     return q
   }
 
+  /**
+   * REWRITTEN AGAIN 2026-09-11, and the paragraph above predicted the exact edit that forced it:
+   * "a future edit that narrowed the flattening (say, to the post's own media, missing the hoist)
+   * would quietly bring the two-convention payload back, and nothing else in the suite would
+   * notice." The gallery mode narrows it deliberately — in 'videos' mode ONE video of the post's own
+   * media is promoted and keeps type:"video", so it takes fudge() while the stills beside it take
+   * true dimensions, and the two conventions DO meet in one payload again.
+   *
+   * So the claim in the title is now MODE-SCOPED rather than absolute, and this test asserts both
+   * halves, which is strictly more than it asserted before:
+   *   'stills' — still unreachable, byte for byte. Everything below this line is that original test.
+   *   'videos' — reachable BY DESIGN, and bounded: EXACTLY ONE fudge()d entry, never two.
+   * The hoist assertion below is now doing double duty, because the narrowing this file feared is
+   * precisely what promotedVideo's ownCount bound prevents from reaching the quote.
+   */
+
   // A MIXED CAROUSEL: every entry is an image after flattening, so every entry ships TRUE
   // dimensions. Not one fudge()d pair anywhere in the payload.
-  const mixed = toMastodonStatus(oversized(igMixed()), ORIGIN)
+  const mixed = toMastodonStatus(oversized(igMixed()), ORIGIN, 'stills')
   assert.deepEqual(mixed.media_attachments.map(a => a.meta.original.size),
     ['2160x3240', '2160x4050', '1440x3840', '2160x3240', '1440x3840'],
     'a flattened gallery is all image, so all TRUE — no fudge() survives in it')
@@ -823,20 +839,59 @@ test('THE TWO DIMENSION CONVENTIONS CAN NO LONGER MEET IN ONE PAYLOAD — and th
     media: [{ kind: 'image', url: 'https://cdn/0.jpg', w: 4000, h: 2250 }],
     quote: { ...igMixed(), media: [{ kind: 'video', url: 'https://cdn/q.mp4', w: 2160, h: 3840, poster: 'https://cdn/q.jpg' }] },
   }
-  const hoisted = toMastodonStatus(quoting, ORIGIN)
+  const hoisted = toMastodonStatus(quoting, ORIGIN, 'stills')
   assert.deepEqual(hoisted.media_attachments.map(a => a.type), ['image', 'image'],
     'a hoisted quote video makes the GALLERY mixed — the hoist must not escape the flattening')
   assert.deepEqual(hoisted.media_attachments.map(a => a.meta.original.size), ['4000x2250', '2160x3840'],
     'both TRUE: there is no video attachment left to take fudge()')
 
+  // AND IN 'videos' MODE THE HOIST STILL DOES NOT ESCAPE — for a different reason, which is the one
+  // worth pinning. Nothing is promoted here at all: the promotion scans the POST'S OWN media only
+  // (promotedVideo's ownCount bound), and this post's own media is a single image. A quoted post's
+  // video must never become the whole card of a post that has none — the 2026-08-01 map-image
+  // report, arriving by the opposite door.
+  const hoistedVideos = toMastodonStatus(quoting, ORIGIN, 'videos')
+  assert.deepEqual(hoistedVideos.media_attachments.map(a => a.type), ['image', 'image'],
+    'a quote is context, not content: its video is not promotable')
+  assert.deepEqual(hoistedVideos.media_attachments.map(a => a.meta.original.size), ['4000x2250', '2160x3840'],
+    'and with nothing promoted, both conventions stay TRUE here too')
+
   // AND THE VIDEO CONVENTION IS STILL ALIVE where a video attachment survives — which since the
   // 2026-07-20 widening is ONLY a SINGLE video (an all-video carousel now flattens too, so it no
   // longer keeps a real video attachment). So the conventions were separated, not collapsed into
   // one: a lone reel/TikTok video still takes fudge().
-  const single = toMastodonStatus(oversized(igSingleVideo()), ORIGIN)
+  const single = toMastodonStatus(oversized(igSingleVideo()), ORIGIN, 'stills')
   assert.deepEqual(single.media_attachments.map(a => a.type), ['video'])
   assert.deepEqual(single.media_attachments.map(a => a.meta.original.size), ['720x1920'],
     'a real video attachment still takes fudge()')
+
+  /**
+   * 'videos' MODE: THE TWO CONVENTIONS MEET, AND EXACTLY ONE ENTRY IS FUDGED.
+   *
+   * This is the payload the title used to call unreachable. It is reachable on purpose now, and the
+   * bound is what makes it safe to say so: one promoted video takes fudge(), every still beside it
+   * takes true dimensions, and there is never a second video attachment to disagree with the first.
+   * Counting the fudged entries — rather than just checking that a video exists — is what would go
+   * red if promotedVideo ever returned more than one.
+   */
+  const promoted = toMastodonStatus(oversized(igMixed()), ORIGIN, 'videos')
+  assert.equal(promoted.media_attachments.filter(a => a.type === 'video').length, 1,
+    'exactly one player: N are not purchasable and a second would cost a mux for nobody')
+  assert.equal(promoted.media_attachments[0].type, 'video', 'and it leads the array')
+  /**
+   * THE ARITHMETIC, spelled out because it is the whole point of the assertion. igMixed's first
+   * video is 720x1280 at index 2; oversized() doubles w and trebles h to 1440x3840, which is over
+   * fudge()'s 1920 threshold, so the VIDEO convention halves it to 720x1920. Every other entry is a
+   * still and keeps its true oversized size — including the SECOND video at index 4, which is not
+   * promoted, flattens to an image, and therefore reports 1440x3840 UNhalved.
+   *
+   * That last pair is the sharpest thing here: two entries with identical source dimensions report
+   * different sizes in the same payload, purely because one is the promoted player and one is not.
+   * Both conventions, one array, exactly one fudge.
+   */
+  assert.deepEqual(promoted.media_attachments.map(a => a.meta.original.size),
+    ['720x1920', '2160x3240', '2160x4050', '2160x3240', '1440x3840'],
+    'the promoted video leads and is fudged; the rest keep source order and TRUE dimensions')
 })
 
 // ---------------------------------------------------------------------------
@@ -887,7 +942,7 @@ const igSingleVideo = () => ({
 test('MIXED: every child appears, in SOURCE ORDER, and every one of them is type "image"', () => {
   // The fix. Ten-of-ten rather than six-of-ten is the entire point: a viewer sees every item
   // Instagram has, in the order Instagram has them.
-  const s = toMastodonStatus(igMixedFlat(), ORIGIN)
+  const s = toMastodonStatus(igMixedFlat(), ORIGIN, 'stills')
   assert.equal(s.media_attachments.length, 5, 'no child may be dropped — all five must appear')
   assert.deepEqual(s.media_attachments.map(a => a.type),
     ['image', 'image', 'image', 'image', 'image'],
@@ -902,7 +957,7 @@ test('MIXED: a converted video points at its POSTER, never at the video url', ()
   // Pointing an image attachment at an mp4 is the EXACT defect fixed on 2026-07-19: Discord asks
   // for a poster, receives video bytes, and abandons the whole card. Converting the type without
   // moving the url would reinstate it on every video in the carousel at once.
-  const s = toMastodonStatus(igMixedFlat(), ORIGIN)
+  const s = toMastodonStatus(igMixedFlat(), ORIGIN, 'stills')
   const key = 'ig%3Ap%3AABC'
   for (const i of [2, 4]) {
     assert.equal(s.media_attachments[i].url, `${ORIGIN}/_media/${key}/poster${i}`,
@@ -925,7 +980,7 @@ test('MIXED: a video with NO usable poster is DROPPED, and its siblings are unaf
   const p = igMixedFlat()
   delete p.media[2].poster
   let s
-  assert.doesNotThrow(() => { s = toMastodonStatus(p, ORIGIN) }, 'a posterless video must not throw')
+  assert.doesNotThrow(() => { s = toMastodonStatus(p, ORIGIN, 'stills') }, 'a posterless video must not throw')
   assert.equal(s.media_attachments.length, 4, 'the posterless video is the only thing that drops')
   // The ids are the RAW indices, so the drop is observable as a HOLE at 2 rather than a shift.
   assert.deepEqual(s.media_attachments.map(a => a.id), ['0', '1', '3', '4'],
@@ -977,7 +1032,7 @@ test('ALL-VIDEO carousel: every child becomes type "image" at its own poster, in
   //
   // The compensating real player still ships on the surface that can carry it — discord.ts's
   // og:video head fallback is untouched (see the all-video head test below).
-  const s = toMastodonStatus(igAllVideo(), ORIGIN)
+  const s = toMastodonStatus(igAllVideo(), ORIGIN, 'stills')
   const key = 'ig%3Ap%3AABC'
   assert.equal(s.media_attachments.length, 2, 'no child may be dropped')
   assert.deepEqual(s.media_attachments.map(a => a.type), ['image', 'image'],
@@ -1004,7 +1059,7 @@ test('a GIF beside a video IS mixed — the test is on the EMITTED type, not on 
     { kind: 'gif', url: 'https://cdn/0.gif', w: 480, h: 480 },
     { kind: 'video', url: 'https://cdn/1.mp4', w: 720, h: 1280, poster: 'https://cdn/1.jpg' },
   ]
-  const mixed = toMastodonStatus(p, ORIGIN)
+  const mixed = toMastodonStatus(p, ORIGIN, 'stills')
   assert.deepEqual(mixed.media_attachments.map(a => a.type), ['image', 'image'],
     'gif emits image, so gif+video is MIXED and must flatten')
 
@@ -1013,7 +1068,7 @@ test('a GIF beside a video IS mixed — the test is on the EMITTED type, not on 
     { kind: 'gif', url: 'https://cdn/0.gif', w: 480, h: 480 },
     { kind: 'image', url: 'https://cdn/1.jpg', w: 1080, h: 1080 },
   ]
-  const homogeneous = toMastodonStatus(q, ORIGIN)
+  const homogeneous = toMastodonStatus(q, ORIGIN, 'stills')
   assert.deepEqual(homogeneous.media_attachments.map(a => a.url),
     [`${ORIGIN}/_media/ig%3Ap%3AABC/0`, `${ORIGIN}/_media/ig%3Ap%3AABC/1`],
     'gif+image is homogeneous — both entries keep their OWN url, nothing is redirected to a poster')
@@ -1026,7 +1081,7 @@ test('a corrupt entry beside a video does not make the gallery mixed by itself',
   // be left alone rather than flattened by a phantom.
   const p = igMixed()
   p.media = [null, { kind: 'video', url: 'https://cdn/1.mp4', w: 720, h: 1280, poster: 'https://cdn/1.jpg' }]
-  const s = toMastodonStatus(p, ORIGIN)
+  const s = toMastodonStatus(p, ORIGIN, 'stills')
   assert.equal(s.media_attachments.length, 1)
   assert.equal(s.media_attachments[0].type, 'video', 'a dead entry is not an image')
 })
@@ -1038,7 +1093,7 @@ test('MIXED: a converted video takes the IMAGE dimension convention, because the
   const p = igMixedFlat()
   p.media[1] = { ...p.media[1], w: 4000, h: 2250 }  // IMAGE, oversized: must NOT be halved
   p.media[4] = { ...p.media[4], w: 2160, h: 3840 }  // CONVERTED video, oversized: also NOT halved
-  const s = toMastodonStatus(p, ORIGIN)
+  const s = toMastodonStatus(p, ORIGIN, 'stills')
   assert.deepEqual(s.media_attachments[1].meta.original,
     { width: 4000, height: 2250, size: '4000x2250', aspect: 4000 / 2250 },
     'the image keeps TRUE dimensions')
@@ -1050,7 +1105,7 @@ test('MIXED: a converted video takes the IMAGE dimension convention, because the
   // than being deleted outright.
   const v = igSingleVideo()
   v.media[0] = { ...v.media[0], w: 2160, h: 3840 }
-  assert.equal(toMastodonStatus(v, ORIGIN).media_attachments[0].meta.original.size, '1080x1920',
+  assert.equal(toMastodonStatus(v, ORIGIN, 'stills').media_attachments[0].meta.original.size, '1080x1920',
     'an unconverted video still takes fudge()')
 })
 
@@ -1071,7 +1126,7 @@ test('MIXED: a converted video is MARKED as one in its description', () => {
   // `content` marker; this is the accessibility half, kept because it costs nothing.
   const p = igMixedFlat()
   p.media[2] = { ...p.media[2], alt: 'a dog on a skateboard' }
-  const s = toMastodonStatus(p, ORIGIN)
+  const s = toMastodonStatus(p, ORIGIN, 'stills')
   assert.equal(s.media_attachments[2].description, 'Video: a dog on a skateboard',
     'the author\'s own alt text is PRESERVED, and the marker composes with it')
   assert.equal(s.media_attachments[4].description, 'Video',
@@ -1172,7 +1227,7 @@ test('THE og:video HEAD FALLBACK IS UNCHANGED FOR AN ALL-VIDEO POST', () => {
   // of the gallery mapper — so the flattening in mastodon.ts must not leak here. The head points at
   // the FIRST video (index 0) as its real mp4, emits no og:image, and carries NO marker (the marker
   // is a `content`-only surface).
-  const s = toMastodonStatus(igAllVideo(), ORIGIN)
+  const s = toMastodonStatus(igAllVideo(), ORIGIN, 'stills')
   assert.ok(s.content.endsWith(VIDEO_MARKER), 'precondition: the all-video activity content IS marked')
   const head = render({ kind: 'post', post: igAllVideo() }, 'discord', ORIGIN)
   return head.text().then(html => {
@@ -1215,7 +1270,7 @@ test('MARKER: a mixed carousel appends the marker line, after the caption and co
   // in one line that the marker trails, that the separator is the builder's own GAP, and that the
   // whole caption/counts body is preserved unchanged ahead of it (buildContentHtml is its one owner).
   const p = { ...igMixed(), text: 'a real caption', counts: { likes: 5 } }
-  const s = toMastodonStatus(p, ORIGIN)
+  const s = toMastodonStatus(p, ORIGIN, 'stills')
   assert.ok(s.content.endsWith(`<br><br>${VIDEO_MARKER}`), `content must end with the marker line: ${s.content}`)
   assert.equal(s.content, `${buildContentHtml(p)}<br><br>${VIDEO_MARKER}`, 'the unchanged body + GAP + marker')
   assert.ok(s.content.includes('a real caption'), 'the caption still precedes the marker')
@@ -1231,7 +1286,7 @@ test('MARKER: exact codepoints — U+1F3AC clapper and U+2014 em dash, never a h
   // An editor can swap an em dash for a hyphen invisibly. Every check below reads the marker line
   // off REAL rendered content and compares by CODEPOINT, so a hyphen in the source turns it red
   // regardless of how the constant looks in a diff.
-  const content = toMastodonStatus(igMixed(), ORIGIN).content
+  const content = toMastodonStatus(igMixed(), ORIGIN, 'stills').content
   // The marker is the LAST block now that it trails the body — take the final <br><br>-delimited part.
   const blocks = content.split('<br><br>')
   const markerLine = blocks[blocks.length - 1]
@@ -1249,7 +1304,7 @@ test('MARKER: with a [sensitive] prefix, [sensitive] is OUTERMOST and the marker
   // marker is simply the LAST block inside what it labels (owner's call 2026-07-20 moved the marker
   // to trail the counts). Both markers are present: [sensitive] leads, the marker trails.
   const p = { ...igMixed(), text: 'cap', sensitive: true }
-  const s = toMastodonStatus(p, ORIGIN)
+  const s = toMastodonStatus(p, ORIGIN, 'stills')
   assert.equal(s.content, `[sensitive] ${buildContentHtml(p)}<br><br>${VIDEO_MARKER}`)
   assert.ok(s.content.startsWith('[sensitive] '), '[sensitive] leads')
   assert.ok(s.content.endsWith(VIDEO_MARKER), 'the marker is the LAST block')
@@ -1260,9 +1315,9 @@ test('MARKER: with a [sensitive] prefix, [sensitive] is OUTERMOST and the marker
 test('MARKER: pure-image galleries are UNCHANGED — no marker, byte-for-byte', () => {
   // The control. These render correctly today and must not move by a byte. Pinned as the literal
   // caption for the Bluesky post and as buildContentHtml verbatim for the TikTok slideshow.
-  assert.equal(toMastodonStatus(fourImages, ORIGIN).content, 'hello', 'a Bluesky 4-image caption is untouched')
+  assert.equal(toMastodonStatus(fourImages, ORIGIN, 'stills').content, 'hello', 'a Bluesky 4-image caption is untouched')
   const slideshow = normalizeTikTok(readFileSync('test/fixtures/tiktok-slideshow.html', 'utf8'), { p: 'tt', id: '7534' })
-  const sc = toMastodonStatus(slideshow, ORIGIN).content
+  const sc = toMastodonStatus(slideshow, ORIGIN, 'stills').content
   assert.equal(sc, buildContentHtml(slideshow), 'a TikTok slideshow content stays buildContentHtml verbatim')
   assert.ok(!sc.includes('\u{1F3AC}'), 'no video marker may reach an all-image gallery')
 })
@@ -1282,7 +1337,7 @@ test('MARKER: an all-video carousel IS marked, exactly once', () => {
   // by the SAME gate as a mixed carousel. The marker and the conversion share one predicate, so
   // they cannot disagree: a gallery that flattens is a gallery that gets marked.
   const p = { ...igAllVideo(), text: 'a caption', counts: { likes: 5 } }
-  const s = toMastodonStatus(p, ORIGIN)
+  const s = toMastodonStatus(p, ORIGIN, 'stills')
   assert.ok(s.content.endsWith(`<br><br>${VIDEO_MARKER}`), `content must end with the marker: ${s.content}`)
   assert.equal(s.content, `${buildContentHtml(p)}<br><br>${VIDEO_MARKER}`, 'the unchanged body + GAP + marker')
   assert.equal(s.content.split(VIDEO_MARKER).length, 2, 'the marker must appear exactly once')
@@ -1295,7 +1350,7 @@ test('MARKER: buildPlainText / og:description carry NO marker — wrong surface'
   // content carries no marker anywhere in the rendered OpenGraph head.
   assert.ok(!buildPlainText(igMixed()).includes('\u{1F3AC}'), 'the plain-text builder must never carry the marker')
   const post = normalizeInstagram(readFileSync('test/fixtures/instagram-carousel.html', 'utf8'), { p: 'ig', kind: 'p', code: 'DaQ5CPTki4E' })
-  assert.ok(toMastodonStatus(post, ORIGIN).content.endsWith(VIDEO_MARKER),
+  assert.ok(toMastodonStatus(post, ORIGIN, 'stills').content.endsWith(VIDEO_MARKER),
     'precondition: this mixed carousel IS marked on the activity surface')
   const head = render({ kind: 'post', post }, 'discord', ORIGIN)
   return head.text().then(html => {
@@ -1454,7 +1509,7 @@ test('A REAL GALLERY WITH A VIDEO STILL FLATTENS — the exception is scoped, no
     counts: {},
     sensitive: false,
   }
-  const s = toMastodonStatus(post, ORIGIN)
+  const s = toMastodonStatus(post, ORIGIN, 'stills')
   assert.equal(s.media_attachments[0].type, 'image', 'a real mixed gallery still flattens')
   assert.match(String(s.content), /Contains video/, 'and still warns')
 })

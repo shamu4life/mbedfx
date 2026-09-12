@@ -11,6 +11,143 @@ Nothing yet.
 
 ---
 
+## [1.16.0] - 2026-09-11
+
+A gallery plays one of its videos again, the choice is in the url, and the converter stops handing
+out dead links for one of our own domains.
+
+### The gallery default flipped
+
+A multi-item gallery holding a video used to render every video as its poster still, so nothing
+played. It now promotes the FIRST video of the post's own media to the front of `media_attachments`
+as a real `type:"video"`, flattens the rest, and adds a fixed-prose note to the body saying the post
+holds more.
+
+This reverses the owner's 2026-07-20 decision, on the owner's call, and the reversal is bounded by
+the two measurements that produced it. Neither was argued away:
+
+- *"a 10-video post drew a single player"* — so N players are not purchasable at any price, and
+  "one or more videos" can only ever be delivered as one.
+- *"DISCORD KEEPS THE TYPE OF THE FIRST ATTACHMENT"* — so the promoted entry must LEAD the array.
+  Left at its source position in an image-led carousel it would be discarded exactly as it is today
+  and the mode would be invisible.
+
+What that buys is one playing video where there were none. What it costs is that the other items
+may not be drawn at all beside a video-led array; the note is what covers that, and whether they
+survive is a **live-gate item** that only a real client can answer.
+
+A single video is untouched under both modes — the load-bearing line the 2026-07-20 widening was
+told not to move. So is a gallery with no video in it. A quoted post's video is never promoted: a
+quote is context, not content, which is the 2026-08-01 map-image report arriving by the other door.
+
+### `/v` and `/p`
+
+```
+mbedfx.app/{post}      the default, which is /v
+mbedfx.app/{post}/v    one video plays, the rest are stills, the body says there is more
+mbedfx.app/{post}/p    every item is a still, marked "Contains video" — the old default
+```
+
+**The suffix alone would have done nothing.** A gallery card is drawn from the activity document,
+and Discord does not fetch the href the head advertises — measured 2026-09-02, *"/api/v1/statuses/
+{id} 5 times out of 5 and the advertised /users/ href never"*. It rebuilds that url from the `{id}`.
+So the head mints the mode into the status id's leading digit and the callback reads it back. `1`
+still means "no mode named" and still decodes byte-identically, so every id already frozen in
+Discord's embed cache keeps working and renders at whatever the current default is.
+
+The strip runs ahead of every route matcher, because running route() over the real tree showed the
+most-pasted platforms ALREADY absorb a trailing segment (`/alice/status/123/v` is x post 123 today,
+and so are the Reddit title-slug position, PieFed and `/watch?v={id}/v`) — a strip below them would
+have been a silent no-op on exactly the links people paste. It falls back to the unstripped path
+when the stripped one names no post, which is what keeps `/p/v` (an Instagram shortcode),
+`/{host}/@user/v` and the bare `/v` chooser resolving exactly as before.
+
+The response cache key gains the mode; the post cache deliberately does not. Two spellings of one
+post are meant to render differently, and sharing an entry would let whichever was pasted first
+decide what the other shows — permanently, since Discord caches an embed from its first crawl.
+
+The converter page grows an "all as stills" checkbox beside "media only". Unticked it emits no
+suffix at all rather than `/v`: spelling out the default would freeze today's default into every
+link ever shared.
+
+### forsen.sex was handing out dead links
+
+`public/index.html` read ONE array for two different questions — which domains to NAME, and which
+hosts to RECOGNISE as ours. Making the first a subset on 2026-08-03 silently made the second one
+too, and forsen.sex shipped that same day. Measured against production 2026-09-11:
+
+```
+convert('https://forsen.sex/jack/status/20') -> mbedfx.app/forsen.sex/jack/status/20
+    "Unrecognised host, treated as a fediverse instance."
+that url, Discordbot UA          -> HTTP 200, og:title "Not found"
+https://forsen.sex/jack/status/20 -> HTTP 200, og:title "jack (@jack)"
+```
+
+The fediverse-shaped form is worse: `/forsen.sex/@bob/{id}` mints the canonical
+`https://forsen.sex/statuses/{id}` — our own domain, answering notfound — which is where a human is
+redirected and what `og:url` advertises.
+
+Split into `OUR_HOSTS` (recognise, three) and `PUBLIC_HOSTS` (advertise, two — forsen.sex stays
+unadvertised, owner's call), with the subset relation asserted inside the page and again from
+outside it. The 1.7.0 entry above claimed this was already pinned by tests and named a symbol that
+does not exist in the page; that claim is corrected in place and is now true.
+
+### An age-gated video no longer offers a play button that plays nothing
+
+Reported by the owner: *"age-gated ones show a play button that confuses people and then the gallery
+has nothing."* Measured against production the same day on `yt:G0sORVBL4kM`:
+
+```
+activity doc   type:"video"   url .../_media/yt%3AG0sORVBL4kM/0   meta:null
+GET that url   -> HTTP 503, 0 bytes, and always will
+GET poster0    -> 302 to i.ytimg.com/vi/G0sORVBL4kM/hqdefault.jpg, fine
+GET /_api/v1   -> kind:"image", still:true, 480x360      <- already correct on that seam
+```
+
+Both halves of the report, one cause. The play button is `type:"video"`. "The gallery has nothing"
+is `meta:null` — Discord will not lay out an attachment it has no size for, so it drew nothing at
+all (measured 2026-07-31, recorded in `types.ts`).
+
+**Why only that seam.** The deadline degrade always handled the age gate correctly, which is why
+`/_api/v1` and the head were right and the activity document alone was wrong: under 1.15.0 that seam
+does not wait, it **promises**, and a promise keeps the video attachment by design. The gate slipped
+through `promisable()` because it is not `live` and its duration — 177s, straight off yt-dlp — sits
+comfortably inside the 240s promise window. An ordinary number on an impossible video.
+`promisable()`'s own docstring already stated the rule it was missing: *"A promise that cannot be
+kept is frozen in Discord's message forever (it re-crawls successful cards, never failed ones)."*
+
+`Media.gated` is now the sibling of `Media.live`: stamped by the normalizer at build time from the
+`ytAgeRestricted` read that already sets `sensitive`, so it rides the post cache and the very first
+render refuses. `settleMux` gains a `gated` arm beside the `live` one (degrade to the poster still,
+no container call), and `promisable()` refuses it. The card becomes the thumbnail at its own poster
+slot, with the poster's real dimensions, keeping the title, author, date and the existing
+`🔞 Age-restricted on YouTube` note.
+
+Refusing an age-gated entry inside `playableVideo()` was tried and reverted: it correctly drops
+`og:video`, but the image selector beside it matches only `kind:'image'`, so a raw gated entry fell
+past the picture too and one half of the report became the other. Making that fallback right meant
+spelling `stillOf` a second time in a renderer. `settleMux` owns the degrade shape; the reverted
+attempt is recorded in `embed.ts` so it is not re-tried.
+
+### Also
+
+- `docs/API.md` documents the suffix, and corrects "either official host" to all three for `d.`
+  (verified live: `d.forsen.sex` serves).
+- The landing page's own limits card said "Carousels with video flatten to the cover", which this
+  release makes false. Rewritten; the other three sentences in it were left alone because they are
+  still true and have unrelated causes.
+
+### Not settled here
+
+Four questions need a human in front of a real Discord client, and none can be answered from the
+code: whether a video-led array draws its trailing stills at all; whether a video attachment with
+no `meta.original` lays out (remux and YouTube entries carry `w:0,h:0` by design, and the measured
+failure for an IMAGE with no size was that Discord "drew nothing at all"); whether Discord truncates
+the activity `content`, which would eat the trailing note first; and whether oEmbed `author_name`
+draws beside the activity card, which is wire-spec correction C4, open since 2026-07-18.
+
+---
+
 ## [1.15.2] - 2026-09-04
 
 Two defects from the owner's screenshot, and the koutube question closed.
@@ -1902,6 +2039,15 @@ does not.
   this Worker's own origin makes it fetch itself back through the edge; and `OWN_HOSTS` in
   `public/index.html`, without which the page serves on the new domain while handing out links on a
   different one and calling its own links unsupported. All are pinned by tests now.
+
+  > **Correction, 2026-09-11.** The last two sentences of that paragraph were both wrong, and
+  > forsen.sex — added by this very release — spent five weeks demonstrating it. `public/index.html`
+  > contained no `OWN_HOSTS`; the array was called `PUBLIC_HOSTS`, and forsen.sex was never added to
+  > it. Nor were "all pinned by tests": `test/smoke.test.mjs` was rewritten the same day to check
+  > only that every domain the page OFFERS is one the worker serves, which is the direction that
+  > cannot catch this. Pasting a forsen.sex link into the converter returned
+  > `mbedfx.app/forsen.sex/...`, labelled "Unrecognised host, treated as a fediverse instance", and
+  > that url renders "Not found" in production. See 1.16.0.
 
 - A spinner while a video is being muxed. `settleMux` degrades an unfinished video to its poster
   still and keeps working in the background, which left the card payload indistinguishable from a

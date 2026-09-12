@@ -1,4 +1,4 @@
-import type { ClientClass, Outcome } from '../types.ts'
+import type { ClientClass, GalleryMode, Outcome } from '../types.ts'
 import { renderPost } from './discord.ts'
 import { renderProfile } from './profile.ts'
 import { renderTelegram } from './telegram.ts'
@@ -11,8 +11,13 @@ import { errorEmbed, redirect } from './fail.ts'
  *
  * `origin` comes from the request, never a constant — a hardcoded prod origin
  * would make staging embeds point Discord's media proxy at the live prod worker.
+ *
+ * `mode` is the gallery mode the reader's url named (the /p or /v suffix), or undefined for the
+ * ordinary paste. It is passed straight through to renderPost and reaches only the Discord head,
+ * which mints it into the status id so the activity callback can read it back — every other arm
+ * here renders one picture or none, so there is no gallery for a mode to change.
  */
-export function render(outcome: Outcome, client: ClientClass, origin: string): Response {
+export function render(outcome: Outcome, client: ClientClass, origin: string, mode?: GalleryMode): Response {
   const isHuman = client === 'human'
 
   switch (outcome.kind) {
@@ -33,7 +38,7 @@ export function render(outcome: Outcome, client: ClientClass, origin: string): R
       // one. That gate deliberately does NOT live here: it is a statement about which meta
       // tags suppress which others, so it belongs beside the tags, and hoisting it would put a
       // Discord-shaped concern in front of 'ambiguous' and 'failure', which must ignore it.
-      return renderPost(outcome.post, client, origin)
+      return renderPost(outcome.post, client, origin, mode)
 
     /**
      * AN ACCOUNT. One head for every bot client — see render/profile.ts for why there is no

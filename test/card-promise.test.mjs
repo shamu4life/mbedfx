@@ -127,6 +127,8 @@ test('promisable(): a known duration under the ceiling, never live, never blind'
   assert.equal(promisable({}), false, 'no duration verdict = Innertube refused = we know nothing = no promise')
   assert.equal(promisable({ duration: 0 }), false, 'a live stream reports lengthSeconds 0')
   assert.equal(promisable({ duration: 60, live: true }), false)
+  assert.equal(promisable({ duration: 60, gated: true }), false,
+    'age-gated: an ordinary duration, and a mux that can NEVER succeed')
   assert.equal(promisable(null), false)
 })
 
@@ -185,14 +187,65 @@ test('A VIDEO WE CANNOT VOUCH FOR IS NEVER PROMISED — the safety valve', async
     assert.equal(rowsOf(ae, 'card_promised').length, 0, `${why}: no promise row`)
     assert.equal(rowsOf(ae, 'card_degraded').length, 1, `${why}: counted as the degrade it is`)
   }
-  // Live and over-ceiling are the two rewrites that call nothing and count nothing — unchanged.
-  for (const [id, over] of [['promise0004', { live: true, duration: 0 }], ['promise0005', { duration: 99_999 }]]) {
+  // Live, over-ceiling and AGE-GATED are the three rewrites that call nothing and count nothing.
+  // `gated` joined them 2026-09-12 — see the age-gate test below for what it cost while it was missing.
+  for (const [id, over] of [
+    ['promise0004', { live: true, duration: 0 }],
+    ['promise0005', { duration: 99_999 }],
+    ['promise0007', { gated: true, duration: 177 }],
+  ]) {
     const ae = recordingAE()
     const j = await (await handle(bot(activityUrl(ytRef(id))), envWith({ resolver: silentResolver(), ae }), retainingCtx(),
       depsFor(r => ytPost(r, over)))).json()
     assert.equal(j.media_attachments[0].type, 'image')
     assert.equal(rowsOf(ae, 'card_promised').length + rowsOf(ae, 'card_degraded').length, 0, 'a rewrite is neither')
   }
+})
+
+test('AN AGE-GATED VIDEO IS A STILL ON THE DOCUMENT DISCORD READS — no player over a slot that 503s forever', async () => {
+  /**
+   * THE OWNER'S REPORT, 2026-09-12: "age-gated ones show a play button that confuses people and then
+   * the gallery has nothing". Measured against production the same day, on yt:G0sORVBL4kM:
+   *
+   *   activity doc  type:"video"  url .../_media/yt%3AG0sORVBL4kM/0  meta:null
+   *   GET that url  ->  HTTP 503, 0 bytes, permanently
+   *   GET poster0   ->  302 to i.ytimg.com/vi/G0sORVBL4kM/hqdefault.jpg, fine
+   *   /_api/v1      ->  kind:"image", still:true, 480x360   <- ALREADY CORRECT on that seam
+   *
+   * Both halves of the report, one cause. The play button is `type:"video"`. "The gallery has
+   * nothing" is `meta:null`: types.ts's 2026-07-31 measurement is that Discord "will not lay out an
+   * IMAGE attachment it has no size for, so it drew nothing at all".
+   *
+   * WHY ONLY THIS SEAM. The deadline degrade always handled the age gate correctly, which is why
+   * /_api/v1 and the head were right and only the activity document was wrong: under 1.15.0 this
+   * seam does not WAIT, it PROMISES, and a promise keeps the video attachment by design. The gate
+   * slipped through promisable() because it is not `live` and its duration (177s, straight off
+   * yt-dlp) sits comfortably inside the 240s window — an ordinary number on an impossible video.
+   *
+   * This asserts the ACTIVITY DOCUMENT, not the normalizer, because the normalizer was never the
+   * broken part.
+   */
+  const ae = recordingAE()
+  const ref = ytRef('promise0008')
+  const j = await (await handle(bot(activityUrl(ref)), envWith({ resolver: silentResolver(), ae }), retainingCtx(),
+    depsFor(r => ytPost(r, { gated: true, duration: 177 })))).json()
+
+  const a = j.media_attachments[0]
+  assert.equal(a.type, 'image', 'no play button on a video that can never play')
+  assert.match(a.url, /\/poster0$/, 'and it addresses the POSTER slot, which serves real bytes')
+  assert.doesNotMatch(a.url, /\/0$/, 'never the video slot, which answers 503 forever')
+  assert.ok(a.meta?.original?.width > 0 && a.meta?.original?.height > 0,
+    'WITH DIMENSIONS, or Discord lays out nothing at all — the "gallery has nothing" half')
+  assert.equal(rowsOf(ae, 'card_promised').length, 0, 'nothing was promised')
+
+  // THE CONTROL. The same post, same duration, without the gate, IS promised — so this test fails
+  // for the right reason. Without it, a change that broke promising entirely would leave the
+  // assertions above green and look like a fix.
+  const ae2 = recordingAE()
+  const ok = await (await handle(bot(activityUrl(ytRef('promise0009'))), envWith({ resolver: silentResolver(), ae: ae2 }),
+    retainingCtx(), depsFor(r => ytPost(r, { duration: 177 })))).json()
+  assert.equal(ok.media_attachments[0].type, 'video', 'an ungated 177s video is still promised')
+  assert.equal(rowsOf(ae2, 'card_promised').length, 1)
 })
 
 test('A WARM MUX IS THE REAL THING, NOT A PROMISE', async () => {

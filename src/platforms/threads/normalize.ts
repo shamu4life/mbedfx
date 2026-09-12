@@ -206,8 +206,12 @@ const num = (v: unknown): number | undefined =>
  *
  * A video is `kind: 'video'` with the cover as its poster, at BOTH levels; where it renders diverges in
  * the RENDERER, not here (exactly as Instagram): a standalone / single-item video advertises og:video and
- * plays, while a multi-item carousel is flattened by mastodon.ts to that poster still PLUS the "🎬 Contains
- * video" marker (galleryHasVideo, usableCount > 1). A non-video item is its still image.
+ * plays, while a multi-item carousel is handled by mastodon.ts according to the GALLERY MODE
+ * (galleryHasVideo, usableCount > 1): the default promotes one video to a real player and stills the
+ * rest with a "more in the post" note, and /p stills every one with the "🎬 Contains video" marker.
+ * Which of those happens is emphatically not this file's business — what matters here is that the
+ * child arrives as kind:'video' WITH a poster, because both modes need the poster and neither can
+ * recover it. A non-video item is its still image.
  */
 function mediaFromDict(m: Any): Media | null {
   const cover = m?.image_versions2?.candidates?.[0]
@@ -222,7 +226,8 @@ function mediaFromDict(m: Any): Media | null {
 function mediaEntries(m: Any): Media[] {
   if (m?.media_type === 8 && Array.isArray(m.carousel_media)) {
     // Each child is normalized the same; whether a video plays or flattens to a still is the renderer's
-    // call (galleryHasVideo, usableCount > 1) — a multi-item carousel flattens, a 1-item one plays.
+    // call (galleryHasVideo, usableCount > 1, and since 2026-09-11 the gallery mode) — a 1-item
+    // carousel always plays, and a multi-item one plays at most one of its videos.
     return m.carousel_media.map((c: Any) => mediaFromDict(c)).filter((x: Media | null): x is Media => x !== null)
   }
   const one = mediaFromDict(m)
