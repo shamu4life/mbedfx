@@ -759,10 +759,38 @@ test('MEDIA-ONLY PREVIEWS THE FILE — no Discord card, but not nothing either',
   assert.match(HTML, /Discord attaches this file\. No card, no caption\./,
     'and it says what will happen alongside the file')
   // The SAME card payload feeds it — that is where the media urls come from. Skipping the fetch is
-  // exactly what left the page previewing nothing.
-  assert.match(HTML, /if \(mediaOnly\) \{ drawMediaOnly\(url, j\); return; \}/,
+  // exactly what left the page previewing nothing. REWRITTEN 2026-10-04: the condition gained
+  // `|| (j && j.direct)`, because a pasted `.mp4` link asks for the file exactly as the box does (see
+  // the test below); the property pinned, fetch-then-draw rather than skip, is unchanged.
+  assert.match(HTML, /if \(mediaOnly \|\| \(j && j\.direct\)\) \{ drawMediaOnly\(url, j\); return; \}/,
     'the card payload is fetched and re-drawn, not skipped')
   assert.ok(!/function mediaNote\(\)/.test(HTML), 'the text-only state is gone')
+})
+
+test('A PASTED .mp4 LINK PREVIEWS AS THE FILE, from the ROUTER\'s verdict echoed by /_card, not a copy of it', () => {
+  /**
+   * Since 2026-10-04 a trailing `.mp4` on a post url is the path spelling of the d. host (router.ts
+   * DIRECT_SUFFIX), and the converter passes a pasted fxtwitter-style path through untouched. Drawing the
+   * mock card for it would preview something nobody will see, the exact mistake the media-only drawing
+   * above was written to stop.
+   *
+   * THE PAGE ASKS, IT DOES NOT DECIDE. A first version re-derived the rule in a page regex, and an
+   * adversarial review measured it already disagreeing with route(): `/A61SaA1.mp4` (a chooser) and
+   * `/fxtwitter.com/…/{id}.mp4` (notfound) would have previewed as "Nothing to attach" files. /_card now
+   * echoes the router's own `direct` (pinned in api.test.mjs), and the page reads that.
+   */
+  assert.ok(!/function mbedfxSendsFile\(/.test(HTML), 'no second copy of the router\'s suffix rule in the page')
+  // Both draw decisions read it: the first fetch, and the redraw-from-lastCard on a toggle.
+  assert.match(HTML, /if \(mediaOnly \|\| \(lastCard\.j && lastCard\.j\.direct\)\) drawMediaOnly\(url, lastCard\.j\);/)
+  // The pasted suffix survives conversion, and the stills toggle composes with it into a path the router
+  // reads as both, so the echoed flag is there to read.
+  const { convert } = loadConverter()
+  const plain = convert('https://x.com/X/status/2102147636702634195.mp4', 'mbedfx.app')
+  assert.equal(plain.path, '/X/status/2102147636702634195.mp4')
+  assert.equal(routed(plain.path).direct, true)
+  const stills = convert('https://x.com/X/status/2102147636702634195.mp4', 'mbedfx.app', 'stills')
+  assert.equal(routed(stills.path).direct, true, stills.path)
+  assert.equal(routed(stills.path).gallery, 'stills', stills.path)
 })
 
 test('A WORKER-SUPPLIED URL IS RE-POINTED AT THE CHOSEN HOST', () => {

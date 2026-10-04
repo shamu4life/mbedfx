@@ -1875,3 +1875,139 @@ test("DISCORD'S SPOILER BARS DO NOT BREAK A LINK", () => {
     assert.deepEqual(barred, bare, `bars must not change the outcome for ${JSON.stringify(junk)}`)
   }
 })
+
+/* ===================== THE .mp4 SUFFIX AND THE MASKED-LINK OVER-CAPTURE (2026-10-04) =====================
+ *
+ * Two path layers in route(), both strip-first-then-fall-back like the /v /p gallery layer, and both only
+ * kept when the stripped path names a post. Measured against production as Discordbot before either
+ * existed: `/X/status/2102147636702634195.mp4`, `/X/status/{id}).` and `/r/{sub}/comments/{id}).` each
+ * answered a "Couldn't load" card, because the matchers take their last segment verbatim and the id
+ * picked up the suffix. The differential sweep this change was checked with (every path literal in this
+ * suite plus generated shapes, ~1.4M paths, old router against new) found ZERO differences on any path
+ * that carries neither suffix; the "untouched" test below keeps a slice of that promise in the suite.
+ */
+
+const POSTS_FOR_SUFFIX = [
+  '/X/status/2102147636702634195',
+  '/i/web/status/20',
+  '/profile/alice.bsky.social/post/3k2a',
+  '/@someone/video/7246058829106973978',
+  '/@bradandthegoat/post/DeEFGTkCLxz',
+  '/p/DaQ5CPTki4E',
+  '/r/interestingasfuck/comments/1es7hb1',
+  '/shorts/dQw4w9WgXcQ',
+  '/fb/reel/1234567890123',
+  '/mastodon.social/@bob/109',
+]
+
+test('A TRAILING .mp4 ON A POST URL NAMES THE SAME POST, AND ASKS FOR ITS BYTES', () => {
+  for (const p of POSTS_FOR_SUFFIX) {
+    const plain = r(p)
+    assert.equal(plain.kind, 'post', `${p} is a post to begin with`)
+    assert.deepEqual(r(`${p}.mp4`), { ...plain, direct: true }, `${p}.mp4`)
+    // The canonical a human could be sent to, and every cache key, are those of the url without it.
+    assert.equal(refKey(r(`${p}.mp4`).ref), refKey(plain.ref))
+  }
+})
+
+test('THE .mp4 SUFFIX REACHES SHARE CODES AND SHORT LINKS, with the suffix kept out of the code', () => {
+  for (const [p, code] of [['/r/linuxmemes/s/VRg1iSFn4k', 'VRg1iSFn4k'], ['/t/ZTAvgEAL3', 'ZTAvgEAL3'], ['/share/1AbCdEfGhI', '1AbCdEfGhI']]) {
+    const got = r(`${p}.mp4`)
+    assert.equal(got.direct, true, p)
+    assert.equal(got.code, code, `${p}: a share code with '.mp4' glued on resolves to nothing`)
+    assert.equal(got.kind, r(p).kind)
+  }
+})
+
+test('A PATH WITHOUT EITHER SUFFIX IS ROUTED EXACTLY AS BEFORE — no direct field appears', () => {
+  for (const p of [...POSTS_FOR_SUFFIX, '/jack', '/@jack', '/gallery/abc123', '/watch?v=dQw4w9WgXcQ', '/_media/x%3A20/0', '/', '/r/linuxmemes/s/VRg1iSFn4k']) {
+    assert.ok(!('direct' in r(p)), `${p} must not carry direct`)
+  }
+})
+
+test('THE .mp4 STRIP FALLS BACK WHEN THE STRIPPED PATH NAMES NO POST', () => {
+  // /_media/ tolerates its own .mp4 (the spoof head mints it) and must stay a media route.
+  assert.deepEqual(r('/_media/x%3A20/0.mp4'), r('/_media/x%3A20/0'))
+  assert.ok(!('direct' in r('/_media/x%3A20/0.mp4')))
+  // A bare token is the handle chooser either way; the suffix reading is discarded, so the chooser shows
+  // the path the reader typed.
+  assert.equal(r('/A61SaA1.mp4').kind, 'ambiguous')
+  assert.equal(r('/A61SaA1.mp4').path, '/A61SaA1.mp4')
+  // .gifv is Imgur's own card route token, not a direct switch.
+  assert.ok(!('direct' in r('/A61SaA1.gifv')))
+})
+
+test('AN EMPTY STEM AND A DOUBLED EXTENSION ARE NOT A CLEAN SUFFIX; AN UPPERCASE ONE IS', () => {
+  assert.ok(!('direct' in r('/X/status/.mp4')), 'an empty stem keeps its old reading (the Number("") trap /_media/ names)')
+  // Case-insensitive since review: a capitalised .MP4 used to keep the failure card the lowercase
+  // spelling was fixed out of.
+  assert.deepEqual(r('/X/status/20.MP4'), { ...r('/X/status/20'), direct: true })
+  assert.ok(!('direct' in r('/_media/x%3A20/0.MP4')), 'and /_media/ never becomes a direct post route')
+  // Strips ONCE: the id is '20.mp4', an honest failure, never post 20 by accident.
+  assert.deepEqual(r('/X/status/20.mp4.mp4').ref, { p: 'x', id: '20.mp4' })
+})
+
+test("DISCORD'S SPOILER BARS DO NOT HIDE THE .mp4, OR A GALLERY SUFFIX", () => {
+  for (const p of ['/X/status/20.mp4||', '/X/status/20.mp4%7C%7C']) {
+    const got = r(p)
+    assert.deepEqual(got.ref, { p: 'x', id: '20' }, p)
+    assert.equal(got.direct, true, p)
+  }
+  // Bars on the gallery suffix: routeInner strips them only after the gallery lookup, so the lookup has
+  // to see past them itself. The first case was a pre-existing loss of the mode; the second is the
+  // converter's own `.mp4` + stills output, spoilered, which fell back to id '20.mp4' without it.
+  assert.deepEqual(r('/X/status/20/p||'), r('/X/status/20/p'))
+  assert.deepEqual(r('/X/status/20.mp4/p||'), { ...r('/X/status/20'), gallery: 'stills', direct: true })
+  assert.deepEqual(r('/X/status/20.mp4/p%7C%7C'), { ...r('/X/status/20'), gallery: 'stills', direct: true })
+})
+
+test('THE .mp4 SUFFIX COMPOSES WITH /v AND /p — including the converter\'s own `.mp4/p` output', () => {
+  assert.deepEqual(r('/X/status/20.mp4/p'), { ...r('/X/status/20'), gallery: 'stills', direct: true })
+  const flipped = r('/X/status/20/p.mp4')
+  assert.deepEqual(flipped.ref, { p: 'x', id: '20' })
+  assert.equal(flipped.direct, true)
+})
+
+test('A SUFFIXED FACEBOOK REEL NO LONGER LANDS ON INSTAGRAM', () => {
+  // Before, FB_NUM refused '{num}.mp4', the forced miss fell through, and instagram()'s depth-2 arm took
+  // it as an Instagram code ending '.mp4': the wrong platform, silently.
+  for (const p of ['/reel/1234567890123.mp4', '/fb/reel/1234567890123.mp4']) {
+    assert.equal(r(p).ref.p, r(p.replace('.mp4', '')).ref.p, p)
+    assert.equal(r(p).direct, true)
+  }
+})
+
+test("A MASKED-LINK OVER-CAPTURE GLUED TO AN ID IS DECORATION — Discord's ')' and what follows it", () => {
+  /**
+   * discord-api-docs#6279: `[text](https://host/a/b).` makes Discordbot request `/a/b).`, and the issue's
+   * access log also shows `/_bug)A` and `/_bug)$`. Each of these used to mint an id ending ')'.
+   */
+  const cases = [
+    // The tail runs to the next whitespace (#6279), so it is unbounded: an ellipsis (percent-encoded), a
+    // run of punctuation, and spoiler bars after the paren all have to trim.
+    ['/X/status/2102147636702634195', ['', ')', ').', '),', ')A', '%29', '%29.', ')%E2%80%A6', ')...', ')!!!', ')||', ')%7C%7C']],
+    ['/r/interestingasfuck/comments/1es7hb1', [')', ').', '%29']],
+    ['/@someone/video/7246058829106973978', [').']],
+    ['/p/DaQ5CPTki4E', [').']],
+    ['/profile/alice.bsky.social/post/3k2a', [').']],
+  ]
+  for (const [p, tails] of cases) for (const t of tails) {
+    assert.deepEqual(r(`${p}${t}`), r(p), `${p}${t}`)
+  }
+  // A link that ends in a slug was already fine, because the slug position is ignored. Pinned so a future
+  // stricter slug check cannot break it: this is the shape of the owner's own reddit example.
+  const slug = '/r/interestingasfuck/comments/1es7hb1/rayguns_husband_and_trainer_sammie_free_now_it/'
+  assert.deepEqual(r(`${slug}).`), r(slug))
+})
+
+test('THE OVER-CAPTURE TRIM IS ONLY KEPT WHEN IT NAMES A POST, and composes with both other layers', () => {
+  // Not a post either way: answered as typed, so the chooser still shows the reader's own path.
+  assert.equal(r('/jack)').kind, 'ambiguous')
+  assert.equal(r('/jack)').path, '/jack)')
+  // A masked gallery link and a masked .mp4 link: the trim runs first, so the inner layers see a clean
+  // last segment.
+  assert.deepEqual(r('/X/status/20/p).'), r('/X/status/20/p'))
+  assert.equal(r('/X/status/20/p).').gallery, 'stills')
+  assert.deepEqual(r('/X/status/20.mp4).'), r('/X/status/20.mp4'))
+  assert.equal(r('/X/status/20.mp4).').direct, true)
+})

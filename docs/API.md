@@ -280,6 +280,12 @@ The suffix is stripped ahead of every route matcher, and falls back to the unstr
 stripped one names no post — so the handful of live permalinks whose own last segment is `p` or `v`
 (`/p/v` is an Instagram shortcode; `/{host}/@user/v` is a fediverse id) are unaffected.
 
+A `)` glued to the end of a post url, and anything after it, is dropped the same way (strip first,
+keep it only when what remains names a post). Discord appends exactly that when a masked link
+`[text](url)` is followed directly by punctuation, `[text](url).` fetching `url).` (discord-api-docs
+issue 6279), and without the trim the `)` became part of the post id. This applies to `url` here too:
+`?url=https://x.com/jack/status/20).` describes post 20.
+
 ### The `d.` host
 
 `d.` in front of any of the three official hosts serves the file itself, video or image, at its own
@@ -292,6 +298,20 @@ With nothing to serve, `d.` answers a plain-text 404; an HTML body there leaves 
 a file full of markup. `media_miss` on this host means the post has no usable media at all, a second
 meaning `docs/METRICS.md` records under "Known defects in the write shape" (`serveDirectMedia`,
 `src/worker.ts`).
+
+A trailing `.mp4` on the post url does the same on any host, the spelling fxtwitter users already
+type: `https://mbedfx.app/jack/status/20.mp4`. It is read off the path (`DIRECT_SUFFIX`,
+`src/router.ts`), so it works on every post url `d.` works on, share codes and short links included,
+and the answer is identical: the post's first usable media, a plain-text 404 when there is none (or
+when a share code or short link does not resolve), and no split between crawlers and people. Only
+`.mp4`, in any case, directly on the last segment; a `/watch?v={id}.mp4` query is still a card.
+`/_api/v1` ignores the suffix, as it ignores `/v` and `/p`, and describes the post.
+
+Both spellings have one cost a card does not. A card answers at once and Discord fetches its video
+later; a direct url makes Discord follow the redirect into `/_media/` straight away, so the first paste
+of a video that still has to be muxed (YouTube, Reddit, Facebook and the other container platforms) can
+draw nothing while the mux runs, where the card would have shown the title and the poster. A later
+paste plays.
 
 ---
 

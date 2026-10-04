@@ -460,11 +460,12 @@ Most mean nothing as an absolute number, and several mislead alone.
 No query works around either of these.
 
 - `media_hit`/`media_miss` carry two meanings. On the `/_media/` arm of `handle()`, cache-hit vs
-  upstream-fetch. On the direct-media `d.` host, matched by `DIRECT_MEDIA_HOST`, `media_miss` instead
+  upstream-fetch. On a direct-media request (the `d.` host, matched by `DIRECT_MEDIA_HOST`, or since
+  2026-10-04 a trailing `.mp4` on the post url on any host, `Route.direct`), `media_miss` instead
   means the post has no usable media at all, the request answering 404 `no media: this post has
   nothing to serve` inside `serveDirectMedia`. Both write identical blobs: no query separates them,
-  and `d.` host traffic contaminates the fetch-amplification ratio with nothing in the data to mark
-  it.
+  and direct-media traffic contaminates the fetch-amplification ratio with nothing in the data to
+  mark it. The `.mp4` spelling arrives on the ordinary hosts, so not even the host separates it.
 - `translated`/`translate_fallback`/`translate_pending` all say `discord`: `withTranslated` takes no
   client class and passes the literal `'discord'` to `count()` itself. Three callers reach it. Two are
   the seams Discord really does read, where the label is accidentally true: `renderPostRoute`, and

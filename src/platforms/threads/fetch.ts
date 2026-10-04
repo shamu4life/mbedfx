@@ -13,7 +13,9 @@ import { askTwice } from '../../fetchretry.ts'
  *   bot UA (facebookexternalhit, Discordbot, curl, Googlebot, WhatsApp, Telegram) -> OG page
  *
  * AND THE BOT UA CHANGES THE PAYLOAD, which is why this fetches TWICE:
- *   Discordbot/2.0           -> og:title (author) + og:image = the POST media (fbcdn t39.92108-6)
+ *   Discordbot/2.0           -> og:title (author) + og:image = Threads' rendered SHARE CARD of the post
+ *                               (fbcdn t39.92108-6; called "the POST media" here until a 2026-10-04
+ *                               look at the picture itself: see normalize.ts's head)
  *   facebookexternalhit/1.1  -> name="description" (the caption); its og:image is only the avatar
  *
  * Neither UA carries both, so a rich card needs both pages. They are fetched concurrently; the
@@ -26,7 +28,8 @@ const TEXT_UA = 'facebookexternalhit/1.1'
 /**
  * THE SSR GATE IS A HEADER COMBINATION, not a UA (measured from Workers egress 2026-07-21). A browser
  * UA alone gets the ~256KB dataless shell; add `Accept: text/html` + `Sec-Fetch-Dest: document` +
- * `Sec-Fetch-Mode: navigate` and Threads server-renders the full post JSON (~700-860KB), video and
+ * `Sec-Fetch-Mode: navigate` and Threads server-renders the full post JSON (~700-860KB then; 951KB and
+ * 1.43MB on the two pages captured 2026-10-04), video and
  * counts included, from our datacenter IP with no decoy, block or cookie. `/@i/post/{code}` 301s to
  * the real @user url and still resolves, so the ref needs only the shortcode.
  */

@@ -1773,7 +1773,9 @@ function mbedfxConvert(input, host, gallery) {
         lastCard = { path: path, j: j };
         // Media-only needs the SAME answer — it is where the media urls come from — just drawn as the
         // file rather than as a card. Skipping the fetch is what left the page previewing nothing.
-        if (mediaOnly) { drawMediaOnly(url, j); return; }
+        // `j.direct` is the ROUTER's reading of a trailing `.mp4` on the path, echoed by /_card: Discord
+        // attaches that file exactly as it does for a d. link, so it previews the way the box does.
+        if (mediaOnly || (j && j.direct)) { drawMediaOnly(url, j); return; }
         /**
          * AT THE CAP THE PAYLOAD ITSELF IS SETTLED, not a copy of it passed to one draw.
          *
@@ -1967,7 +1969,7 @@ function mbedfxConvert(input, host, gallery) {
       var path = url ? url.slice(url.indexOf('/', 8)) : '';
       cardSeq++;
       if (lastCard && lastCard.path === path) {
-        if (mediaOnly) drawMediaOnly(url, lastCard.j);
+        if (mediaOnly || (lastCard.j && lastCard.j.direct)) drawMediaOnly(url, lastCard.j);
         else drawCard(url, lastCard.j);
         return;
       }

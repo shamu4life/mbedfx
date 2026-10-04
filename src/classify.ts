@@ -6,9 +6,11 @@ const GENERIC_BOT = /bot|crawler|spider|preview/
  * Lowercased substring match, ordered, first match wins.
  *
  * There is deliberately no `discord-media` class. Discord's media proxy sends a
- * fake browser UA (Firefox/38), but it only ever fetches /_media/* URLs, which
- * behave identically for every client class. Detecting it would require matching
- * chrome/96.0.4664.110 — a real Chrome build — and denying real people the redirect.
+ * fake browser UA (Firefox/38), but the urls it fetches behave identically for every
+ * client class: /_media/* by construction, and a direct-media post url (a `d.` host,
+ * or a trailing `.mp4`) because serveDirectMedia has no human/bot split. That second
+ * case is why the direct path must never grow one. Detecting the proxy would require
+ * matching chrome/96.0.4664.110 — a real Chrome build — and denying real people the redirect.
  */
 export function classify(ua: string | null): ClientClass {
   if (!ua) return 'human'

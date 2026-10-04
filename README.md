@@ -72,6 +72,12 @@ Put `d.` in front of the domain and you get the file itself, the video or the im
 https://d.megapenispoopenfarten.sex/jack/status/20
 ```
 
+Or, the way fxtwitter does it, put `.mp4` on the end of the link. It does the same thing on any of the domains, for any site.
+
+```
+https://megapenispoopenfarten.sex/jack/status/20.mp4
+```
+
 The converter page has a **media only** checkbox next to the domain buttons. A `d.` url renders no card; [docs/API.md](docs/API.md#the-d-host) has the rest.
 
 ## Supported sites

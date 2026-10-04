@@ -7,7 +7,41 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Added
+
+- **A trailing `.mp4` on any post link serves the file, the way fxtwitter does.**
+  `megapenispoopenfarten.sex/X/status/{id}.mp4` used to answer "Couldn't load this Twitter post",
+  because the id swallowed the suffix. It is now the path spelling of the `d.` host and takes the same
+  code path to the same bytes: every platform, share codes and short links included, no
+  crawler/person split, a plain-text 404 when there is nothing to serve. The router reads it
+  (`DIRECT_SUFFIX`), so the router stays host-blind, and `/_card` echoes the router's verdict so the
+  converter previews a `.mp4` link as the file without a second copy of the rule.
+
 ### Fixed
+
+- **Every Threads post had fallen back to one picture.** Threads renamed the server-rendered block the
+  normaliser reads (now `BarcelonaPostPageTargetQueryRelayPreloader_`), so every post took the OG
+  fallback, whose single image is Threads' own rendered share card. Reported as a carousel showing one
+  unscrollable image; it also cost every video its player and every card its counts, avatar and real
+  timestamp. The exact name is matched, never a wildcard, because the same page carries sibling blocks
+  holding other people's posts. `/_smoke` stayed green through it, so the `th` row now demands a player.
+
+- **Reddit GIF posts rendered as text only.** Reddit labels them `type: "gif"`, which no branch knew.
+  They now play Reddit's own mp4 rendition with its poster and real size (25 KB against 556 KB for the
+  `.gif`). A render with no player yields no media rather than the raw `.gif`, because the two renders
+  share a cache key and an image there would sit behind a url promised as video.
+
+- **A masked link followed by punctuation, `[text](url).`, broke any link ending at the post id.**
+  Discord's own bug (discord-api-docs#6279) makes Discordbot fetch `url).`, and the `)` became part of
+  the id. The router now drops a trailing `)` and what follows it, only when what remains names a post.
+  The owner's example in the report had a separate cause: it was written `https//`, with no colon,
+  which Discord does not treat as a link at all.
+
+- **An unresolved share code or short link on the `d.` host answered HTML**, contradicting the
+  documented plain-text 404. It answers the 404 now, on `d.` and `.mp4` alike.
+
+- **A spoilered gallery suffix lost its mode.** `…/{id}/p||` rendered the default, because the bars
+  were stripped only after the `/v` `/p` lookup.
 
 - **The README banner's mark was 72px left of centre**, and had been since the first commit. The
   tile is 112 wide on a 1280 canvas, so it belongs at `translate(584 …)` with its centre on 640 —

@@ -7,7 +7,7 @@ type Any = Record<string, any>
  *
  *  - 'embed' (PRIMARY): the `embed.reddit.com/r/{sub}/comments/{id}/` HTML, which is credential-free
  *    and — unlike www.reddit.com/.json — NOT IP-blocked from Workers egress. Rich: title, author,
- *    subreddit, score, timestamp, nsfw, image/gallery/video-cover/selftext.
+ *    subreddit, score, timestamp, nsfw, image/gif/gallery/video-cover/selftext.
  *  - 'json' (FALLBACK): the OAuth listing from oauth.reddit.com, used only if the Reddit app creds are
  *    set. Reddit gates app creation behind the Responsible Builder Policy, so this rarely runs; it
  *    stays as a richer path for if that ever opens up.
@@ -68,6 +68,57 @@ function screenview(html: string): Any | null {
 }
 
 /**
+ * An ANIMATED post's player, read off the embed page: Reddit's own mp4 rendition of the gif, its still
+ * poster, and the size, as one `kind: 'video'` entry. Null when any part is missing or off-host.
+ *
+ * WHY THIS AND NOT THE .gif. Reported 2026-10-04: r/forsen/comments/1wuh1g1, a gif post, rendered as
+ * text only. Reddit now labels such posts `type: "gif"` in the screenview (measured), which no branch
+ * below knew, so media came back empty and nothing failed loudly. Treating it as the old .gif image
+ * would have been a one-line fix, and it is the worse card on what was measured that day (container
+ * egress): the .gif is 556 KB against 25 KB for the mp4, and it carries no size. Whether Discord draws a
+ * size-less IMAGE attachment at all is unresolved for Reddit: types.ts records that it does not (measured
+ * on a YouTube poster), while embed.ts calls Reddit's 0x0 images human-verified. The mp4-with-poster shape
+ * sidesteps that question, and it is the one Twitter's animated_gif, Imgur and Mastodon's gifv already
+ * ship. It also previews: /_card publishes 'gif' as a posterless 'video', which the converter draws as
+ * nothing, and a video with a poster as its poster.
+ *
+ * WHAT THE PAGE CARRIES, in the real-subreddit render fetch.ts asks for:
+ *   <shreddit-player src="https://preview.redd.it/{id}.gif?width=320&format=mp4&s=…" … gif …
+ *                    poster="https://preview.redd.it/{slug}-v0-{id}.gif?format=png8&s=…">
+ * inside a `<shreddit-aspect-ratio style="--aspect-ratio: 1.333…">`. The `gif` attribute is what marks
+ * it, and it is a BARE attribute, so quoted values are blanked before looking for it: the src's own
+ * `.gif?` must not count. The `s=` signature binds the whole query (dropping `width=` answered 403), so
+ * the url is passed through exactly as served, entities decoded.
+ *
+ * THE SIZE IS READ, NEVER GUESSED: the width from the src's own `width=` (it names the rendition, and the
+ * served mp4 measured exactly 320x240), the height from that width over the aspect ratio of the
+ * `<shreddit-aspect-ratio>` that wraps the player (the last one opened before it, not the first on the
+ * page). If either is missing, both are 0, which every renderer already treats as "unknown".
+ */
+function gifPlayer(html: string): Media | null {
+  for (const m of html.matchAll(/<shreddit-player\b[^>]*>/g)) {
+    const tag = m[0]
+    if (!/\sgif(?=[\s>=/])/.test(tag.replace(/"[^"]*"/g, '""'))) continue
+    const attr = (name: string) => {
+      const a = tag.match(new RegExp(`\\s${name}="([^"]*)"`))
+      return a ? decodeEntities(a[1]) : ''
+    }
+    const src = attr('src')
+    const poster = attr('poster')
+    // Reddit's own image hosts only. This url ends up in a Location header on our origin.
+    if (!/^https:\/\/preview\.redd\.it\/[^?#]+\?(?:[^#]*&)?format=mp4(?:&|#|$)/.test(src)) return null
+    if (!/^https:\/\/(?:external-)?preview\.redd\.it\//.test(poster)) return null
+    const w = Number((src.match(/[?&]width=(\d+)(?:&|#|$)/) || [])[1])
+    const before = html.slice(0, m.index)
+    const wrap = before.slice(before.lastIndexOf('<shreddit-aspect-ratio'))
+    const ar = Number((wrap.match(/^<shreddit-aspect-ratio\b[^>]*?--aspect-ratio:\s*([\d.]+)/) || [])[1])
+    const sized = Number.isFinite(w) && w > 0 && Number.isFinite(ar) && ar > 0
+    return { kind: 'video', url: src, w: sized ? w : 0, h: sized ? Math.round(w / ar) : 0, poster }
+  }
+  return null
+}
+
+/**
  * Media by post type (from the embed HTML + screenview). VIDEO is a `remux` video: Reddit serves
  * HLS/CMAF only (no progressive mp4 — the legacy DASH_{q}.mp4 files 404), which the /_media/ route
  * hands to the media-resolver container to mux to a playable MP4, with the external-preview cover as
@@ -79,6 +130,25 @@ function redditEmbedMedia(html: string, post: Any): Media[] {
   const type = post?.type
   const url = typeof post?.url === 'string' ? post.url : ''
 
+  /**
+   * A 'gif' POST IS ITS PLAYER OR NOTHING, and the "nothing" is the important half.
+   *
+   * The placeholder-sub render (a bare /comments/{id} or /user/{name}/comments/{id} link, fetch.ts) has no
+   * player at all, and loadPost writes whichever render it got under the post's CANONICAL cache key, the
+   * same key a real-subreddit load uses (an empty-sub refKey does not parse, and /_media/ needs the real
+   * sub). Falling back to the raw i.redd.it .gif there would put an IMAGE at index 0 of a post whose other
+   * render puts the mp4 there, so the one /_media/{key}/0.mp4 url og:video promised could 302 to image
+   * bytes, which is the sticky poisoned-url defect worker.ts's notReady() exists to prevent. Caught by an
+   * adversarial review of this change before it shipped. Absent media at index 0 answers 404 instead,
+   * which poisons nothing, and is exactly what a bare link to a gif post rendered before 2026-10-04.
+   *
+   * For the same reason a type:'image' post is NOT read for a player: its .gif fallback below is what both
+   * renders have always agreed on, and reading the player for it would reopen the same disagreement.
+   */
+  if (type === 'gif') {
+    const player = gifPlayer(html)
+    if (player) return [player]
+  }
   if (type === 'image' && /^https:\/\/i\.redd\.it\//.test(url)) {
     // A true .gif animates as an image; Discord plays a gif og:image. Everything else is a still.
     return [{ kind: /\.gif(?:\?|$)/i.test(url) ? 'gif' : 'image', url, w: 0, h: 0 }]
@@ -92,7 +162,10 @@ function redditEmbedMedia(html: string, post: Any): Media[] {
       return ids.map(x => ({ kind: 'image' as const, url: `https://i.redd.it/${x}`, w: 0, h: 0 }))
     }
   }
-  if (type === 'video') {
+  // 'gif' on a v.redd.it url: whether Reddit labels its is_gif VIDEOS 'gif' or 'video' has not been
+  // measured. If it is 'gif', the video branch is the right reading of that url, and before 2026-10-04
+  // this combination came back as no media at all, so routing it here cannot make a card worse.
+  if (type === 'video' || (type === 'gif' && /^https:\/\/v\.redd\.it\//.test(url))) {
     const cover = html.match(/https:\/\/external-preview\.redd\.it\/[^"\\ ]+/)
     const poster = cover ? decodeEntities(cover[0]) : undefined
     // The HLS lives at {v.redd.it base}/HLSPlaylist.m3u8. Emit a remux video only with BOTH a v.redd.it
@@ -103,7 +176,8 @@ function redditEmbedMedia(html: string, post: Any): Media[] {
     }
     if (poster) return [{ kind: 'image', url: poster, w: 0, h: 0 }]
   }
-  // link (no preview thumbnail is exposed by embed) and text carry no media.
+  // link (no preview thumbnail is exposed by embed) and text carry no media. So does any type this
+  // file has not met yet, which is how 'gif' rendered as text only until 2026-10-04.
   return []
 }
 

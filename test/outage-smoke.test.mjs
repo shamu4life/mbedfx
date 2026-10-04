@@ -156,10 +156,19 @@ test('THE EXPECTATION IS OPT-IN, and every row without one is judged exactly as 
   assert.equal(cardVerdict(REAL_MEDIA_CARD, undefined), 'ok')
   assert.equal(cardVerdict(REAL_IMAGE_CARD), 'ok')
 
+  /**
+   * REWRITTEN 2026-10-04, from ['yt'] to ['yt', 'th']. The old message said a second strict row "must be
+   * a row whose media is durably warm". th is not, and it is admitted anyway, on a narrower ground the
+   * row's own comment spells out: its og:video is derived from the Post on every render, with no R2,
+   * mux or container behind it, so it cannot go cold the way a mux can. What it CAN do is go red when
+   * the live Threads fetch misses, and every such tick is a card that really lost its player. Without
+   * it, the th row stayed green through the loss of every Threads post's rich path.
+   */
   const strict = SMOKE_CHECKS.filter(c => c.expect)
-  assert.deepEqual(strict.map(c => c.name), ['yt'],
-    'exactly one row demands a player. Adding another is a decision to defend in SmokeExpect, not a '
-    + 'tidy-up: it must be a row whose media is durably warm, or the monitor starts crying on a timer.')
+  assert.deepEqual(strict.map(c => c.name), ['yt', 'th'],
+    'exactly two rows demand a player. Adding another is a decision to defend in SmokeExpect, not a '
+    + 'tidy-up: its media must be durably warm (yt) or derived from the Post on every render so a red '
+    + 'tick is always a real loss (th), or the monitor starts crying on a timer.')
   for (const c of strict) assert.equal(c.expect, 'video', 'the only expectation this file knows')
 })
 
@@ -202,18 +211,23 @@ test('A RENDER THAT THROWS IS A FAILED CHECK, not a dead run', () => {
   })
 })
 
-test('runSmoke CARRIES EACH ROW\'S EXPECTATION, so the strict row is the only one that goes red', () => {
+test('runSmoke CARRIES EACH ROW\'S EXPECTATION, so only the strict rows go red', () => {
   /**
    * THE WIRING, END TO END, because a per-row expectation that cardVerdict honours and runSmoke never
    * passes is a check that only exists in its own unit test. The head below is the SAME playerless
-   * shape for every row — the one a cold mux produces — and exactly one row must report it.
+   * shape for every row — the one a cold mux produces, and the one a Threads card on the OG fallback
+   * produces — and exactly the rows that asked for a player must report it. Rewritten 2026-10-04 from
+   * one strict row (yt) to two, when th gained the expectation; the property it pins is unchanged.
    */
   const render = async () => new Response(DEGRADED_VIDEO_CARD, { status: 200 })
   return runSmoke('https://mbedfx.app', render).then(results => {
-    const yt = results.find(r => r.name === 'yt')
-    assert.equal(yt.verdict, 'no-video', 'the row that asked for a player is told it did not get one')
-    assert.equal(smokeOutcome(yt.verdict), 'smoke_fail')
-    assert.ok(results.filter(r => r.name !== 'yt').every(r => r.verdict === 'ok'),
+    const strict = ['yt', 'th']
+    for (const name of strict) {
+      const row = results.find(r => r.name === name)
+      assert.equal(row.verdict, 'no-video', `${name} asked for a player and is told it did not get one`)
+      assert.equal(smokeOutcome(row.verdict), 'smoke_fail')
+    }
+    assert.ok(results.filter(r => !strict.includes(r.name)).every(r => r.verdict === 'ok'),
       'and no other row is made stricter by it — this head is a perfectly healthy media post for them')
   })
 })

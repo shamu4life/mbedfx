@@ -18,6 +18,7 @@ import { normalizeInstagram } from '../src/platforms/instagram/normalize.ts'
 // encoding, the canonical the normalizer mints vs the one the router assumed) fails HERE, before
 // staging, instead of as a dead player on Discord.
 import { normalizeTwitter } from '../src/platforms/twitter/normalize.ts'
+import { normalizeReddit } from '../src/platforms/reddit/normalize.ts'
 import { withResolvedVideo } from '../src/platforms/tiktok/fetch.ts'
 import { AWEME_PLAY } from '../src/platforms/tiktok/normalize.ts'
 import { toMastodonStatus } from '../src/render/mastodon.ts'
@@ -3535,6 +3536,72 @@ test('REAL FIXTURE: an animated_gif renders a player, not an og:image=mp4', asyn
   const html = await (await handle(req(`/i/status/${post.ref.id}`, DISCORD), fakeEnv(), ctx, deps)).text()
   assert.match(html, /property="og:video"/, 'the GIF plays as a video, not an og:image')
   assert.ok(!html.includes('video.twimg') && !html.includes('pbs.twimg'), 'no raw CDN url in the GIF head')
+})
+
+test('REAL FIXTURE: a Reddit GIF renders a player in every surface, not the empty card it shipped as', async () => {
+  /**
+   * Reported 2026-10-04: a Reddit gif post (r/forsen/comments/1wuh1g1) unfurled as text only, because
+   * Reddit labels it type:'gif' and the normalizer had no branch for the word. The fix reads Reddit's own
+   * mp4 rendition off the embed's player, so this drives the REAL captured page through the REAL
+   * normalizer and then every surface that has to agree on it: the Discord head, the activity document
+   * Discord actually draws a media post from, both /_media/ urls, and the converter preview.
+   */
+  const ref = { p: 'rd', sub: 'forsen', id: '1wuh1g1' }
+  const html = readFileSync('test/fixtures/reddit-embed-gif.html', 'utf8')
+  const post = normalizeReddit({ source: 'embed', html }, ref)
+  const deps = xDeps(post)
+  const head = await (await handle(req('/r/forsen/comments/1wuh1g1/this_man_is_deranged/', DISCORD), fakeEnv(), ctx, deps)).text()
+  assert.match(head, /property="og:video" content="https:\/\/staging\.megapenispoopenfarten\.sex\/_media\/rd%3Aforsen%3A1wuh1g1\/0\.mp4"/)
+  assert.ok(!/redd\.it/.test(head), 'no raw Reddit CDN url in the head')
+
+  const status = toMastodonStatus(post, 'https://staging.megapenispoopenfarten.sex', 'videos')
+  assert.equal(status.media_attachments.length, 1)
+  assert.equal(status.media_attachments[0].type, 'video')
+  assert.ok(status.media_attachments[0].preview_url.endsWith('/poster0'), 'the png8 poster is the still')
+  // It carries a size, unlike a 0x0 .gif, whose attachment would go out with no meta at all. The
+  // width/height are fudge()d up for video on purpose (originalMeta), so the aspect is what is pinned.
+  assert.ok(status.media_attachments[0].meta?.original, 'a sized attachment')
+  assert.equal(status.media_attachments[0].meta.original.aspect, 320 / 240)
+
+  const video = await handle(req(mediaRef(ref, 0), DISCORD), fakeEnv(), ctx, deps)
+  assert.equal(video.status, 302)
+  assert.match(video.headers.get('location'), /^https:\/\/preview\.redd\.it\/4gg2f32z3qsh1\.gif\?width=320&format=mp4&s=/)
+  const poster = await handle(req(`${mediaRef(ref, 'poster0')}`, DISCORD), fakeEnv(), ctx, deps)
+  assert.equal(poster.status, 302)
+  assert.match(poster.headers.get('location'), /^https:\/\/preview\.redd\.it\/this-man-is-deranged-v0-4gg2f32z3qsh1\.gif\?format=png8&s=/)
+
+  const card = await (await handle(new Request(`https://mbedfx.app/_card?p=${encodeURIComponent('/r/forsen/comments/1wuh1g1/')}`), fakeEnv(), ctx, deps)).json()
+  assert.equal(card.media?.[0]?.kind, 'video')
+  assert.ok(card.media?.[0]?.poster, 'the preview draws a video from its poster, so a posterless entry would draw nothing')
+})
+
+test('A BARE /comments/{id} LOAD OF A REDDIT GIF NEVER MAKES THE PROMISED VIDEO URL SERVE AN IMAGE', async () => {
+  /**
+   * Found by an adversarial review of the gif fix before it shipped. A bare /comments/{id} link gets
+   * Reddit's placeholder-sub render, which has no player, and loadPost writes that Post under the SAME
+   * canonical cache key the real-subreddit render uses. Had the normalizer fallen back to the raw .gif
+   * there, the /_media/{key}/0.mp4 url the real card's og:video names would 302 to image/gif after one
+   * bare-link request: Discord's media proxy caches per url, so that is the sticky poisoned-url defect.
+   * Driven through one shared cache, the real render first, then the bare one.
+   */
+  const ref = { p: 'rd', sub: 'forsen', id: '1wuh1g1' }
+  const full = normalizeReddit({ source: 'embed', html: readFileSync('test/fixtures/reddit-embed-gif.html', 'utf8') }, ref)
+  // The placeholder render's shape: the same post, the screenview saying type:'gif', and no player.
+  const placeholder = { ...full, media: normalizeReddit({ source: 'embed', html:
+    readFileSync('test/fixtures/reddit-embed-gif.html', 'utf8').replace(/<shreddit-player\b[^>]*>/g, '') }, ref).media }
+  assert.deepEqual(placeholder.media, [], 'the stripped render contributes no media at all')
+  const cache = fakeCache()
+  let next = full
+  const deps = { cache, fetchPost: async () => next, resolveShortlink: async () => ({ kind: 'unresolved' }) }
+  await handle(req('/r/forsen/comments/1wuh1g1/', DISCORD), fakeEnv(), ctx, deps)
+  next = placeholder
+  for (const k of [...cache.store.keys()]) cache.store.delete(k)   // the 900s post TTL lapsing between the two
+  await handle(req('/comments/1wuh1g1', DISCORD), fakeEnv(), ctx, deps)
+  const media = await handle(req(`${mediaRef(ref, 0)}.mp4`, DISCORD), fakeEnv(), ctx, deps)
+  const loc = media.headers.get('location') || ''
+  assert.ok(!loc.startsWith('https://i.redd.it/'), `the promised video url must never redirect to the .gif, got ${loc}`)
+  assert.ok(media.status === 404 || (media.status === 302 && /format=mp4/.test(loc)),
+    `video bytes or a 404, never an image, got ${media.status} ${loc}`)
 })
 
 test('REAL FIXTURE: a tombstone renders the AGE-RESTRICTED embed — calm card for a crawler, human 302', async () => {
