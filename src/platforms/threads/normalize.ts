@@ -15,7 +15,8 @@ type Any = Record<string, any>
  *    picture; `Discordbot/2.0` renders an `og:image` and no caption. So `media` is the Discord page
  *    and `text` the fbhit page, and each field is read from the page that actually carries it.
  *
- * WHAT THE DISCORDBOT og:image ACTUALLY IS, measured 2026-10-04 on a carousel and on a video post:
+ * WHAT THE DISCORDBOT og:image ACTUALLY IS, measured 2026-10-04 on a carousel and on a video post, from
+ * the Claude Code dev sandbox (a non-Cloudflare cloud IP behind an HTTPS proxy), not a Worker and not the Cloudflare Container (and the same picture came back through production's /_media/ for both):
  * Threads' own rendered SHARE CARD (fbcdn `t39.92108-6`), not the post's media. It is one picture with the
  * Threads logo, a truncated caption, cropped slides, counts as they were when it was rendered, and on a
  * video a play glyph that does not play. Real slides and covers are `t51.*`. The 2026-07-21 note
@@ -147,7 +148,7 @@ function buildFromHtml(mediaHtml: unknown, textHtml: unknown, ref: Extract<PostR
  * ever produce ONE image. Reported as a carousel collapsing to a single picture; it was every post: a
  * video lost its player, and every card lost its counts, its avatar and its real timestamp. /_smoke
  * stayed green, because the fallback card still has a title and the activity link (see its th row).
- * Measured from CONTAINER egress (not a Worker) on six pages with SSR_HEADERS: a carousel, a video, a
+ * Measured from the Claude Code dev sandbox (a non-Cloudflare cloud IP behind an HTTPS proxy), not a Worker and not the Cloudflare Container, on six pages with SSR_HEADERS: a carousel, a video, a
  * reply permalink, a quote post, a third account and an invalid code. The path inside is the same
  * `__bbox.result.data.media` the Permalink name used, and the hash differs per request, so the `\w+`
  * after the prefix is required. test/fixtures/threads-ssr-*.html are cut from two of those pages.
@@ -301,7 +302,8 @@ function buildFromMedia(m: Any, ref: Extract<PostRef, { p: 'th' }>, quoted = fal
 /**
  * Pure: fetched Threads data -> Post. Dispatches on `source`: 'ssr' is the rich path (video, counts,
  * timestamp, carousels, quotes) from the server-rendered JSON; 'html' is the OG-tag fallback (author,
- * caption, cover image) for when the SSR page is rate-limited or its header gate shifts. Returns null
+ * caption, and Threads' rendered share card as the one image) for when the SSR page is rate-limited or
+ * its header gate shifts. Returns null
  * rather than inventing a Post — a half-built Post renders as a broken embed.
  */
 export function normalizeThreads(raw: unknown, ref: PostRef): Post | null {

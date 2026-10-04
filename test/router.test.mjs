@@ -1961,11 +1961,43 @@ test("DISCORD'S SPOILER BARS DO NOT HIDE THE .mp4, OR A GALLERY SUFFIX", () => {
   assert.deepEqual(r('/X/status/20.mp4/p%7C%7C'), { ...r('/X/status/20'), gallery: 'stills', direct: true })
 })
 
-test('THE .mp4 SUFFIX COMPOSES WITH /v AND /p — including the converter\'s own `.mp4/p` output', () => {
-  assert.deepEqual(r('/X/status/20.mp4/p'), { ...r('/X/status/20'), gallery: 'stills', direct: true })
-  const flipped = r('/X/status/20/p.mp4')
-  assert.deepEqual(flipped.ref, { p: 'x', id: '20' })
-  assert.equal(flipped.direct, true)
+test('THE .mp4 SUFFIX COMPOSES WITH /v AND /p IN EITHER ORDER, on a platform that checks exact depth', () => {
+  /**
+   * REWRITTEN after review. The first version checked the flipped order only on X, whose matcher absorbs
+   * a trailing segment, so it passed without showing composition at all: `/p/{code}/v.mp4` was notfound.
+   * Instagram checks depth exactly, which is what makes it the honest fixture.
+   */
+  for (const base of ['/p/DaQ5CPTki4E', '/X/status/20']) {
+    assert.deepEqual(r(`${base}.mp4/p`), { ...r(base), gallery: 'stills', direct: true }, `${base}.mp4/p, the converter's own output`)
+  }
+  assert.deepEqual(r('/p/DaQ5CPTki4E/v.mp4'), { ...r('/p/DaQ5CPTki4E'), gallery: 'videos', direct: true })
+  assert.deepEqual(r('/nasajpl/p/DaQ5CPTki4E/v.mp4'), { ...r('/nasajpl/p/DaQ5CPTki4E'), gallery: 'videos', direct: true })
+  // X absorbs the trailing segment, so its plain reading wins first and keeps its old answer.
+  assert.deepEqual(r('/X/status/20/p.mp4'), { ...r('/X/status/20'), direct: true })
+})
+
+test('A URL ENDING IN "/" PUTS THE DECORATION IN A SEGMENT OF ITS OWN, AND IT IS STILL DROPPED', () => {
+  /**
+   * Caught by review: Instagram's and TikTok's desktop links end in '/', so the masked-link tail and a
+   * hand-typed `.mp4` land in their own segment (`/p/{code}/).`, `/p/{code}/.mp4`), where neither layer
+   * that strips from the end of a segment can see them. Every one of these was notfound. X and Reddit
+   * only looked fixed because their matchers ignore extra segments.
+   */
+  const cases = [
+    '/p/DaQ5CPTki4E', '/reel/DX7byl-oyGR', '/t/ZTAvgEAL3', '/share/v/AbCdEf123',
+    '/100052152768666/posts/1596906778724399',   // the converter's own Facebook story.php output ends in '/'
+    '/profile/alice.bsky.social/post/3k2a', '/mastodon.social/@bob/109',
+  ]
+  for (const p of cases) {
+    const plain = r(p)
+    assert.ok(['post', 'shortlink', 'redditshare', 'metashare'].includes(plain.kind), `${p} names a post`)
+    for (const t of ['/).', '/)', '/%29', '/)%E2%80%A6', '/||']) assert.deepEqual(r(`${p}${t}`), plain, `${p}${t}`)
+    assert.deepEqual(r(`${p}/.mp4`), { ...plain, direct: true }, `${p}/.mp4`)
+  }
+  // Decoration on a path that names no post is answered as typed; the empty-stem readings are unchanged.
+  assert.ok(!['post', 'shortlink', 'redditshare', 'metashare'].includes(r('/jack/).').kind), 'a handle is not made into a post')
+  assert.ok(!('direct' in r('/X/status/.mp4')), '/X/status names no post, so the bare .mp4 keeps its old reading')
+  assert.ok(!('direct' in r('/_media/x%3A20/.mp4')))
 })
 
 test('A SUFFIXED FACEBOOK REEL NO LONGER LANDS ON INSTAGRAM', () => {

@@ -12,8 +12,9 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - **A trailing `.mp4` on any post link serves the file, the way fxtwitter does.**
   `megapenispoopenfarten.sex/X/status/{id}.mp4` used to answer "Couldn't load this Twitter post",
   because the id swallowed the suffix. It is now the path spelling of the `d.` host and takes the same
-  code path to the same bytes: every platform, share codes and short links included, no
-  crawler/person split, a plain-text 404 when there is nothing to serve. The router reads it
+  code path to the same bytes: every platform whose post id is in the path, share codes and short
+  links included, no crawler/person split, a plain-text 404 when there is nothing to serve. A link
+  whose id is in the query (`watch?v=`, `photo/?fbid=`) cannot carry it; `d.` still serves those. The router reads it
   (`DIRECT_SUFFIX`), so the router stays host-blind, and `/_card` echoes the router's verdict so the
   converter previews a `.mp4` link as the file without a second copy of the rule.
 
@@ -28,12 +29,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 - **Reddit GIF posts rendered as text only.** Reddit labels them `type: "gif"`, which no branch knew.
   They now play Reddit's own mp4 rendition with its poster and real size (25 KB against 556 KB for the
-  `.gif`). A render with no player yields no media rather than the raw `.gif`, because the two renders
-  share a cache key and an image there would sit behind a url promised as video.
+  `.gif`, measured from a dev sandbox, not a Worker). A render with no player, and the OAuth fallback,
+  yield no media rather than an image, because every render of a post shares one cache key and an
+  image there would sit behind a url promised as video.
 
 - **A masked link followed by punctuation, `[text](url).`, broke any link ending at the post id.**
   Discord's own bug (discord-api-docs#6279) makes Discordbot fetch `url).`, and the `)` became part of
-  the id. The router now drops a trailing `)` and what follows it, only when what remains names a post.
+  the id. The router now drops a trailing `)` and what follows it from the path, only when what remains
+  names a post. An id carried in the query (`photo/?fbid=`) is not covered.
   The owner's example in the report had a separate cause: it was written `https//`, with no colon,
   which Discord does not treat as a link at all.
 

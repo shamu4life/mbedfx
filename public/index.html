@@ -1732,7 +1732,9 @@ function mbedfxConvert(input, host, gallery) {
     var m = (j && j.ok && (j.media || [])[0]) || null;
     var still = m ? (m.kind === 'video' ? m.poster : (m.poster || m.url)) : '';
     var line = j && j.ok
-      ? 'Discord attaches this file. No card, no caption.'
+      ? (j.muxing
+          ? 'The video is still being prepared. Pasted right now, it may show nothing.'
+          : 'Discord attaches this file. No card, no caption.')
       : (j && j.gate ? j.gate : 'Nothing to attach. This link has no media.');
     preview.innerHTML = '<div class="sentrow"><span class="sent" id="sentline"></span>'
       + '<button type="button" id="copy2">Copy</button></div>'
@@ -1771,11 +1773,6 @@ function mbedfxConvert(input, host, gallery) {
       .then(function (j) {
         if (seq !== cardSeq) return;
         lastCard = { path: path, j: j };
-        // Media-only needs the SAME answer — it is where the media urls come from — just drawn as the
-        // file rather than as a card. Skipping the fetch is what left the page previewing nothing.
-        // `j.direct` is the ROUTER's reading of a trailing `.mp4` on the path, echoed by /_card: Discord
-        // attaches that file exactly as it does for a d. link, so it previews the way the box does.
-        if (mediaOnly || (j && j.direct)) { drawMediaOnly(url, j); return; }
         /**
          * AT THE CAP THE PAYLOAD ITSELF IS SETTLED, not a copy of it passed to one draw.
          *
@@ -1804,7 +1801,16 @@ function mbedfxConvert(input, host, gallery) {
          * because the thing that was supposed to stop it already gave up.
          */
         if (j && j.muxing && waited >= MUX_WATCH_TOTAL_MS) { j.muxing = false; j.muxSlow = true; }
-        drawCard(url, j);
+        // Media-only needs the SAME answer — it is where the media urls come from — just drawn as the
+        // file rather than as a card. Skipping the fetch is what left the page previewing nothing.
+        // `j.direct` is the ROUTER's reading of a trailing `.mp4` on the path, echoed by /_card: Discord
+        // attaches that file exactly as it does for a d. link, so it previews the way the box does.
+        // DRAWN AFTER THE MUX BOOKKEEPING ABOVE, NOT BEFORE IT, so the file drawing keeps polling a video
+        // that is still being prepared exactly as the card does. Returning early, as it first did, froze
+        // the preview on a poster still captioned as the file Discord attaches, while a paste at that
+        // moment draws nothing (docs/API.md, the d. host). Caught by review.
+        if (mediaOnly || (j && j.direct)) drawMediaOnly(url, j);
+        else drawCard(url, j);
         if (j && j.muxing) {
           cardTimer = setTimeout(function () {
             // Re-checked on fire: the reader may have typed since, and that newer card wins.

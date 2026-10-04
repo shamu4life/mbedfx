@@ -74,8 +74,13 @@ function screenview(html: string): Any | null {
  * WHY THIS AND NOT THE .gif. Reported 2026-10-04: r/forsen/comments/1wuh1g1, a gif post, rendered as
  * text only. Reddit now labels such posts `type: "gif"` in the screenview (measured), which no branch
  * below knew, so media came back empty and nothing failed loudly. Treating it as the old .gif image
- * would have been a one-line fix, and it is the worse card on what was measured that day (container
- * egress): the .gif is 556 KB against 25 KB for the mp4, and it carries no size. Whether Discord draws a
+ * would have been a one-line fix, and it is the worse card on what was measured that day: the .gif is
+ * 556 KB against 25 KB for the mp4, and it carries no size. WHERE THOSE WERE MEASURED: from the Claude
+ * Code dev sandbox that wrote this change (a non-Cloudflare cloud IP behind an HTTPS proxy), not from a
+ * Worker and not from the Cloudflare Container. The same goes for the 320x240, the 403 below, and the
+ * page markup itself. That Worker egress gets the player block is INFERRED, not measured: production
+ * read the same title, author and counts off this post, which only that full render carries. The check
+ * after deploy is /_api/v1 for this post showing kind 'video', 320x240 and a poster. Whether Discord draws a
  * size-less IMAGE attachment at all is unresolved for Reddit: types.ts records that it does not (measured
  * on a YouTube poster), while embed.ts calls Reddit's 0x0 images human-verified. The mp4-with-poster shape
  * sidesteps that question, and it is the one Twitter's animated_gif, Imgur and Mastodon's gifv already
@@ -86,9 +91,10 @@ function screenview(html: string): Any | null {
  *   <shreddit-player src="https://preview.redd.it/{id}.gif?width=320&format=mp4&s=…" … gif …
  *                    poster="https://preview.redd.it/{slug}-v0-{id}.gif?format=png8&s=…">
  * inside a `<shreddit-aspect-ratio style="--aspect-ratio: 1.333…">`. The `gif` attribute is what marks
- * it, and it is a BARE attribute, so quoted values are blanked before looking for it: the src's own
- * `.gif?` must not count. The `s=` signature binds the whole query (dropping `width=` answered 403), so
- * the url is passed through exactly as served, entities decoded.
+ * it, and it is a BARE attribute, so quoted values are blanked before looking for it: a whitespace-
+ * separated `gif` inside a value (a class list, `class="media gif loop"`) must not count. The `s=`
+ * signature binds the whole query (dropping `width=` answered 403), so the url is passed through exactly
+ * as served, entities decoded.
  *
  * THE SIZE IS READ, NEVER GUESSED: the width from the src's own `width=` (it names the rendition, and the
  * served mp4 measured exactly 320x240), the height from that width over the aspect ratio of the
@@ -136,11 +142,13 @@ function redditEmbedMedia(html: string, post: Any): Media[] {
    * The placeholder-sub render (a bare /comments/{id} or /user/{name}/comments/{id} link, fetch.ts) has no
    * player at all, and loadPost writes whichever render it got under the post's CANONICAL cache key, the
    * same key a real-subreddit load uses (an empty-sub refKey does not parse, and /_media/ needs the real
-   * sub). Falling back to the raw i.redd.it .gif there would put an IMAGE at index 0 of a post whose other
-   * render puts the mp4 there, so the one /_media/{key}/0.mp4 url og:video promised could 302 to image
-   * bytes, which is the sticky poisoned-url defect worker.ts's notReady() exists to prevent. Caught by an
-   * adversarial review of this change before it shipped. Absent media at index 0 answers 404 instead,
-   * which poisons nothing, and is exactly what a bare link to a gif post rendered before 2026-10-04.
+   * sub). So does the OAuth render (redditOAuthMedia, which follows the same rule). Falling back to the
+   * raw i.redd.it .gif there would put an IMAGE at index 0 of a post whose embed render puts the mp4 there,
+   * so the one /_media/{key}/0.mp4 url og:video promised could 302 to image bytes, which is the sticky
+   * poisoned-url defect worker.ts's notReady() exists to prevent. Caught by an adversarial review of this
+   * change before it shipped. Absent media at index 0 answers a 404 instead: not image bytes, and the same
+   * answer a bare link already gets for a Reddit VIDEO post's url, so it adds no new kind of failure.
+   * Whether Discord's proxy remembers that 404 is unmeasured, as it is for the video case.
    *
    * For the same reason a type:'image' post is NOT read for a player: its .gif fallback below is what both
    * renders have always agreed on, and reading the player for it would reopen the same disagreement.
@@ -249,6 +257,18 @@ function isRemoved(d: Any): boolean {
 
 /** OAuth media: gallery images, else the preview image. Video is the still (audio-split, unmuxable here). */
 function redditOAuthMedia(d: Any): Media[] {
+  /**
+   * AN ANIMATED POST GETS NO MEDIA HERE, for the reason redditEmbedMedia gives for its own placeholder
+   * render: this Post lands under the same canonical cache key as the embed render, which puts Reddit's
+   * mp4 rendition at index 0 of a gif post, so the png8 still the preview branch below would pick could
+   * sit behind a /_media/{key}/0.mp4 url a cached card promised as video. Caught by review. The animated
+   * markers are read off Reddit's public listing shape (a .gif url, or a gif/mp4 preview variant), which
+   * nothing here has captured, since this path needs app credentials; that is also why the mp4 variant
+   * is not emitted as the video instead, as a url from an unmeasured field behind a video url is the
+   * same risk the other way round.
+   */
+  const v = d.preview?.images?.[0]?.variants
+  if ((typeof d.url === 'string' && /\.gif(?:\?|$)/i.test(d.url)) || v?.gif || v?.mp4) return []
   if (d.is_gallery && d.gallery_data?.items && d.media_metadata) {
     const out: Media[] = []
     for (const it of d.gallery_data.items) {

@@ -3597,6 +3597,14 @@ test('A BARE /comments/{id} LOAD OF A REDDIT GIF NEVER MAKES THE PROMISED VIDEO 
   next = placeholder
   for (const k of [...cache.store.keys()]) cache.store.delete(k)   // the 900s post TTL lapsing between the two
   await handle(req('/comments/1wuh1g1', DISCORD), fakeEnv(), ctx, deps)
+  // TIGHTENED after review: the first version let /_media/ refetch the placeholder itself, so it passed
+  // without the bare load ever writing anything. Now the canonical entry the bare load wrote is the only
+  // place the answer can come from: any further upstream fetch throws.
+  const canonicalKey = [...cache.store.keys()].find(k => String(k).endsWith('/post%3Ard%3Aforsen%3A1wuh1g1'))
+  assert.ok(canonicalKey, `the bare /comments/ load wrote under the CANONICAL key, saw ${[...cache.store.keys()].join(', ')}`)
+  const written = JSON.parse(await cache.store.get(canonicalKey).clone().text())
+  assert.deepEqual(written.media, [], 'and what it wrote there is the placeholder render, with no media')
+  deps.fetchPost = async () => { throw new Error('/_media/ must answer from the entry the bare load wrote') }
   const media = await handle(req(`${mediaRef(ref, 0)}.mp4`, DISCORD), fakeEnv(), ctx, deps)
   const loc = media.headers.get('location') || ''
   assert.ok(!loc.startsWith('https://i.redd.it/'), `the promised video url must never redirect to the .gif, got ${loc}`)

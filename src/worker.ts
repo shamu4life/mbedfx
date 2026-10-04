@@ -6041,7 +6041,25 @@ export async function handle(req: Request, env: Env, ctx: ExecutionContext, d: D
       const alreadyRight = shown === inner.canonical
         && pasted.kind === 'post'
         && refKey(pasted.ref) === refKey(ref)
-      const shownUrl = alreadyRight ? target : new URL(shown)
+      let shownUrl = alreadyRight ? target : new URL(shown)
+      /**
+       * A PASTED `.mp4` SURVIVES THE UNFURL. A share code or short link with the suffix asks for the file,
+       * and the permalink rebuilt from `shown` above has no suffix, so the page would replace the link the
+       * reader typed with a card link (caught by review: `/r/{sub}/s/{code}.mp4`, `/t/{code}.mp4` and
+       * `/share/{code}.mp4` all came back bare, while /_card for the same path said direct). The d. host
+       * survives this on its own because the page re-applies the host; nothing re-applies a path suffix.
+       *
+       * PROVED, NOT ASSUMED: the suffixed permalink is used only if route() reads it back as the same post
+       * with `direct`. Otherwise the pasted target goes back untouched, which still serves the file when
+       * pasted, rather than a permalink that would silently be a card (a canonical whose id lives in the
+       * query, like /watch?v=, cannot carry the suffix at all).
+       */
+      if (!alreadyRight && 'direct' in pasted && pasted.direct === true) {
+        const cand = new URL(shownUrl.toString())
+        cand.pathname = `${cand.pathname.replace(/\/+$/, '')}.mp4`
+        const back = route(cand)
+        shownUrl = back.kind === 'post' && back.direct === true && refKey(back.ref) === refKey(ref) ? cand : target
+      }
       return Response.json({
         ok: true,
         url: `${origin}${shownUrl.pathname}${shownUrl.search}`,
@@ -6594,6 +6612,8 @@ export async function handle(req: Request, env: Env, ctx: ExecutionContext, d: D
          * `/t/{code}.mp4` in its text. Answering here, with nothing put, closes it.
          */
         if (direct) {
+          // The SAME counter each HTML twin below writes, so a TikTok block reads the same on direct and
+          // card traffic; METRICS.md records that tt/ambiguous now also covers this 404.
           count(env, r.p, seen.at?.kind === 'gated' || seen.at?.kind === 'gone' ? 'fetch_fail' : 'ambiguous', client)
           return directNotFound('this short link could not be resolved to a post')
         }

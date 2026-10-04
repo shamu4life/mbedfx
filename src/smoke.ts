@@ -17,8 +17,8 @@ import type { ClientClass, Platform } from './types.ts'
  * looks at an HTTP status, because on this service every interesting failure answers 200: the
  * failure card is a 200, Meta's login wall is a 200, TikTok's 404 page is a 200. `cardVerdict`
  * below is a pure function over the emitted head and the row's own `expect`, and it is the entire
- * assertion. The default floor is "a title and something to draw"; one row asks for more, and the
- * SmokeExpect docstring is where the case for keeping that rare is written down.
+ * assertion. The default floor is "a title and something to draw"; two rows ask for more (yt and th),
+ * and the SmokeExpect docstring is where the case for keeping that rare is written down.
  *
  * WHAT IT DOES NOT COLLECT. Platform, outcome and nothing else, through the existing counters. No
  * url, no ip, no user agent, no geolocation. wrangler.jsonc explains at length why Workers Logs are
@@ -373,16 +373,18 @@ export const SMOKE_UNCHECKED: readonly { platform: Platform, why: string }[] = [
  * ... post" — so a title alone proves nothing. It carries no media and no activity link, which is
  * exactly what separates it here.
  *
- * `expect` RAISES THE BAR FOR ONE ROW, and the floor above stays this low for everybody else on
- * purpose: it is the widest assertion sixteen platforms can share. On YouTube that floor is met by
- * the activity link the head emits unconditionally, so the check could not fail while the cards had
- * no player in them. `expect: 'video'` additionally demands og:video. SmokeExpect says why the rest
+ * `expect` RAISES THE BAR FOR TWO ROWS, and the floor above stays this low for everybody else on
+ * purpose: it is the widest assertion sixteen platforms can share. On YouTube and Threads that floor is
+ * met by the activity link the head emits unconditionally, so the check could not fail while the cards
+ * had no player in them. `expect: 'video'` additionally demands og:video. SmokeExpect says why the rest
  * of the list must not ask for it.
  *
  * THE FAILURE CARD STILL WINS OVER AN UNMET EXPECTATION, which is what the order of the returns below
  * decides. "The upstream is gone" and "the card rendered but has no player" are different repairs and
  * the first is the more specific, so a row carrying an expectation must not relabel a dead platform as
- * a muxing problem.
+ * a missing player. WHAT `no-video` POINTS AT DIFFERS BY ROW: on yt it is this service (the mux path or
+ * the crawler's mux budget); on th, which has no mux at all, it is the upstream (Threads' server-rendered
+ * post did not arrive or was not read: a throttle, the header gate, or another preloader rename).
  *
  * `no-video` IS A VERDICT OF ITS OWN rather than a second spelling of `failure-card`, for the reason
  * `timeout` is not a second spelling of `threw`: both count as `smoke_fail`, and only one of them

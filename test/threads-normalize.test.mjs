@@ -26,7 +26,8 @@ const mediaDict = (over = {}) => ({
 })
 
 // Small literal meta-tag pages, not real captures — the two-UA split is the whole point, so the
-// fixtures mirror it: the "media" (Discordbot) page carries og:image = the POST media, the "text"
+// fixtures mirror it: the "media" (Discordbot) page carries og:image (Threads' rendered share card, measured
+// 2026-10-04; called the POST media here before that), the "text"
 // (fbhit) page carries name="description" = the caption. `&#064;` is how Threads spells '@' in
 // og:title, and `&amp;` is in every CDN url — both must decode.
 const mediaPage = (title, image) =>
@@ -81,7 +82,7 @@ test('normalizeThreads builds a Post from the two OG pages, decoding entities', 
   assert.equal(post.canonical, 'https://www.threads.com/@pmestevez/post/DDYEM_foiI1')
   // Caption comes from the fbhit page's name=description, with entities decoded.
   assert.equal(post.text, 'the caption & more')
-  // The post media (Discord page og:image) is one image entry, with its &amp; decoded.
+  // The Discord page's og:image (the share card) is one image entry, with its &amp; decoded.
   assert.equal(post.media.length, 1)
   assert.equal(post.media[0].kind, 'image')
   assert.equal(post.media[0].url, 'https://scontent.xx.fbcdn.net/v/t39.92108-6/img.jpg?a=1&b=2')
@@ -242,7 +243,7 @@ test('normalizeThreads tolerates a post with no image (text-only) — an empty m
  * REAL PAGES, 2026-10-04. Everything above builds its SSR page by hand, under the OLD preloader name and
  * without the real page's outer `{"require":[["ScheduledServerJS",…,{"__bbox":{"require":…` wrapper. That
  * is how a rename went unnoticed: no test had ever seen a page Threads actually served. These two are cut
- * from pages captured that day from CONTAINER egress with fetch.ts's SSR_HEADERS (not a Worker):
+ * from pages captured that day with fetch.ts's SSR_HEADERS from the Claude Code dev sandbox (a non-Cloudflare cloud IP behind an HTTPS proxy), not a Worker and not the Cloudflare Container:
  *
  *  - threads-ssr-carousel.html: @bradandthegoat/post/DeEFGTkCLxz, the ten-slide carousel the owner reported
  *    collapsing to one picture.
@@ -278,8 +279,8 @@ test('THE 2026-10-04 PAGE IS READ: a real carousel yields every slide, the count
   assert.ok(post.media.every(m => m.w > 0 && m.h > 0), 'each slide carries its real dimensions')
   assert.ok(post.media.every(m => /\/t51\./.test(m.url)), 'real slides are t51; the share card is t39.92108-6')
   assert.deepEqual(post.counts, { likes: 4316, replies: 21, reposts: 2003 })
-  // taken_at, to the second. The fallback can only estimate from the shortcode (createdAtFromCode),
-  // which lands about a minute off and carries milliseconds no real timestamp has.
+  // taken_at, exactly. The OG fallback can only estimate from the shortcode (createdAtFromCode): 0.4s off on
+  // this post (07:18:02.401), 65s on the video one, and always with milliseconds no real timestamp has.
   assert.equal(post.createdAt.toISOString(), '2026-10-04T07:18:02.000Z')
   assert.ok(post.author.avatar, 'the avatar only exists on the rich path')
   assert.equal(post.author.handle, 'bradandthegoat')

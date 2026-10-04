@@ -280,11 +280,14 @@ The suffix is stripped ahead of every route matcher, and falls back to the unstr
 stripped one names no post — so the handful of live permalinks whose own last segment is `p` or `v`
 (`/p/v` is an Instagram shortcode; `/{host}/@user/v` is a fediverse id) are unaffected.
 
-A `)` glued to the end of a post url, and anything after it, is dropped the same way (strip first,
-keep it only when what remains names a post). Discord appends exactly that when a masked link
-`[text](url)` is followed directly by punctuation, `[text](url).` fetching `url).` (discord-api-docs
-issue 6279), and without the trim the `)` became part of the post id. This applies to `url` here too:
-`?url=https://x.com/jack/status/20).` describes post 20.
+A `)` at the end of a post url's path, and anything after it, is dropped the same way (strip first,
+keep it only when what remains names a post), whether it is glued to the id or sits in a segment of
+its own after a trailing `/`. Discord appends exactly that when a masked link `[text](url)` is
+followed directly by punctuation, `[text](url).` fetching `url).` (discord-api-docs issue 6279), and
+without the trim the `)` became part of the post id. This applies to `url` here too:
+`?url=https://x.com/jack/status/20).` describes post 20. A post whose id is in the query
+(`/photo/?fbid=`, `/story.php?…`, `/embed?clip=`) is not covered: the tail lands in the query value,
+which routing does not trim.
 
 ### The `d.` host
 
@@ -299,12 +302,14 @@ a file full of markup. `media_miss` on this host means the post has no usable me
 meaning `docs/METRICS.md` records under "Known defects in the write shape" (`serveDirectMedia`,
 `src/worker.ts`).
 
-A trailing `.mp4` on the post url does the same on any host, the spelling fxtwitter users already
-type: `https://mbedfx.app/jack/status/20.mp4`. It is read off the path (`DIRECT_SUFFIX`,
-`src/router.ts`), so it works on every post url `d.` works on, share codes and short links included,
-and the answer is identical: the post's first usable media, a plain-text 404 when there is none (or
-when a share code or short link does not resolve), and no split between crawlers and people. Only
-`.mp4`, in any case, directly on the last segment; a `/watch?v={id}.mp4` query is still a card.
+A trailing `.mp4` on the post url's path does the same on any host, the spelling fxtwitter users
+already type: `https://mbedfx.app/jack/status/20.mp4`. It is read off the path (`DIRECT_SUFFIX`,
+`src/router.ts`), so it works on every post `d.` works on whose id is in the path, share codes and
+short links included, glued to the id or after a trailing `/` (`/p/{code}/.mp4`), and before or after
+a `/v` or `/p`. The answer is identical to `d.`'s: the post's first usable media, a plain-text 404
+when there is none (or when a share code or short link does not resolve), and no split between
+crawlers and people. `.mp4` only, in any case. In a query it is not read: `/watch?v={id}.mp4` is
+still a card for a YouTube id and a chooser for a Facebook numeric one, so use `d.` for those.
 `/_api/v1` ignores the suffix, as it ignores `/v` and `/p`, and describes the post.
 
 Both spellings have one cost a card does not. A card answers at once and Discord fetches its video

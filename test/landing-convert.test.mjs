@@ -761,9 +761,17 @@ test('MEDIA-ONLY PREVIEWS THE FILE — no Discord card, but not nothing either',
   // The SAME card payload feeds it — that is where the media urls come from. Skipping the fetch is
   // exactly what left the page previewing nothing. REWRITTEN 2026-10-04: the condition gained
   // `|| (j && j.direct)`, because a pasted `.mp4` link asks for the file exactly as the box does (see
-  // the test below); the property pinned, fetch-then-draw rather than skip, is unchanged.
-  assert.match(HTML, /if \(mediaOnly \|\| \(j && j\.direct\)\) \{ drawMediaOnly\(url, j\); return; \}/,
+  // the test below), and the early `return` went, so the file drawing keeps polling a video still being
+  // prepared the way the card does. The property pinned, fetch-then-draw rather than skip, is unchanged.
+  assert.match(HTML, /if \(mediaOnly \|\| \(j && j\.direct\)\) drawMediaOnly\(url, j\);\s*else drawCard\(url, j\);/,
     'the card payload is fetched and re-drawn, not skipped')
+  // And the poll that follows the drawing is shared by both, rather than skipped by an early return.
+  const body = HTML.slice(HTML.indexOf('function card(url, isRetry, muxSince)'))
+  const draw = body.indexOf('if (mediaOnly || (j && j.direct)) drawMediaOnly(url, j);')
+  assert.ok(draw > 0 && body.indexOf('if (j && j.muxing) muxSince') < draw && body.indexOf('if (j && j.muxing) {', draw) > draw,
+    'the mux bookkeeping runs before the drawing, and the re-poll after it, for the file drawing too')
+  assert.match(HTML, /The video is still being prepared\. Pasted right now, it may show nothing\./,
+    'and while it is being prepared the file drawing says so, instead of promising the file')
   assert.ok(!/function mediaNote\(\)/.test(HTML), 'the text-only state is gone')
 })
 

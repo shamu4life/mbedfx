@@ -28,10 +28,14 @@ const TEXT_UA = 'facebookexternalhit/1.1'
 /**
  * THE SSR GATE IS A HEADER COMBINATION, not a UA (measured from Workers egress 2026-07-21). A browser
  * UA alone gets the ~256KB dataless shell; add `Accept: text/html` + `Sec-Fetch-Dest: document` +
- * `Sec-Fetch-Mode: navigate` and Threads server-renders the full post JSON (~700-860KB then; 951KB and
- * 1.43MB on the two pages captured 2026-10-04), video and
+ * `Sec-Fetch-Mode: navigate` and Threads server-renders the full post JSON (~700-860KB), video and
  * counts included, from our datacenter IP with no decoy, block or cookie. `/@i/post/{code}` 301s to
  * the real @user url and still resolves, so the ref needs only the shortcode.
+ *
+ * The two pages captured 2026-10-04 for the preloader-rename fix (normalize.ts SSR_PRELOADERS) were
+ * 951KB and 1.43MB, fetched with these headers from the Claude Code dev sandbox (a non-Cloudflare cloud IP behind an HTTPS proxy), not a Worker and not the Cloudflare Container. That Workers egress still
+ * passes the gate is inferred from production, not re-measured; the th smoke row's expect:'video' is
+ * the first check from a Worker after deploy.
  */
 const SSR_HEADERS: Record<string, string> = {
   'user-agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36',
@@ -79,9 +83,9 @@ export async function fetchThreads(ref: Extract<PostRef, { p: 'th' }>): Promise<
     // Transport failure on the SSR fetch is not fatal — the OG scrape below is a second chance.
   }
 
-  // FALLBACK: the two-UA OG scrape (author + caption + cover image, no video/counts). Robust when the
+  // FALLBACK: the two-UA OG scrape (author + caption + Threads' share card, no video/counts). Robust when the
   // SSR path is throttled, at the cost of richness. No single bot UA carries both text and media, so
-  // Discordbot gives the post image and facebookexternalhit the caption.
+  // Discordbot gives the share card in og:image and facebookexternalhit the caption.
   //
   // askTwice ON BOTH, added 2026-08-29 — these two were the only platform fetches the retry lint could
   // not see, because it anchored on `await fetch(` and these are `fetch(…).then(…)` inside a

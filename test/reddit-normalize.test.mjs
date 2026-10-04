@@ -48,6 +48,24 @@ test('normalizeReddit: an image post carries the preview source, &amp; decoded',
   assert.deepEqual(post.media[0], { kind: 'image', url: 'https://preview.redd.it/x.jpg?a=1&b=2', w: 800, h: 600 })
 })
 
+test('normalizeReddit (OAuth): an animated post yields no media, never its png8 still at the index the embed render makes a video', () => {
+  /**
+   * Caught by review. The OAuth Post shares the canonical cache key with the embed render, which puts
+   * Reddit's mp4 rendition at index 0 of a gif post. The preview source here is the png8 STILL, so emitting
+   * it would let /_media/{key}/0.mp4, a url a cached card promised as video, 302 to image bytes. Every
+   * render must agree that index 0 of a gif post is a video or absent.
+   */
+  const still = { source: { url: 'https://preview.redd.it/x.gif?format=png8&amp;s=abc', width: 320, height: 240 } }
+  for (const over of [
+    { url: 'https://i.redd.it/x.gif', preview: { images: [still] } },
+    { url: 'https://i.redd.it/x.png', preview: { images: [{ ...still, variants: { gif: { source: { url: 'https://preview.redd.it/x.gif' } } } }] } },
+    { url: 'https://i.redd.it/x.png', preview: { images: [{ ...still, variants: { mp4: { source: { url: 'https://preview.redd.it/x.gif?format=mp4' } } } }] } },
+  ]) {
+    const post = normalizeReddit(listing({ ...base, post_hint: 'image', ...over }), REF)
+    assert.deepEqual(post.media, [], JSON.stringify(over).slice(0, 80))
+  }
+})
+
 test('normalizeReddit: a gallery carries every media_metadata image', () => {
   const post = normalizeReddit(listing({
     ...base, is_gallery: true,
@@ -172,7 +190,8 @@ test('embed: a gallery reconstructs clean full-res i.redd.it urls from every sli
 /**
  * GIF POSTS, 2026-10-04. Reported: https://forsen.sex/r/forsen/comments/1wuh1g1/ rendered as text only.
  * Reddit labels these `type: "gif"` in the screenview, no branch knew the word, and media came back empty
- * with nothing failing. The fixture is that post's real embed page (container egress, real subreddit,
+ * with nothing failing. The fixture is that post's real embed page (captured from the Claude Code dev
+ * sandbox, not a Worker or the Cloudflare Container; real subreddit,
  * trimmed of scripts and styles; see its header for exactly what was cut and that the Post it yields is
  * identical to the full page's).
  */
@@ -232,10 +251,12 @@ test('embed: a gif player with no aspect ratio is 0x0, never an invented height'
   assert.equal(post.media[0].h, 0)
 })
 
-test('embed: a NON-gif player on the page is not mistaken for one, even though its src ends .gif?', () => {
-  // `gif` is a BARE attribute; the src's own ".gif?" must not count. Without the blanking of quoted
-  // values, any player whose url mentions .gif would be read as the animated rendition.
-  const notGif = '<shreddit-player src="https://preview.redd.it/x.gif?width=320&amp;format=mp4" autoplay poster="https://preview.redd.it/p.png">'
+test('embed: a NON-gif player is not mistaken for one, even with the word "gif" inside one of its attribute values', () => {
+  // `gif` is a BARE attribute. REWRITTEN after review: the first version used a src ending ".gif?", which
+  // the detection regex (whitespace before "gif") could never match anyway, so the test passed with the
+  // quoted-value blanking deleted. A whitespace-separated "gif" inside a value, a class list here, is the
+  // case the blanking actually exists for.
+  const notGif = '<shreddit-player class="block gif media" src="https://preview.redd.it/x.gif?width=320&amp;format=mp4" autoplay poster="https://preview.redd.it/p.png">'
   const post = normalizeReddit({ source: 'embed', html: gifPage({ player: notGif }) }, eRef())
   assert.deepEqual(post.media, [], 'no gif attribute, no player reading')
 })

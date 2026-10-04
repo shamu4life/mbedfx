@@ -1152,3 +1152,26 @@ test('/_prep STILL UNFURLS A LINK THAT NAMES NO POST UNTIL IT IS RESOLVED', asyn
   assert.ok(!j.url.includes('/t/'), `the opaque code is replaced, got ${j.url}`)
   assert.match(j.url, /7650584217042144526/, 'with the real post it resolved to')
 })
+
+test('/_prep KEEPS A PASTED .mp4 THROUGH A SHARE-CODE UNFURL, so the page never swaps a file link for a card link', async () => {
+  /**
+   * Caught by review. A share code or short link names no post until it is resolved, so /_prep hands the
+   * page the permalink, rebuilt from the platform canonical, and the page replaces the reader's link with
+   * it. The rebuilt permalink had no `.mp4`: the reader typed a link to the FILE and copied a CARD link.
+   * The answer must route as the same post with `direct`, for all three kinds that resolve this way.
+   */
+  const { ctx: c } = ctx()
+  const cases = [
+    ['/r/linuxmemes/s/VRg1iSFn4k.mp4', deps({ fetchPost: echoRedditPost, resolveRedditShare: async () => redditShareResolved('linuxmemes', 'prep2rd') })],
+    ['/t/ZTAxTF9aE.mp4', deps({ resolveShortlink: async () => shortResolved })],
+    ['/share/Fixture05X.mp4', deps({ resolveMetaShare: async () => 'https://www.threads.com/@dexerto/post/DbWxxQjFe4u?xmt=AQG0&slof=1' })],
+  ]
+  for (const [p, d] of cases) {
+    const j = await (await handle(prep(p), envWith(fakeResolver().binding), c, d)).json()
+    assert.equal(j.ok, true, p)
+    assert.ok(j.url.endsWith('.mp4'), `${p}: the suffix survives, got ${j.url}`)
+    const back = route(new URL(j.url))
+    assert.equal(back.kind, 'post', p)
+    assert.equal(back.direct, true, `${p}: and the router reads it as the file`)
+  }
+})

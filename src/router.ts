@@ -1634,8 +1634,28 @@ function withLastSegment(url: URL, seg: string[], last: string): URL {
  * to `/X/status/20/p` before the gallery lookup sees its last segment, and the converter's own `.mp4` +
  * stills output, `/X/status/20.mp4/p`, strips `/p` before the `.mp4` layer sees `20.mp4`.
  */
+/**
+ * A LAST SEGMENT THAT IS NOTHING BUT DECORATION: an over-capture tail, a bare `.mp4`, or spoiler bars,
+ * standing alone because the pasted url ended in '/'. `[t](https://host/p/{code}/).` makes Discordbot ask
+ * for `/p/{code}/).`, and a hand-swapped Instagram link with `.mp4` typed on the end is `/p/{code}/.mp4`;
+ * in both the decoration has no stem in its own segment, so the two layers below (which strip from the
+ * end of a segment) never fire. Instagram's and TikTok's desktop links end in '/', and so does the
+ * converter's own Facebook story.php output. Caught by an adversarial review: every such shape was
+ * notfound, while X and Reddit only looked fixed because their matchers ignore extra segments.
+ */
+const DECORATION = /^(?:(?:\)|%29)[^/]*|\.mp4(?:\||%7[Cc])*|(?:\||%7[Cc])+)$/i
+
 export function route(url: URL): Route {
   const seg = url.pathname.split('/').filter(Boolean)
+  // The parent goes through ALL the layers (it may itself end `20.mp4` or `/p`), and is kept only when
+  // it names a post, so a decoration segment on anything else is answered as it was typed. Bounded:
+  // each call drops a segment.
+  if (seg.length >= 2 && DECORATION.test(seg[seg.length - 1])) {
+    const parent = new URL(url.toString())
+    parent.pathname = `/${seg.slice(0, -1).join('/')}`
+    const hit = route(parent)
+    if (namesAPost(hit)) return /^\.mp4/i.test(seg[seg.length - 1]) ? { ...hit, direct: true } : hit
+  }
   const over = seg.length ? OVERCAPTURE.exec(seg[seg.length - 1]) : null
   if (over) {
     const hit = routeGallery(withLastSegment(url, seg, over[1]))
@@ -1672,6 +1692,18 @@ function routeDirect(url: URL): Route {
     // Spread only when set, the same no-churn rule as `gallery`: every existing deepEqual on a route
     // without the suffix is untouched.
     if (namesAPost(hit)) return { ...hit, direct: true }
+    // `.mp4` TYPED ONTO A /v OR /p LINK: `/p/{code}/v.mp4`. The gallery layer above saw `v.mp4`, not a
+    // gallery key, and routeInner has no gallery layer, so every matcher that checks exact depth
+    // refused `/p/{code}/v` (only x() and reddit(), which absorb a trailing segment, ever worked).
+    // Tried only after the plain reading names no post, so those two keep their old answers.
+    const mode = seg.length >= 2 ? GALLERY_SUFFIX[m[1]] : undefined
+    if (mode) {
+      const parent = new URL(url.toString())
+      parent.pathname = `/${seg.slice(0, -1).join('/')}`
+      const up = routeInner(parent)
+      if (takesGallery(up)) return { ...up, gallery: mode, direct: true }
+      if (namesAPost(up)) return { ...up, direct: true }
+    }
   }
   return routeInner(url)
 }
