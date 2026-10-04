@@ -1662,7 +1662,7 @@ type Peel = { segs: string[]; direct: boolean; gluedMp4: boolean; gallery?: Gall
  * removes ONE suffix, recording the reading it leaves:
  *   - a whole decoration segment (DECORATION), noting `direct` if it was `.mp4`;
  *   - a glued over-capture tail (OVERCAPTURE);
- *   - a gallery key, `v` or `p` (one per path);
+ *   - a gallery key, `v` or `p` (one, or a second on a `.mp4` request; the last typed decides);
  *   - a glued `.mp4` (DIRECT_SUFFIX; once, so `20.mp4.mp4` stays the honest failure id '20.mp4').
  * Then the readings are routed from the most peeled back to the least, and the first that NAMES A POST
  * wins, carrying the flags gathered on the way to it; if none does, the url is routed exactly as typed.
@@ -1690,10 +1690,14 @@ function peelSuffixes(url: URL): Route {
       next = { ...cur, segs: head, direct: cur.direct || /^\.mp4/i.test(last) }
     } else {
       const over = OVERCAPTURE.exec(last)
-      const mode = s.length >= 2 && !cur.gallery ? galleryMode(last) : undefined
+      const mode = s.length >= 2 && (!cur.gallery || cur.direct) ? galleryMode(last) : undefined
       const mp4 = cur.gluedMp4 ? null : DIRECT_SUFFIX.exec(last)
       if (over) next = { ...cur, segs: [...head, over[1]] }
-      else if (mode) next = { ...cur, segs: head, gallery: mode }
+      // A SECOND toggle is peeled only on a direct request, keeping the one typed LAST (the outermost,
+      // peeled first): the converter's stills box appends `/p` to a pasted `/p/{code}/v.mp4`, giving
+      // `…/v.mp4/p`, and allowing one toggle per path left a bare `v` that depth-exact matchers refused
+      // (third review round). Only when a `.mp4` was peeled, so a plain `/x/v/p` routes exactly as before.
+      else if (mode) next = { ...cur, segs: head, gallery: cur.gallery ?? mode }
       else if (mp4) next = { ...cur, segs: [...head, mp4[1] + mp4[2]], direct: true, gluedMp4: true }
     }
     if (!next) break

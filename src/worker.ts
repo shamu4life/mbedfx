@@ -5990,6 +5990,9 @@ export async function handle(req: Request, env: Env, ctx: ExecutionContext, d: D
        * url would have been a link we then could not read.
        */
       let shown = inner.canonical
+      // Set when the Facebook branch below unfurls a typed share to its permalink: that permalink, not
+      // the share, is what the page will hand out, so it is what has to be warmed (see the warm below).
+      let unfurled: { ref: PostRef; canonical: string } | null = null
       if (ref.p === 'fb' && ref.kind === 'share') {
         let loc: string | null = null
         try {
@@ -5998,26 +6001,10 @@ export async function handle(req: Request, env: Env, ctx: ExecutionContext, d: D
           loc = null
         }
         const resolved = loc ? route(new URL(stripMetaTracking(loc), 'https://www.facebook.com')) : null
-        if (resolved?.kind === 'post' && resolved.ref.p === 'fb') shown = resolved.canonical
-      }
-      const warms = prewarmable(ref) !== null
-      if (warms) {
-        // The render is discarded; the point is its SIDE EFFECTS — the post lands in the cache and
-        // the mux starts. waitUntil keeps it alive past this response, exactly as settleMux does.
-        /**
-         * CONSUMED, NOT CANCELLED. `res.body.cancel()` looked like the tidy way to throw away a
-         * render nobody reads, and it HANGS: renderPostRoute clones its response to populate the
-         * cache, so the body is teed, and cancelling one branch while the other is still unread never
-         * settles. Measured — the prep JSON returned in 23ms and the waitUntil promise was still
-         * pending 8 seconds later, which on a Worker means an isolate held open for nothing.
-         * arrayBuffer() drains it, which is what actually releases both branches.
-         */
-        ctx.waitUntil(
-          renderPostRoute(ref, inner.canonical, d, env, ctx, 'discord', origin, direct)
-            .then(res => res.arrayBuffer())
-            .then(() => undefined)
-            .catch(() => undefined),
-        )
+        if (resolved?.kind === 'post' && resolved.ref.p === 'fb') {
+          shown = resolved.canonical
+          unfurled = { ref: resolved.ref, canonical: resolved.canonical }
+        }
       }
       /**
        * DO NOT RE-SPELL A LINK THAT WAS ALREADY RIGHT.
@@ -6068,6 +6055,35 @@ export async function handle(req: Request, env: Env, ctx: ExecutionContext, d: D
         const want = route(new URL(shown))
         shownUrl = back.kind === 'post' && back.direct === true && want.kind === 'post'
           && refKey(back.ref) === refKey(want.ref) ? cand : target
+      }
+      /**
+       * WARM THE POST THE HANDED-OUT LINK NAMES. Moved below the url decision for that reason: a Facebook
+       * typed share is unfurled to its permalink, and a first version still warmed the SHARE ref, so the
+       * reel the page showed (and, with `.mp4`, the /_media/ url Discord fetches at once) started cold
+       * while the page said the video was downloading (found in the third review round). When the
+       * pasted share code itself comes back (the `.mp4` round trip fell back), the share ref is warmed.
+       */
+      const handsOutUnfurled = unfurled !== null && shownUrl !== target
+      const warmRef = handsOutUnfurled && unfurled ? unfurled.ref : ref
+      const warmCanonical = handsOutUnfurled && unfurled ? unfurled.canonical : inner.canonical
+      const warms = prewarmable(warmRef) !== null
+      if (warms) {
+        // The render is discarded; the point is its SIDE EFFECTS — the post lands in the cache and
+        // the mux starts. waitUntil keeps it alive past this response, exactly as settleMux does.
+        /**
+         * CONSUMED, NOT CANCELLED. `res.body.cancel()` looked like the tidy way to throw away a
+         * render nobody reads, and it HANGS: renderPostRoute clones its response to populate the
+         * cache, so the body is teed, and cancelling one branch while the other is still unread never
+         * settles. Measured — the prep JSON returned in 23ms and the waitUntil promise was still
+         * pending 8 seconds later, which on a Worker means an isolate held open for nothing.
+         * arrayBuffer() drains it, which is what actually releases both branches.
+         */
+        ctx.waitUntil(
+          renderPostRoute(warmRef, warmCanonical, d, env, ctx, 'discord', origin, direct)
+            .then(res => res.arrayBuffer())
+            .then(() => undefined)
+            .catch(() => undefined),
+        )
       }
       return Response.json({
         ok: true,

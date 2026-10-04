@@ -1738,14 +1738,17 @@ function mbedfxConvert(input, host, gallery) {
      * `.mp4` cannot). And a video still being prepared, or one this preview stopped watching after six
      * minutes, may draw nothing if pasted now (docs/API.md, the d. host), so it says that instead.
      */
+    // The mux state is asked FIRST: a video with no poster that is still being prepared comes back with
+    // its entry dropped (no still to stand in for it), so "no media" there would be wrong; the link does
+    // serve the file once the mux lands (third review round).
     var has = !!(j && j.ok && (j.media || []).length);
-    var line = has
-      ? (j.muxSlow
-          ? 'Still being prepared after six minutes. This preview has stopped checking. Pasted right now, it may show nothing.'
-          : (j.muxing
-              ? 'The video is still being prepared. Pasted right now, it may show nothing.'
-              : 'Discord attaches this file. No card, no caption.'))
-      : (j && j.gate ? j.gate : 'Nothing to attach. This link has no media.');
+    var line = (j && j.ok && j.muxSlow)
+      ? 'Still being prepared after six minutes. This preview has stopped checking. Pasted right now, it may show nothing.'
+      : (j && j.ok && j.muxing)
+        ? 'The video is still being prepared. Pasted right now, it may show nothing.'
+        : has
+          ? 'Discord attaches this file. No card, no caption.'
+          : (j && j.gate ? j.gate : 'Nothing to attach. This link has no media.');
     preview.innerHTML = '<div class="sentrow"><span class="sent" id="sentline"></span>'
       + '<button type="button" id="copy2">Copy</button></div>'
       + '<div class="pv mediaonly-pv">'

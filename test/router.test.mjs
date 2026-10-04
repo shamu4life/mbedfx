@@ -1979,6 +1979,14 @@ test('THE .mp4 SUFFIX COMPOSES WITH /v AND /p IN EITHER ORDER, on a platform tha
   assert.deepEqual(r('/p/DaQ5CPTki4E/.mp4/p'), { ...r('/p/DaQ5CPTki4E'), gallery: 'stills', direct: true })
   assert.deepEqual(r('/@a/video/7650584217042144526/.mp4/v'), { ...r('/@a/video/7650584217042144526'), gallery: 'videos', direct: true })
   assert.deepEqual(r('/X/status/20/.mp4/p'), { ...r('/X/status/20'), gallery: 'stills', direct: true })
+  // Two toggles: what the stills box builds from a pasted `/p/{code}/v.mp4`. The one typed last decides
+  // (third review round: allowing one toggle per path left the inner `v` unpeelable, so notfound).
+  assert.deepEqual(r('/p/DaQ5CPTki4E/v.mp4/p'), { ...r('/p/DaQ5CPTki4E'), gallery: 'stills', direct: true })
+  assert.deepEqual(r('/@a/video/7650584217042144526/p.mp4/v'), { ...r('/@a/video/7650584217042144526'), gallery: 'videos', direct: true })
+  // Only on a `.mp4` request: a plain path keeps one toggle, so a single-letter id followed by a toggle
+  // keeps its own reading (`/p/v/p` is Instagram code 'v' with stills, as it always was).
+  assert.deepEqual(r('/p/v/p'), { ...r('/p/v'), gallery: 'stills' })
+  assert.deepEqual(r('/p/DaQ5CPTki4E/v/.mp4/p'), { ...r('/p/DaQ5CPTki4E'), gallery: 'stills', direct: true })
 })
 
 test('A GALLERY KEY IS AN OWN KEY: constructor, toString and __proto__ are not modes', () => {

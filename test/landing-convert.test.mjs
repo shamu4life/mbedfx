@@ -775,8 +775,12 @@ test('MEDIA-ONLY PREVIEWS THE FILE — no Discord card, but not nothing either',
   // Second review round: past the six-minute watch cap the drawing fell back to promising the file with
   // nothing polling behind it, and a post with no media at all was captioned as an attached file.
   assert.match(HTML, /Still being prepared after six minutes\. This preview has stopped checking\./)
-  assert.match(HTML, /var has = !!\(j && j\.ok && \(j\.media \|\| \[\]\)\.length\);\s*var line = has/,
-    'the file line turns on media being present, because a post with none answers a direct url with a 404')
+  // The file line asks the mux state first (a posterless video still being prepared has its entry
+  // dropped, third review round), then media presence, because a post with none answers a direct url 404.
+  const lineAt = HTML.indexOf('var line = (j && j.ok && j.muxSlow)')
+  assert.ok(lineAt > 0, 'the mux state is asked first')
+  assert.ok(HTML.indexOf("        : has\n", lineAt) > HTML.indexOf('(j && j.ok && j.muxing)', lineAt),
+    'then media presence decides between the file and nothing to attach')
   // And ticking the box for the SAME post must not kill a mux poll already armed for it.
   const toggle = HTML.slice(HTML.indexOf("mediaOnlyBox.addEventListener('change'"))
   const same = toggle.indexOf('if (lastCard && lastCard.path === path) {')

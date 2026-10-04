@@ -1179,3 +1179,23 @@ test('/_prep KEEPS A PASTED .mp4 THROUGH A SHARE-CODE UNFURL, so the page never 
     assert.equal(back.direct, true, `${p}: and the router reads it as the file`)
   }
 })
+
+test('/_prep WARMS THE POST ITS LINK NAMES — an unfurled Facebook share warms the permalink, not the share', async () => {
+  /**
+   * Found in the third review round. The Facebook branch unfurls a typed share (/share/v/{code}) to its
+   * permalink, and the page hands that permalink out, yet the warm still rendered the SHARE ref: the
+   * reel shown (and, with `.mp4`, the /_media/ url Discord fetches at once) started cold while the page
+   * said the video was downloading. The stub container records which page each mux was asked for.
+   */
+  for (const p of ['/share/v/AbCdEf124', '/share/v/AbCdEf125.mp4']) {
+    const { ctx: c, settle } = ctx()
+    const res = fakeResolver()
+    const d = deps({ resolveMetaShare: async () => 'https://www.facebook.com/reel/1234567890124' })
+    const j = await (await handle(prep(p), envWith(res.binding), c, d)).json()
+    await settle()
+    assert.equal(j.warming, true, p)
+    assert.ok(new URL(j.url).pathname.startsWith('/reel/1234567890124'), `${p}: the page is handed the reel, got ${j.url}`)
+    assert.ok(res.seen.pages.some(u => u.endsWith('/page/1234567890124')), `${p}: the reel is what was warmed, saw ${res.seen.pages}`)
+    assert.ok(!res.seen.pages.some(u => /AbCdEf12[45]/.test(u)), `${p}: and not the share code`)
+  }
+})
