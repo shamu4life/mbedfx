@@ -515,8 +515,7 @@ REDDIT_MASTER = "https://v.redd.it/muy8yipuynid1/HLSPlaylist.m3u8"
 
 # Lines from `ffmpeg -hide_banner -h demuxer=hls`, trimmed (other options and the long default lists
 # cut): the first from a 7.1.5 built from Debian's source, the second from Ubuntu's 6.1.1-3ubuntu5.
-# The 6.1.1 listing still says "extensions", which is why the probe matches the option's own name and
-# not a substring.
+# The 6.1.1 listing is the negative control.
 HLS_HELP_7_1_5 = b"""Demuxer hls [Apple HTTP Live Streaming]:
 hls demuxer AVOptions:
   -allowed_extensions <string>     .D......... List of file extensions that hls is allowed to access (default "3gp,aac")
@@ -538,12 +537,13 @@ class RedditHls(unittest.TestCase):
     as MPEG-TS in files named .aac. FFmpeg 7.1.1 added `extension_picky` to the hls demuxer, on by
     default, and it refuses exactly that: ffmpeg exits 183 while opening the input, the container
     answers 502, the Worker counts `mux_gate` and serves a 503, and the alarm's retries fail the same
-    way. The image runs 7.1.5, so none of those videos ever played. Measured in the dev sandbox on
-    2026-10-04 against the Raygun post; see the comment at server.py's REDDIT_HLS_HOST.
+    way. The image runs a 7.1 release no older than 7.1.1, so, by inference, none of those videos
+    played. Measured in the dev sandbox on 2026-10-04 against the Raygun post; see the comment at
+    server.py's REDDIT_HLS_HOST.
 
-    THE OTHER HALF IS AS LOAD-BEARING. The option exists only from 7.1.1, and an unknown input option
-    aborts the whole mux ("Option extension_picky not found"), the trap container/README.md already
-    records for `-http_persistent`. So the flag must never reach an ffmpeg that lacks it, and it must
+    THE OTHER HALF IS AS LOAD-BEARING. The option arrived with the check in 7.1.1, and an unknown
+    option aborts the whole mux (6.1.1: "Unrecognized option 'extension_picky'", rc 8), the same
+    shape of trap container/README.md already records for `-http_persistent`. So the flag must never reach an ffmpeg that lacks it, and it must
     stay off every input that is not Reddit HLS, where the check still does its job.
     """
 
@@ -649,7 +649,8 @@ class RedditHls(unittest.TestCase):
         self.assertEqual(len(calls), 1, "a real 'no' is an answer, and answers are kept")
 
     def test_a_probe_that_could_not_run_is_asked_again_rather_than_remembered(self):
-        """Remembering a failed probe would pin every class-E video to a 503 for the instance's life."""
+        """Remembering a failed probe would pin every 2024-05..2025-11 Reddit video with audio to a
+        503 for the instance's life."""
         for kwargs in ({"raises": OSError("no ffmpeg")},
                        {"raises": srv.subprocess.TimeoutExpired("ffmpeg", 10)},
                        {"stdout": HLS_HELP_7_1_5, "returncode": 1}):
@@ -658,6 +659,35 @@ class RedditHls(unittest.TestCase):
             self.assertFalse(srv._ffmpeg_has_extension_picky(), kwargs)
             self.assertFalse(srv._ffmpeg_has_extension_picky(), kwargs)
             self.assertEqual(len(calls), 2, kwargs)
+
+    def test_the_probe_has_a_short_wall_of_its_own(self):
+        """It runs ahead of the tracks mux on the request path, so its wall comes out of the 20 s
+        src/muxpolicy.ts keeps between PROC_TIMEOUT and MUX_FIRST_ATTEMPT_TRACKS_MS."""
+        kwargs = []
+        srv.subprocess.run = lambda cmd, **kw: kwargs.append(kw) or type("R", (), {
+            "stdout": HLS_HELP_7_1_5, "returncode": 0})()
+        srv._ffmpeg_has_extension_picky()
+        self.assertEqual(kwargs[0].get("timeout"), srv.HLS_PROBE_TIMEOUT)
+        self.assertLessEqual(srv.HLS_PROBE_TIMEOUT, 5)
+
+    def test_clients_reports_the_marker_and_says_unknown_when_the_probe_could_not_run(self):
+        """/_clients is how an operator tells a stale instance from a fix that failed, so the two keys
+        must be there, and a probe that never answered must read as null, not as an ffmpeg without the
+        check (which is what a stale image looks like)."""
+        real = (srv._probe_one, srv._probe_tiktok)
+        srv._probe_one = lambda c: {"client": c, "gvs": "ok"}
+        srv._probe_tiktok = lambda: {}
+        try:
+            for answer, want in (({"stdout": HLS_HELP_7_1_5}, True),
+                                 ({"stdout": HLS_HELP_6_1_1}, False),
+                                 ({"raises": srv.subprocess.TimeoutExpired("ffmpeg", 3)}, None)):
+                srv._hls_picky_known = None
+                self._answer(**answer)
+                out = srv._probe_clients()
+                self.assertIn("ffmpeg", out)
+                self.assertIs(out["hlsExtensionPicky"], want, answer)
+        finally:
+            srv._probe_one, srv._probe_tiktok = real
 
     def test_the_marker_reports_the_ffmpeg_version_or_unknown(self):
         """/_clients carries this so an operator can tell a stale instance from a fix that failed."""

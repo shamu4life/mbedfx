@@ -127,7 +127,8 @@ rather than left as one number that points at the wrong system.
 
 "Usually" because `mux_gate` means the process exited non-zero, and on a `{video}` source that
 process is the container's own ffmpeg. Every Reddit video with audio uploaded between about 2024-05
-and 2025-11 counted here, at 1-3 s, until 2026-10-04: the image's ffmpeg refused Reddit's
+and 2025-11 would have counted here until 2026-10-04 (read from the code path; the dataset was not
+queried, and those `/_media/` 503s took 1.4-3.0 s as Discordbot): the image's ffmpeg refused Reddit's
 MPEG-TS-in-`.aac` audio, and Reddit had changed nothing. A steady `mux_gate` on `rd` or `bs` is worth
 reproducing against the image's ffmpeg before blaming the platform.
 

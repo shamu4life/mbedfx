@@ -1701,10 +1701,11 @@ const RESOLVER_SLOTS = 4
  * wall — and the wrong conclusion was one step away. Ship a shape marker with any container change
  * whose result you intend to act on.
  *
- * g14 -> g15, 2026-10-04, THE SAME USE A THIRD TIME, AND THIS ONE SPENT ON PURPOSE BEFORE ANY OUTAGE.
- * Every record is fine. The container now opens Reddit's HLS with `-extension_picky 0` (see
- * container/server.py, REDDIT_HLS_HOST): every Reddit video with audio uploaded 2024-05..2025-11 had
- * been answering 503 because the image's ffmpeg 7.1.5 refuses that generation's MPEG-TS-in-.aac audio.
+ * g14 -> g15, 2026-10-04, THE SAME USE A THIRD TIME, AND THIS ONE BUMPED WITH THE CHANGE, NOT AFTER A
+ * STALE IMAGE WAS FOUND. Every record is fine. The container now opens Reddit's HLS with
+ * `-extension_picky 0` (see container/server.py, REDDIT_HLS_HOST): every Reddit video with audio
+ * uploaded 2024-05..2025-11 had been answering 503 because the image's ffmpeg (a 7.1 release no older
+ * than 7.1.1) refuses that generation's MPEG-TS-in-.aac audio.
  * Both earlier bumps record that a deploy reporting done can leave instances on the old image, so this
  * one is bumped with the change rather than after it is found not to have landed. Its marker, the one
  * the paragraph above says to ship, is `ffmpeg` plus `hlsExtensionPicky` in `/_clients`.
@@ -1849,8 +1850,9 @@ function withCookieJar<T extends object>(body: T, env: Env, platform: Credential
  * TWO DIFFERENT 502s, and telling them apart is most of the point. container/server.py answers 502
  * for BOTH a non-zero yt-dlp exit (`"mux failed"` — the upstream refused us: a 403, a PO-token
  * demand, a sign-in wall) and a run that completed with nothing usable (`"empty or oversized
- * result"`). The first is YouTube's verdict and the second is ours, and a single `mux_gate` covering
- * both would point the next reader at the wrong system.
+ * result"`). The first is usually the upstream's verdict, but on a `{video}` source it is our own
+ * ffmpeg's exit (see analytics.ts `mux_gate`); the second is ours. A single `mux_gate` covering both
+ * would point the next reader at the wrong system.
  *
  * MATCHED, NEVER ECHOED. The body is compared against fixed literals this repo owns; nothing from it
  * is ever stored or logged. yt-dlp's stderr is suppressed inside the container because it can carry
