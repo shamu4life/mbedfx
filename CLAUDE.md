@@ -109,6 +109,13 @@ plays inline.
   `no-video` on a YouTube card that came back with no player, which is the state a cut crawler
   budget leaves it in. That does not close this gap, because a warm mux in R2 answers the check
   whether or not the container is running.
+- A post's age can look like a platform change when it is really a packaging generation. Reddit
+  videos with audio uploaded 2024-05..2025-11 answered 503 because the image's ffmpeg (7.1.5, via the
+  unpinned `python:3.12-slim`) refuses their MPEG-TS-in-`.aac` audio under `extension_picky`. Reddit
+  had changed nothing. `mux_gate` read as their fault, but on a `{video}` source it counts our own
+  ffmpeg's exits. Reproduce against the image's ffmpeg (production output is tagged `Lavf61.7.103`)
+  before blaming upstream. The measurement and the fix are at `REDDIT_HLS_HOST` in
+  `container/server.py`.
 - A PO token minter buys this project nothing, and re-opening that question costs weeks. Measured
   2026-08-28 through `/_clients` on production egress: five of six player clients served bytes
   with no token at all, including `tv_simply` and `mweb`, which are precisely the two yt-dlp's own

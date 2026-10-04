@@ -1700,8 +1700,16 @@ const RESOLVER_SLOTS = 4
  * from a platform gate — the probe's `fetch: http-403` reads exactly like the `*-webapp-prime` cookie
  * wall — and the wrong conclusion was one step away. Ship a shape marker with any container change
  * whose result you intend to act on.
+ *
+ * g14 -> g15, 2026-10-04, THE SAME USE A THIRD TIME, AND THIS ONE SPENT ON PURPOSE BEFORE ANY OUTAGE.
+ * Every record is fine. The container now opens Reddit's HLS with `-extension_picky 0` (see
+ * container/server.py, REDDIT_HLS_HOST): every Reddit video with audio uploaded 2024-05..2025-11 had
+ * been answering 503 because the image's ffmpeg 7.1.5 refuses that generation's MPEG-TS-in-.aac audio.
+ * Both earlier bumps record that a deploy reporting done can leave instances on the old image, so this
+ * one is bumped with the change rather than after it is found not to have landed. Its marker, the one
+ * the paragraph above says to ship, is `ffmpeg` plus `hlsExtensionPicky` in `/_clients`.
  */
-const RESOLVER_GENERATION = 'g14'
+const RESOLVER_GENERATION = 'g15'
 /**
  * THE STORED-RECORD HALF, pinned at the value the shared string had when it split, so the split
  * itself invalidates nothing. Read by metaCacheKey and by nothing else.

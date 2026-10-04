@@ -121,9 +121,15 @@ HTML render and the activity render within ~2s of a single paste and `muxOnce` c
 onto one piece of work, so no single client owns the mux and naming one would be arbitrary.
 
 The eight outcomes are documented at their definition (`src/analytics.ts`). The split that matters
-most: **`mux_timeout` is ours and `mux_gate` is theirs.** The container answers 502 for both a
-non-zero yt-dlp exit and an empty result, so those are separated here into `mux_gate` and `mux_empty`
+most: **`mux_timeout` is ours and `mux_gate` is usually theirs.** The container answers 502 for both a
+non-zero exit and an empty result, so those are separated here into `mux_gate` and `mux_empty`
 rather than left as one number that points at the wrong system.
+
+"Usually" because `mux_gate` means the process exited non-zero, and on a `{video}` source that
+process is the container's own ffmpeg. Every Reddit video with audio uploaded between about 2024-05
+and 2025-11 counted here, at 1-3 s, until 2026-10-04: the image's ffmpeg refused Reddit's
+MPEG-TS-in-`.aac` audio, and Reddit had changed nothing. A steady `mux_gate` on `rd` or `bs` is worth
+reproducing against the image's ffmpeg before blaming the platform.
 
 ```sql
 -- Which half of the video pipeline is failing, per platform, and how slow the good ones are.
@@ -163,8 +169,13 @@ measures from the egress that matters: every earlier argument in this project ab
 was settled on a laptop, and a laptop is a residential IP.
 
 ```sh
-curl -s 'https://mbedfx.app/_clients' | jq '{ok, ms, ytdlp, serving, clients}'
+curl -s 'https://mbedfx.app/_clients' | jq '{ok, ms, ytdlp, ffmpeg, hlsExtensionPicky, serving, clients}'
 ```
+
+`ffmpeg` and `hlsExtensionPicky` (since 2026-10-04) say which image the probed instance is running:
+the ffmpeg version, and whether its hls demuxer has the extension check that Reddit's playlists are
+opened without. Both keys missing means the instance predates that change, which is the stale-image
+state `RESOLVER_GENERATION` exists to end.
 
 It takes no input — the video id and the client list are constants in `container/server.py`, the same
 property that makes `/_smoke` comparable run to run. It rides the existing authenticated `/resolve`,

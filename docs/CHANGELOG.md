@@ -34,6 +34,16 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   yield no media rather than an image, because every render of a post shares one cache key and an
   image there would sit behind a url promised as video.
 
+- **Reddit videos uploaded between about May 2024 and November 2025 never played.** Their `/_media/`
+  answered 503 because the container's ffmpeg (7.1.5) refused Reddit's audio from that period:
+  MPEG-TS stored in files named `.aac`, which FFmpeg's hls extension check has rejected since 7.1.1.
+  It looked like Reddit had changed how old videos are served. It had not: the post's age decides
+  which packaging Reddit used at upload, and only that one generation fails. The container now opens
+  Reddit's HLS, and nothing else, with the check off, and only on an ffmpeg that has the option. The
+  Raygun post muxes to 3.28 MB of h264 + aac locally under 7.1.5 (dev sandbox, not Cloudflare).
+  `RESOLVER_GENERATION` is bumped so pooled instances pick up the new image, and `/_clients` now
+  reports `ffmpeg` and `hlsExtensionPicky` so an operator can tell which image answered.
+
 - **A masked link followed by punctuation, `[text](url).`, broke any link ending at the post id.**
   Discord's own bug (discord-api-docs#6279) makes Discordbot fetch `url).`, and the `)` became part of
   the id. The router now drops a trailing `)` and what follows it from the path, only when what remains

@@ -304,6 +304,41 @@ test('embed: a video post is a remux video — HLS playlist + external-preview p
   assert.equal(post.media[0].poster, 'https://external-preview.redd.it/cover.jpg?width=640&s=zzz')
 })
 
+const VIDEO_PAGE = readFileSync(new URL('./fixtures/reddit-embed-video.html', import.meta.url), 'utf8')
+
+test('embed: a real video page yields the unsigned HLS master at index 0, never the signed player src or a packaged-media mp4', () => {
+  /**
+   * THE POST IN THE 2026-10-04 REPORT, and the first real capture of a Reddit VIDEO page in this suite
+   * (the test above is synthetic). Uploaded 2024-08-14, so its audio is MPEG-TS named .aac, the
+   * packaging the container's ffmpeg refused until container/server.py's REDDIT_HLS_HOST. Nothing on
+   * this page tells it apart from a video that always muxed, which is why the fix lives in the container
+   * and this file only has to keep handing over the same url.
+   *
+   * WHAT THIS PINS. The page now carries two tempting alternatives, and both are signed to expire: the
+   * player's own src (`?f=..&a=..`) and `packaged-media-json`'s ready-muxed mp4s (`e=` at the next UTC
+   * midnight in every url seen). A Post sits in the Post cache, the response cache and the alarm's
+   * durable mux source for minutes, so either one would let a cached card hand Discord a dead link. The
+   * unsigned master never expires, and it was present for 21 of 21 posts from 2018 to 2026 (dev sandbox).
+   *
+   * 0x0, NOT A SIZE OFF THE PAGE. The <shreddit-aspect-ratio> around this player reads 1 while the video
+   * is 360x450, so the gif path's way of sizing a player must never be reused for a video.
+   */
+  assert.match(VIDEO_PAGE, /packaged-media-json=/, 'the fixture must still carry the thing this test is about')
+  const post = normalizeReddit({ source: 'embed', html: VIDEO_PAGE }, { p: 'rd', sub: 'interestingasfuck', id: '1es7hb1' })
+  assert.ok(post)
+  const hls = 'https://v.redd.it/muy8yipuynid1/HLSPlaylist.m3u8'
+  assert.equal(post.media.length, 1)
+  const [m] = post.media
+  assert.equal(m.kind, 'video')
+  assert.equal(m.url, hls)
+  assert.deepEqual(m.remux, { video: hls })
+  assert.deepEqual([m.w, m.h], [0, 0])
+  assert.match(m.poster, /^https:\/\/external-preview\.redd\.it\/[^?]+\?/)
+  assert.doesNotMatch(JSON.stringify(post), /packaged-media|SIGNATURE-BLANKED|HLSPlaylist\.m3u8\?/)
+  assert.equal(post.title, "Raygun's husband and trainer, Sammie Free. Now it makes sense.")
+  assert.equal(post.createdAt.toISOString(), '2024-08-14T17:23:59.843Z')
+})
+
 test('embed: a stripped render (no title element) derives a title from the url slug', () => {
   // The placeholder-sub / bare-/comments render omits the title element; the slug is the fallback so
   // the post still renders rather than falling to the generic failure.

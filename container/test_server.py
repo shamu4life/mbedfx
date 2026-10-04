@@ -511,6 +511,164 @@ class MuxSources(unittest.TestCase):
             )
 
 
+REDDIT_MASTER = "https://v.redd.it/muy8yipuynid1/HLSPlaylist.m3u8"
+
+# Lines from `ffmpeg -hide_banner -h demuxer=hls`, trimmed (other options and the long default lists
+# cut): the first from a 7.1.5 built from Debian's source, the second from Ubuntu's 6.1.1-3ubuntu5.
+# The 6.1.1 listing still says "extensions", which is why the probe matches the option's own name and
+# not a substring.
+HLS_HELP_7_1_5 = b"""Demuxer hls [Apple HTTP Live Streaming]:
+hls demuxer AVOptions:
+  -allowed_extensions <string>     .D......... List of file extensions that hls is allowed to access (default "3gp,aac")
+  -allowed_segment_extensions <string>     .D......... List of file extensions that hls is allowed to access (default "3gp,aac,html")
+  -extension_picky   <boolean>    .D......... Be picky with all extensions matching (default true)
+  -http_persistent   <boolean>    .D......... Use persistent HTTP connections (default true)
+"""
+HLS_HELP_6_1_1 = b"""Demuxer hls [Apple HTTP Live Streaming]:
+hls demuxer AVOptions:
+  -allowed_extensions <string>     .D......... List of file extensions that hls is allowed to access (default "3gp,aac")
+  -http_persistent   <boolean>    .D......... Use persistent HTTP connections (default true)
+"""
+
+
+class RedditHls(unittest.TestCase):
+    """REDDIT'S PLAYLISTS ARE OPENED WITH THE HLS EXTENSION CHECK OFF, and nothing else is.
+
+    THE DEFECT. Reddit videos with audio uploaded between about 2024-05 and 2025-11 carry their audio
+    as MPEG-TS in files named .aac. FFmpeg 7.1.1 added `extension_picky` to the hls demuxer, on by
+    default, and it refuses exactly that: ffmpeg exits 183 while opening the input, the container
+    answers 502, the Worker counts `mux_gate` and serves a 503, and the alarm's retries fail the same
+    way. The image runs 7.1.5, so none of those videos ever played. Measured in the dev sandbox on
+    2026-10-04 against the Raygun post; see the comment at server.py's REDDIT_HLS_HOST.
+
+    THE OTHER HALF IS AS LOAD-BEARING. The option exists only from 7.1.1, and an unknown input option
+    aborts the whole mux ("Option extension_picky not found"), the trap container/README.md already
+    records for `-http_persistent`. So the flag must never reach an ffmpeg that lacks it, and it must
+    stay off every input that is not Reddit HLS, where the check still does its job.
+    """
+
+    def setUp(self):
+        self.rec = ArgvRecorder()
+        self._run = srv.subprocess.run
+        self._resolve = srv.socket.getaddrinfo
+        self._probe = srv._ffmpeg_has_extension_picky
+        srv.subprocess.run = self.rec
+        srv.socket.getaddrinfo = lambda host, port, **kw: [
+            (socket.AF_INET, socket.SOCK_STREAM, socket.IPPROTO_TCP, "", ("93.184.216.34", port))
+        ]
+        srv._hls_picky_known = None
+
+    def tearDown(self):
+        srv.subprocess.run = self._run
+        srv.socket.getaddrinfo = self._resolve
+        srv._ffmpeg_has_extension_picky = self._probe
+        srv._hls_picky_known = None
+
+    def _flag_spans(self, argv):
+        """Each input's option span, i.e. the args between the previous `-i <url>` and this `-i`."""
+        spans, start = {}, 0
+        for i, a in enumerate(argv):
+            if a == "-i":
+                spans[argv[i + 1]] = argv[start:i]
+                start = i + 2
+        return spans
+
+    def test_a_reddit_hls_master_is_opened_with_the_extension_check_off(self):
+        srv._ffmpeg_has_extension_picky = lambda: True
+        srv._mux_tracks(REDDIT_MASTER, None, OUT)
+        span = self._flag_spans(self.rec.calls[0])[REDDIT_MASTER]
+        self.assertIn("-extension_picky", span, "the flag must sit before the master's own -i")
+        self.assertEqual(span[span.index("-extension_picky") + 1], "0")
+
+    def test_the_reddit_mux_is_still_the_one_recorded_call_and_still_under_proc_timeout(self):
+        """With the probe answered, the mux is the only call, and it keeps the wall src/muxpolicy.ts's
+        tracks alarm is derived from (see Walls). Unpatched, the probe's own call comes first, once
+        per instance."""
+        srv._ffmpeg_has_extension_picky = lambda: True
+        srv._mux_tracks(REDDIT_MASTER, None, OUT)
+        self.assertEqual(len(self.rec.calls), 1)
+        self.assertEqual(self.rec.calls[0][0], "ffmpeg")
+        self.assertEqual(self.rec.kwargs[0].get("timeout"), srv.PROC_TIMEOUT)
+
+    def test_an_input_that_is_not_reddit_hls_never_carries_the_flag(self):
+        srv._ffmpeg_has_extension_picky = lambda: True
+        for video, audio in (
+            ("https://video.bsky.app/watch/did%3Aplc%3Ax/bafy/playlist.m3u8", None),  # Bluesky: .ts passes
+            ("https://v.redd.it/muy8yipuynid1/DASH_360.mp4", None),  # Reddit, but no hls demuxer
+            ("https://cdn.example/v.m4s", "https://cdn.example/a.m4s"),  # the yt-dlp tracks pair
+            ("https://v.redd.it.evil.example/x/HLSPlaylist.m3u8", None),  # a lookalike host
+            ("https://notv.redd.it/x/HLSPlaylist.m3u8", None),
+        ):
+            self.rec.calls.clear()
+            srv._mux_tracks(video, audio, OUT)
+            self.assertNotIn("-extension_picky", self.rec.calls[0], video)
+
+    def test_an_ffmpeg_without_the_option_never_gets_the_flag(self):
+        """6.1.1 has neither the check nor the option; passing it there would break every Reddit mux."""
+        srv._ffmpeg_has_extension_picky = lambda: False
+        srv._mux_tracks(REDDIT_MASTER, None, OUT)
+        self.assertNotIn("-extension_picky", self.rec.calls[0])
+
+    def test_a_refused_source_never_reaches_the_probe(self):
+        asked = []
+        srv._ffmpeg_has_extension_picky = lambda: asked.append(1) or True
+        srv.socket.getaddrinfo = lambda host, port, **kw: [
+            (socket.AF_INET, socket.SOCK_STREAM, socket.IPPROTO_TCP, "", ("127.0.0.1", port))
+        ]
+        with self.assertRaises(ValueError):
+            srv._mux_tracks(REDDIT_MASTER, None, OUT)
+        self.assertEqual(asked, [])
+        self.assertEqual(self.rec.calls, [])
+
+    def _answer(self, stdout=b"", returncode=0, raises=None):
+        calls = []
+
+        def run(cmd, **kwargs):
+            calls.append(cmd)
+            if raises:
+                raise raises
+
+            class Result:
+                pass
+            r = Result()
+            r.stdout, r.returncode = stdout, returncode
+            return r
+        srv.subprocess.run = run
+        return calls
+
+    def test_the_probe_reads_the_option_off_a_7_1_5_listing_and_asks_once(self):
+        calls = self._answer(HLS_HELP_7_1_5)
+        self.assertTrue(srv._ffmpeg_has_extension_picky())
+        self.assertTrue(srv._ffmpeg_has_extension_picky())
+        self.assertEqual(calls, [["ffmpeg", "-hide_banner", "-h", "demuxer=hls"]])
+
+    def test_the_probe_says_no_for_a_6_1_1_listing_that_still_says_extensions(self):
+        calls = self._answer(HLS_HELP_6_1_1)
+        self.assertFalse(srv._ffmpeg_has_extension_picky())
+        self.assertFalse(srv._ffmpeg_has_extension_picky())
+        self.assertEqual(len(calls), 1, "a real 'no' is an answer, and answers are kept")
+
+    def test_a_probe_that_could_not_run_is_asked_again_rather_than_remembered(self):
+        """Remembering a failed probe would pin every class-E video to a 503 for the instance's life."""
+        for kwargs in ({"raises": OSError("no ffmpeg")},
+                       {"raises": srv.subprocess.TimeoutExpired("ffmpeg", 10)},
+                       {"stdout": HLS_HELP_7_1_5, "returncode": 1}):
+            srv._hls_picky_known = None
+            calls = self._answer(**kwargs)
+            self.assertFalse(srv._ffmpeg_has_extension_picky(), kwargs)
+            self.assertFalse(srv._ffmpeg_has_extension_picky(), kwargs)
+            self.assertEqual(len(calls), 2, kwargs)
+
+    def test_the_marker_reports_the_ffmpeg_version_or_unknown(self):
+        """/_clients carries this so an operator can tell a stale instance from a fix that failed."""
+        self._answer(b"ffmpeg version 6.1.1-3ubuntu5 Copyright (c) 2000-2023 the FFmpeg developers\n")
+        self.assertEqual(srv._ffmpeg_version(), "6.1.1-3ubuntu5")
+        self._answer(b"something else entirely\n")
+        self.assertEqual(srv._ffmpeg_version(), "unknown")
+        self._answer(raises=OSError("no ffmpeg"))
+        self.assertEqual(srv._ffmpeg_version(), "unknown")
+
+
 
 class NoRedirectOpener(unittest.TestCase):
     """The redirect-resolve mode's one load-bearing piece, exercised rather than read.
@@ -583,7 +741,8 @@ class HandlerShape(unittest.TestCase):
     def test_probe_helpers_are_module_level_and_not_swallowed_by_the_class(self):
         # The mirror of the above, and the half that localises the failure: if these ever became
         # attributes of Handler, the class body has eaten them again.
-        for name in ("_probe_one", "_probe_clients", "_probe_error", "_probe_tiktok"):
+        for name in ("_probe_one", "_probe_clients", "_probe_error", "_probe_tiktok",
+                     "_ffmpeg_has_extension_picky", "_ffmpeg_version", "_input_opts"):
             self.assertTrue(callable(getattr(srv, name, None)), f"{name} must be module level")
             self.assertFalse(hasattr(srv.Handler, name), f"{name} must NOT be inside Handler")
 

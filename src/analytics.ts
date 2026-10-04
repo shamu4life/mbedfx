@@ -205,8 +205,11 @@ export type Outcome2 =
    * failures is carrying the weight.
    *
    *   mux_ok       the container produced bytes and R2 stored them. double2 is the elapsed ms.
-   *   mux_gate     502 + "mux failed" — yt-dlp exited non-zero. THEIRS: a 403, a PO-token demand, a
-   *                sign-in wall, an nsig solve failure. A rise here on `yt` alone is YouTube moving.
+   *   mux_gate     502 + "mux failed" — yt-dlp, or on a `{video}` source ffmpeg, exited non-zero.
+   *                USUALLY THEIRS: a 403, a PO-token demand, a sign-in wall, an nsig solve failure. A
+   *                rise here on `yt` alone is YouTube moving. NOT ALWAYS: every Reddit video with
+   *                audio uploaded 2024-05..2025-11 landed here until 2026-10-04 because OUR ffmpeg
+   *                refused the input (container/server.py, REDDIT_HLS_HOST).
    *   mux_timeout  504 — one of the container's own walls, and there are two since 2026-08-29:
    *                MUX_PAGE_TIMEOUT (360s) on a `{page}` mux, PROC_TIMEOUT (120s) on `{video}` tracks
    *                and on a meta extract. OURS. It was one number, PROC_TIMEOUT + 60 = 180s, until

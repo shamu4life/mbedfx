@@ -125,12 +125,27 @@ function gifPlayer(html: string): Media | null {
 }
 
 /**
- * Media by post type (from the embed HTML + screenview). VIDEO is a `remux` video: Reddit serves
- * HLS/CMAF only (no progressive mp4 — the legacy DASH_{q}.mp4 files 404), which the /_media/ route
- * hands to the media-resolver container to mux to a playable MP4, with the external-preview cover as
- * the poster. WITHOUT the container, worker.ts's withResolver degrades it to that cover still, exactly
- * as it rendered before playback existed. Verified live 2026-07-22: a v.redd.it HLS muxed to a 13MB
- * progressive MP4 through the container.
+ * Media by post type (from the embed HTML + screenview). VIDEO is a `remux` video: the unsigned
+ * {v.redd.it base}/HLSPlaylist.m3u8, which the /_media/ route hands to the media-resolver container
+ * to mux to a playable MP4, with the external-preview cover as the poster. WITHOUT the container,
+ * worker.ts's withResolver degrades it to that cover still, exactly as it rendered before playback
+ * existed. Verified live 2026-07-22: a v.redd.it HLS muxed to a 13MB progressive MP4 through the
+ * container.
+ *
+ * WHY THE HLS MASTER AND NOT A FILE. This used to say the legacy DASH_{q}.mp4 files 404, without
+ * saying where that was measured. Measured 2026-10-04 from the dev sandbox (not a Worker), they do
+ * not: DASHPlaylist.mpd answered 200 on 10 of 10 posts and its track files 206. They are still not
+ * worth reading, because DASH puts video and audio in separate files, so they need the same mux. The
+ * master is the one source present for every live post (21 of 21, 2018 to 2026, same sandbox) and it
+ * is unsigned and never expires, which is what lets it sit in the Post cache, the response cache and
+ * the alarm's durable source. The embed page's newer `packaged-media-json` holds ready-muxed MP4s,
+ * but it was missing on the first fetch for 6 of 23 posts, and every url seen was signed to expire at
+ * the next UTC midnight (one day observed), so a cached card could hand Discord a dead link.
+ *
+ * WHICH 2024-25 VIDEOS FAILED, AND WHERE THE FIX LIVES. Uploads from about 2024-05 to 2025-11 put
+ * MPEG-TS audio in files named .aac, and the container's ffmpeg refused that until 2026-10-04.
+ * Nothing in this url or the playlist text tells those posts apart, so the fix is in the container
+ * (container/server.py, REDDIT_HLS_HOST), not here.
  */
 function redditEmbedMedia(html: string, post: Any): Media[] {
   const type = post?.type
