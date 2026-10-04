@@ -1621,91 +1621,106 @@ const OVERCAPTURE = /^(.+?)(?:\)|%29)[^/]*$/i
  */
 const DIRECT_SUFFIX = /^(.+)\.mp4((?:\||%7[Cc])*)$/i
 
-/** Re-route `url` with its last path segment replaced, keeping the query (routeInner reads /watch?v=). */
-function withLastSegment(url: URL, seg: string[], last: string): URL {
-  const next = new URL(url.toString())
-  next.pathname = `/${[...seg.slice(0, -1), last].join('/')}`
-  return next
-}
-
-/**
- * THREE LAYERS, outermost first: the over-capture trim, the gallery toggle, the `.mp4` suffix. The order
- * is what lets them compose on the links people paste: `/X/status/20/p).` (a masked gallery link) trims
- * to `/X/status/20/p` before the gallery lookup sees its last segment, and the converter's own `.mp4` +
- * stills output, `/X/status/20.mp4/p`, strips `/p` before the `.mp4` layer sees `20.mp4`.
- */
 /**
  * A LAST SEGMENT THAT IS NOTHING BUT DECORATION: an over-capture tail, a bare `.mp4`, or spoiler bars,
  * standing alone because the pasted url ended in '/'. `[t](https://host/p/{code}/).` makes Discordbot ask
  * for `/p/{code}/).`, and a hand-swapped Instagram link with `.mp4` typed on the end is `/p/{code}/.mp4`;
- * in both the decoration has no stem in its own segment, so the two layers below (which strip from the
- * end of a segment) never fire. Instagram's and TikTok's desktop links end in '/', and so does the
- * converter's own Facebook story.php output. Caught by an adversarial review: every such shape was
- * notfound, while X and Reddit only looked fixed because their matchers ignore extra segments.
+ * in both the decoration has no stem in its own segment, so the glued rules (which strip from the end of
+ * a segment) never fire. Instagram's and TikTok's desktop links end in '/', and so does the converter's
+ * own Facebook story.php output. Caught by an adversarial review: every such shape was notfound, while X
+ * and Reddit only looked fixed because their matchers ignore extra segments.
  */
 const DECORATION = /^(?:(?:\)|%29)[^/]*|\.mp4(?:\||%7[Cc])*|(?:\||%7[Cc])+)$/i
 
-export function route(url: URL): Route {
-  const seg = url.pathname.split('/').filter(Boolean)
-  // The parent goes through ALL the layers (it may itself end `20.mp4` or `/p`), and is kept only when
-  // it names a post, so a decoration segment on anything else is answered as it was typed. Bounded:
-  // each call drops a segment.
-  if (seg.length >= 2 && DECORATION.test(seg[seg.length - 1])) {
-    const parent = new URL(url.toString())
-    parent.pathname = `/${seg.slice(0, -1).join('/')}`
-    const hit = route(parent)
-    if (namesAPost(hit)) return /^\.mp4/i.test(seg[seg.length - 1]) ? { ...hit, direct: true } : hit
-  }
-  const over = seg.length ? OVERCAPTURE.exec(seg[seg.length - 1]) : null
-  if (over) {
-    const hit = routeGallery(withLastSegment(url, seg, over[1]))
-    if (namesAPost(hit)) return hit
-  }
-  return routeGallery(url)
+/**
+ * The gallery mode a segment names, OWN keys only. GALLERY_SUFFIX is an object literal, so a bare
+ * `GALLERY_SUFFIX[seg]` answered `constructor`, `toString` or `__proto__` with something truthy: found by
+ * review, `/p/{code}/constructor` had routed as a post with `gallery: Object` since the toggle shipped.
+ * Spoiler bars are ignored for the lookup, because routeInner strips them only after it.
+ */
+function galleryMode(seg: string): GalleryMode | undefined {
+  const k = seg.replace(/\||%7[Cc]/g, '')
+  return Object.hasOwn(GALLERY_SUFFIX, k) ? GALLERY_SUFFIX[k] : undefined
 }
 
-function routeGallery(url: URL): Route {
-  const seg = url.pathname.split('/').filter(Boolean)
-  // Discord's spoiler bars are stripped by routeInner, AFTER this lookup, so they are dropped here for
-  // the lookup alone: `||…/20/p||` arrives with the bars on `p`. Without this a spoilered gallery link
-  // silently lost its mode, and the converter's own `.mp4` + stills output spoilered (`…/20.mp4/p||`)
-  // fell all the way back to an id of '20.mp4' (both measured offline 2026-10-04).
-  const last = seg.length >= 2 ? seg[seg.length - 1].replace(/\||%7[Cc]/g, '') : ''
-  const mode = last ? GALLERY_SUFFIX[last] : undefined
-  if (mode) {
-    // A NEW URL rather than a mutated one: routeInner reads searchParams too (/watch?v=), and the
-    // query must survive the strip untouched — /watch?v={id}/p is one of the shapes measured to
-    // absorb the segment today.
-    const stripped = new URL(url.toString())
-    stripped.pathname = `/${seg.slice(0, -1).join('/')}`
-    const hit = routeDirect(stripped)
-    if (takesGallery(hit)) return { ...hit, gallery: mode }
-  }
-  return routeDirect(url)
-}
+/**
+ * How many suffixes route() will peel off the end of a path. A real paste carries at most three or four
+ * (`/p/{code}/.mp4/p` then Discord's `).`, say); six leaves room and bounds the work. THE BOUND IS THE
+ * POINT: a first version recursed once per decoration segment, and an adversarial review measured an
+ * 8 KB path of `/)` segments costing ~2.4s of CPU and a ~14 KB one throwing a stack overflow out of
+ * handle(). A path with more decoration than this is simply answered with what six peels leave.
+ */
+const MAX_PEELS = 6
 
-function routeDirect(url: URL): Route {
-  const seg = url.pathname.split('/').filter(Boolean)
-  const m = seg.length ? DIRECT_SUFFIX.exec(seg[seg.length - 1]) : null
-  if (m) {
-    const hit = routeInner(withLastSegment(url, seg, m[1] + m[2]))
-    // Spread only when set, the same no-churn rule as `gallery`: every existing deepEqual on a route
-    // without the suffix is untouched.
-    if (namesAPost(hit)) return { ...hit, direct: true }
-    // `.mp4` TYPED ONTO A /v OR /p LINK: `/p/{code}/v.mp4`. The gallery layer above saw `v.mp4`, not a
-    // gallery key, and routeInner has no gallery layer, so every matcher that checks exact depth
-    // refused `/p/{code}/v` (only x() and reddit(), which absorb a trailing segment, ever worked).
-    // Tried only after the plain reading names no post, so those two keep their old answers.
-    const mode = seg.length >= 2 ? GALLERY_SUFFIX[m[1]] : undefined
-    if (mode) {
-      const parent = new URL(url.toString())
-      parent.pathname = `/${seg.slice(0, -1).join('/')}`
-      const up = routeInner(parent)
-      if (takesGallery(up)) return { ...up, gallery: mode, direct: true }
-      if (namesAPost(up)) return { ...up, direct: true }
+type Peel = { segs: string[]; direct: boolean; gluedMp4: boolean; gallery?: GalleryMode }
+
+/**
+ * THE SUFFIX LAYER: Discord's masked-link over-capture, the /v /p gallery toggle and the `.mp4` direct
+ * suffix, in one bounded pass rather than nested layers.
+ *
+ * PEEL, THEN TRY FROM THE MOST-PEELED READING BACK. Each step looks at the path's current last segment and
+ * removes ONE suffix, recording the reading it leaves:
+ *   - a whole decoration segment (DECORATION), noting `direct` if it was `.mp4`;
+ *   - a glued over-capture tail (OVERCAPTURE);
+ *   - a gallery key, `v` or `p` (one per path);
+ *   - a glued `.mp4` (DIRECT_SUFFIX; once, so `20.mp4.mp4` stays the honest failure id '20.mp4').
+ * Then the readings are routed from the most peeled back to the least, and the first that NAMES A POST
+ * wins, carrying the flags gathered on the way to it; if none does, the url is routed exactly as typed.
+ * That is the strip-first-then-fall-back discipline GALLERY_SUFFIX's docstring argues for, applied to
+ * every suffix at once: matchers like x() absorb a trailing segment and would otherwise "succeed" with a
+ * corrupted id, and a path that names no post (a chooser, a profile, a site path) keeps its own reading.
+ *
+ * THE ORDER IS WHAT LETS SUFFIXES COMPOSE on the links people paste, in whatever order they were typed:
+ * `/X/status/20/p).` (a masked gallery link), the converter's own `/X/status/20.mp4/p`, a hand-typed
+ * `/p/{code}/v.mp4`, and `/p/{code}/.mp4/p` all peel down to the post with their flags. Nested layers
+ * got each of the last two wrong in turn, on every platform whose matcher checks depth exactly.
+ *
+ * A path with no suffix peels nothing and goes straight to routeInner, so it is routed byte-identically to
+ * before any of this existed; an old-vs-new sweep of ~1.4M such paths found no difference.
+ */
+function peelSuffixes(url: URL): Route {
+  const peels: Peel[] = []
+  let cur: Peel = { segs: url.pathname.split('/').filter(Boolean), direct: false, gluedMp4: false }
+  for (let i = 0; i < MAX_PEELS && cur.segs.length > 0; i++) {
+    const s = cur.segs
+    const last = s[s.length - 1]
+    const head = s.slice(0, -1)
+    let next: Peel | null = null
+    if (s.length >= 2 && DECORATION.test(last)) {
+      next = { ...cur, segs: head, direct: cur.direct || /^\.mp4/i.test(last) }
+    } else {
+      const over = OVERCAPTURE.exec(last)
+      const mode = s.length >= 2 && !cur.gallery ? galleryMode(last) : undefined
+      const mp4 = cur.gluedMp4 ? null : DIRECT_SUFFIX.exec(last)
+      if (over) next = { ...cur, segs: [...head, over[1]] }
+      else if (mode) next = { ...cur, segs: head, gallery: mode }
+      else if (mp4) next = { ...cur, segs: [...head, mp4[1] + mp4[2]], direct: true, gluedMp4: true }
     }
+    if (!next) break
+    peels.push(next)
+    cur = next
+  }
+  for (let i = peels.length - 1; i >= 0; i--) {
+    const p = peels[i]
+    // A NEW URL rather than a mutated one: routeInner reads searchParams too (/watch?v=), and the query
+    // must survive the peel untouched.
+    const u = new URL(url.toString())
+    u.pathname = `/${p.segs.join('/')}`
+    const hit = routeInner(u)
+    if (!namesAPost(hit)) continue
+    // A reading that consumed a /v or /p must be one that can carry the mode, as the gallery toggle has
+    // always required: otherwise `/t/{code}/p` would start meaning the short link, and token-shaped
+    // permalinks like `/t/p/p` (an Instagram reading today) would change platform.
+    if (p.gallery && !takesGallery(hit)) continue
+    // Spread only when set, so a route without the suffix is deepEqual to one that never had it.
+    const withMode: Route = p.gallery && takesGallery(hit) ? { ...hit, gallery: p.gallery } : hit
+    return p.direct && namesAPost(withMode) ? { ...withMode, direct: true } : withMode
   }
   return routeInner(url)
+}
+
+export function route(url: URL): Route {
+  return peelSuffixes(url)
 }
 
 function routeInner(url: URL): Route {

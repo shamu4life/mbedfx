@@ -1731,10 +1731,20 @@ function mbedfxConvert(input, host, gallery) {
      */
     var m = (j && j.ok && (j.media || [])[0]) || null;
     var still = m ? (m.kind === 'video' ? m.poster : (m.poster || m.url)) : '';
-    var line = j && j.ok
-      ? (j.muxing
-          ? 'The video is still being prepared. Pasted right now, it may show nothing.'
-          : 'Discord attaches this file. No card, no caption.')
+    /**
+     * THE LINE TURNS ON WHAT THE LINK WILL ACTUALLY SERVE, not on whether the post was read. A post with no
+     * usable media answers a direct url with a plain-text 404, so "attaches this file" over it would be
+     * the confident wrong preview (the box can be switched off when there is nothing to attach; a pasted
+     * `.mp4` cannot). And a video still being prepared, or one this preview stopped watching after six
+     * minutes, may draw nothing if pasted now (docs/API.md, the d. host), so it says that instead.
+     */
+    var has = !!(j && j.ok && (j.media || []).length);
+    var line = has
+      ? (j.muxSlow
+          ? 'Still being prepared after six minutes. This preview has stopped checking. Pasted right now, it may show nothing.'
+          : (j.muxing
+              ? 'The video is still being prepared. Pasted right now, it may show nothing.'
+              : 'Discord attaches this file. No card, no caption.'))
       : (j && j.gate ? j.gate : 'Nothing to attach. This link has no media.');
     preview.innerHTML = '<div class="sentrow"><span class="sent" id="sentline"></span>'
       + '<button type="button" id="copy2">Copy</button></div>'
@@ -1968,17 +1978,21 @@ function mbedfxConvert(input, host, gallery) {
        * already in hand the other kind can be drawn immediately — no blank gap, and no second request
        * that could land out of order behind the first.
        *
-       * cardSeq is bumped so any fetch still in flight cannot land on top of this draw; without that,
-       * a toggle during a slow request drew the previous post's answer in the new kind.
+       * cardSeq is bumped WHEN THE POST CHANGED, so a fetch still in flight for the previous post cannot
+       * land on top of this draw; without that, a toggle during a slow request drew the previous post's
+       * answer in the new kind. For the same post it is left alone (see below).
        */
       var url = result.textContent || '';
       var path = url ? url.slice(url.indexOf('/', 8)) : '';
-      cardSeq++;
       if (lastCard && lastCard.path === path) {
         if (mediaOnly || (lastCard.j && lastCard.j.direct)) drawMediaOnly(url, lastCard.j);
         else drawCard(url, lastCard.j);
+        // NO cardSeq BUMP FOR THE SAME POST: a mux poll armed for this path must keep running, and card()
+        // reads `mediaOnly` when it draws, so it lands as the right kind. Bumping here killed that poll
+        // and froze "still being prepared" on screen after the toggle (found in the second review round).
         return;
       }
+      cardSeq++;
       preview.className = 'preview';
       preview.innerHTML = '';
       schedulePrep();

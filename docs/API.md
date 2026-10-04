@@ -304,12 +304,13 @@ meaning `docs/METRICS.md` records under "Known defects in the write shape" (`ser
 
 A trailing `.mp4` on the post url's path does the same on any host, the spelling fxtwitter users
 already type: `https://mbedfx.app/jack/status/20.mp4`. It is read off the path (`DIRECT_SUFFIX`,
-`src/router.ts`), so it works on every post `d.` works on whose id is in the path, share codes and
-short links included, glued to the id or after a trailing `/` (`/p/{code}/.mp4`), and before or after
-a `/v` or `/p`. The answer is identical to `d.`'s: the post's first usable media, a plain-text 404
-when there is none (or when a share code or short link does not resolve), and no split between
-crawlers and people. `.mp4` only, in any case. In a query it is not read: `/watch?v={id}.mp4` is
-still a card for a YouTube id and a chooser for a Facebook numeric one, so use `d.` for those.
+`src/router.ts`), so it works on every post `d.` works on, share codes and short links included:
+glued to the last path segment or after a trailing `/` (`/p/{code}/.mp4`), before or after a `/v`
+or `/p`, and on the path of a link whose id is in the query (`/watch.mp4?v={id}`,
+`/photo/.mp4?fbid={id}`). The answer is identical to `d.`'s: the post's first usable media, a
+plain-text 404 when there is none (or when a share code or short link does not resolve), and no split
+between crawlers and people. `.mp4` only, in any case. Typed onto the query VALUE it is not read:
+`/watch?v={id}.mp4` is still a card for a YouTube id and a chooser for a Facebook numeric one.
 `/_api/v1` ignores the suffix, as it ignores `/v` and `/p`, and describes the post.
 
 Both spellings have one cost a card does not. A card answers at once and Discord fetches its video

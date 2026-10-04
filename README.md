@@ -78,7 +78,7 @@ Or, the way fxtwitter does it, put `.mp4` on the end of the link's path, before 
 https://megapenispoopenfarten.sex/jack/status/20.mp4
 ```
 
-A link whose post id sits after the `?` (YouTube's `watch?v=`, Facebook's `photo/?fbid=`) has nowhere to put it and stays a card, so use `d.` for those.
+That goes for links whose post id sits after the `?` too: `/watch.mp4?v=…`, `/photo/.mp4?fbid=…`. A `.mp4` typed onto the end of the query instead (`watch?v=….mp4`) isn't read, and that link stays a card.
 
 The converter page has a **media only** checkbox next to the domain buttons. A `d.` url renders no card; [docs/API.md](docs/API.md#the-d-host) has the rest.
 

@@ -265,7 +265,9 @@ function redditOAuthMedia(d: Any): Media[] {
    * markers are read off Reddit's public listing shape (a .gif url, or a gif/mp4 preview variant), which
    * nothing here has captured, since this path needs app credentials; that is also why the mp4 variant
    * is not emitted as the video instead, as a url from an unmeasured field behind a video url is the
-   * same risk the other way round.
+   * same risk the other way round. The bare `.gif` url test also blanks a .gif post Reddit treats as a
+   * still, if such posts exist; that is accepted, because a missing index answers 404 while a still behind
+   * a promised video url is the sticky defect.
    */
   const v = d.preview?.images?.[0]?.variants
   if ((typeof d.url === 'string' && /\.gif(?:\?|$)/i.test(d.url)) || v?.gif || v?.mp4) return []

@@ -6050,15 +6050,24 @@ export async function handle(req: Request, env: Env, ctx: ExecutionContext, d: D
        * survives this on its own because the page re-applies the host; nothing re-applies a path suffix.
        *
        * PROVED, NOT ASSUMED: the suffixed permalink is used only if route() reads it back as the same post
-       * with `direct`. Otherwise the pasted target goes back untouched, which still serves the file when
-       * pasted, rather than a permalink that would silently be a card (a canonical whose id lives in the
-       * query, like /watch?v=, cannot carry the suffix at all).
+       * the unsuffixed one names, with `direct`. Otherwise the pasted target goes back untouched, which
+       * still serves the file when pasted, rather than a permalink that would silently be a card. A query
+       * canonical passes (`/watch.mp4?v={id}` is the file); the guard is for a candidate that would route
+       * anywhere else.
+       *
+       * COMPARED WITH THE POST `shown` NAMES, NOT WITH `ref`. For a Facebook typed share the Facebook
+       * branch above rewrites `shown` to the resolved permalink while `ref` stays the share ref, so a first
+       * version compared a resolved reel with the share it came from, never matched, and handed back the
+       * share code (found in the second review round), which is the per-share-act token that unfurl
+       * exists to drop.
        */
       if (!alreadyRight && 'direct' in pasted && pasted.direct === true) {
         const cand = new URL(shownUrl.toString())
         cand.pathname = `${cand.pathname.replace(/\/+$/, '')}.mp4`
         const back = route(cand)
-        shownUrl = back.kind === 'post' && back.direct === true && refKey(back.ref) === refKey(ref) ? cand : target
+        const want = route(new URL(shown))
+        shownUrl = back.kind === 'post' && back.direct === true && want.kind === 'post'
+          && refKey(back.ref) === refKey(want.ref) ? cand : target
       }
       return Response.json({
         ok: true,

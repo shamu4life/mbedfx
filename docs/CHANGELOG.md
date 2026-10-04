@@ -12,9 +12,10 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - **A trailing `.mp4` on any post link serves the file, the way fxtwitter does.**
   `megapenispoopenfarten.sex/X/status/{id}.mp4` used to answer "Couldn't load this Twitter post",
   because the id swallowed the suffix. It is now the path spelling of the `d.` host and takes the same
-  code path to the same bytes: every platform whose post id is in the path, share codes and short
-  links included, no crawler/person split, a plain-text 404 when there is nothing to serve. A link
-  whose id is in the query (`watch?v=`, `photo/?fbid=`) cannot carry it; `d.` still serves those. The router reads it
+  code path to the same bytes: every platform, share codes and short links included, no
+  crawler/person split, a plain-text 404 when there is nothing to serve. It goes on the path, so a link
+  whose id is in the query takes it before the `?` (`/watch.mp4?v=…`); typed onto the query value it is
+  not read. The router reads it
   (`DIRECT_SUFFIX`), so the router stays host-blind, and `/_card` echoes the router's verdict so the
   converter previews a `.mp4` link as the file without a second copy of the rule.
 

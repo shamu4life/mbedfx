@@ -1972,8 +1972,43 @@ test('THE .mp4 SUFFIX COMPOSES WITH /v AND /p IN EITHER ORDER, on a platform tha
   }
   assert.deepEqual(r('/p/DaQ5CPTki4E/v.mp4'), { ...r('/p/DaQ5CPTki4E'), gallery: 'videos', direct: true })
   assert.deepEqual(r('/nasajpl/p/DaQ5CPTki4E/v.mp4'), { ...r('/nasajpl/p/DaQ5CPTki4E'), gallery: 'videos', direct: true })
-  // X absorbs the trailing segment, so its plain reading wins first and keeps its old answer.
-  assert.deepEqual(r('/X/status/20/p.mp4'), { ...r('/X/status/20'), direct: true })
+  // X too, now that every suffix is peeled in one pass: the mode is read, not absorbed into x()'s depth.
+  assert.deepEqual(r('/X/status/20/p.mp4'), { ...r('/X/status/20'), gallery: 'stills', direct: true })
+  // A bare `.mp4` segment under a gallery suffix: the converter's stills toggle builds exactly this from a
+  // pasted `/p/{code}/.mp4`, and nested layers answered it notfound (found in the second review round).
+  assert.deepEqual(r('/p/DaQ5CPTki4E/.mp4/p'), { ...r('/p/DaQ5CPTki4E'), gallery: 'stills', direct: true })
+  assert.deepEqual(r('/@a/video/7650584217042144526/.mp4/v'), { ...r('/@a/video/7650584217042144526'), gallery: 'videos', direct: true })
+  assert.deepEqual(r('/X/status/20/.mp4/p'), { ...r('/X/status/20'), gallery: 'stills', direct: true })
+})
+
+test('A GALLERY KEY IS AN OWN KEY: constructor, toString and __proto__ are not modes', () => {
+  /**
+   * GALLERY_SUFFIX is an object literal, so an unguarded lookup answered inherited names with something
+   * truthy. Found in the second review round: `/p/{code}/constructor` had routed as a post with
+   * `gallery: Object` since the toggle shipped, and the `.mp4` branch copied the pattern so that
+   * `/p/{code}/constructor.mp4` served the post's file.
+   */
+  for (const name of ['constructor', 'toString', 'valueOf', '__proto__', 'hasOwnProperty']) {
+    for (const p of [`/p/DaQ5CPTki4E/${name}`, `/p/DaQ5CPTki4E/${name}.mp4`]) {
+      const got = r(p)
+      assert.ok(!('gallery' in got), `${p} carries no gallery`)
+      assert.notEqual(got.kind, 'post', `${p} is not the post`)
+    }
+  }
+})
+
+test('THE SUFFIX PEEL IS BOUNDED — a path of thousands of decoration segments routes in milliseconds', () => {
+  /**
+   * Found in the second review round: the first decoration rule recursed once per segment, quadratic in
+   * time and linear in stack. Measured in node 22: an 8 KB path of `/)` segments took ~2.4s through
+   * handle(), and a ~14 KB one threw RangeError out of it (the fetch handler has no catch, so a 500 for
+   * one unauthenticated GET). The peel now stops after MAX_PEELS steps.
+   */
+  for (const p of ['/a' + '/)'.repeat(8000), '/X/status/20' + '/||'.repeat(8000), '/a' + '/%29'.repeat(5000), '/a' + '/.mp4'.repeat(4000)]) {
+    const t = performance.now()
+    assert.doesNotThrow(() => r(p))
+    assert.ok(performance.now() - t < 500, `${p.length}-byte path took ${Math.round(performance.now() - t)}ms`)
+  }
 })
 
 test('A URL ENDING IN "/" PUTS THE DECORATION IN A SEGMENT OF ITS OWN, AND IT IS STILL DROPPED', () => {

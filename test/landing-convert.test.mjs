@@ -772,6 +772,16 @@ test('MEDIA-ONLY PREVIEWS THE FILE — no Discord card, but not nothing either',
     'the mux bookkeeping runs before the drawing, and the re-poll after it, for the file drawing too')
   assert.match(HTML, /The video is still being prepared\. Pasted right now, it may show nothing\./,
     'and while it is being prepared the file drawing says so, instead of promising the file')
+  // Second review round: past the six-minute watch cap the drawing fell back to promising the file with
+  // nothing polling behind it, and a post with no media at all was captioned as an attached file.
+  assert.match(HTML, /Still being prepared after six minutes\. This preview has stopped checking\./)
+  assert.match(HTML, /var has = !!\(j && j\.ok && \(j\.media \|\| \[\]\)\.length\);\s*var line = has/,
+    'the file line turns on media being present, because a post with none answers a direct url with a 404')
+  // And ticking the box for the SAME post must not kill a mux poll already armed for it.
+  const toggle = HTML.slice(HTML.indexOf("mediaOnlyBox.addEventListener('change'"))
+  const same = toggle.indexOf('if (lastCard && lastCard.path === path) {')
+  assert.ok(same > 0 && toggle.indexOf('cardSeq++;') > toggle.indexOf('return;', same),
+    'the sequence is bumped only after the same-post redraw has returned')
   assert.ok(!/function mediaNote\(\)/.test(HTML), 'the text-only state is gone')
 })
 

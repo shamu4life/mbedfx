@@ -1165,11 +1165,15 @@ test('/_prep KEEPS A PASTED .mp4 THROUGH A SHARE-CODE UNFURL, so the page never 
     ['/r/linuxmemes/s/VRg1iSFn4k.mp4', deps({ fetchPost: echoRedditPost, resolveRedditShare: async () => redditShareResolved('linuxmemes', 'prep2rd') })],
     ['/t/ZTAxTF9aE.mp4', deps({ resolveShortlink: async () => shortResolved })],
     ['/share/Fixture05X.mp4', deps({ resolveMetaShare: async () => 'https://www.threads.com/@dexerto/post/DbWxxQjFe4u?xmt=AQG0&slof=1' })],
+    // A Facebook TYPED share: here `ref` stays the share ref while `shown` becomes the resolved reel, and a
+    // first version compared against `ref`, never matched, and handed back the share code (second review).
+    ['/share/v/AbCdEf123.mp4', deps({ resolveMetaShare: async () => 'https://www.facebook.com/reel/1234567890123' })],
   ]
   for (const [p, d] of cases) {
     const j = await (await handle(prep(p), envWith(fakeResolver().binding), c, d)).json()
     assert.equal(j.ok, true, p)
-    assert.ok(j.url.endsWith('.mp4'), `${p}: the suffix survives, got ${j.url}`)
+    assert.ok(new URL(j.url).pathname.endsWith('.mp4'), `${p}: the suffix survives, got ${j.url}`)
+    assert.ok(!j.url.includes('/share/') && !j.url.includes('/s/') && !j.url.includes('/t/'), `${p}: unfurled, not the share code: ${j.url}`)
     const back = route(new URL(j.url))
     assert.equal(back.kind, 'post', p)
     assert.equal(back.direct, true, `${p}: and the router reads it as the file`)
