@@ -2075,6 +2075,21 @@ test("A MASKED-LINK OVER-CAPTURE GLUED TO AN ID IS DECORATION — Discord's ')' 
   assert.deepEqual(r(`${slug}).`), r(slug))
 })
 
+test('A MASKED PROFILE LINK FOLLOWED BY PUNCTUATION STILL REACHES THE PROFILE — but a profile takes no /p or .mp4', () => {
+  /**
+   * Found by the completeness review, round four. `[me](https://mbedfx.app/profile/alice.bsky.social).` makes
+   * Discordbot fetch `/profile/alice.bsky.social).`, which named nothing, so Discord drew "not found" for an
+   * advertised route. Only Discord's tail and spoiler bars may land on a profile; a /v /p or a `.mp4`
+   * means something only a post can honour, so those keep their old answer.
+   */
+  const profile = r('/profile/alice.bsky.social')
+  assert.equal(profile.kind, 'profile')
+  for (const t of [').', ')', '%29', ')%E2%80%A6', '/).', '/||']) assert.deepEqual(r(`/profile/alice.bsky.social${t}`), profile, t)
+  for (const p of ['/profile/alice.bsky.social/p', '/profile/alice.bsky.social.mp4', '/profile/alice.bsky.social/.mp4', '/profile/alice.bsky.social/p).']) {
+    assert.notEqual(r(p).kind, 'profile', `${p} is not made into the profile`)
+  }
+})
+
 test('THE OVER-CAPTURE TRIM IS ONLY KEPT WHEN IT NAMES A POST, and composes with both other layers', () => {
   // Not a post either way: answered as typed, so the chooser still shows the reader's own path.
   assert.equal(r('/jack)').kind, 'ambiguous')

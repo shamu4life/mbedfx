@@ -815,6 +815,31 @@ test('A PASTED .mp4 LINK PREVIEWS AS THE FILE, from the ROUTER\'s verdict echoed
   assert.equal(routed(stills.path).gallery, 'stills', stills.path)
 })
 
+test('A .mp4 BEFORE THE QUERY OF A QUERY-ID LINK SURVIVES CONVERSION, and the id with it', () => {
+  /**
+   * Found by the completeness review, round four. The query branches matched exact paths, so
+   * `youtube.com/watch.mp4?v={id}` fell through to the generic branch, which drops the query: the page
+   * offered the X/Instagram chooser for a YouTube link. The router reads `/watch.mp4?v=` and
+   * `/photo/.mp4?fbid=` as the file, so the converter has to hand those spellings out intact.
+   */
+  const { convert } = loadConverter()
+  for (const [input, want] of [
+    ['https://www.youtube.com/watch.mp4?v=dQw4w9WgXcQ', '/watch.mp4?v=dQw4w9WgXcQ'],
+    ['https://www.youtube.com/watch/.mp4?v=dQw4w9WgXcQ', '/watch.mp4?v=dQw4w9WgXcQ'],
+    ['https://www.facebook.com/photo/.mp4?fbid=1092409469807430', '/photo/.mp4?fbid=1092409469807430'],
+    ['https://www.facebook.com/photo.mp4?fbid=1092409469807430', '/photo/.mp4?fbid=1092409469807430'],
+  ]) {
+    const got = convert(input, 'mbedfx.app')
+    assert.equal(got.path, want, input)
+    const r = routed(got.path)
+    assert.equal(r.kind, 'post', input)
+    assert.equal(r.direct, true, `${input}: and the router reads it as the file`)
+  }
+  // Without the suffix nothing changes.
+  assert.equal(convert('https://www.youtube.com/watch?v=dQw4w9WgXcQ', 'mbedfx.app').path, '/watch?v=dQw4w9WgXcQ')
+  assert.equal(convert('https://www.facebook.com/photo/?fbid=1092409469807430', 'mbedfx.app').path, '/photo/?fbid=1092409469807430')
+})
+
 test('A WORKER-SUPPLIED URL IS RE-POINTED AT THE CHOSEN HOST', () => {
   /**
    * Reported as media-only "intermittently not working when changing links". /_prep answers with a

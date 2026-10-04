@@ -1652,7 +1652,7 @@ function galleryMode(seg: string): GalleryMode | undefined {
  */
 const MAX_PEELS = 6
 
-type Peel = { segs: string[]; direct: boolean; gluedMp4: boolean; gallery?: GalleryMode }
+type Peel = { segs: string[]; direct: boolean; gluedMp4: boolean; gallery?: GalleryMode; onlyTrim: boolean }
 
 /**
  * THE SUFFIX LAYER: Discord's masked-link over-capture, the /v /p gallery toggle and the `.mp4` direct
@@ -1680,14 +1680,15 @@ type Peel = { segs: string[]; direct: boolean; gluedMp4: boolean; gallery?: Gall
  */
 function peelSuffixes(url: URL): Route {
   const peels: Peel[] = []
-  let cur: Peel = { segs: url.pathname.split('/').filter(Boolean), direct: false, gluedMp4: false }
+  let cur: Peel = { segs: url.pathname.split('/').filter(Boolean), direct: false, gluedMp4: false, onlyTrim: true }
   for (let i = 0; i < MAX_PEELS && cur.segs.length > 0; i++) {
     const s = cur.segs
     const last = s[s.length - 1]
     const head = s.slice(0, -1)
     let next: Peel | null = null
     if (s.length >= 2 && DECORATION.test(last)) {
-      next = { ...cur, segs: head, direct: cur.direct || /^\.mp4/i.test(last) }
+      const mp4 = /^\.mp4/i.test(last)
+      next = { ...cur, segs: head, direct: cur.direct || mp4, onlyTrim: cur.onlyTrim && !mp4 }
     } else {
       const over = OVERCAPTURE.exec(last)
       const mode = s.length >= 2 && (!cur.gallery || cur.direct) ? galleryMode(last) : undefined
@@ -1697,8 +1698,8 @@ function peelSuffixes(url: URL): Route {
       // peeled first): the converter's stills box appends `/p` to a pasted `/p/{code}/v.mp4`, giving
       // `…/v.mp4/p`, and allowing one toggle per path left a bare `v` that depth-exact matchers refused
       // (third review round). Only when a `.mp4` was peeled, so a plain `/x/v/p` routes exactly as before.
-      else if (mode) next = { ...cur, segs: head, gallery: cur.gallery ?? mode }
-      else if (mp4) next = { ...cur, segs: [...head, mp4[1] + mp4[2]], direct: true, gluedMp4: true }
+      else if (mode) next = { ...cur, segs: head, gallery: cur.gallery ?? mode, onlyTrim: false }
+      else if (mp4) next = { ...cur, segs: [...head, mp4[1] + mp4[2]], direct: true, gluedMp4: true, onlyTrim: false }
     }
     if (!next) break
     peels.push(next)
@@ -1711,6 +1712,10 @@ function peelSuffixes(url: URL): Route {
     const u = new URL(url.toString())
     u.pathname = `/${p.segs.join('/')}`
     const hit = routeInner(u)
+    // A PROFILE TOO, WHEN ONLY DISCORD'S TAIL OR SPOILER BARS WERE CUT: `[me](…/profile/{handle}).` asks
+    // for `/profile/{handle}).`, which named nothing at all, so there is no other reading to protect. Not
+    // after a /v /p or a `.mp4`: a profile has no gallery and no file (completeness review, round four).
+    if (p.onlyTrim && hit.kind === 'profile') return hit
     if (!namesAPost(hit)) continue
     // A reading that consumed a /v or /p must be one that can carry the mode, as the gallery toggle has
     // always required: otherwise `/t/{code}/p` would start meaning the short link, and token-shaped

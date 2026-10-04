@@ -5086,16 +5086,6 @@ async function renderPostRoute(
 const DIRECT_MEDIA_HOST = /^d\.[^.]+\./i
 
 /**
- * Resolve the post and hand back its bytes. A 302 to this post's own /_media/ url rather than a
- * proxy of its own: that route already owns byte-range serving, the R2 mux cache, the container
- * dispatch and the degrade rules, and a second path to the same bytes is a second place for those to
- * disagree. The redirect stays on the `d.` host, so a reader who lands there stays there.
- *
- * NO HUMAN/BOT SPLIT, deliberately, and it is the one place in this file without one. Everywhere else
- * a human is redirected to the original post because a card is for a crawler; here the bytes ARE the
- * product and a person pasting a d. link wants the file, not the post they already had.
- */
-/**
  * THE DIRECT-MEDIA FAILURE ANSWER, one spelling for every arm that can reach it: plain text, a real 404,
  * never cached. A direct request promises bytes; answering a failure with an HTML embed would hand a
  * media player a document, and `curl -O` a page of markup named like a video.
@@ -5106,6 +5096,16 @@ function directNotFound(why: string): Response {
   })
 }
 
+/**
+ * Resolve the post and hand back its bytes. A 302 to this post's own /_media/ url rather than a
+ * proxy of its own: that route already owns byte-range serving, the R2 mux cache, the container
+ * dispatch and the degrade rules, and a second path to the same bytes is a second place for those to
+ * disagree. The redirect stays on the `d.` host, so a reader who lands there stays there.
+ *
+ * NO HUMAN/BOT SPLIT, deliberately, and it is the one place in this file without one. Everywhere else
+ * a human is redirected to the original post because a card is for a crawler; here the bytes ARE the
+ * product and a person pasting a d. or `.mp4` link wants the file, not the post they already had.
+ */
 async function serveDirectMedia(
   ref: PostRef, d: Deps, env: Env, ctx: ExecutionContext, client: ClientClass, origin: string,
 ): Promise<Response> {
