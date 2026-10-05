@@ -36,7 +36,7 @@ plays inline.
 | `src/refkey.ts` | **the security boundary.** What crosses the wire and comes back; kind lists are allowlists |
 | `src/worker.ts` | dispatch, caching, deadlines, the container calls |
 | `src/platforms/<site>/` | `fetch.ts` (I/O) + `normalize.ts` (pure) |
-| `src/fetchretry.ts` | `askTwice`, the one extra ask every platform fetcher goes through. The three exempt call sites say `NO-RETRY` and why |
+| `src/fetchretry.ts` | `askTwice`, the one extra ask every platform fetcher goes through. The four exempt call sites say `NO-RETRY` and why |
 | `src/render/` | the two heads, the Mastodon spoof, failure cards |
 | `src/render/embed.ts` | shared predicates: `usable`, `mediaOf`, `themeColor`, `byline` |
 | `src/render/text.ts` | `statParts`, the quote block, the plain-text builders |
