@@ -42,6 +42,11 @@ export const MUX_FIRST_ATTEMPT_MS = 35_000
  *
  * 140s = PROC_TIMEOUT (120) + slack for the container's own request overhead. Move it if PROC_TIMEOUT
  * moves; they are one number expressed twice and that is the bug shape this repo keeps writing down.
+ *
+ * Since 2026-10-04 the slack also pays for one probe ahead of a Reddit mux: `HLS_PROBE_TIMEOUT` (3s),
+ * asking the container's ffmpeg whether it has the hls extension check (server.py, REDDIT_HLS_HOST).
+ * It runs once per instance when it answers, and again on each Reddit mux while it does not. Raise
+ * that wall and this number has to move with it.
  */
 export const MUX_FIRST_ATTEMPT_TRACKS_MS = 140_000
 

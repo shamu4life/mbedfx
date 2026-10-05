@@ -11,8 +11,9 @@ yt-dlp knows. Those posts are cover stills without it.
 `POST /resolve`, JSON body, reached over the Worker's container binding, never a public route.
 
 ```jsonc
-{ "video": "<url>", "audio": "<url>"|null }  // mux tracks the Worker extracted (v.redd.it + DASH_audio,
-                                             // a bare HLS .m3u8 or DASH .mpd as `video` with no `audio`)
+{ "video": "<url>", "audio": "<url>"|null }  // mux tracks the Worker extracted (a v.redd.it or Bluesky
+                                             // HLS .m3u8 as `video` with no `audio`, or the yt-dlp tracks
+                                             // shortcut's pair)
 { "page": "<url>" }                          // yt-dlp resolves + merges (YouTube/Vimeo/FB/…)
 { "page": "<url>", "meta": true }            // METADATA ONLY (yt-dlp -J, no download) — see below
 { "probe": true }                            // DIAGNOSTIC (yt-dlp per client + a range fetch) — see below
@@ -98,6 +99,7 @@ in `PROBE_CLIENTS` and then RANGE-FETCHES the format that client chose, reportin
 
 ```jsonc
 { "video": "jNQXAC9IVRw", "ytdlp": "2026.08.19", "ms": 20233,
+  "ffmpeg": "<version>", "hlsExtensionPicky": true,   // since 2026-10-04; null = probe could not run
   "serving": ["default", "web_embedded", "tv_simply", "mweb", "web_safari"],
   "clients": [ { "client": "default", "extracted": true, "formats": 24,
                  "gvs": "ok", "bytes": 65536, "ms": 3378 }, … ] }
@@ -309,18 +311,35 @@ apiece.
 One caveat that build does not cover. `HTTP_OPTS` sends `-http_persistent 0` with every input, and
 that option belongs to ffmpeg's HLS demuxer. On ffmpeg 8.1.2 the `dash` demuxer does not define it
 and a plain MP4 has no demuxer that does, so either input dies at
-`Option http_persistent not found` before a byte is read. Production never reaches it: `{video}` is
-only ever set from `src/platforms/reddit/normalize.ts:102` and
-`src/platforms/bluesky/normalize.ts:73`, both HLS playlists, and everything else arrives as `{page}`
-where yt-dlp builds its own ffmpeg call.
+`Option http_persistent not found` before a byte is read. Production does reach it, and this
+paragraph used to say otherwise. The Reddit and Bluesky `{video}` sources are HLS playlists
+(`src/platforms/reddit/normalize.ts`, `src/platforms/bluesky/normalize.ts`), but the yt-dlp tracks
+shortcut (`src/platforms/ytdlp/normalize.ts`, used by Dailymotion, Streamable and the Imgur fallback)
+sends whatever url `_mux_sources` picked. When that is not an HLS playlist (a progressive MP4, an
+`.m4s`), the shortcut dies at this option and `ensureMuxed` falls back to `{page}`. Which formats each
+platform's shortcut actually carries has not been checked, so how often that happens is unknown (an
+HLS rendition would pass). That was found by reading the code on 2026-10-04, not measured in
+production, and nothing counts it, because only the last attempt's failure is counted. Making the
+option HLS-only would change what those platforms' muxes do, which needs its own measurement, so it
+has been left for a separate change.
 The interface note above still advertises a bare `.mpd` as `video`, which is the shape to re-measure
 before relying on it, and a self-hoster on a newer ffmpeg than the image's is who would find out.
+
+The same per-input slot carries `-extension_picky 0`, for Reddit's HLS only, and only when the
+installed ffmpeg's hls demuxer lists the option. Reddit videos with audio uploaded between about
+2024-05 and 2025-11 store their audio as MPEG-TS in files named `.aac`, which the check refuses, so
+before 2026-10-04 every one of them failed to mux on this image's ffmpeg (a 7.1 release no older
+than 7.1.1). An ffmpeg that does not list the option (6.1.1 measured) has no check and muxes them as
+is. The full measurement is in the comment at `REDDIT_HLS_HOST` in `server.py`.
 
 ## Status (2026-08-28)
 
 Reddit and Bluesky single videos play in production, since their HLS muxes to a progressive
 faststart MP4. Both were confirmed live against a real post: 200 `video/mp4` with a valid `ftyp`,
-Range answered 206, the file cached in R2.
+Range answered 206, the file cached in R2. That was true of Reddit only for some upload dates:
+videos with audio uploaded between about 2024-05 and 2025-11 answered 503 for 8 of 8 when measured
+as Discordbot on 2026-10-04 (see the `-extension_picky` paragraph above). The fix has not yet been
+measured in production.
 
 Since 2026-08-28 this runs on `standard-2` (1 vCPU) rather than `basic` (1/4 vCPU). Measured from
 production egress the same day, a per-client YouTube extract takes 3.1-4.7 s; it took 14-17 s before,

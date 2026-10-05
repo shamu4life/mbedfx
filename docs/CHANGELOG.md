@@ -7,7 +7,56 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Added
+
+- **A trailing `.mp4` on any post link serves the file, the way fxtwitter does.**
+  `megapenispoopenfarten.sex/X/status/{id}.mp4` used to answer "Couldn't load this Twitter post",
+  because the id swallowed the suffix. It is now the path spelling of the `d.` host and takes the same
+  code path to the same bytes: every platform, share codes and short links included, no
+  crawler/person split, a plain-text 404 when there is nothing to serve. It goes on the path, so a link
+  whose id is in the query takes it before the `?` (`/watch.mp4?v=…`); typed onto the query value it is
+  not read. The router reads it
+  (`DIRECT_SUFFIX`), so the router stays host-blind, and `/_card` echoes the router's verdict so the
+  converter previews a `.mp4` link as the file without a second copy of the rule.
+
 ### Fixed
+
+- **Every Threads post had fallen back to one picture.** Threads renamed the server-rendered block the
+  normaliser reads (now `BarcelonaPostPageTargetQueryRelayPreloader_`), so every post took the OG
+  fallback, whose single image is Threads' own rendered share card. Reported as a carousel showing one
+  unscrollable image; it also cost every video its player and every card its counts, avatar and real
+  timestamp. The exact name is matched, never a wildcard, because the same page carries sibling blocks
+  holding other people's posts. `/_smoke` stayed green through it, so the `th` row now demands a player.
+
+- **Reddit GIF posts rendered as text only.** Reddit labels them `type: "gif"`, which no branch knew.
+  They now play Reddit's own mp4 rendition with its poster and real size (25 KB against 556 KB for the
+  `.gif`, measured from a dev sandbox, not a Worker). A render with no player, and the OAuth fallback,
+  yield no media rather than an image, because every render of a post shares one cache key and an
+  image there would sit behind a url promised as video.
+
+- **Reddit videos with audio uploaded between about May 2024 and November 2025 would not play.**
+  Their `/_media/` answered 503 (8 of 8 asked as Discordbot) because the container's ffmpeg, a 7.1
+  release no older than 7.1.1, refused Reddit's audio from that period: MPEG-TS stored in files named
+  `.aac`, which FFmpeg's hls extension check has rejected since 7.1.1.
+  It looked like Reddit had changed how old videos are served. It had not: the post's age decides
+  which packaging Reddit used at upload, and only that one generation fails. The container now opens
+  Reddit's HLS, and nothing else, with the check off, and only on an ffmpeg that has the option. The
+  Raygun post muxes to 3.28 MB of h264 + aac locally under 7.1.5 (dev sandbox, not Cloudflare).
+  `RESOLVER_GENERATION` is bumped so pooled instances pick up the new image, and `/_clients` now
+  reports `ffmpeg` and `hlsExtensionPicky` so an operator can tell which image the probed slot runs.
+
+- **A masked link followed by punctuation, `[text](url).`, broke any link ending at the post id.**
+  Discord's own bug (discord-api-docs#6279) makes Discordbot fetch `url).`, and the `)` became part of
+  the id. The router now drops a trailing `)` and what follows it from the path, only when what remains
+  names a post. An id carried in the query (`photo/?fbid=`) is not covered.
+  The owner's example in the report had a separate cause: it was written `https//`, with no colon,
+  which Discord does not treat as a link at all.
+
+- **An unresolved share code or short link on the `d.` host answered HTML**, contradicting the
+  documented plain-text 404. It answers the 404 now, on `d.` and `.mp4` alike.
+
+- **A spoilered gallery suffix lost its mode.** `…/{id}/p||` rendered the default, because the bars
+  were stripped only after the `/v` `/p` lookup.
 
 - **The README banner's mark was 72px left of centre**, and had been since the first commit. The
   tile is 112 wide on a 1280 canvas, so it belongs at `translate(584 …)` with its centre on 640 —

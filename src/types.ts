@@ -636,7 +636,14 @@ export type Route =
    * wrongly all the time, and telling the caller so is most of what makes it usable.
    */
   | { kind: 'api'; target: string | null }
-  | { kind: 'post'; ref: PostRef; canonical: string; gallery?: GalleryMode }
+  /**
+   * `direct` is set by a trailing `.mp4` on the pasted path (router.ts DIRECT_SUFFIX) and asks for the
+   * post's BYTES rather than its card, the path spelling of the `d.` host. A property of the RESPONSE
+   * shape, never of identity: the ref, canonical and every cache key are those of the url without the
+   * suffix, so it needs no refKey or parseRefKey change. The same field rides on the shortlink,
+   * redditshare and metashare arms, the other kinds that converge on serveDirectMedia.
+   */
+  | { kind: 'post'; ref: PostRef; canonical: string; gallery?: GalleryMode; direct?: true }
   /**
    * AN ACCOUNT PAGE — `/profile/{handle}`, which is bsky.app's own permalink with the host swapped
    * and nothing else edited.
@@ -663,7 +670,7 @@ export type Route =
    * `canonical` is the short URL itself, so a human costs us zero upstream fetches — it resolves
    * in their browser exactly as it does in ours.
    */
-  | { kind: 'shortlink'; p: 'tt'; code: string; canonical: string }
+  | { kind: 'shortlink'; p: 'tt'; code: string; canonical: string; direct?: true }
   /**
    * Reddit's mobile-app "copy link" share form — /r/{sub}/s/{code} (or /user/{name}/s/{code}). Like
    * 'shortlink' the {code} is an OPAQUE token that names no post until a network hop resolves it, so
@@ -675,7 +682,7 @@ export type Route =
    * url itself (a human resolves it in their own browser at zero upstream cost); `sub` is carried for
    * clarity only — the resolver reads the post id from the redirect, never from these fields.
    */
-  | { kind: 'redditshare'; sub: string; code: string; canonical: string; gallery?: GalleryMode }
+  | { kind: 'redditshare'; sub: string; code: string; canonical: string; gallery?: GalleryMode; direct?: true }
   /**
    * META'S BARE SHARE CODE — `/share/{code}`, which BOTH Threads and Facebook mint in the identical
    * shape. Like 'redditshare' the code is an OPAQUE token naming no post until a network hop resolves
@@ -691,7 +698,7 @@ export type Route =
    * last-resort failure link, never as the card's canonical — a resolved share takes the ordinary
    * post path and gets that platform's own canonical, with every share parameter stripped.
    */
-  | { kind: 'metashare'; code: string; canonical: string; gallery?: GalleryMode }
+  | { kind: 'metashare'; code: string; canonical: string; gallery?: GalleryMode; direct?: true }
   | { kind: 'ambiguous'; path: string; candidates: Platform[] }
   | { kind: 'notfound' }
 
