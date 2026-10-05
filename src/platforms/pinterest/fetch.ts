@@ -20,13 +20,21 @@ import { askTwice } from '../../fetchretry.ts'
  * handler name (an allowlist — `garbage` and `` both 403) but need not be the right one for the
  * route, so the literal below is stable rather than route-derived.
  *
- * THE USER-AGENT, AND WHY THIS COMMENT USED TO SAY THE OPPOSITE. On 2026-07-27 this endpoint answered
- * identical 200s to `curl/8.0`, a Discordbot UA and NO user-agent header at all, and this section was
- * headed "IT IS NOT A UA GATE". So this fetcher sent no UA, and a Worker's fetch adds none of its own:
- * it was riding on the absence being allowed. That stopped somewhere between 2026-08-12 (the date
- * /_smoke's pn row was last verified good through production) and 2026-10-05, when every pin in
- * production failed: the pn row drew a failure card and /_api/v1 answered fetch_fail on 5 of 5 pins
- * sampled. The exact day it changed was not measured.
+ * THE USER-AGENT, AND WHY THIS COMMENT USED TO SAY THE OPPOSITE. As first committed on 2026-08-09,
+ * this section was headed "IT IS NOT A UA GATE" and recorded identical 200s for `curl/8.0`, a
+ * Discordbot UA and NO user-agent header at all. That sentence sat beside the 2026-07-27 bisect but
+ * carried no date of its own, so all that is known of when it was measured is "by 2026-08-09". So this
+ * fetcher sent no UA, and a Worker's fetch adds none of its own: it was riding on the absence being
+ * allowed. That stopped after 2026-08-28, when docs/METRICS.md records /_smoke running 17/17 green
+ * (src/smoke.ts had carried the pn row since 2026-08-12, so pin 66287425756772418 was one of the
+ * seventeen), and before 2026-10-05, when every pin in production failed: the pn row drew a failure
+ * card and /_api/v1 answered fetch_fail on 5 of 5 pins sampled.
+ *
+ * THE DAY IT CHANGED CAN STILL BE RECOVERED, AND HAS NOT BEEN. The half-hourly smoke cron writes
+ * smoke_ok / smoke_fail per platform to Analytics Engine (the query is under "The self-check" in
+ * docs/METRICS.md). Narrowed to blob1 = 'pn' from 2026-08-28 on, it gives the first failing tick to the
+ * half hour. Retention is three months, so the late-August points are the first to expire. It was not
+ * run for this change because the dev sandbox has no Analytics Engine read access.
  *
  * Re-measured 2026-10-05 from the Claude Code dev sandbox (a non-Cloudflare cloud IP behind an HTTPS
  * proxy, NOT a Worker), with the exact URL and headers built below, two asks per arm on each of pin
@@ -52,12 +60,13 @@ import { askTwice } from '../../fetchretry.ts'
  *
  * WHY A BROWSER UA AND NOT A CRAWLER'S. Every non-empty value measured alike, so the evidence is a tie
  * and the choice is convention. This is the web app's own XHR endpoint and the request already carries
- * the web app's handler header, so a browser UA makes it the request Pinterest's own page sends. That
- * is the same reasoning that gives the other web-app API fetchers here, twitch/fetch.ts and
- * twitter/fetch.ts, a browser UA. A crawler UA next to an app-internal header is a pairing no real
- * client sends. And facebook/normalize.ts records a second reason: an upstream identity that is not
- * Discord's stays independent of whichever client happens to be unfurling. The string is BROWSER_UA
- * from reddit/fetch.ts and twitch/fetch.ts, verbatim, so one future bump finds all three.
+ * the web app's handler header, so a browser UA makes it the request Pinterest's own page sends. A
+ * crawler UA next to an app-internal header is a pairing no real client sends. The other web-app API
+ * fetchers here, twitch/fetch.ts and twitter/fetch.ts, make the same choice, but neither file records
+ * why, so that is precedent and not a second argument. facebook/normalize.ts does record a reason that
+ * carries over: an upstream identity that is not Discord's stays independent of whichever client
+ * happens to be unfurling. The string is BROWSER_UA from reddit/fetch.ts and twitch/fetch.ts,
+ * verbatim, so one future bump finds all three.
  *
  * ROBOTS.TXT EXPLICITLY ALLOWS THIS PATH: `Allow: /resource/*​/get/`. Worth recording because it is
  * the rare case where the surface we use is one the site publishes permission for.
@@ -110,8 +119,10 @@ export async function fetchPinterest(ref: Extract<PostRef, { p: 'pn' }>): Promis
     redirect: 'manual',
   })
   // A dead pin id is a clean HTTP 404 (measured on ids 0, 1 and 999999999999999999), so status is a
-  // cheap first filter — but the REAL assertion is the payload shape below, because a 403
-  // `Invalid Resource Request` is also JSON and would otherwise parse.
+  // cheap first filter — but the REAL assertion is the payload shape below, because the no-user-agent
+  // 403 ({"message":"Looks like you don't have permission…","status":403}) is JSON and would otherwise
+  // parse. The handler wall is not the parse hazard: re-measured 2026-10-05 from the dev sandbox, it is
+  // 24 bytes of bare text, `Invalid Resource Request`, with no content-type, and res.json() throws on it.
   if (res.status !== 200) return { ok: false, reason: 'assert_fail' }
   let body: unknown
   try {

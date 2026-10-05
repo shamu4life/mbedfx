@@ -37,7 +37,9 @@ export function pinTitle(pin: Record<string, unknown>): string {
  * dev sandbox (a non-Cloudflare cloud IP behind an HTTPS proxy, NOT a Worker), with NO user-agent, a
  * Discordbot UA and a desktop Chrome UA alike: V_720P on v1.pinimg.com answered a 0-1023 range request
  * with 206 `video/mp4` and bytes 4-11 `ftypisom`, and two `originals/` jpegs on i.pinimg.com answered
- * 200 `image/jpeg` with a JPEG signature. Same bytes for all three. Only the metadata endpoint moved.
+ * 200 `image/jpeg` with a JPEG signature. Same status, content type and size for all three UAs, and on
+ * a second pass the same day, the same sha256 too (both jpegs whole, the mp4's first 1024 bytes). Only
+ * the metadata endpoint moved.
  *
  * TODAY IT BARELY MATTERS WHICH UA pinimg wants, because this Worker never fetches these urls: /_media/
  * answers with a 302 and Discord's own media fetcher follows it with Discord's UA, and the converter

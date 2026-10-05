@@ -18,9 +18,10 @@ import { fetchPinterest } from '../src/platforms/pinterest/fetch.ts'
  * alone -> still 403; this one alone -> 200 with the full pin. No cookie is sent and none is required,
  * and `robots.txt` explicitly allows the path (`Allow: /resource/*​/get/`).
  *
- * THE SECOND IS A NON-EMPTY USER-AGENT, and this header used to say the opposite. On 2026-07-27 it
- * read "IT IS NOT A UA GATE": identical 200s for `curl/8.0`, a Discordbot UA and NO user-agent at
- * all. Rewritten 2026-10-05, when every pin in production had started failing: re-measured from the
+ * THE SECOND IS A NON-EMPTY USER-AGENT, and this header used to say the opposite. As committed on
+ * 2026-08-09 it read "IT IS NOT A UA GATE": identical 200s for `curl/8.0`, a Discordbot UA and NO
+ * user-agent at all, a measurement the original comment did not date (it sat beside the 2026-07-27
+ * bisect). Rewritten 2026-10-05, when every pin in production had started failing: re-measured from the
  * Claude Code dev sandbox (a non-Cloudflare cloud IP, not a Worker), no UA and an empty UA both answer
  * 403 `{"message":"Looks like you don't have permission to access this page…","status":403}`, and
  * every non-empty UA tried (curl, two Chromes, Discordbot, facebookexternalhit) answers 200 with the
@@ -262,14 +263,16 @@ async function withFakePinterest(body) {
 test('the pin request carries a non-empty user-agent beside the handler header, because Pinterest 403s every pin asked without one', async () => {
   /**
    * THE DEFECT: Pinterest was down on every pin in production. fetchPinterest sent only the handler
-   * header and `accept`, a Worker's fetch adds no user-agent of its own, and somewhere between
-   * 2026-08-12 and 2026-10-05 PinResource began refusing UA-less requests with 403 "Looks like you
-   * don't have permission to access this page". /_smoke's pn row drew a failure card and /_api/v1
-   * answered fetch_fail for 5 of 5 pins. The handler header alone, which was the whole gate in July,
-   * is not enough now, so this asserts BOTH ride on the same request.
+   * header and `accept`, a Worker's fetch adds no user-agent of its own, and somewhere after
+   * 2026-08-28 (when docs/METRICS.md records /_smoke 17/17 green, the pn row one of the seventeen) and
+   * before 2026-10-05 PinResource began refusing UA-less requests with 403 "Looks like you don't have
+   * permission to access this page". /_smoke's pn row drew a failure card and /_api/v1 answered
+   * fetch_fail for 5 of 5 pins. The handler header alone, which was the whole gate when this fetcher
+   * was written, is not enough now, so this asserts BOTH ride on the same request.
    *
-   * An empty or whitespace user-agent counts as none: measured from the dev sandbox, a present but
-   * empty UA got the same 403 as an absent one.
+   * An empty user-agent counts as none: measured from the dev sandbox, a present but empty UA got the
+   * same 403 as an absent one. A whitespace-only UA was not measured; the stub and the assertion treat
+   * it as none too, which errs strict rather than letting a blank value pass.
    */
   const { got, asks } = await withFakePinterest(() => fetchPinterest(REF))
   assert.equal(asks.length, 1, 'one ask: a 200 is never asked again')
