@@ -1802,10 +1802,14 @@ test('PARITY: og:video and both twitter:player URLs are ONE url, on our origin, 
   assert.deepEqual(got, { kind: 'media', ref: ttVideo.ref, index: 0, asVideo: true })
 })
 
-test('PARITY: media_attachments and the avatar keep the EXTENSIONLESS url', async () => {
-  // The suffix is scoped to og:video / twitter:player and nothing else. media_attachments is what
-  // actually draws Discord's inline player on the card we want, and it was never part of the
+test('PARITY: media_attachments and the avatar keep the EXTENSIONLESS url, except a gif\'s, which ends in .gif', async () => {
+  // The .mp4 suffix is scoped to og:video / twitter:player and nothing else. media_attachments is what
+  // actually draws Discord's inline player on the card we want, and it was never part of that
   // delta — changing it would be shipping an untested second change under cover of this one.
+  //
+  // RENAMED 2026-10-05 (it read "keep the EXTENSIONLESS url" with no exception, while its own last
+  // assertion, added the same day, pins a gif attachment ending in `.gif`). A test name stating a rule
+  // its body contradicts is how someone "normalises" the carve-out away.
   const st = toMastodonStatus(ttVideo, ORIGIN)
   assert.equal(st.media_attachments[0].url, `${ORIGIN}/_media/tt%3A777/0`, 'no suffix here')
   assert.equal(st.account.avatar, `${ORIGIN}/_media/tt%3A777/avatar`)

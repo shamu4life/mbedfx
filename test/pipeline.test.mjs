@@ -3564,7 +3564,7 @@ test('REAL FIXTURE: a Reddit GIF is its looping .gif in every surface, and its o
   const status = await (await handle(req(`/api/v1/statuses/${id}`, DISCORD), fakeEnv(), ctx, deps)).json()
   assert.equal(status.media_attachments.length, 1)
   const [att] = status.media_attachments
-  assert.equal(att.type, 'image', 'Mastodon `image`, which Discord loops; never `video`, never `gifv`')
+  assert.equal(att.type, 'image', 'Mastodon `image`, which Discord is expected to loop; never `video`, never `gifv`')
   assert.equal(att.url, `https://staging.megapenispoopenfarten.sex${mediaRef(ref, 0)}.gif`,
     'a url never handed out as a video (#98 put a video attachment on the extensionless one for a day)')
   assert.equal(att.preview_url, att.url, 'a GIF is its own picture')
@@ -3603,7 +3603,8 @@ test('A BARE /comments/{id} LOAD OF A REDDIT GIF WRITES THE SAME GIF, AND THE OL
    * one an adversarial review found for #98: a bare /comments/{id} link gets Reddit's placeholder-sub
    * render (no player), and loadPost writes it under the SAME canonical cache key as the real-subreddit
    * render. #98 had that render write NO media, so index 0 was a video or absent. Now both renders write
-   * the gif (they read the screenview's url and type, which the placeholder render carries; measured), so
+   * the gif (they read the screenview's url and type, which the placeholder render carries: measured
+   * 2026-10-05 from the Claude Code dev sandbox, not a Worker; a Worker's is known to differ), so
    * index 0 is the same kind whichever wrote last, and only the size can differ (a header read that
    * failed, simulated here). The .mp4 url #98's cards promised is answered by the media arm's guard.
    * Driven through one shared cache, the real render first, then the bare one.
@@ -3640,12 +3641,17 @@ test('A BARE /comments/{id} LOAD OF A REDDIT GIF WRITES THE SAME GIF, AND THE OL
   assert.equal(media.headers.get('cache-control'), 'no-store')
 })
 
-test('A VIDEO-SPELLED MEDIA URL ON ANY PLATFORM NEVER 302s TO AN IMAGE, while a real video and every image spelling still redirect', async () => {
+test('A MEDIA URL\'S EXTENSION IS A PROMISE ON ANY PLATFORM: a video spelling never 302s to a picture, an image spelling never 302s to a video, and matching spellings still redirect', async () => {
   /**
-   * The guard is general on purpose. The Reddit gif move made it reachable, but the shape (a url Discord was
-   * handed as video, an entry at that index that is now a picture) is the 2026-07-24 poisoned-url defect on
-   * any platform where an entry's kind can change under a url. A Bluesky post is used here so nothing about
-   * it is Reddit's: one image entry and one direct video entry, no remux, no proxy.
+   * The guards are general on purpose. The Reddit gif move made them reachable, but the shape (a url Discord
+   * was handed as one kind, an entry at that index that is now the other) is the 2026-07-24 poisoned-url
+   * defect, or its 2026-07-19 mirror where an image-role url answered with mp4 bytes and Discord abandoned
+   * the rich card, on any platform where an entry's kind can change under a url. A Bluesky post is used here
+   * so nothing about it is Reddit's: one image entry, one direct video entry and one gif, no remux, no proxy.
+   *
+   * REWRITTEN 2026-10-05 after review, from "A VIDEO-SPELLED MEDIA URL ... while a real video and EVERY
+   * image spelling still redirect". The image spellings on the VIDEO entry (`1.gif`, `1.jpg`, ...) now
+   * answer notReady too (the asImage guard); the image spellings on pictures redirect exactly as before.
    */
   const ref = { p: 'bs', handle: 'alice.bsky.social', rkey: '3k2a' }
   const post = {
@@ -3659,9 +3665,9 @@ test('A VIDEO-SPELLED MEDIA URL ON ANY PLATFORM NEVER 302s TO AN IMAGE, while a 
     ],
   }
   const deps = xDeps(post)
-  for (const seg of ['0.mp4', '0.webm', '0.mov', '0.m4v', '2.mp4']) {
+  for (const seg of ['0.mp4', '0.webm', '0.mov', '0.m4v', '2.mp4', '1.gif', '1.jpg', '1.jpeg', '1.png', '1.webp']) {
     const res = await handle(req(mediaRef(ref, seg), DISCORD), fakeEnv(), ctx, deps)
-    assert.equal(res.status, 503, `${seg} on a picture is notReady`)
+    assert.equal(res.status, 503, `${seg} on the other kind of entry is notReady`)
     assert.equal(res.headers.get('location'), null, `${seg} must not redirect`)
     assert.equal(res.headers.get('cache-control'), 'no-store', `${seg} caches nothing`)
   }
@@ -3673,6 +3679,47 @@ test('A VIDEO-SPELLED MEDIA URL ON ANY PLATFORM NEVER 302s TO AN IMAGE, while a 
   }
   // An index past the end keeps its 404: the guard answers a promise about an entry, not a missing one.
   assert.equal((await handle(req(mediaRef(ref, '9.mp4'), DISCORD), fakeEnv(), ctx, deps)).status, 404)
+})
+
+test('THE NEW .gif ATTACHMENT URL NEVER 302s TO #98\'S MP4, even through a colo whose post cache still holds #98\'s Post', async () => {
+  /**
+   * Found by review of the Reddit gif change (2026-10-05), reproduced there with handle() and two fake caches,
+   * and pinned here the same way. The post cache is per colo (caches.default, POST_TTL 900 s), Discord's
+   * crawler, its activity callback and its media proxy do not reliably share a colo, and a rollout is not
+   * atomic. So colo A renders the status from the NEW Post and hands Discord `/_media/{key}/0.gif` as an
+   * IMAGE attachment, and Discord's proxy fetches it through colo B, which still holds the Post #98 wrote:
+   * index 0 is Reddit's mp4 rendition there. Before the asImage guard that answered 302 to
+   * preview.redd.it/...format=mp4, mp4 bytes behind an image attachment, the measured 2026-07-19 failure
+   * (Discord abandons the whole rich card), on a url that is the same for every future card of the post.
+   */
+  const ref = { p: 'rd', sub: 'forsen', id: '1wuh1g1' }
+  const fresh = normalizeReddit({ source: 'embed', html: readFileSync('test/fixtures/reddit-embed-gif.html', 'utf8'), gifHead: RD_GIF_HEAD }, ref)
+  // What #98's normalizer wrote for this post, entry for entry from the same fixture's player.
+  const mp4 = 'https://preview.redd.it/4gg2f32z3qsh1.gif?width=320&format=mp4&s=b980ae1e4df49136d178f605cd05e89ac921bb5e'
+  const stale = { ...fresh, media: [{ kind: 'video', url: mp4, w: 320, h: 240,
+    poster: 'https://preview.redd.it/this-man-is-deranged-v0-4gg2f32z3qsh1.gif?format=png8&s=e8f08d5ba684bd179ca3a777577ec2f742cfdf50' }] }
+  const colo = (post) => ({ cache: fakeCache(), fetchPost: async () => post, resolveShortlink: async () => ({ kind: 'unresolved' }) })
+  const a = colo(fresh)
+  const b = colo(stale)
+  const status = await (await handle(req(`/api/v1/statuses/${encodeStatusId(refKey(ref))}`, DISCORD), fakeEnv(), ctx, a)).json()
+  const gifUrl = new URL(status.media_attachments[0].url)
+  assert.equal(status.media_attachments[0].type, 'image', 'precondition: colo A hands Discord an image attachment')
+  assert.equal(gifUrl.pathname, `${mediaRef(ref, 0)}.gif`, 'precondition: on the .gif spelling')
+  // Warm colo B's post cache with #98's Post, as fifteen minutes of pre-deploy traffic would have.
+  await handle(req(mediaRef(ref, 0), DISCORD), fakeEnv(), ctx, b)
+  b.fetchPost = async () => { throw new Error('colo B must answer from the Post it already holds') }
+  const res = await handle(req(gifUrl.pathname, DISCORD), fakeEnv(), ctx, b)
+  const loc = res.headers.get('location') || ''
+  assert.ok(!/format=mp4/.test(loc), `an image-promised url must never redirect to the mp4, got ${res.status} ${loc}`)
+  assert.equal(res.status, 503, 'notReady')
+  assert.equal(res.headers.get('cache-control'), 'no-store', 'so nothing pins it, and the next fetch after colo B\'s Post expires gets the gif')
+  // The extensionless url on colo B still answers what #98 promised there, the mp4, unchanged.
+  const old = await handle(req(mediaRef(ref, 0), DISCORD), fakeEnv(), ctx, b)
+  assert.equal(old.headers.get('location'), mp4)
+  // And on colo A the same .gif url serves the gif.
+  const good = await handle(req(gifUrl.pathname, DISCORD), fakeEnv(), ctx, a)
+  assert.equal(good.status, 302)
+  assert.equal(good.headers.get('location'), RD_GIF_URL)
 })
 
 test('A REDDIT GIF\'S DIRECT LINK (d. host and a trailing .mp4) SERVES THE .gif, and does not trip the video-url guard', async () => {

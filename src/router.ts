@@ -1842,8 +1842,9 @@ function routeInner(url: URL): Route {
     const poster = /^poster(\d+)(?:\.(?:jpg|jpeg|png|gif|webp))?$/.exec(raw[2])
     if (poster) return { kind: 'media', ref, index: { poster: Number(poster[1]) } }
     // A TRAILING MEDIA EXTENSION IS DECORATION, stripped before the integer parse — so
-    // /_media/{key}/0.mp4 and /_media/{key}/0 are two spellings of one resource (the video spelling
-    // also carries `asVideo`, below, so the media arm can refuse to answer it with an image).
+    // /_media/{key}/0.mp4 and /_media/{key}/0 are two spellings of one resource (a video spelling
+    // also carries `asVideo`, and an image spelling `asImage`, below, so the media arm can refuse to
+    // answer either one with the other kind of bytes).
     //
     // WHY IT EXISTS: production fxtiktok's og:video / twitter:player URL ends in '.mp4' and ours
     // ended in a bare '/0'. That suffix is one delta in the production-parity head shipped
@@ -1852,8 +1853,10 @@ function routeInner(url: URL): Route {
     //
     // THE EXTENSIONLESS FORM IS NOT LEGACY. It is what the plain-og head, the Bluesky path and
     // the Mastodon media_attachments all still emit — and media_attachments is what actually
-    // draws Discord's inline player. Only the spoof head's og:video / twitter:player pair carries
-    // the suffix. Neither spelling may be removed.
+    // draws Discord's inline player. Two spellings carry a suffix: the spoof head's og:video /
+    // twitter:player pair (`.mp4`), and, since 2026-10-05, a GIF's media_attachment (`.gif`, see
+    // mastodon.ts attachment() for why a gif image attachment needs a url #98 never handed out as a
+    // video). Every other media_attachment stays extensionless. No spelling may be removed.
     //
     // FULL-SEGMENT MATCH ON DIGITS + AN ALLOWLISTED EXTENSION, which is the tightest rule that
     // does the job, and the tightness is load-bearing twice over:
@@ -1866,15 +1869,19 @@ function routeInner(url: URL): Route {
     const suffixed = /^(\d+)\.(mp4|m4v|mov|webm|jpg|jpeg|png|gif|webp)$/.exec(raw[2])
     const i = Number(suffixed ? suffixed[1] : raw[2])
     if (!Number.isInteger(i) || i < 0) return { kind: 'notfound' }
-    // THE SUFFIX IS STILL DECORATION FOR WHICH ENTRY IS MEANT, BUT A VIDEO ONE IS ALSO A PROMISE, recorded
-    // since 2026-10-05 as `asVideo` (see Route). The bytes come from the same entry either way; what the
-    // flag adds is the media arm's refusal to answer a url spelled as a video with an IMAGE, the sticky
-    // poisoned-url defect, which became reachable for Reddit gif posts when their index 0 stopped being
-    // an mp4. Read here because it is pathname, the one thing this router may read. The extensionless and
-    // image spellings carry no flag, so every route they produced before is produced byte for byte.
-    return suffixed && /^(?:mp4|m4v|mov|webm)$/.test(suffixed[2])
+    // THE SUFFIX IS STILL DECORATION FOR WHICH ENTRY IS MEANT, BUT IT IS ALSO A PROMISE, recorded since
+    // 2026-10-05 as `asVideo` or `asImage` (see Route). The bytes come from the same entry either way;
+    // what the flag adds is the media arm's refusal to answer a url spelled as one kind with the other,
+    // the sticky poisoned-url defect, which became reachable both ways for Reddit gif posts when their
+    // index 0 moved from #98's mp4 to the original .gif: a day-old card's `.mp4` can meet the new gif,
+    // and the new card's `.gif` can meet a colo's post cache still holding #98's mp4 (worker.ts's media
+    // arm has both scenarios). Read here because it is pathname, the one thing this router may read.
+    // The extensionless spelling carries no flag, so every route it produced before is produced byte
+    // for byte, and an image spelling on a picture redirects exactly as it did.
+    if (!suffixed) return { kind: 'media', ref, index: i }
+    return /^(?:mp4|m4v|mov|webm)$/.test(suffixed[2])
       ? { kind: 'media', ref, index: i, asVideo: true }
-      : { kind: 'media', ref, index: i }
+      : { kind: 'media', ref, index: i, asImage: true }
   }
 
   // Platform paths carry ordinary URL-encoded segments, so they DO get decoded.

@@ -891,6 +891,24 @@ test('only a VIDEO extension sets asVideo; an image extension, the poster and th
   }
 })
 
+test('only an IMAGE extension on an index sets asImage; a video extension, the bare index, the poster and the avatar never do', () => {
+  // The mirror of asVideo, added after review (2026-10-05). mastodon.ts mints `/_media/{key}/0.gif` for a
+  // gif's IMAGE attachment, and a colo whose post cache still held #98's Post (an mp4 at index 0) would
+  // have 302'd that url to video bytes, the 2026-07-19 defect where Discord abandons the rich card. The
+  // flag is how the media arm knows the url was promised as a picture. It must stay off the extensionless
+  // spelling (every picture's AND every video's url) and off the poster slot, which is always a still and
+  // needs no promise check; same entry either way.
+  const ref = { p: 'tt', id: '777' }
+  const key = encodeURIComponent(refKey(ref))
+  for (const ext of ['gif', 'jpg', 'jpeg', 'png', 'webp']) {
+    assert.deepEqual(r(`/_media/${key}/3.${ext}`), { kind: 'media', ref, index: 3, asImage: true }, `.${ext}`)
+  }
+  for (const seg of ['3', '3.mp4', '3.m4v', '3.mov', '3.webm', 'poster3', 'poster3.gif', 'avatar']) {
+    assert.ok(!('asImage' in r(`/_media/${key}/${seg}`)), `${seg} must not carry asImage`)
+  }
+  assert.equal(r(`/_media/${key}/.gif`).kind, 'notfound', 'Number(\'\') is 0: an empty index with a suffix still names nothing')
+})
+
 test('the .mp4 tolerance covers a DID-handle Bluesky ref and a non-zero index too', () => {
   // The DID case is where the two decode layers live (see the _media branch's comment), so a
   // change to the INDEX segment gets asserted against the hardest KEY segment as well — the two

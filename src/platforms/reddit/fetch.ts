@@ -22,9 +22,12 @@ const REDDIT_UA = 'web:mbedfx.app:v0.1 (by /u/shamu4life)'
 const POST_ID = /^[0-9a-z]+$/i
 
 /**
- * `gifHead` rides on a success when the post is a Reddit gif (normalize.ts redditGifUrl): the first ten
- * bytes of its .gif, unparsed, for normalize.ts's gifSize to read the size out of. Absent when there was
- * nothing to read or the read failed, which costs the card its size and nothing else.
+ * `gifHead` rides on a success when the post is a Reddit gif (normalize.ts redditGifUrl): up to the first
+ * ten bytes of whatever i.redd.it answered, AS RECEIVED, for normalize.ts's gifSize to read the size out
+ * of. Absent only on a thrown or timed-out read, or a response with no body. Its presence does NOT mean
+ * the read succeeded: a 403, the 307 to Reddit's HTML viewer or a 200 page all attach their first bytes,
+ * and an empty but present body attaches a zero-length array. Whether the bytes are a GIF is gifSize's
+ * signature check, and nothing else may treat this field as a verdict.
  */
 export type RedditFetch =
   | { ok: true; source: 'embed'; html: string; gifHead?: Uint8Array }
@@ -35,9 +38,10 @@ export type RedditFetch =
  * How long the gif's size may take. Sized on what was measured, not on a guess at Worker latency: 40
  * ranged GETs of the headers of 36 i.redd.it gifs from the Claude Code dev sandbox (2026-10-05; not a
  * Worker, and Worker egress to i.redd.it has NOT been measured) answered in 120 to 425 ms, all 206 with
- * a GIF87a/GIF89a signature. This runs after the embed fetch and inside
- * the head's whole-response budget (worker.ts HTML_DEADLINE_MS, 5000), so its ceiling is spent from the
- * same pot as everything else on a cold first paste, and a slow i.redd.it must cost a size, never a card.
+ * a GIF87a/GIF89a signature. This runs after the embed fetch and inside the head's whole-response budget
+ * (worker.ts HTML_DEADLINE_MS, 5000), so its ceiling is spent from the same pot as everything else on a
+ * cold first paste, and a slow i.redd.it must never cost the post itself: past this it gives up and the
+ * gif goes out at 0x0, which may cost the picture (normalize.ts gifSize) but never the card's text.
  */
 const GIF_HEAD_TIMEOUT_MS = 1000
 
@@ -48,19 +52,36 @@ const GIF_HEAD_BYTES = 10
  * The first ten bytes of a Reddit gif, or undefined. I/O ONLY: whether they are a GIF, and what size
  * they say, is normalize.ts's gifSize. The url has already passed redditGifUrl's i.redd.it check.
  *
- * WHAT IS SENT, AND WHY EACH PART. Measured 2026-10-05 from the dev sandbox against
- * i.redd.it/4gg2f32z3qsh1.gif: `range: bytes=0-9` answers 206 with exactly ten bytes (content-range
- * bytes 0-9/556483), so a 99 MB gif costs ten bytes, not a download. An Accept that lists text/html gets a
- * 307 to www.reddit.com/media (an HTML viewer); an image Accept, `*\/*` or none gets the gif, so this
- * asks for images. `redirect: 'manual'` keeps a redirect from being followed into that page, and the
- * body is read only to the tenth byte and then cancelled, so a server that ignored the Range header
- * still costs ten bytes of reading.
+ * WHAT IS SENT, AND WHY EACH PART. Measured 2026-10-05 from the Claude Code dev sandbox (a non-Cloudflare
+ * cloud IP behind an HTTPS proxy, not a Worker) against i.redd.it/4gg2f32z3qsh1.gif: `range: bytes=0-9`
+ * answers 206 with exactly ten bytes (content-range bytes 0-9/556483), so a 99 MB gif costs ten bytes, not
+ * a download. An Accept that lists text/html gets a 307 to www.reddit.com/media (an HTML viewer); an image
+ * Accept, `*\/*` or none gets the gif, so this asks for images. THE EXACT HEADERS BELOW were measured as a
+ * set, not only their neighbours: this BROWSER_UA with `accept: image/gif,image/*;q=0.8` and the range,
+ * 3 of 3 answered 206 image/gif, ten bytes reading GIF89a 320x240, in 144 to 418 ms (same sandbox, same
+ * day). `redirect: 'manual'` keeps a redirect from being followed into that page, and the body is read
+ * only to the tenth byte and then cancelled, so a server that ignored the Range header still costs ten
+ * bytes of reading.
+ *
+ * WHAT A FAILED READ COSTS, AND WHY IT IS CACHED ANYWAY. Any failure here leaves the gif at 0x0, and per
+ * normalize.ts gifSize that may leave Discord drawing NO PICTURE (types.ts posterW, measured on a YouTube
+ * poster 2026-07-31; unmeasured for Reddit, whose 0x0 stills embed.ts calls human-verified). That card
+ * is then cached like a healthy one, the Post for POST_TTL and the head for RESP_TTL (900 s each, per
+ * colo). That is a choice, made with CLAUDE.md's "a degraded card must not be response-cached" in view:
+ * that rule is settleMux's `degraded`, which means "incomplete, something is still coming", and nothing
+ * is coming here, the same reasoning settleMux gives for not setting it on the over-ceiling and live
+ * arms. Marking a failed read uncacheable would also turn a systematic refusal (Worker egress to
+ * i.redd.it is unmeasured) into an embed fetch plus up to a second of waiting on EVERY unfurl of every
+ * Reddit gif, while what it buys is a re-read inside the 900 s window. And 0x0 is the exact shape
+ * Reddit's type:'image' .gif and every Reddit still have shipped in for months. If the post-deploy
+ * /_api/v1 check shows 0x0 for the measured post, Worker egress is failing this read, and that is the
+ * moment to revisit, not before.
  */
 async function readGifHead(url: string): Promise<Uint8Array | undefined> {
   try {
-    // NO-RETRY: deliberate. This only reads a SIZE for a card that renders either way, and a failed
-    // read already degrades to 0x0, so a second ask buys nothing a reader is owed and doubles the cost
-    // of the failure path inside the head's budget. Bounded by GIF_HEAD_TIMEOUT_MS. See src/fetchretry.ts.
+    // NO-RETRY: deliberate. This reads only a SIZE: the post loads either way, a failed read falls back
+    // to 0x0, and a second ask would double the failure path's cost (up to two seconds) inside the head's
+    // whole-response budget. Bounded by GIF_HEAD_TIMEOUT_MS. See src/fetchretry.ts.
     const res = await fetch(url, {
       headers: { 'user-agent': BROWSER_UA, accept: 'image/gif,image/*;q=0.8', range: `bytes=0-${GIF_HEAD_BYTES - 1}` },
       redirect: 'manual',
@@ -81,7 +102,8 @@ async function readGifHead(url: string): Promise<Uint8Array | undefined> {
     return out.slice(0, n)
   } catch {
     // A timeout, a reset or a refusal is no evidence about the post, and this path must never throw
-    // into the fetch that decides whether a card exists. No size is the whole consequence.
+    // into the fetch that decides whether a card exists. The entry goes out at 0x0, which may cost the
+    // picture in Discord (see WHAT A FAILED READ COSTS above), never the post.
     return undefined
   }
 }

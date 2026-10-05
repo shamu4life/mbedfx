@@ -7,9 +7,11 @@ import { normalizeReddit } from '../src/platforms/reddit/normalize.ts'
 /**
  * THE GIF SIZE READ, fetch.ts's half of Reddit gif posts looping (2026-10-05). The normalizer decides the
  * entry from the screenview alone; this file only checks what fetch.ts asks i.redd.it, how little it reads,
- * and that every way the read can fail costs the size and nothing else. The network is stubbed throughout:
- * the embed page is the real capture in test/fixtures, and the gif's ten bytes are the ones read from the
- * dev sandbox (not a Worker) for i.redd.it/4gg2f32z3qsh1.gif: GIF89a, 320x240.
+ * that both fetch paths make the read, and that every way the read can fail leaves the post, the kind and
+ * the url intact at 0x0. What 0x0 costs in Discord (possibly the picture, normalize.ts gifSize) is not
+ * something a stubbed test can show. The network is stubbed throughout: the embed page is the real capture
+ * in test/fixtures, and the gif's ten bytes are the ones read from the Claude Code dev sandbox (not a
+ * Worker) for i.redd.it/4gg2f32z3qsh1.gif: GIF89a, 320x240.
  */
 
 const GIF_PAGE = readFileSync(new URL('./fixtures/reddit-embed-gif.html', import.meta.url), 'utf8')
@@ -54,11 +56,15 @@ test('a Reddit gif\'s size costs ONE ten-byte ranged GET of the original, asking
   })
 })
 
-test('every way the size read can fail costs the SIZE, never the card, the kind or the url', async () => {
+test('every way the size read can fail still loads the post, with the same gif kind and url at 0x0', async () => {
   /**
    * The read runs inside the head's whole-response budget on a cold first paste, so it must never turn a
    * card into a failure, and it must never change what index 0 is: a probe that can fail transiently
    * deciding the kind would give two renders of one post two kinds, the poisoned-url defect.
+   *
+   * RENAMED 2026-10-05 after review. It read "costs the SIZE, never the card", which promised more than
+   * this can check: a 0x0 image attachment carries no meta.original, and types.ts posterW records Discord
+   * drawing no picture for one (measured on YouTube; unmeasured for Reddit). The assertions are unchanged.
    */
   const failures = {
     'a thrown fetch': async () => { throw new TypeError('connection reset') },
@@ -107,4 +113,50 @@ test('a post that is not a Reddit gif costs no extra request', async () => {
     assert.equal(got.gifHead, undefined)
     assert.deepEqual(asked.map(a => new URL(a.url).host), ['embed.reddit.com'])
   }, image)
+})
+
+test('the OAUTH path reads the gif\'s size too, with the same single request, when the embed read fails', async () => {
+  /**
+   * fetchReddit falls back to the OAuth listing when the embed page fails its content check and the app
+   * credentials are set, and that render lands under the same post cache key, so it has to size the gif
+   * the same way. Added after review (2026-10-05): changing `if (oauth.ok) return withGifHead(oauth)` to
+   * `return oauth` left the whole suite green, and the only symptom would have been OAuth-path gifs going
+   * out at 0x0 while embed-path ones were sized. Stubbed end to end: the embed answers a 200 with no
+   * canonical (Reddit's not-found shape), then the token, then a listing whose `url` is the i.redd.it .gif.
+   */
+  const env = { REDDIT_CLIENT_ID: 'id', REDDIT_CLIENT_SECRET: 'secret' }
+  const post = {
+    title: 'this man is deranged', author: 'someone', subreddit: 'forsen', permalink: '/r/forsen/comments/1wuh1g1/x/',
+    selftext: '', score: 1, num_comments: 0, created_utc: 1700000000, over_18: false, url: GIF_URL, post_hint: 'image',
+  }
+  const listing = [{ kind: 'Listing', data: { children: [{ kind: 't3', data: post }] } }, { kind: 'Listing', data: { children: [] } }]
+  const notFound = '<html><body>no canonical here</body></html>'
+  await withFetch(async (url) => {
+    if (url === 'https://www.reddit.com/api/v1/access_token') return Response.json({ access_token: 'tok', expires_in: 3600 })
+    if (url.startsWith('https://oauth.reddit.com/comments/1wuh1g1')) return Response.json(listing)
+    if (url === GIF_URL) return new Response(GIF_HEAD, { status: 206, headers: { 'content-type': 'image/gif' } })
+    throw new Error(`unexpected fetch ${url}`)
+  }, async (asked) => {
+    const got = await fetchReddit(REF, env)
+    assert.equal(got.ok, true)
+    assert.equal(got.source, 'json', 'precondition: this is the OAuth render')
+    assert.equal(asked.filter(a => a.url === GIF_URL).length, 1, 'one read of the gif, as on the embed path')
+    assert.equal(new Headers(asked.find(a => a.url === GIF_URL).init.headers).get('range'), 'bytes=0-9')
+    assert.deepEqual([...got.gifHead], [...GIF_HEAD])
+    assert.deepEqual(normalizeReddit(got, REF).media, [{ kind: 'gif', url: GIF_URL, w: 320, h: 240 }],
+      'the same entry the embed render builds, size included')
+  }, notFound)
+})
+
+test('a type:image post whose url is an i.redd.it .gif makes the size read as well', async () => {
+  // Reddit has long labelled some .gif posts `image`, and they have always been kind:'gif'. They share
+  // redditGifUrl's reading so they get a size; dropping `type === 'image'` from it left the suite green
+  // (review, 2026-10-05), so the read itself is asserted here.
+  const imageGif = GIF_PAGE.replace(/&quot;type&quot;:&quot;gif&quot;/g, '&quot;type&quot;:&quot;image&quot;')
+  assert.notEqual(imageGif, GIF_PAGE, 'precondition: the screenview now says type:image')
+  await withFetch(async () => new Response(GIF_HEAD, { status: 206, headers: { 'content-type': 'image/gif' } }), async (asked) => {
+    const got = await fetchReddit(REF, ENV)
+    assert.equal(asked.filter(a => a.url === GIF_URL).length, 1)
+    assert.deepEqual(normalizeReddit(got, REF).media, [{ kind: 'gif', url: GIF_URL, w: 320, h: 240 }])
+  }, imageGif)
 })

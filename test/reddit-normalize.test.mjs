@@ -204,7 +204,8 @@ test('embed: a gallery reconstructs clean full-res i.redd.it urls from every sli
  * GIF POSTS. Reported 2026-10-04: https://forsen.sex/r/forsen/comments/1wuh1g1/ rendered as text only.
  * Reddit labels these `type: "gif"` in the screenview, no branch knew the word, and media came back empty
  * with nothing failing. #98 answered with Reddit's mp4 rendition (a video, which Discord does not loop);
- * since 2026-10-05 the answer is the original .gif (kind:'gif'), which Discord loops as an image. The
+ * since 2026-10-05 the answer is the original .gif (kind:'gif'), which Discord is expected to loop as an
+ * image (expected, not measured: the owner's paste after deploy is the check). The
  * fixture is that post's real embed page (captured from the Claude Code dev sandbox, not a Worker or the
  * Cloudflare Container; real subreddit, trimmed of scripts and styles; see its header for exactly what
  * was cut and that the Post it yields is identical to the full page's).
@@ -250,8 +251,10 @@ test('embed: the PLACEHOLDER render of a type:gif post (no player) yields the SA
    * full render puts a video". That rule existed because the full render put a VIDEO at index 0 and this
    * render, cached under the same canonical key, could only have put an image there: the poisoned-url
    * defect. Now neither render reads the player. Both read the screenview's `url` and `type`, which the
-   * placeholder render carries too (measured), so index 0 is the same entry in both. That sameness is the
-   * safety property, so it is what is asserted, with and without the size.
+   * placeholder render carries too (measured 2026-10-05 from the Claude Code dev sandbox, not a Worker;
+   * Worker egress gets a different stripped placeholder render, fetch.ts 2026-07-22, not re-measured), so
+   * index 0 is the same entry in both. That sameness is the safety property, so it is what is asserted,
+   * with and without the size.
    */
   const full = normalizeReddit({ source: 'embed', html: GIF_PAGE, gifHead: GIF_HEAD }, GIF_REF)
   const bare = normalizeReddit({ source: 'embed', html: GIF_PLACEHOLDER, gifHead: GIF_HEAD }, { p: 'rd', sub: '', id: '1wuh1g1' })
@@ -365,6 +368,13 @@ test('redditGifUrl names exactly the url every render puts at index 0, and nothi
     assert.equal(redditGifUrl(raw), GIF_URL, name)
     assert.equal(normalizeReddit(raw, ref).media[0].url, redditGifUrl(raw), `${name}: the url read is the url emitted`)
   }
+  // A type:'image' post with an i.redd.it .gif shares the reading, so fetch.ts sizes it too. Added after
+  // review (2026-10-05): dropping `type === 'image'` from redditGifUrl left the whole suite green, and the
+  // only cost would have been every such gif silently going back to 0x0.
+  const imageGif = { source: 'embed', html: imagePage({ url: GIF_URL, type: 'image' }) }
+  assert.equal(redditGifUrl(imageGif), GIF_URL, 'a type:image post whose url is an i.redd.it .gif')
+  assert.deepEqual(normalizeReddit({ ...imageGif, gifHead: GIF_HEAD }, eRef()).media, [{ kind: 'gif', url: GIF_URL, w: 320, h: 240 }],
+    'and it is sized from the header like a type:gif post, same kind and url as it always had')
   assert.equal(redditGifUrl({ source: 'embed', html: imagePage() }), null, 'a .jpg image post')
   assert.equal(redditGifUrl({ source: 'embed', html: imagePage({ url: 'https://v.redd.it/g1abc', type: 'gif' }) }), null, 'a v.redd.it gif-labelled video')
   assert.equal(redditGifUrl({ source: 'embed', html: imagePage({ url: GIF_URL, type: 'link' }) }), null, 'a link post pointing at a gif')

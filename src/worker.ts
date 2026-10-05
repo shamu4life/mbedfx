@@ -1367,9 +1367,16 @@ function withResolver(post: Post, env: Env): Post {
 /**
  * NEVER AN IMAGE ON A VIDEO URL, and now ONE spelling of that rule for BOTH ways we serve video (the
  * container mux and the direct CDN pass-through added 2026-07-25). 503 + no-store: Discord draws the
- * card with no inline player and caches nothing, and the next fetch plays. See serveMuxed above for
- * the poisoned-url defect this reverses — two copies of "the video url must never become an image"
- * would be two places for one of them to drift, and that drift IS the defect.
+ * card with no inline player and caches nothing, and, for those two, the next fetch plays. See
+ * serveMuxed above for the poisoned-url defect this reverses — two copies of "the video url must never
+ * become an image" would be two places for one of them to drift, and that drift IS the defect.
+ *
+ * A THIRD CALLER since 2026-10-05: the media arm's extension guards (`asVideo`, `asImage`), which answer
+ * this when a url spelled as one kind names an entry of the other. There "the next fetch plays" is NOT a
+ * promise. A Reddit gif's `.mp4` url from a #98 card answers 503 for good, because the entry is a gif now
+ * and will stay one; only the `asImage` case, a colo still holding a stale Post, heals once that Post
+ * expires. A permanent 503 on a `/_media/…/0.mp4` is therefore not by itself a container problem: check
+ * what the entry at that index is before investigating the resolver.
  */
 const notReady = () => new Response(null, { status: 503, headers: { 'cache-control': 'no-store' } })
 
@@ -5750,6 +5757,28 @@ export async function handle(req: Request, env: Env, ctx: ExecutionContext, d: D
        * same answer from the post cache. An entry that does not exist keeps its 404 below.
        */
       if (r.asVideo && entry && entry.kind !== 'video') return notReady()
+      /**
+       * AND THE MIRROR: A URL SPELLED AS AN IMAGE NEVER ANSWERS WITH A VIDEO. `asImage` is the router's
+       * reading of an image extension on the index, which only mastodon.ts mints (`.gif`, on a gif's
+       * image attachment). Without this, the `.gif` spelling kept Discord's media proxy from answering
+       * the new attachment out of an mp4 it remembered, and then THIS ORIGIN could answer it with one.
+       *
+       * THE SCENARIO, found by review of the Reddit gif change (2026-10-05) and reproduced with handle()
+       * and two fake caches. The post cache is per colo (caches.default, POST_TTL 900 s); the crawler's
+       * HTML, the activity callback and this proxy fetch do not reliably share a colo (FB_META_TTL_MS's
+       * note records that), and a rollout is not atomic. So in the 15 minutes after the deploy, colo A
+       * renders the status from the NEW Post and hands Discord `/_media/rd:{sub}:{id}/0.gif` as an image,
+       * Discord's proxy fetches it through colo B, colo B still holds #98's Post, and index 0 there is
+       * Reddit's mp4 rendition: the 302 below would send mp4 bytes to an image attachment. That is the
+       * MEASURED 2026-07-19 failure (mastodon.ts, A CONVERTED VIDEO WITH NO POSTER IS DROPPED): Discord
+       * fetches the image-role url, receives video bytes, and abandons the whole rich card. And the
+       * `.gif` url is the same for every later card of that post, so whatever the proxy keeps is sticky.
+       *
+       * notReady() for the same reasons as above, and here its "the next fetch" is literally true: no-store,
+       * nothing pinned, and once colo B's #98 Post expires (POST_TTL) the same url 302s to the gif. A
+       * remux video on a `.gif` url is refused before serveMuxed for the same reason: its bytes are mp4.
+       */
+      if (r.asImage && entry && entry.kind === 'video') return notReady()
       if (entry?.remux && env.MEDIA_RESOLVER && env.MEDIA_CACHE) {
         return serveMuxed(req, env, ctx, r.ref, r.index as number, entry.remux)
       }
@@ -6308,8 +6337,9 @@ export async function handle(req: Request, env: Env, ctx: ExecutionContext, d: D
         createdAt: post.createdAt instanceof Date ? post.createdAt.toISOString() : null,
         media: own.map(({ m, i }) => ({
           // A 'gif' is drawn as an IMAGE, since 2026-10-05: the page draws an image from `url` and a video
-          // from its poster, a GIF has no poster, and an <img> animates it the way Discord loops the card's
-          // `image` attachment. Published as 'video' it drew nothing at all. Same rule as toApiPost.
+          // from its poster, a GIF has no poster, and an <img> animates it, as Discord is expected to loop the
+          // card's `image` attachment (unmeasured until a real paste). Published as 'video' it drew nothing at
+          // all. Same rule as toApiPost.
           kind: m.kind === 'video' ? 'video' : 'image',
           url: mediaUrl(origin, post, bytesIndex(m, i)),
           /**

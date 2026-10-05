@@ -214,7 +214,9 @@ added 2026-08-04 (`3a2406f`).
 
 A Reddit GIF's pair is the size its own file states: the first ten bytes of the .gif, read with one
 ranged request when the post is fetched (`gifSize`, `src/platforms/reddit/normalize.ts`). If that read
-fails or times out, the pair is `0` and nothing else about the entry changes.
+fails or times out, the pair is `0` and the entry's kind and url are unchanged. The card is not
+necessarily unchanged: without a size the Discord attachment carries no `meta.original`, which has been
+measured to leave Discord drawing no picture (a YouTube poster, 2026-07-31; unmeasured for Reddit).
 
 ### `media`
 
@@ -228,7 +230,8 @@ publishing a `gif` as `"image"` (`toApiPost`, `src/worker.ts`): the bytes at `ur
 file, which an `<img>` animates and a `<video>` cannot play, and it carries no `poster`. Until
 2026-10-05 a `gif` was published as `"video"`, which told every consumer, the converter page included,
 to draw nothing. Reddit GIF posts are the common case since that date, served as their original .gif
-so Discord loops them; Misskey GIFs and Reddit posts labelled `image` with a .gif were always `gif`.
+so that Discord loops them (expected, and checked by a real paste rather than measured here); Misskey
+GIFs and Reddit posts labelled `image` with a .gif were always `gif`.
 
 ### `still`
 
@@ -265,11 +268,13 @@ the platform.
 | images, avatars, posters, already-progressive video | `302` to the CDN under `cache-control: public, max-age=300` (`MEDIA_MAX_AGE`, `src/cache.ts:8`) |
 | Instagram, Twitch and Threads video | proxied rather than redirected (the `media` arm of `src/worker.ts`; the three platforms are scoped in `proxyableVideoUrl`, `src/mediaproxy.ts`) |
 
-The payload's urls carry no extension. The card's `og:video` adds `.mp4` to the same url, and that
-spelling is a promise: a media url ending in a video extension (`.mp4`, `.m4v`, `.mov`, `.webm`) whose
-entry is not a video answers `503` with `cache-control: no-store`, never a redirect to a picture.
-That is the `asVideo` guard in the `media` arm, added 2026-10-05 when Reddit GIF posts moved from an
-mp4 to their original .gif under urls a day of cards had promised as video.
+The payload's urls carry no extension. The card's `og:video` adds `.mp4` to the same url, and a
+GIF's Mastodon attachment adds `.gif`, and either spelling is a promise: a media url ending in a video
+extension (`.mp4`, `.m4v`, `.mov`, `.webm`) whose entry is not a video, or in an image extension
+(`.jpg`, `.jpeg`, `.png`, `.gif`, `.webp`) whose entry is a video, answers `503` with
+`cache-control: no-store`, never a redirect to the other kind of bytes. Those are the `asVideo` and
+`asImage` guards in the `media` arm, added 2026-10-05 when Reddit GIF posts moved from an mp4 to their
+original .gif under urls a day of cards had promised as video.
 
 ### The `/v` and `/p` gallery suffix
 
