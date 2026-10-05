@@ -5175,7 +5175,14 @@ async function serveDirectMedia(
   // bytesIndex, not the bare position: a degraded still lives in the poster slot, and addressing it
   // by its array index hits the VIDEO entry, which answers 503. The renderers all mint through this
   // for the same reason.
-  return redirect(mediaUrl(origin, got.post, bytesIndex(list[i], i)))
+  //
+  // A GIF TAKES THE `.gif` SPELLING, as its Mastodon attachment does (mastodon.ts attachment() has the
+  // full argument). On the apex the extensionless /_media/{key}/0 of a Reddit gif post is the url #98
+  // handed Discord as a VIDEO on 2026-10-04/05, so Discord's media proxy may still hold the mp4
+  // rendition for it; a url never handed out as a video keeps that memory out of this redirect. The
+  // router reads the suffix as the same entry and the same bytes (asImage), which passes for a gif.
+  const gif = list[i].kind === 'gif' ? '.gif' : ''
+  return redirect(`${mediaUrl(origin, got.post, bytesIndex(list[i], i))}${gif}`)
 }
 
 export async function handle(req: Request, env: Env, ctx: ExecutionContext, d: Deps): Promise<Response> {

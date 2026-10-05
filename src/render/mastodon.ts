@@ -308,8 +308,10 @@ function attachment(post: Post, origin: string, m: Media, index: number, hasVide
   // post cache still holds #98's Post would answer `/0.gif` with a 302 to that mp4; the router records
   // the image spelling as `asImage` and worker.ts's media arm answers notReady instead (its comment has
   // the scenario). Every gif entry takes the suffix, which changes the url, never the bytes, of
-  // Misskey's and Reddit's type:'image' gifs. The other surfaces keep the extensionless url: none of
-  // them is what Discord fetched for these posts.
+  // Misskey's and Reddit's type:'image' gifs. worker.ts serveDirectMedia (the d. host and a trailing
+  // .mp4 on a post link) takes the same suffix for the same reason: on the apex its redirect target was
+  // byte for byte the url #98 handed Discord as the video. Every other surface keeps the extensionless
+  // url: none of them is what Discord fetched for these posts.
   const own = `${mediaUrl(origin, post, bytesIndex(m, index))}${m.kind === 'gif' ? '.gif' : ''}`
   const declared = attachmentType(m)
   const poster = declared === 'video' ? posterUrl(post, origin, m, index) : null

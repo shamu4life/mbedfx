@@ -3722,11 +3722,14 @@ test('THE NEW .gif ATTACHMENT URL NEVER 302s TO #98\'S MP4, even through a colo 
   assert.equal(good.headers.get('location'), RD_GIF_URL)
 })
 
-test('A REDDIT GIF\'S DIRECT LINK (d. host and a trailing .mp4) SERVES THE .gif, and does not trip the video-url guard', async () => {
+test('A REDDIT GIF\'S DIRECT LINK (d. host and a trailing .mp4) SERVES THE .gif through /0.gif, never the url #98 handed out as a video', async () => {
   /**
-   * serveDirectMedia redirects to the post's own /_media/{key}/0, EXTENSIONLESS, so the guard (which reads
-   * only a video extension on the media url) never sees the reader's `.mp4`. A `.mp4` on a POST link asks
-   * for "the post's file", whatever it is (docs/API.md, the d. host), and for a gif post that is the .gif.
+   * serveDirectMedia redirects to the post's own media url, and the guard never sees the reader's `.mp4`:
+   * a `.mp4` on a POST link asks for "the post's file", whatever it is (docs/API.md, the d. host), and for
+   * a gif post that is the .gif. REWRITTEN 2026-10-05 from "redirects to the extensionless url": on the apex
+   * that url (/_media/rd%3Aforsen%3A1wuh1g1/0) is byte for byte what #98 gave Discord as the VIDEO, so its
+   * media proxy may still hold the mp4 rendition there (an integration review caught it). The redirect now
+   * names `/0.gif`, the same spelling the Mastodon attachment uses, which the router reads as the same entry.
    */
   const ref = { p: 'rd', sub: 'forsen', id: '1wuh1g1' }
   const post = normalizeReddit({ source: 'embed', html: readFileSync('test/fixtures/reddit-embed-gif.html', 'utf8'), gifHead: RD_GIF_HEAD }, ref)
@@ -3735,7 +3738,7 @@ test('A REDDIT GIF\'S DIRECT LINK (d. host and a trailing .mp4) SERVES THE .gif,
     const first = await handle(new Request(url, { headers: { 'user-agent': DISCORD } }), fakeEnv(), ctx, deps)
     assert.equal(first.status, 302, url)
     const hop = new URL(first.headers.get('location'))
-    assert.equal(hop.pathname, mediaRef(ref, 0), `${url} redirects to the extensionless media url`)
+    assert.equal(hop.pathname, `${mediaRef(ref, 0)}.gif`, `${url} redirects to the .gif spelling, never the extensionless url`)
     const second = await handle(new Request(hop, { headers: { 'user-agent': DISCORD } }), fakeEnv(), ctx, deps)
     assert.equal(second.status, 302, `${url} -> ${hop}`)
     assert.equal(second.headers.get('location'), RD_GIF_URL)
