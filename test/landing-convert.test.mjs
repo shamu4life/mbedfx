@@ -759,10 +759,85 @@ test('MEDIA-ONLY PREVIEWS THE FILE — no Discord card, but not nothing either',
   assert.match(HTML, /Discord attaches this file\. No card, no caption\./,
     'and it says what will happen alongside the file')
   // The SAME card payload feeds it — that is where the media urls come from. Skipping the fetch is
-  // exactly what left the page previewing nothing.
-  assert.match(HTML, /if \(mediaOnly\) \{ drawMediaOnly\(url, j\); return; \}/,
+  // exactly what left the page previewing nothing. REWRITTEN 2026-10-04: the condition gained
+  // `|| (j && j.direct)`, because a pasted `.mp4` link asks for the file exactly as the box does (see
+  // the test below), and the early `return` went, so the file drawing keeps polling a video still being
+  // prepared the way the card does. The property pinned, fetch-then-draw rather than skip, is unchanged.
+  assert.match(HTML, /if \(mediaOnly \|\| \(j && j\.direct\)\) drawMediaOnly\(url, j\);\s*else drawCard\(url, j\);/,
     'the card payload is fetched and re-drawn, not skipped')
+  // And the poll that follows the drawing is shared by both, rather than skipped by an early return.
+  const body = HTML.slice(HTML.indexOf('function card(url, isRetry, muxSince)'))
+  const draw = body.indexOf('if (mediaOnly || (j && j.direct)) drawMediaOnly(url, j);')
+  assert.ok(draw > 0 && body.indexOf('if (j && j.muxing) muxSince') < draw && body.indexOf('if (j && j.muxing) {', draw) > draw,
+    'the mux bookkeeping runs before the drawing, and the re-poll after it, for the file drawing too')
+  assert.match(HTML, /The video is still being prepared\. Pasted right now, it may show nothing\./,
+    'and while it is being prepared the file drawing says so, instead of promising the file')
+  // Second review round: past the six-minute watch cap the drawing fell back to promising the file with
+  // nothing polling behind it, and a post with no media at all was captioned as an attached file.
+  assert.match(HTML, /Still being prepared after six minutes\. This preview has stopped checking\./)
+  // The file line asks the mux state first (a posterless video still being prepared has its entry
+  // dropped, third review round), then media presence, because a post with none answers a direct url 404.
+  const lineAt = HTML.indexOf('var line = (j && j.ok && j.muxSlow)')
+  assert.ok(lineAt > 0, 'the mux state is asked first')
+  assert.ok(HTML.indexOf("        : has\n", lineAt) > HTML.indexOf('(j && j.ok && j.muxing)', lineAt),
+    'then media presence decides between the file and nothing to attach')
+  // And ticking the box for the SAME post must not kill a mux poll already armed for it.
+  const toggle = HTML.slice(HTML.indexOf("mediaOnlyBox.addEventListener('change'"))
+  const same = toggle.indexOf('if (lastCard && lastCard.path === path) {')
+  assert.ok(same > 0 && toggle.indexOf('cardSeq++;') > toggle.indexOf('return;', same),
+    'the sequence is bumped only after the same-post redraw has returned')
   assert.ok(!/function mediaNote\(\)/.test(HTML), 'the text-only state is gone')
+})
+
+test('A PASTED .mp4 LINK PREVIEWS AS THE FILE, from the ROUTER\'s verdict echoed by /_card, not a copy of it', () => {
+  /**
+   * Since 2026-10-04 a trailing `.mp4` on a post url is the path spelling of the d. host (router.ts
+   * DIRECT_SUFFIX), and the converter passes a pasted fxtwitter-style path through untouched. Drawing the
+   * mock card for it would preview something nobody will see, the exact mistake the media-only drawing
+   * above was written to stop.
+   *
+   * THE PAGE ASKS, IT DOES NOT DECIDE. A first version re-derived the rule in a page regex, and an
+   * adversarial review measured it already disagreeing with route(): `/A61SaA1.mp4` (a chooser) and
+   * `/fxtwitter.com/…/{id}.mp4` (notfound) would have previewed as "Nothing to attach" files. /_card now
+   * echoes the router's own `direct` (pinned in api.test.mjs), and the page reads that.
+   */
+  assert.ok(!/function mbedfxSendsFile\(/.test(HTML), 'no second copy of the router\'s suffix rule in the page')
+  // Both draw decisions read it: the first fetch, and the redraw-from-lastCard on a toggle.
+  assert.match(HTML, /if \(mediaOnly \|\| \(lastCard\.j && lastCard\.j\.direct\)\) drawMediaOnly\(url, lastCard\.j\);/)
+  // The pasted suffix survives conversion, and the stills toggle composes with it into a path the router
+  // reads as both, so the echoed flag is there to read.
+  const { convert } = loadConverter()
+  const plain = convert('https://x.com/X/status/2102147636702634195.mp4', 'mbedfx.app')
+  assert.equal(plain.path, '/X/status/2102147636702634195.mp4')
+  assert.equal(routed(plain.path).direct, true)
+  const stills = convert('https://x.com/X/status/2102147636702634195.mp4', 'mbedfx.app', 'stills')
+  assert.equal(routed(stills.path).direct, true, stills.path)
+  assert.equal(routed(stills.path).gallery, 'stills', stills.path)
+})
+
+test('A .mp4 BEFORE THE QUERY OF A QUERY-ID LINK SURVIVES CONVERSION, and the id with it', () => {
+  /**
+   * Found by the completeness review, round four. The query branches matched exact paths, so
+   * `youtube.com/watch.mp4?v={id}` fell through to the generic branch, which drops the query: the page
+   * offered the X/Instagram chooser for a YouTube link. The router reads `/watch.mp4?v=` and
+   * `/photo/.mp4?fbid=` as the file, so the converter has to hand those spellings out intact.
+   */
+  const { convert } = loadConverter()
+  for (const [input, want] of [
+    ['https://www.youtube.com/watch.mp4?v=dQw4w9WgXcQ', '/watch.mp4?v=dQw4w9WgXcQ'],
+    ['https://www.youtube.com/watch/.mp4?v=dQw4w9WgXcQ', '/watch.mp4?v=dQw4w9WgXcQ'],
+    ['https://www.facebook.com/photo/.mp4?fbid=1092409469807430', '/photo/.mp4?fbid=1092409469807430'],
+    ['https://www.facebook.com/photo.mp4?fbid=1092409469807430', '/photo/.mp4?fbid=1092409469807430'],
+  ]) {
+    const got = convert(input, 'mbedfx.app')
+    assert.equal(got.path, want, input)
+    const r = routed(got.path)
+    assert.equal(r.kind, 'post', input)
+    assert.equal(r.direct, true, `${input}: and the router reads it as the file`)
+  }
+  // Without the suffix nothing changes.
+  assert.equal(convert('https://www.youtube.com/watch?v=dQw4w9WgXcQ', 'mbedfx.app').path, '/watch?v=dQw4w9WgXcQ')
+  assert.equal(convert('https://www.facebook.com/photo/?fbid=1092409469807430', 'mbedfx.app').path, '/photo/?fbid=1092409469807430')
 })
 
 test('A WORKER-SUPPLIED URL IS RE-POINTED AT THE CHOSEN HOST', () => {

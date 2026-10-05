@@ -3,16 +3,26 @@ import type { Media, Post, PostRef } from '../../types.ts'
 type Any = Record<string, any>
 
 /**
- * Threads serves a BOT user-agent a server-rendered page whose OpenGraph/meta tags carry the post.
- * This file is the pure half: it reads those tags out of already-fetched HTML and builds a Post. No
- * I/O — fetch.ts owns the two-UA fetch and the "did a real post arrive" gate; everything here is
- * testable against a handful of literal meta tags with no network.
+ * The pure half of Threads: already-fetched HTML in, a Post out, no I/O. fetch.ts owns the requests and
+ * the "did a real post arrive" gate. Two sources, dispatched in normalizeThreads at the bottom:
  *
- * TWO PAGES, because no single UA carries both the text and the post's own media (measured
- * 2026-07-21): `facebookexternalhit/1.1` renders `name="description"` (the caption) but its
- * `og:image` is only the author's profile picture; `Discordbot/2.0` renders `og:image` as the POST
- * media (fbcdn `t39.92108-6`) but no caption. So `media` is the Discord page and `text` the fbhit
- * page, and each field is read from the page that actually carries it.
+ *  - 'ssr' (PRIMARY): the server-rendered post JSON in the logged-out permalink (SSR_PRELOADERS below).
+ *    Every field a rich card needs: each carousel slide, video, counts, avatar, the real timestamp,
+ *    the quoted post.
+ *  - 'html' (FALLBACK): the OG tags of two bot-UA pages, for when the SSR payload is missing. TWO
+ *    pages, because no single UA carries both (measured 2026-07-21): `facebookexternalhit/1.1`
+ *    renders `name="description"` (the caption) but its `og:image` is only the author's profile
+ *    picture; `Discordbot/2.0` renders an `og:image` and no caption. So `media` is the Discord page
+ *    and `text` the fbhit page, and each field is read from the page that actually carries it.
+ *
+ * WHAT THE DISCORDBOT og:image ACTUALLY IS, measured 2026-10-04 on a carousel and on a video post, from
+ * the Claude Code dev sandbox (a non-Cloudflare cloud IP behind an HTTPS proxy), not a Worker and not the Cloudflare Container (and the same picture came back through production's /_media/ for both):
+ * Threads' own rendered SHARE CARD (fbcdn `t39.92108-6`), not the post's media. It is one picture with the
+ * Threads logo, a truncated caption, cropped slides, counts as they were when it was rendered, and on a
+ * video a play glyph that does not play. Real slides and covers are `t51.*`. The 2026-07-21 note
+ * called it "the POST media", and it was probably always this (same `t39.92108-6` class, inferred).
+ * That is why the fallback is a single-image card by nature, and why losing the SSR path showed up as
+ * "a carousel became one unscrollable image".
  */
 
 /**
@@ -87,7 +97,7 @@ export function createdAtFromCode(code: string): Date | null {
 }
 
 /**
- * Build a Post from the two OG pages. `media` is the Discord-UA page (post image in og:image),
+ * Build a Post from the two OG pages. `media` is the Discord-UA page (the share card in og:image),
  * `text` the fbhit-UA page (caption in name=description). The handle is parsed out of og:title so the
  * canonical is rebuilt from the PAYLOAD — the same "normalizer owns its canonical" rule TikTok and
  * Instagram follow, because the ref carries only the shortcode (the pasted username was decoration).
@@ -131,8 +141,30 @@ function buildFromHtml(mediaHtml: unknown, textHtml: unknown, ref: Extract<PostR
  * preloader whose name has a stable prefix + a rotating hash. We match the prefix, then a
  * string-aware brace scan lifts the `{"__bbox"…}` object out for JSON.parse — regexing a nested JSON
  * object whole would be wrong on the first escaped quote or brace inside a caption/url.
+ *
+ * THE NAME MOVED, AND NOTHING SAID SO. By 2026-10-04 the logged-out permalink carried the post under
+ * `BarcelonaPostPageTargetQueryRelayPreloader_<hash>` and neither of the two older names appeared
+ * anywhere on the page. So every Threads post fell through to the OG scrape in fetch.ts, which can only
+ * ever produce ONE image. Reported as a carousel collapsing to a single picture; it was every post: a
+ * video lost its player, and every card lost its counts, its avatar and its real timestamp. /_smoke
+ * stayed green, because the fallback card still has a title and the activity link (see its th row).
+ * Measured from the Claude Code dev sandbox (a non-Cloudflare cloud IP behind an HTTPS proxy), not a Worker and not the Cloudflare Container, on six pages with SSR_HEADERS: a carousel, a video, a
+ * reply permalink, a quote post, a third account and an invalid code. The path inside is the same
+ * `__bbox.result.data.media` the Permalink name used, and the hash differs per request, so the `\w+`
+ * after the prefix is required. test/fixtures/threads-ssr-*.html are cut from two of those pages.
+ *
+ * MATCH EXACT NAMES, NEVER A `Barcelona\w*QueryRelayPreloader_` WILDCARD. The same page carries three
+ * sibling preloaders with the same `__bbox.result` envelope, and each holds a DIFFERENT post: Upward is
+ * the parent chain, Downward is the replies, LoggedOutRelatedPosts is other posts (including the same
+ * author's other carousels), and an invalid code serves LoggedOutFeedContainer, a feed of strangers'
+ * posts. Measured: a wildcard plus a walk picked a stranger's reply on one page and the author's OTHER
+ * carousel on another, which is a confidently wrong card, worse than the degraded one. The
+ * `user.username` guard below happens to reject Upward and Downward today, but that is luck of shape,
+ * not a defence. The two older names stay because they cost one failed scan each and Threads has
+ * served them before.
  */
 const SSR_PRELOADERS = [
+  'BarcelonaPostPageTargetQueryRelayPreloader_',
   'BarcelonaPermalinkMobilePostColumnPageQueryRelayPreloader_',
   'BarcelonaPostPageDirectQueryRelayPreloader_',
 ]
@@ -197,12 +229,9 @@ const num = (v: unknown): number | undefined =>
  * every video. The signed url expires in hours, but the Post cache TTL is far shorter, so each render
  * carries a fresh one — same as Instagram.
  *
- * AND FOR THE SAME REASON, THE 2026-07-25 DIRECT-VIDEO PROXY DELIBERATELY SKIPS THIS PLATFORM. mediaproxy.ts
- * serves Instagram video bytes from the Worker instead of 302-ing, and these urls are on the SAME
- * scontent*.cdninstagram.com hosts — so a host-only allowlist would have captured Threads too. The Worker's
- * egress is a datacenter IP exactly like the container's, so those bytes would most likely come back
- * non-video, fail the content assertion, and answer og:video with 503 on every Threads video post.
- * proxyableVideoUrl is therefore gated on `ref.p === 'ig'`; revisit only with a real measurement.
+ * The Worker's direct-video proxy (mediaproxy.ts proxyableVideoUrl) DOES serve these bytes itself, since
+ * 2026-08-09, when a `wrangler dev --remote` fetch of a Threads scontent url came back as real video and
+ * retired the inferred Meta block this paragraph used to cite. Its reasons and its 302 fallback live there.
  *
  * A video is `kind: 'video'` with the cover as its poster, at BOTH levels; where it renders diverges in
  * the RENDERER, not here (exactly as Instagram): a standalone / single-item video advertises og:video and
@@ -273,7 +302,8 @@ function buildFromMedia(m: Any, ref: Extract<PostRef, { p: 'th' }>, quoted = fal
 /**
  * Pure: fetched Threads data -> Post. Dispatches on `source`: 'ssr' is the rich path (video, counts,
  * timestamp, carousels, quotes) from the server-rendered JSON; 'html' is the OG-tag fallback (author,
- * caption, cover image) for when the SSR page is rate-limited or its header gate shifts. Returns null
+ * caption, and Threads' rendered share card as the one image) for when the SSR page is rate-limited or
+ * its header gate shifts. Returns null
  * rather than inventing a Post — a half-built Post renders as a broken embed.
  */
 export function normalizeThreads(raw: unknown, ref: PostRef): Post | null {

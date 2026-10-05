@@ -1565,19 +1565,171 @@ const GALLERY_SUFFIX: Record<string, GalleryMode> = { v: 'videos', p: 'stills' }
 const takesGallery = (r: Route): r is Extract<Route, { kind: 'post' | 'redditshare' | 'metashare' }> =>
   r.kind === 'post' || r.kind === 'redditshare' || r.kind === 'metashare'
 
-export function route(url: URL): Route {
-  const seg = url.pathname.split('/').filter(Boolean)
-  const mode = seg.length >= 2 ? GALLERY_SUFFIX[seg[seg.length - 1]] : undefined
-  if (mode) {
-    // A NEW URL rather than a mutated one: routeInner reads searchParams too (/watch?v=), and the
-    // query must survive the strip untouched — /watch?v={id}/p is one of the shapes measured to
-    // absorb the segment today.
-    const stripped = new URL(url.toString())
-    stripped.pathname = `/${seg.slice(0, -1).join('/')}`
-    const hit = routeInner(stripped)
-    if (takesGallery(hit)) return { ...hit, gallery: mode }
+/**
+ * Route kinds that converge on serveDirectMedia once their ref is known: the three gallery kinds plus
+ * the TikTok short link, which renders its own post (see the shortlink arm in worker.ts). These are
+ * the kinds a `.mp4` suffix can mean anything to, and the kinds the over-capture trim below accepts.
+ * A type predicate for the same reason takesGallery is one.
+ */
+const namesAPost = (r: Route): r is Extract<Route, { kind: 'post' | 'shortlink' | 'redditshare' | 'metashare' }> =>
+  r.kind === 'post' || r.kind === 'shortlink' || r.kind === 'redditshare' || r.kind === 'metashare'
+
+/**
+ * DISCORD'S MASKED-LINK OVER-CAPTURE — a `)` (or `%29`) in the last segment and everything after it.
+ *
+ * Discord bug discord-api-docs#6279 (open since 2023-07-08, labelled bug): in a masked link followed
+ * directly by a non-space character, `[text](https://host/a/b).`, Discordbot requests `/a/b).`, and the
+ * issue's own access log shows `/_bug).`, `/_bug)A` and `/_bug)$`. The tail runs to the next whitespace,
+ * so it is NOT bounded: an ellipsis arrives as `)%E2%80%A6`, and a masked link inside spoiler bars as
+ * `)%7C%7C`. A first version allowed two characters after the paren and an adversarial review of it
+ * measured `)…`, `)...` and `)!!!` still minting a failure id. Measured 2026-10-04 against
+ * production as Discordbot: `/X/status/{id}).` and `/r/{sub}/comments/{id}).` each answered "Couldn't
+ * load this … post", because x() and reddit() take the id segment verbatim and the id became `{id})`.
+ * A link that ends in a slug was already fine (the slug position is ignored), which is why the owner's
+ * reddit example still drew a card once its missing colon was put back. FxEmbed and vxTwitter read the
+ * id with a digits regex and are immune; this is the same tolerance, applied once here rather than in
+ * every matcher that takes its last segment verbatim (x, reddit, bluesky, tiktok, threads, instagram…).
+ *
+ * WHY IT IS SAFE: no platform's id alphabet contains `)` (numeric, base36, base64url, atproto TIDs), so
+ * a `)` at the end of the last segment is never part of an id. It is still strip-first-then-fall-back
+ * and only kept when the trimmed path names a post, exactly the GALLERY_SUFFIX discipline above, so a
+ * path that does not name a post (a chooser, a profile, a site path) is answered as it was typed.
+ */
+const OVERCAPTURE = /^(.+?)(?:\)|%29)[^/]*$/i
+
+/**
+ * THE DIRECT-MEDIA SUFFIX — a trailing `.mp4` on the last segment of any post url, the path spelling of
+ * the `d.` host. Asked for 2026-10-04, against fxtwitter, which does the same: FxEmbed sets its direct
+ * flag on `/status/{id}.(mp4|png|jpe?g|gifv?)` (github.com/FxEmbed/FxEmbed, realms/twitter/routes/status.ts) and vxTwitter on a
+ * url ending `.mp4`/`.png`. Before this, `/X/status/{id}.mp4` routed to x post `{id}.mp4`, a failure
+ * card, and a human was 302'd to a corrupted x.com url carrying the `.mp4`.
+ *
+ * IT LIVES HERE, NOT BESIDE THE `d.` TEST IN worker.ts, because a path suffix is pathname and route()
+ * may read pathname: the router stays host-blind, which is the property worker.ts's DIRECT_MEDIA_HOST
+ * docstring says the d. check is placed AROUND. It sets Route.direct and nothing else. The ref, the
+ * canonical, the refKey, the post cache and the /_media/ namespace are those of the url without it, so
+ * the bytes come from the one place the card's own og:video already points.
+ *
+ * STRIP FIRST, THEN FALL BACK, for the reason GALLERY_SUFFIX states: x() and most matchers would
+ * otherwise absorb the suffix into the id and "succeed". Only `.mp4`, the one extension the owner asked
+ * for (`.gifv` would collide with Imgur's own card route), in any case: a phone that capitalises it
+ * should not get the failure card the lowercase spelling no longer does, and the namesAPost fallback
+ * makes the wider match exactly as safe. The `(.+)` refuses an empty stem (`/X/status/.mp4` keeps today's reading), and a doubled
+ * `.mp4.mp4` strips once and stays an honest failure rather than becoming the post by accident. Spoiler
+ * bars after the suffix (`20.mp4||`, or `%7C%7C`) are carried over so routeInner still strips them.
+ * `/_media/{key}/0.mp4` is untouched: its stripped reading is kind 'media', which namesAPost refuses.
+ */
+const DIRECT_SUFFIX = /^(.+)\.mp4((?:\||%7[Cc])*)$/i
+
+/**
+ * A LAST SEGMENT THAT IS NOTHING BUT DECORATION: an over-capture tail, a bare `.mp4`, or spoiler bars,
+ * standing alone because the pasted url ended in '/'. `[t](https://host/p/{code}/).` makes Discordbot ask
+ * for `/p/{code}/).`, and a hand-swapped Instagram link with `.mp4` typed on the end is `/p/{code}/.mp4`;
+ * in both the decoration has no stem in its own segment, so the glued rules (which strip from the end of
+ * a segment) never fire. Instagram's and TikTok's desktop links end in '/', and so does the converter's
+ * own Facebook story.php output. Caught by an adversarial review: every such shape was notfound, while X
+ * and Reddit only looked fixed because their matchers ignore extra segments.
+ */
+const DECORATION = /^(?:(?:\)|%29)[^/]*|\.mp4(?:\||%7[Cc])*|(?:\||%7[Cc])+)$/i
+
+/**
+ * The gallery mode a segment names, OWN keys only. GALLERY_SUFFIX is an object literal, so a bare
+ * `GALLERY_SUFFIX[seg]` answered `constructor`, `toString` or `__proto__` with something truthy: found by
+ * review, `/p/{code}/constructor` had routed as a post with `gallery: Object` since the toggle shipped.
+ * Spoiler bars are ignored for the lookup, because routeInner strips them only after it.
+ */
+function galleryMode(seg: string): GalleryMode | undefined {
+  const k = seg.replace(/\||%7[Cc]/g, '')
+  return Object.hasOwn(GALLERY_SUFFIX, k) ? GALLERY_SUFFIX[k] : undefined
+}
+
+/**
+ * How many suffixes route() will peel off the end of a path. A real paste carries at most three or four
+ * (`/p/{code}/.mp4/p` then Discord's `).`, say); six leaves room and bounds the work. THE BOUND IS THE
+ * POINT: a first version recursed once per decoration segment, and an adversarial review measured an
+ * 8 KB path of `/)` segments costing ~2.4s of CPU and a ~14 KB one throwing a stack overflow out of
+ * handle(). A path with more decoration than this is simply answered with what six peels leave.
+ */
+const MAX_PEELS = 6
+
+type Peel = { segs: string[]; direct: boolean; gluedMp4: boolean; gallery?: GalleryMode; onlyTrim: boolean }
+
+/**
+ * THE SUFFIX LAYER: Discord's masked-link over-capture, the /v /p gallery toggle and the `.mp4` direct
+ * suffix, in one bounded pass rather than nested layers.
+ *
+ * PEEL, THEN TRY FROM THE MOST-PEELED READING BACK. Each step looks at the path's current last segment and
+ * removes ONE suffix, recording the reading it leaves:
+ *   - a whole decoration segment (DECORATION), noting `direct` if it was `.mp4`;
+ *   - a glued over-capture tail (OVERCAPTURE);
+ *   - a gallery key, `v` or `p` (one, or a second on a `.mp4` request; the last typed decides);
+ *   - a glued `.mp4` (DIRECT_SUFFIX; once, so `20.mp4.mp4` stays the honest failure id '20.mp4').
+ * Then the readings are routed from the most peeled back to the least, and the first that NAMES A POST
+ * wins, carrying the flags gathered on the way to it; if none does, the url is routed exactly as typed.
+ * That is the strip-first-then-fall-back discipline GALLERY_SUFFIX's docstring argues for, applied to
+ * every suffix at once: matchers like x() absorb a trailing segment and would otherwise "succeed" with a
+ * corrupted id, and a path that names no post (a chooser, a profile, a site path) keeps its own reading.
+ *
+ * THE ORDER IS WHAT LETS SUFFIXES COMPOSE on the links people paste, in whatever order they were typed:
+ * `/X/status/20/p).` (a masked gallery link), the converter's own `/X/status/20.mp4/p`, a hand-typed
+ * `/p/{code}/v.mp4`, and `/p/{code}/.mp4/p` all peel down to the post with their flags. Nested layers
+ * got each of the last two wrong in turn, on every platform whose matcher checks depth exactly.
+ *
+ * A path with no suffix peels nothing and goes straight to routeInner, so it is routed byte-identically to
+ * before any of this existed; an old-vs-new sweep of ~1.4M such paths found no difference.
+ */
+function peelSuffixes(url: URL): Route {
+  const peels: Peel[] = []
+  let cur: Peel = { segs: url.pathname.split('/').filter(Boolean), direct: false, gluedMp4: false, onlyTrim: true }
+  for (let i = 0; i < MAX_PEELS && cur.segs.length > 0; i++) {
+    const s = cur.segs
+    const last = s[s.length - 1]
+    const head = s.slice(0, -1)
+    let next: Peel | null = null
+    if (s.length >= 2 && DECORATION.test(last)) {
+      const mp4 = /^\.mp4/i.test(last)
+      next = { ...cur, segs: head, direct: cur.direct || mp4, onlyTrim: cur.onlyTrim && !mp4 }
+    } else {
+      const over = OVERCAPTURE.exec(last)
+      const mode = s.length >= 2 && (!cur.gallery || cur.direct) ? galleryMode(last) : undefined
+      const mp4 = cur.gluedMp4 ? null : DIRECT_SUFFIX.exec(last)
+      if (over) next = { ...cur, segs: [...head, over[1]] }
+      // A SECOND toggle is peeled only on a direct request, keeping the one typed LAST (the outermost,
+      // peeled first): the converter's stills box appends `/p` to a pasted `/p/{code}/v.mp4`, giving
+      // `…/v.mp4/p`, and allowing one toggle per path left a bare `v` that depth-exact matchers refused
+      // (third review round). Only when a `.mp4` was peeled, so a plain `/x/v/p` routes exactly as before.
+      else if (mode) next = { ...cur, segs: head, gallery: cur.gallery ?? mode, onlyTrim: false }
+      else if (mp4) next = { ...cur, segs: [...head, mp4[1] + mp4[2]], direct: true, gluedMp4: true, onlyTrim: false }
+    }
+    if (!next) break
+    peels.push(next)
+    cur = next
+  }
+  for (let i = peels.length - 1; i >= 0; i--) {
+    const p = peels[i]
+    // A NEW URL rather than a mutated one: routeInner reads searchParams too (/watch?v=), and the query
+    // must survive the peel untouched.
+    const u = new URL(url.toString())
+    u.pathname = `/${p.segs.join('/')}`
+    const hit = routeInner(u)
+    // A PROFILE TOO, WHEN ONLY DISCORD'S TAIL OR SPOILER BARS WERE CUT: `[me](…/profile/{handle}).` asks
+    // for `/profile/{handle}).`, which named nothing at all, so there is no other reading to protect. Not
+    // after a /v /p or a `.mp4`: a profile has no gallery and no file (completeness review, round four).
+    if (p.onlyTrim && hit.kind === 'profile') return hit
+    if (!namesAPost(hit)) continue
+    // A reading that consumed a /v or /p must be one that can carry the mode, as the gallery toggle has
+    // always required: otherwise `/t/{code}/p` would start meaning the short link, and token-shaped
+    // permalinks like `/t/p/p` (an Instagram reading today) would change platform.
+    if (p.gallery && !takesGallery(hit)) continue
+    // Spread only when set, so a route without the suffix is deepEqual to one that never had it.
+    const withMode: Route = p.gallery && takesGallery(hit) ? { ...hit, gallery: p.gallery } : hit
+    return p.direct && namesAPost(withMode) ? { ...withMode, direct: true } : withMode
   }
   return routeInner(url)
+}
+
+export function route(url: URL): Route {
+  return peelSuffixes(url)
 }
 
 function routeInner(url: URL): Route {

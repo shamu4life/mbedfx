@@ -17,8 +17,8 @@ import type { ClientClass, Platform } from './types.ts'
  * looks at an HTTP status, because on this service every interesting failure answers 200: the
  * failure card is a 200, Meta's login wall is a 200, TikTok's 404 page is a 200. `cardVerdict`
  * below is a pure function over the emitted head and the row's own `expect`, and it is the entire
- * assertion. The default floor is "a title and something to draw"; one row asks for more, and the
- * SmokeExpect docstring is where the case for keeping that rare is written down.
+ * assertion. The default floor is "a title and something to draw"; two rows ask for more (yt and th),
+ * and the SmokeExpect docstring is where the case for keeping that rare is written down.
  *
  * WHAT IT DOES NOT COLLECT. Platform, outcome and nothing else, through the existing counters. No
  * url, no ip, no user agent, no geolocation. wrangler.jsonc explains at length why Workers Logs are
@@ -82,9 +82,9 @@ export type SmokeCheck = {
   path: string
   verifiedOn: string
   /**
-   * ABSENT ON EVERY ROW BUT ONE, and that is the design rather than an accident of what has been
+   * ABSENT ON EVERY ROW BUT TWO, and that is the design rather than an accident of what has been
    * written so far. See SmokeExpect above for why a stricter default would be worse than none, and
-   * the yt row below for the outage that made exactly one row need this.
+   * the yt and th rows below for the two outages that each passed a row without it.
    */
   expect?: SmokeExpect
 }
@@ -123,7 +123,7 @@ export const SMOKE_CHECKS: readonly SmokeCheck[] = [
   /**
    * "Me at the zoo", the first video published to YouTube. As close to undeletable as this list gets.
    *
-   * THE ONE ROW THAT DEMANDS A PLAYER, added 2026-08-29, because until then this row COULD NOT FAIL on
+   * THE FIRST ROW THAT DEMANDS A PLAYER, added 2026-08-29, because until then this row COULD NOT FAIL on
    * a YouTube card with no player in it. Every Discord head this service emits carries the activity
    * link unconditionally — render/discord.ts returns renderSpoof for `client === 'discord'` with no
    * branch left above it, and the `rel=alternate application/activity+json` tag is not behind a
@@ -169,8 +169,34 @@ export const SMOKE_CHECKS: readonly SmokeCheck[] = [
    * format selector that makes yt-dlp produce nothing. All four render a perfectly well-formed card.
    */
   { platform: 'yt', name: 'yt', path: '/jNQXAC9IVRw', verifiedOn: '2026-08-29', expect: 'video' },
-  // Verified 2026-08-10: a Threads video, now proxied rather than redirected.
-  { platform: 'th', name: 'th', path: '/@bisniscom/post/DbkwmbMEt6u', verifiedOn: '2026-08-10' },
+  /**
+   * A Threads VIDEO, verified 2026-08-10 rendering with og:video from Cloudflare egress, now proxied
+   * rather than redirected.
+   *
+   * THE SECOND ROW THAT DEMANDS A PLAYER, added 2026-10-04, because without it this row passed through
+   * the total loss of Threads' rich path. Threads renamed the SSR preloader the normalizer reads (see
+   * SSR_PRELOADERS in platforms/threads/normalize.ts), every post fell to the OG-scrape fallback, and
+   * that fallback's one og:image is Threads' rendered share card: a carousel became one picture, this
+   * video became a still with a play glyph baked in, and no card had counts or an avatar. The head still
+   * had og:title and the activity link, which is all the default verdict asks (the same boilerplate
+   * blindness the yt row above describes), so this row stayed `ok` the whole time. Nobody knows for how
+   * long: somewhere between 2026-08-10 and 2026-10-04, found when the owner pasted a carousel.
+   *
+   * WHY og:video IS THE RIGHT TAG HERE. Only the SSR path can produce a kind:'video' entry
+   * (mediaFromDict); the fallback can only produce an image (buildFromHtml). So on a video post, og:video
+   * in the head means the rich path worked, and its absence means it did not. A carousel post would be
+   * the wrong sample: its head is og:title plus the activity link on BOTH paths, and the slides only
+   * differ inside the activity document, which runSmoke never reads.
+   *
+   * ADMITTED ON A DIFFERENT GROUND FROM yt, and it is worth being exact about. yt is safe because its
+   * mux is durably warm in R2. This row has nothing warm behind it: og:video is computed from the Post
+   * on every render, so each tick is a live fetch of Threads from Worker egress (POST_TTL and RESP_TTL
+   * are 900s against a 30-minute schedule). A red tick is therefore always a TRUE one, a card that
+   * really went out without its player, but it fires at whatever rate Threads throttles the SSR fetch
+   * from Cloudflare, and that rate is unmeasured. If it turns out noisy, the fix is a counter that
+   * separates 'ssr' from 'html' outcomes, not removing the expectation.
+   */
+  { platform: 'th', name: 'th', path: '/@bisniscom/post/DbkwmbMEt6u', verifiedOn: '2026-08-10', expect: 'video' },
   /**
    * THE PROFILE ROUTE, and this row is here for the ROUTE rather than for the platform — the one
    * entry in this list that is not about a fragile upstream.
@@ -347,16 +373,18 @@ export const SMOKE_UNCHECKED: readonly { platform: Platform, why: string }[] = [
  * ... post" — so a title alone proves nothing. It carries no media and no activity link, which is
  * exactly what separates it here.
  *
- * `expect` RAISES THE BAR FOR ONE ROW, and the floor above stays this low for everybody else on
- * purpose: it is the widest assertion sixteen platforms can share. On YouTube that floor is met by
- * the activity link the head emits unconditionally, so the check could not fail while the cards had
- * no player in them. `expect: 'video'` additionally demands og:video. SmokeExpect says why the rest
+ * `expect` RAISES THE BAR FOR TWO ROWS, and the floor above stays this low for everybody else on
+ * purpose: it is the widest assertion sixteen platforms can share. On YouTube and Threads that floor is
+ * met by the activity link the head emits unconditionally, so the check could not fail while the cards
+ * had no player in them. `expect: 'video'` additionally demands og:video. SmokeExpect says why the rest
  * of the list must not ask for it.
  *
  * THE FAILURE CARD STILL WINS OVER AN UNMET EXPECTATION, which is what the order of the returns below
  * decides. "The upstream is gone" and "the card rendered but has no player" are different repairs and
  * the first is the more specific, so a row carrying an expectation must not relabel a dead platform as
- * a muxing problem.
+ * a missing player. WHAT `no-video` POINTS AT DIFFERS BY ROW: on yt it is this service (the mux path or
+ * the crawler's mux budget); on th, which has no mux at all, it is the upstream (Threads' server-rendered
+ * post did not arrive or was not read: a throttle, the header gate, or another preloader rename).
  *
  * `no-video` IS A VERDICT OF ITS OWN rather than a second spelling of `failure-card`, for the reason
  * `timeout` is not a second spelling of `threw`: both count as `smoke_fail`, and only one of them

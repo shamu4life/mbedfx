@@ -35,7 +35,10 @@ import { buildContentHtml, statParts, withMoreInPostMarker, withVideoGalleryMark
  * player an image file is Phase 1's I-1 defect exactly (an HLS playlist advertised as
  * og:video rendered a dead player), and Discord animates a GIF served as an image anyway.
  * Reddit reaches this: an i.redd.it `.gif` surfaces as kind:'gif' and maps here to 'image' — a real
- * animated gif Discord plays as a picture, exactly the intent. (Bluesky video is a remux kind:'video'
+ * animated gif Discord plays as a picture, exactly the intent. That is a post Reddit labels
+ * type:'image'; one it labels type:'gif' goes out since 2026-10-04 as Reddit's own mp4 rendition,
+ * kind:'video' with a poster and a size (reddit/normalize.ts gifPlayer), and never reaches this row.
+ * (Bluesky video is a remux kind:'video'
  * since 2026-07-22, and TikTok emits 'video' or a still cover — neither a 'gif'.)
  */
 const ATTACHMENT_TYPE: Record<Media['kind'], string> = {

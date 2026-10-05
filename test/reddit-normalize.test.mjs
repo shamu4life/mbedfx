@@ -1,6 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { normalizeReddit, redditGate } from '../src/platforms/reddit/normalize.ts'
+import { readFileSync } from 'node:fs'
 
 // The shape /comments/{id} returns over OAuth: [postListing, commentListing]. Only the post's
 // data.children[0].data matters here.
@@ -45,6 +46,24 @@ test('normalizeReddit: an image post carries the preview source, &amp; decoded',
   }), REF)
   assert.equal(post.media.length, 1)
   assert.deepEqual(post.media[0], { kind: 'image', url: 'https://preview.redd.it/x.jpg?a=1&b=2', w: 800, h: 600 })
+})
+
+test('normalizeReddit (OAuth): an animated post yields no media, never its png8 still at the index the embed render makes a video', () => {
+  /**
+   * Caught by review. The OAuth Post shares the canonical cache key with the embed render, which puts
+   * Reddit's mp4 rendition at index 0 of a gif post. The preview source here is the png8 STILL, so emitting
+   * it would let /_media/{key}/0.mp4, a url a cached card promised as video, 302 to image bytes. Every
+   * render must agree that index 0 of a gif post is a video or absent.
+   */
+  const still = { source: { url: 'https://preview.redd.it/x.gif?format=png8&amp;s=abc', width: 320, height: 240 } }
+  for (const over of [
+    { url: 'https://i.redd.it/x.gif', preview: { images: [still] } },
+    { url: 'https://i.redd.it/x.png', preview: { images: [{ ...still, variants: { gif: { source: { url: 'https://preview.redd.it/x.gif' } } } }] } },
+    { url: 'https://i.redd.it/x.png', preview: { images: [{ ...still, variants: { mp4: { source: { url: 'https://preview.redd.it/x.gif?format=mp4' } } } }] } },
+  ]) {
+    const post = normalizeReddit(listing({ ...base, post_hint: 'image', ...over }), REF)
+    assert.deepEqual(post.media, [], JSON.stringify(over).slice(0, 80))
+  }
 })
 
 test('normalizeReddit: a gallery carries every media_metadata image', () => {
@@ -168,6 +187,108 @@ test('embed: a gallery reconstructs clean full-res i.redd.it urls from every sli
   assert.deepEqual(post.media.map(m => m.url), ['https://i.redd.it/aaa111.jpg', 'https://i.redd.it/bbb222.png'])
 })
 
+/**
+ * GIF POSTS, 2026-10-04. Reported: https://forsen.sex/r/forsen/comments/1wuh1g1/ rendered as text only.
+ * Reddit labels these `type: "gif"` in the screenview, no branch knew the word, and media came back empty
+ * with nothing failing. The fixture is that post's real embed page (captured from the Claude Code dev
+ * sandbox, not a Worker or the Cloudflare Container; real subreddit,
+ * trimmed of scripts and styles; see its header for exactly what was cut and that the Post it yields is
+ * identical to the full page's).
+ */
+const GIF_PAGE = readFileSync(new URL('./fixtures/reddit-embed-gif.html', import.meta.url), 'utf8')
+const GIF_REF = { p: 'rd', sub: 'forsen', id: '1wuh1g1' }
+const GIF_MP4 = 'https://preview.redd.it/4gg2f32z3qsh1.gif?width=320&format=mp4&s=b980ae1e4df49136d178f605cd05e89ac921bb5e'
+const GIF_POSTER = 'https://preview.redd.it/this-man-is-deranged-v0-4gg2f32z3qsh1.gif?format=png8&s=e8f08d5ba684bd179ca3a777577ec2f742cfdf50'
+
+// A gif page with a player tag, built from the same parts as imagePage, for the edges the capture lacks.
+const gifPage = ({ player = '', ar = '1.3333333333333333', url = 'https://i.redd.it/x.gif', type = 'gif' } = {}) =>
+  imagePage({ url, type }).replace('</body>',
+    (ar ? `<shreddit-aspect-ratio style="--aspect-ratio: ${ar};">` : '') + player + '</body>')
+const playerTag = (src, poster = 'https://preview.redd.it/x-v0-x.gif?format=png8&amp;s=p') =>
+  `<shreddit-player src="${src}" autoplay gif post-id="t3_x" poster="${poster}">`
+
+test('embed: a type:gif post is a VIDEO, Reddit\'s own mp4 rendition with its png8 poster and the size read off the page', () => {
+  const post = normalizeReddit({ source: 'embed', html: GIF_PAGE }, GIF_REF)
+  assert.ok(post)
+  // Entities decoded, the signed query passed through exactly (s= binds it), and NO remux: the rendition
+  // is already a progressive mp4, so the container is never involved.
+  assert.deepEqual(post.media, [{ kind: 'video', url: GIF_MP4, w: 320, h: 240, poster: GIF_POSTER }])
+  assert.equal(post.title, 'this man is deranged')
+  assert.equal(post.author.handle, 'beau_fighter')
+  assert.deepEqual(post.counts, { likes: 297, replies: 29 }, 'the same counts production read that day')
+})
+
+test('embed: a type:gif post with no player yields NO media, never an image where the full render puts a video', () => {
+  /**
+   * The placeholder-sub render (a bare /comments/{id} link) carries no player, and its Post is cached under
+   * the same canonical key as the real-subreddit render's. Falling back to the .gif here would let
+   * /_media/{key}/0.mp4, a url og:video promised as video, 302 to image bytes: the sticky poisoned-url
+   * defect. Caught by an adversarial review before this shipped. No media is what this render gave
+   * before the fix, and a missing index answers 404, which poisons nothing.
+   */
+  const post = normalizeReddit({ source: 'embed', html: gifPage() }, eRef())
+  assert.deepEqual(post.media, [])
+})
+
+test('embed: a gif player whose src or poster is not Reddit\'s own is not trusted, and yields no media', () => {
+  // The src lands in a Location header on our origin, so only Reddit's own image host is accepted, and
+  // only its mp4 rendition (a png or gif `format` would be an image behind kind:'video').
+  for (const src of ['https://evil.example/x.gif?format=mp4', 'https://preview.redd.it/x.gif?width=320&amp;format=png', 'http://preview.redd.it/x.gif?format=mp4']) {
+    const post = normalizeReddit({ source: 'embed', html: gifPage({ player: playerTag(src) }) }, eRef())
+    assert.deepEqual(post.media, [], src)
+  }
+  const offHostPoster = normalizeReddit({ source: 'embed',
+    html: gifPage({ player: playerTag('https://preview.redd.it/x.gif?width=320&amp;format=mp4', 'https://evil.example/p.png') }) }, eRef())
+  assert.deepEqual(offHostPoster.media, [], 'an off-host poster is refused the same way')
+})
+
+test('embed: a gif player with no aspect ratio is 0x0, never an invented height', () => {
+  const post = normalizeReddit({ source: 'embed',
+    html: gifPage({ ar: '', player: playerTag('https://preview.redd.it/x.gif?width=320&amp;format=mp4&amp;s=q') }) }, eRef())
+  assert.equal(post.media[0].kind, 'video')
+  assert.equal(post.media[0].url, 'https://preview.redd.it/x.gif?width=320&format=mp4&s=q')
+  assert.equal(post.media[0].w, 0)
+  assert.equal(post.media[0].h, 0)
+})
+
+test('embed: a NON-gif player is not mistaken for one, even with the word "gif" inside one of its attribute values', () => {
+  // `gif` is a BARE attribute. REWRITTEN after review: the first version used a src ending ".gif?", which
+  // the detection regex (whitespace before "gif") could never match anyway, so the test passed with the
+  // quoted-value blanking deleted. A whitespace-separated "gif" inside a value, a class list here, is the
+  // case the blanking actually exists for.
+  const notGif = '<shreddit-player class="block gif media" src="https://preview.redd.it/x.gif?width=320&amp;format=mp4" autoplay poster="https://preview.redd.it/p.png">'
+  const post = normalizeReddit({ source: 'embed', html: gifPage({ player: notGif }) }, eRef())
+  assert.deepEqual(post.media, [], 'no gif attribute, no player reading')
+})
+
+test('embed: a type:image .gif post is NOT read for a player, even when the page has one — it stays kind:gif', () => {
+  // Both renders of a type:'image' post have always agreed on the .gif. Reading the player for it would
+  // make the real-subreddit render disagree with the placeholder one at index 0, the same poisoned-url
+  // hazard the type:'gif' rule above avoids.
+  const post = normalizeReddit({ source: 'embed', html: gifPage({ type: 'image',
+    player: playerTag('https://preview.redd.it/x.gif?width=320&amp;format=mp4&amp;s=q') }) }, eRef())
+  assert.deepEqual(post.media, [{ kind: 'gif', url: 'https://i.redd.it/x.gif', w: 0, h: 0 }])
+})
+
+test('embed: the aspect ratio is the one wrapping the player, not the first on the page', () => {
+  const player = playerTag('https://preview.redd.it/x.gif?width=320&amp;format=mp4&amp;s=q')
+  const html = gifPage({ ar: '', player: '' }).replace('</body>',
+    '<shreddit-aspect-ratio style="--aspect-ratio: 9;"></shreddit-aspect-ratio>'
+    + '<shreddit-aspect-ratio style="--aspect-ratio: 2;">' + player + '</body>')
+  const post = normalizeReddit({ source: 'embed', html }, eRef())
+  assert.equal(post.media[0].h, 160, '320 over the wrapping 2, not over the decoy 9')
+})
+
+test('embed: a type:gif post hosted on v.redd.it takes the video branch, not the empty card', () => {
+  // Whether Reddit labels its is_gif VIDEOS 'gif' or 'video' is unmeasured. If 'gif', the v.redd.it url
+  // still means a remux video with its cover, which is what this pins.
+  const html = imagePage({ url: 'https://v.redd.it/g1abc', type: 'gif' }).replace('</body>',
+    '<img src="https://external-preview.redd.it/cover.jpg?width=640&amp;s=zzz"></body>')
+  const post = normalizeReddit({ source: 'embed', html }, eRef())
+  assert.equal(post.media[0].kind, 'video')
+  assert.equal(post.media[0].remux.video, 'https://v.redd.it/g1abc/HLSPlaylist.m3u8')
+})
+
 test('embed: a video post is a remux video — HLS playlist + external-preview poster', () => {
   const html = '<html><body>' + canon('oddlysatisfying', 'v1') +
     sv({ id: 't3_v1', url: 'https://v.redd.it/v1abc', type: 'video', created_timestamp: 1700000000000, nsfw: false }, 'oddlysatisfying') +
@@ -181,6 +302,41 @@ test('embed: a video post is a remux video — HLS playlist + external-preview p
   assert.equal(post.media[0].remux.video, 'https://v.redd.it/v1abc/HLSPlaylist.m3u8')
   assert.equal(post.media[0].url, 'https://v.redd.it/v1abc/HLSPlaylist.m3u8')
   assert.equal(post.media[0].poster, 'https://external-preview.redd.it/cover.jpg?width=640&s=zzz')
+})
+
+const VIDEO_PAGE = readFileSync(new URL('./fixtures/reddit-embed-video.html', import.meta.url), 'utf8')
+
+test('embed: a real video page yields the unsigned HLS master at index 0, never the signed player src or a packaged-media mp4', () => {
+  /**
+   * THE POST IN THE 2026-10-04 REPORT, and the first real capture of a Reddit VIDEO page in this suite
+   * (the test above is synthetic). Uploaded 2024-08-14, so its audio is MPEG-TS named .aac, the
+   * packaging the container's ffmpeg refused until container/server.py's REDDIT_HLS_HOST. Nothing on
+   * this page tells it apart from a video that always muxed, which is why the fix lives in the container
+   * and this file only has to keep handing over the same url.
+   *
+   * WHAT THIS PINS. The page now carries two tempting alternatives, and both are signed to expire: the
+   * player's own src (`?f=..&a=..`) and `packaged-media-json`'s ready-muxed mp4s (`e=` at the next UTC
+   * midnight in every url seen). A Post sits in the Post cache, the response cache and the alarm's
+   * durable mux source for minutes, so either one would let a cached card hand Discord a dead link. The
+   * unsigned master never expires, and it was present for 21 of 21 posts from 2018 to 2026 (dev sandbox).
+   *
+   * 0x0, NOT A SIZE OFF THE PAGE. The <shreddit-aspect-ratio> around this player reads 1 while the video
+   * is 360x450, so the gif path's way of sizing a player must never be reused for a video.
+   */
+  assert.match(VIDEO_PAGE, /packaged-media-json=/, 'the fixture must still carry the thing this test is about')
+  const post = normalizeReddit({ source: 'embed', html: VIDEO_PAGE }, { p: 'rd', sub: 'interestingasfuck', id: '1es7hb1' })
+  assert.ok(post)
+  const hls = 'https://v.redd.it/muy8yipuynid1/HLSPlaylist.m3u8'
+  assert.equal(post.media.length, 1)
+  const [m] = post.media
+  assert.equal(m.kind, 'video')
+  assert.equal(m.url, hls)
+  assert.deepEqual(m.remux, { video: hls })
+  assert.deepEqual([m.w, m.h], [0, 0])
+  assert.match(m.poster, /^https:\/\/external-preview\.redd\.it\/[^?]+\?/)
+  assert.doesNotMatch(JSON.stringify(post), /packaged-media|SIGNATURE-BLANKED|HLSPlaylist\.m3u8\?/)
+  assert.equal(post.title, "Raygun's husband and trainer, Sammie Free. Now it makes sense.")
+  assert.equal(post.createdAt.toISOString(), '2024-08-14T17:23:59.843Z')
 })
 
 test('embed: a stripped render (no title element) derives a title from the url slug', () => {

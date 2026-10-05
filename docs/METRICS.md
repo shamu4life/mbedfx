@@ -121,9 +121,16 @@ HTML render and the activity render within ~2s of a single paste and `muxOnce` c
 onto one piece of work, so no single client owns the mux and naming one would be arbitrary.
 
 The eight outcomes are documented at their definition (`src/analytics.ts`). The split that matters
-most: **`mux_timeout` is ours and `mux_gate` is theirs.** The container answers 502 for both a
-non-zero yt-dlp exit and an empty result, so those are separated here into `mux_gate` and `mux_empty`
+most: **`mux_timeout` is ours and `mux_gate` is usually theirs.** The container answers 502 for both a
+non-zero exit and an empty result, so those are separated here into `mux_gate` and `mux_empty`
 rather than left as one number that points at the wrong system.
+
+"Usually" because `mux_gate` means the process exited non-zero, and on a `{video}` source that
+process is the container's own ffmpeg. Every Reddit video with audio uploaded between about 2024-05
+and 2025-11 would have counted here until 2026-10-04 (read from the code path; the dataset was not
+queried, and those `/_media/` 503s took 1.4-3.0 s as Discordbot): the image's ffmpeg refused Reddit's
+MPEG-TS-in-`.aac` audio, and Reddit had changed nothing. A steady `mux_gate` on `rd` or `bs` is worth
+reproducing against the image's ffmpeg before blaming the platform.
 
 ```sql
 -- Which half of the video pipeline is failing, per platform, and how slow the good ones are.
@@ -163,8 +170,13 @@ measures from the egress that matters: every earlier argument in this project ab
 was settled on a laptop, and a laptop is a residential IP.
 
 ```sh
-curl -s 'https://mbedfx.app/_clients' | jq '{ok, ms, ytdlp, serving, clients}'
+curl -s 'https://mbedfx.app/_clients' | jq '{ok, ms, ytdlp, ffmpeg, hlsExtensionPicky, serving, clients}'
 ```
+
+`ffmpeg` and `hlsExtensionPicky` (since 2026-10-04) say which image the probed instance is running:
+the ffmpeg version, and whether its hls demuxer has the extension check that Reddit's playlists are
+opened without. Both keys missing means the instance predates that change, which is the stale-image
+state `RESOLVER_GENERATION` exists to end.
 
 It takes no input — the video id and the client list are constants in `container/server.py`, the same
 property that makes `/_smoke` comparable run to run. It rides the existing authenticated `/resolve`,
@@ -430,7 +442,7 @@ Most mean nothing as an absolute number, and several mislead alone.
 | `fullpage_recovered` | The primary surface failed but the full page carried the whole post. On `ig`, every count is a post that would previously have shown a false 🔒. | `private` |
 | `plugin_recovered` / `caption_recovered` | The second and third Facebook post surfaces. `plugin_recovered` is Meta's embed fragment, which measured 33 of 35 sampled post urls on 2026-08-12 and carries every `/photo/?fbid=` url the page surface answers with a login wall. `caption_recovered` is the narrow last resort (a page with a byline and a caption and no `og:image`), answers 2 of those 35 and fires on 1 of them, because the plugin reaches the other first and returns before this read runs. Expect it small. | each other, and `fb`/`ok` |
 | `translated` / `translate_fallback` | Which engine served a translation, Google or Workers AI as the fallback. Only the ratio means anything. | each other |
-| `smoke_ok` / `smoke_fail` | The scheduled self-check: did a known post on this platform still render a real card — and, on `yt` alone, one with a player in it? Read per platform. | each other |
+| `smoke_ok` / `smoke_fail` | The scheduled self-check: did a known post on this platform still render a real card — and, on `yt` and `th`, one with a player in it? Read per platform. | each other |
 | `translate_pending` | A translation that lost its deadline race. The card went out untranslated **and uncached**, so every unfurl of that post re-runs the full render until the R2 entry lands. | `translated` + `translate_fallback` |
 
 ### `pool_unused` by platform
@@ -460,11 +472,18 @@ Most mean nothing as an absolute number, and several mislead alone.
 No query works around either of these.
 
 - `media_hit`/`media_miss` carry two meanings. On the `/_media/` arm of `handle()`, cache-hit vs
-  upstream-fetch. On the direct-media `d.` host, matched by `DIRECT_MEDIA_HOST`, `media_miss` instead
+  upstream-fetch. On a direct-media request (the `d.` host, matched by `DIRECT_MEDIA_HOST`, or since
+  2026-10-04 a trailing `.mp4` on the post url on any host, `Route.direct`), `media_miss` instead
   means the post has no usable media at all, the request answering 404 `no media: this post has
   nothing to serve` inside `serveDirectMedia`. Both write identical blobs: no query separates them,
-  and `d.` host traffic contaminates the fetch-amplification ratio with nothing in the data to mark
-  it.
+  and direct-media traffic contaminates the fetch-amplification ratio with nothing in the data to
+  mark it. The `.mp4` spelling arrives on the ordinary hosts, so not even the host separates it.
+- `ambiguous` with `blob1='tt'` carries two answers since 2026-10-04. A short link TikTok does not claim
+  serves the chooser on an ordinary request, and on a direct one (the `d.` host or a `.mp4` suffix) the
+  plain-text 404 `no media: this short link could not be resolved to a post`, because a direct url
+  promises bytes. Both write the same blobs. Kept deliberately: the split this counter exists for (a
+  wave of Threads links against TikTok blocking us) means the same thing on both, and folding the 404
+  into `fetch_fail` would break that series.
 - `translated`/`translate_fallback`/`translate_pending` all say `discord`: `withTranslated` takes no
   client class and passes the literal `'discord'` to `count()` itself. Three callers reach it. Two are
   the seams Discord really does read, where the label is accidentally true: `renderPostRoute`, and
@@ -549,14 +568,22 @@ One platform failing while the others pass is either that platform's upstream or
 rotted, and both want a human. Every platform failing at once is this service rather than the
 platforms.
 
-ONE ROW ASKS FOR MORE THAN A CARD. `yt` carries `expect: 'video'` and reports `no-video` when the
-head renders without an `og:video` — a real card, no player. That is neither of the two causes above:
-it is the mux path or the crawler's mux budget, i.e. this service. It exists because every Discord
-head this worker emits carries an activity link unconditionally, so the ordinary assertion was met by
-the head's own boilerplate and the YouTube row could not go red short of YouTube disappearing —
-through the three weeks first pastes were structurally unable to carry a player. Expect one or two
-`no-video` ticks roughly every 60 days from R2's `expire-60d` lifecycle rule sweeping the muxed mp4;
-the MuxRunner alarm re-muxes it and the next tick is green.
+TWO ROWS ASK FOR MORE THAN A CARD, and their `no-video` points in opposite directions. Both exist
+because every Discord head this worker emits carries an activity link unconditionally, so the ordinary
+assertion was met by the head's own boilerplate and neither row could go red short of its platform
+disappearing.
+
+- `yt` reports `no-video` when the head renders without an `og:video`: a real card, no player. That is
+  neither of the two causes above: it is the mux path or the crawler's mux budget, i.e. this service.
+  The YouTube row stayed green through the three weeks first pastes were structurally unable to carry
+  a player. Expect one or two `no-video` ticks roughly every 60 days from R2's `expire-60d` lifecycle
+  rule sweeping the muxed mp4; the MuxRunner alarm re-muxes it and the next tick is green.
+- `th` (added 2026-10-04) reports `no-video` when its smoke post, a video, came back as a still. Threads
+  has no mux, so this is the UPSTREAM: the server-rendered post did not arrive or was not read, and the
+  card fell to the OG fallback. Look at `SSR_PRELOADERS` in `src/platforms/threads/normalize.ts` (a
+  rename is what put every Threads post on the fallback, unseen, until 2026-10-04) and at Threads
+  throttling from Worker egress. How often that throttle fires is not yet measured, so the row's noise
+  rate is unknown; a red tick is still always a card that went out without its player.
 
 `smoke_fail` sitting at zero forever is not automatically good news. It is also what "the cron is not
 running" looks like, and the two are indistinguishable from the counters alone. Check that `smoke_ok`

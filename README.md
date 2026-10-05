@@ -72,6 +72,14 @@ Put `d.` in front of the domain and you get the file itself, the video or the im
 https://d.megapenispoopenfarten.sex/jack/status/20
 ```
 
+Or, the way fxtwitter does it, put `.mp4` on the end of the link's path, before any `?`. It does the same thing on any of the domains.
+
+```
+https://megapenispoopenfarten.sex/jack/status/20.mp4
+```
+
+That goes for links whose post id sits after the `?` too: `/watch.mp4?v=…`, `/photo/.mp4?fbid=…`. A `.mp4` typed onto the end of the query instead (`watch?v=….mp4`) isn't read: a YouTube link stays a card, and a Facebook one gets the which-site chooser.
+
 The converter page has a **media only** checkbox next to the domain buttons. A `d.` url renders no card; [docs/API.md](docs/API.md#the-d-host) has the rest.
 
 ## Supported sites
