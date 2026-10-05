@@ -588,7 +588,24 @@ export type GalleryMode = 'videos' | 'stills'
 
 export type Route =
   | { kind: 'site'; path: string }
-  | { kind: 'media'; ref: PostRef; index: MediaIndex }
+  /**
+   * `asVideo` is set when the index segment carried a VIDEO extension (`/_media/{key}/0.mp4`; router.ts
+   * reads `.mp4`, `.m4v`, `.mov` and `.webm`). Only the spoof head's og:video and twitter:player mint one,
+   * so a url spelled that way was handed to a client AS A VIDEO, and worker.ts's media arm refuses to
+   * answer it with anything else (notReady, never a 302 to an image). Added 2026-10-05, when Reddit gif
+   * posts moved from #98's mp4 rendition to the original .gif and a day of cards still promised the mp4.
+   *
+   * `asImage` is its mirror, set when the index carried an IMAGE extension (`.jpg`, `.jpeg`, `.png`,
+   * `.gif`, `.webp`). Only mastodon.ts mints one, `.gif` on a gif's media_attachment, which Discord is
+   * handed as an image; the media arm refuses to answer it with a video (notReady, never a 302 to an
+   * mp4). Added the same day, after review found the new `.gif` url could meet a colo whose post cache
+   * still held #98's Post, whose index 0 was the mp4 (worker.ts's media arm records the scenario).
+   *
+   * Both are absent on the extensionless spelling, so its routes are byte-identical to before. A
+   * property of the REQUEST, never of identity: the ref, the index and every cache key are the ones
+   * without the suffix, so neither needs a refKey or parseRefKey change.
+   */
+  | { kind: 'media'; ref: PostRef; index: MediaIndex; asVideo?: true; asImage?: true }
   /**
    * The two Mastodon-spoof callbacks Discord makes after reading the head's
    * <link rel="alternate"> tags. Machine-facing siblings of 'media': the ref is the

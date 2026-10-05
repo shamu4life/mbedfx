@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { normalizeReddit, redditGate } from '../src/platforms/reddit/normalize.ts'
+import { normalizeReddit, redditGate, gifSize, redditGifUrl } from '../src/platforms/reddit/normalize.ts'
 import { readFileSync } from 'node:fs'
 
 // The shape /comments/{id} returns over OAuth: [postListing, commentListing]. Only the post's
@@ -48,18 +48,31 @@ test('normalizeReddit: an image post carries the preview source, &amp; decoded',
   assert.deepEqual(post.media[0], { kind: 'image', url: 'https://preview.redd.it/x.jpg?a=1&b=2', w: 800, h: 600 })
 })
 
-test('normalizeReddit (OAuth): an animated post yields no media, never its png8 still at the index the embed render makes a video', () => {
+test('normalizeReddit (OAuth): an i.redd.it .gif is the SAME gif entry the embed renders emit; any other animated marker still yields no media, never its png8 still', () => {
   /**
-   * Caught by review. The OAuth Post shares the canonical cache key with the embed render, which puts
-   * Reddit's mp4 rendition at index 0 of a gif post. The preview source here is the png8 STILL, so emitting
-   * it would let /_media/{key}/0.mp4, a url a cached card promised as video, 302 to image bytes. Every
-   * render must agree that index 0 of a gif post is a video or absent.
+   * REWRITTEN 2026-10-05. This pinned "an animated post yields no media" for every animated marker,
+   * because the embed render then put Reddit's mp4 rendition, a VIDEO, at index 0 of a gif post, and the
+   * png8 preview still here would have sat behind a /_media/{key}/0.mp4 url a cached card promised as video.
+   * Every render must agree on index 0's KIND, because they all land under one canonical cache key.
+   *
+   * What changed: the embed renders now put the ORIGINAL .gif at index 0 (kind:'gif'), so the agreeing
+   * answer for an i.redd.it .gif url is that same entry, sized from the header fetch.ts read. What did not:
+   * a gif/mp4 preview variant on a non-.gif url, and a .gif off i.redd.it, still yield nothing, because the
+   * png8 still the preview branch would pick is an image where an embed render may put a video.
    */
   const still = { source: { url: 'https://preview.redd.it/x.gif?format=png8&amp;s=abc', width: 320, height: 240 } }
+  const head = Uint8Array.from([0x47, 0x49, 0x46, 0x38, 0x39, 0x61, 0x40, 0x01, 0xf0, 0x00]) // GIF89a 320x240
+  const gif = normalizeReddit({ source: 'json', gifHead: head,
+    data: listing({ ...base, post_hint: 'image', url: 'https://i.redd.it/x.gif', preview: { images: [still] } }) }, REF)
+  assert.deepEqual(gif.media, [{ kind: 'gif', url: 'https://i.redd.it/x.gif', w: 320, h: 240 }],
+    'the .gif itself, never the png8 still, and sized from its own header')
+  const unsized = normalizeReddit(listing({ ...base, post_hint: 'image', url: 'https://i.redd.it/x.gif', preview: { images: [still] } }), REF)
+  assert.deepEqual(unsized.media, [{ kind: 'gif', url: 'https://i.redd.it/x.gif', w: 0, h: 0 }],
+    'with no header read the KIND and url are identical; only the size is unknown')
   for (const over of [
-    { url: 'https://i.redd.it/x.gif', preview: { images: [still] } },
     { url: 'https://i.redd.it/x.png', preview: { images: [{ ...still, variants: { gif: { source: { url: 'https://preview.redd.it/x.gif' } } } }] } },
     { url: 'https://i.redd.it/x.png', preview: { images: [{ ...still, variants: { mp4: { source: { url: 'https://preview.redd.it/x.gif?format=mp4' } } } }] } },
+    { url: 'https://i.imgur.com/x.gif', preview: { images: [still] } },
   ]) {
     const post = normalizeReddit(listing({ ...base, post_hint: 'image', ...over }), REF)
     assert.deepEqual(post.media, [], JSON.stringify(over).slice(0, 80))
@@ -188,17 +201,24 @@ test('embed: a gallery reconstructs clean full-res i.redd.it urls from every sli
 })
 
 /**
- * GIF POSTS, 2026-10-04. Reported: https://forsen.sex/r/forsen/comments/1wuh1g1/ rendered as text only.
+ * GIF POSTS. Reported 2026-10-04: https://forsen.sex/r/forsen/comments/1wuh1g1/ rendered as text only.
  * Reddit labels these `type: "gif"` in the screenview, no branch knew the word, and media came back empty
- * with nothing failing. The fixture is that post's real embed page (captured from the Claude Code dev
- * sandbox, not a Worker or the Cloudflare Container; real subreddit,
- * trimmed of scripts and styles; see its header for exactly what was cut and that the Post it yields is
- * identical to the full page's).
+ * with nothing failing. #98 answered with Reddit's mp4 rendition (a video, which Discord does not loop);
+ * since 2026-10-05 the answer is the original .gif (kind:'gif'), which Discord is expected to loop as an
+ * image (expected, not measured: the owner's paste after deploy is the check). The
+ * fixture is that post's real embed page (captured from the Claude Code dev sandbox, not a Worker or the
+ * Cloudflare Container; real subreddit, trimmed of scripts and styles; see its header for exactly what
+ * was cut and that the Post it yields is identical to the full page's).
  */
 const GIF_PAGE = readFileSync(new URL('./fixtures/reddit-embed-gif.html', import.meta.url), 'utf8')
 const GIF_REF = { p: 'rd', sub: 'forsen', id: '1wuh1g1' }
-const GIF_MP4 = 'https://preview.redd.it/4gg2f32z3qsh1.gif?width=320&format=mp4&s=b980ae1e4df49136d178f605cd05e89ac921bb5e'
-const GIF_POSTER = 'https://preview.redd.it/this-man-is-deranged-v0-4gg2f32z3qsh1.gif?format=png8&s=e8f08d5ba684bd179ca3a777577ec2f742cfdf50'
+const GIF_URL = 'https://i.redd.it/4gg2f32z3qsh1.gif'
+// The first ten bytes of that file, as read 2026-10-05 from the dev sandbox with `range: bytes=0-9`:
+// "GIF89a", then 320 and 240 little-endian.
+const GIF_HEAD = Uint8Array.from([0x47, 0x49, 0x46, 0x38, 0x39, 0x61, 0x40, 0x01, 0xf0, 0x00])
+// What a bare /comments/{id} link gets: the placeholder-sub render. Measured the same day on this post, it
+// carries the same screenview (`url` the .gif, `type: "gif"`) and the same canonical, and no player.
+const GIF_PLACEHOLDER = GIF_PAGE.replace(/<shreddit-player\b[^>]*>/g, '')
 
 // A gif page with a player tag, built from the same parts as imagePage, for the edges the capture lacks.
 const gifPage = ({ player = '', ar = '1.3333333333333333', url = 'https://i.redd.it/x.gif', type = 'gif' } = {}) =>
@@ -206,82 +226,189 @@ const gifPage = ({ player = '', ar = '1.3333333333333333', url = 'https://i.redd
     (ar ? `<shreddit-aspect-ratio style="--aspect-ratio: ${ar};">` : '') + player + '</body>')
 const playerTag = (src, poster = 'https://preview.redd.it/x-v0-x.gif?format=png8&amp;s=p') =>
   `<shreddit-player src="${src}" autoplay gif post-id="t3_x" poster="${poster}">`
+// A GIF header for any size, little-endian, the way the file spells it.
+const header = (w, h, sig = 'GIF89a') => Uint8Array.from([...sig].map(c => c.charCodeAt(0)).concat([w & 255, w >> 8, h & 255, h >> 8]))
 
-test('embed: a type:gif post is a VIDEO, Reddit\'s own mp4 rendition with its png8 poster and the size read off the page', () => {
-  const post = normalizeReddit({ source: 'embed', html: GIF_PAGE }, GIF_REF)
+test('embed: a type:gif post is its ORIGINAL .gif, kind:gif, sized from the header fetch.ts read, never the mp4 rendition', () => {
+  /**
+   * REWRITTEN 2026-10-05 from "a type:gif post is a VIDEO, Reddit's own mp4 rendition with its png8 poster
+   * and the size read off the page". The owner chose the loop: Discord draws a video with a play button and
+   * no loop, and loops an animated GIF image natively. So the entry is now the .gif the screenview names,
+   * with no poster (a GIF is its own picture) and the size its own header states.
+   */
+  const post = normalizeReddit({ source: 'embed', html: GIF_PAGE, gifHead: GIF_HEAD }, GIF_REF)
   assert.ok(post)
-  // Entities decoded, the signed query passed through exactly (s= binds it), and NO remux: the rendition
-  // is already a progressive mp4, so the container is never involved.
-  assert.deepEqual(post.media, [{ kind: 'video', url: GIF_MP4, w: 320, h: 240, poster: GIF_POSTER }])
+  assert.deepEqual(post.media, [{ kind: 'gif', url: GIF_URL, w: 320, h: 240 }])
+  assert.doesNotMatch(JSON.stringify(post.media), /format=mp4|preview\.redd\.it/, 'nothing of the rendition survives')
   assert.equal(post.title, 'this man is deranged')
   assert.equal(post.author.handle, 'beau_fighter')
   assert.deepEqual(post.counts, { likes: 297, replies: 29 }, 'the same counts production read that day')
 })
 
-test('embed: a type:gif post with no player yields NO media, never an image where the full render puts a video', () => {
+test('embed: the PLACEHOLDER render of a type:gif post (no player) yields the SAME gif entry as the full render', () => {
   /**
-   * The placeholder-sub render (a bare /comments/{id} link) carries no player, and its Post is cached under
-   * the same canonical key as the real-subreddit render's. Falling back to the .gif here would let
-   * /_media/{key}/0.mp4, a url og:video promised as video, 302 to image bytes: the sticky poisoned-url
-   * defect. Caught by an adversarial review before this shipped. No media is what this render gave
-   * before the fix, and a missing index answers 404, which poisons nothing.
+   * REWRITTEN 2026-10-05 from "a type:gif post with no player yields NO media, never an image where the
+   * full render puts a video". That rule existed because the full render put a VIDEO at index 0 and this
+   * render, cached under the same canonical key, could only have put an image there: the poisoned-url
+   * defect. Now neither render reads the player. Both read the screenview's `url` and `type`, which the
+   * placeholder render carries too (measured 2026-10-05 from the Claude Code dev sandbox, not a Worker;
+   * Worker egress gets a different stripped placeholder render, fetch.ts 2026-07-22, not re-measured), so
+   * index 0 is the same entry in both. That sameness is the safety property, so it is what is asserted,
+   * with and without the size.
    */
-  const post = normalizeReddit({ source: 'embed', html: gifPage() }, eRef())
-  assert.deepEqual(post.media, [])
+  const full = normalizeReddit({ source: 'embed', html: GIF_PAGE, gifHead: GIF_HEAD }, GIF_REF)
+  const bare = normalizeReddit({ source: 'embed', html: GIF_PLACEHOLDER, gifHead: GIF_HEAD }, { p: 'rd', sub: '', id: '1wuh1g1' })
+  assert.deepEqual(bare.media, full.media)
+  const bareUnsized = normalizeReddit({ source: 'embed', html: GIF_PLACEHOLDER }, { p: 'rd', sub: '', id: '1wuh1g1' })
+  assert.deepEqual(bareUnsized.media.map(m => [m.kind, m.url]), full.media.map(m => [m.kind, m.url]),
+    'a header read that failed for one render changes its size, never its kind or url')
 })
 
-test('embed: a gif player whose src or poster is not Reddit\'s own is not trusted, and yields no media', () => {
-  // The src lands in a Location header on our origin, so only Reddit's own image host is accepted, and
-  // only its mp4 rendition (a png or gif `format` would be an image behind kind:'video').
-  for (const src of ['https://evil.example/x.gif?format=mp4', 'https://preview.redd.it/x.gif?width=320&amp;format=png', 'http://preview.redd.it/x.gif?format=mp4']) {
-    const post = normalizeReddit({ source: 'embed', html: gifPage({ player: playerTag(src) }) }, eRef())
-    assert.deepEqual(post.media, [], src)
+test('embed: a type:gif post whose url is not a strict i.redd.it .gif yields no media, whatever player the page carries', () => {
+  /**
+   * REWRITTEN 2026-10-05 from "a gif player whose src or poster is not Reddit's own is not trusted". The
+   * url this file trusts is now the screenview's, and it ends up in a Location header on our origin, so the
+   * host AND the path are checked: i.redd.it, one base36 id, `.gif`, nothing after. A page that also has a
+   * perfectly good Reddit player still gets nothing for these, because reading the player for them would
+   * give the full render a video at index 0 that the placeholder render, which has no player, cannot match.
+   */
+  const player = playerTag('https://preview.redd.it/x.gif?width=320&amp;format=mp4&amp;s=q')
+  for (const url of [
+    'https://evil.example/x.gif', 'http://i.redd.it/x.gif', 'https://i.redd.it.evil.example/x.gif',
+    'https://i.redd.it/x.gif?y=1', 'https://i.redd.it/x.gif#y', 'https://i.redd.it/a/x.gif', 'https://i.redd.it/x.gifv',
+    'https://i.redd.it/x.png', 'https://preview.redd.it/x.gif', 'https://i.redd.it/X.GIF', 'https://i.redd.it/.gif',
+  ]) {
+    const post = normalizeReddit({ source: 'embed', html: gifPage({ url, player }), gifHead: header(320, 240) }, eRef())
+    assert.deepEqual(post.media, [], url)
   }
-  const offHostPoster = normalizeReddit({ source: 'embed',
-    html: gifPage({ player: playerTag('https://preview.redd.it/x.gif?width=320&amp;format=mp4', 'https://evil.example/p.png') }) }, eRef())
-  assert.deepEqual(offHostPoster.media, [], 'an off-host poster is refused the same way')
 })
 
-test('embed: a gif player with no aspect ratio is 0x0, never an invented height', () => {
-  const post = normalizeReddit({ source: 'embed',
-    html: gifPage({ ar: '', player: playerTag('https://preview.redd.it/x.gif?width=320&amp;format=mp4&amp;s=q') }) }, eRef())
-  assert.equal(post.media[0].kind, 'video')
-  assert.equal(post.media[0].url, 'https://preview.redd.it/x.gif?width=320&format=mp4&s=q')
-  assert.equal(post.media[0].w, 0)
-  assert.equal(post.media[0].h, 0)
+test('embed: a gif whose header was not read, or is not a GIF, is 0x0, never a size from anywhere else', () => {
+  /**
+   * REWRITTEN 2026-10-05 from "a gif player with no aspect ratio is 0x0, never an invented height". Same
+   * rule, new source: the size is the file's own header or nothing. Assert on content: an HTML page (what
+   * i.redd.it sends a browser-style Accept, via a 307) or a PNG must not be read as a size because it came
+   * back at all.
+   */
+  const html = gifPage({ player: playerTag('https://preview.redd.it/x.gif?width=320&amp;format=mp4&amp;s=q') })
+  const enc = (s) => Uint8Array.from([...s].map(c => c.charCodeAt(0)))
+  for (const [why, gifHead] of [
+    ['no read', undefined], ['empty', new Uint8Array(0)], ['short', header(320, 240).slice(0, 9)],
+    ['an HTML page', enc('<!DOCTYPE html>')], ['a PNG', Uint8Array.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0])],
+    ['GIF90a', header(320, 240, 'GIF90a')], ['zero width', header(0, 240)], ['zero height', header(320, 0)],
+    ['not bytes', 'GIF89a@\u0001ð\u0000'],
+  ]) {
+    const post = normalizeReddit({ source: 'embed', html, gifHead }, eRef())
+    assert.deepEqual(post.media, [{ kind: 'gif', url: 'https://i.redd.it/x.gif', w: 0, h: 0 }], why)
+  }
 })
 
-test('embed: a NON-gif player is not mistaken for one, even with the word "gif" inside one of its attribute values', () => {
-  // `gif` is a BARE attribute. REWRITTEN after review: the first version used a src ending ".gif?", which
-  // the detection regex (whitespace before "gif") could never match anyway, so the test passed with the
-  // quoted-value blanking deleted. A whitespace-separated "gif" inside a value, a class list here, is the
-  // case the blanking actually exists for.
-  const notGif = '<shreddit-player class="block gif media" src="https://preview.redd.it/x.gif?width=320&amp;format=mp4" autoplay poster="https://preview.redd.it/p.png">'
-  const post = normalizeReddit({ source: 'embed', html: gifPage({ player: notGif }) }, eRef())
-  assert.deepEqual(post.media, [], 'no gif attribute, no player reading')
+test('embed: the page\'s player is never read for a gif post, so no mp4 or png8 url can reach the Post', () => {
+  /**
+   * REWRITTEN 2026-10-05 from "a NON-gif player is not mistaken for one, even with the word gif inside one
+   * of its attribute values". That guarded gifPlayer's bare-attribute detection, and gifPlayer is gone:
+   * the player block is in the full render only, so any reading of it gives two renders of one post two
+   * different answers at index 0. What replaces the guard is the stronger statement that nothing of the
+   * player, gif-marked or not, reaches media at all.
+   */
+  for (const player of [
+    playerTag('https://preview.redd.it/x.gif?width=320&amp;format=mp4&amp;s=q'),
+    '<shreddit-player class="block gif media" src="https://preview.redd.it/x.gif?width=320&amp;format=mp4" autoplay poster="https://preview.redd.it/p.png">',
+  ]) {
+    const post = normalizeReddit({ source: 'embed', html: gifPage({ player }) }, eRef())
+    assert.deepEqual(post.media, [{ kind: 'gif', url: 'https://i.redd.it/x.gif', w: 0, h: 0 }])
+  }
 })
 
 test('embed: a type:image .gif post is NOT read for a player, even when the page has one — it stays kind:gif', () => {
   // Both renders of a type:'image' post have always agreed on the .gif. Reading the player for it would
   // make the real-subreddit render disagree with the placeholder one at index 0, the same poisoned-url
-  // hazard the type:'gif' rule above avoids.
-  const post = normalizeReddit({ source: 'embed', html: gifPage({ type: 'image',
-    player: playerTag('https://preview.redd.it/x.gif?width=320&amp;format=mp4&amp;s=q') }) }, eRef())
-  assert.deepEqual(post.media, [{ kind: 'gif', url: 'https://i.redd.it/x.gif', w: 0, h: 0 }])
+  // hazard the type:'gif' rule above avoids. Since 2026-10-05 it shares the gif reading, so it is sized
+  // from its header like a type:'gif' post; its kind and url are what they always were.
+  const html = gifPage({ type: 'image', player: playerTag('https://preview.redd.it/x.gif?width=320&amp;format=mp4&amp;s=q') })
+  assert.deepEqual(normalizeReddit({ source: 'embed', html }, eRef()).media, [{ kind: 'gif', url: 'https://i.redd.it/x.gif', w: 0, h: 0 }])
+  assert.deepEqual(normalizeReddit({ source: 'embed', html, gifHead: header(500, 281) }, eRef()).media,
+    [{ kind: 'gif', url: 'https://i.redd.it/x.gif', w: 500, h: 281 }])
 })
 
-test('embed: the aspect ratio is the one wrapping the player, not the first on the page', () => {
-  const player = playerTag('https://preview.redd.it/x.gif?width=320&amp;format=mp4&amp;s=q')
-  const html = gifPage({ ar: '', player: '' }).replace('</body>',
-    '<shreddit-aspect-ratio style="--aspect-ratio: 9;"></shreddit-aspect-ratio>'
-    + '<shreddit-aspect-ratio style="--aspect-ratio: 2;">' + player + '</body>')
-  const post = normalizeReddit({ source: 'embed', html }, eRef())
-  assert.equal(post.media[0].h, 160, '320 over the wrapping 2, not over the decoy 9')
+test('embed: the size is the GIF header\'s, never the aspect-ratio wrapper\'s, which reads 1 for a portrait gif', () => {
+  /**
+   * REWRITTEN 2026-10-05 from "the aspect ratio is the one wrapping the player, not the first on the page".
+   * #98 sized the rendition from that wrapper. Measured 2026-10-05 from the dev sandbox on 35 i.redd.it
+   * gifs, the wrapper reads 1 for every portrait one, so an 800x1422 gif would have been published as
+   * 800x800. The header is read instead, and the wrapper is ignored however it reads.
+   */
+  const player = playerTag('https://preview.redd.it/x.gif?width=800&amp;format=mp4&amp;s=q')
+  const post = normalizeReddit({ source: 'embed', html: gifPage({ ar: '1', player }), gifHead: header(800, 1422) }, eRef())
+  assert.deepEqual([post.media[0].w, post.media[0].h], [800, 1422])
+})
+
+test('gifSize reads GIF87a and GIF89a logical screen sizes little-endian, and nothing else', () => {
+  assert.deepEqual(gifSize(GIF_HEAD), { w: 320, h: 240 }, 'the measured header')
+  assert.deepEqual(gifSize(header(1920, 1038)), { w: 1920, h: 1038 }, 'both bytes of each number count')
+  assert.deepEqual(gifSize(header(1280, 1280, 'GIF87a')), { w: 1280, h: 1280 }, 'the older signature, seen on 1 of 36')
+  assert.deepEqual(gifSize([...header(222, 227)]), { w: 222, h: 227 }, 'a plain array of bytes reads the same')
+  // Trailing bytes are ignored: a server that ignored the Range header still yields the size of the first ten.
+  assert.deepEqual(gifSize(Uint8Array.from([...header(640, 364), 0xf7, 0, 0])), { w: 640, h: 364 })
+  for (const junk of [null, undefined, 42, {}, 'GIF89a', header(320, 240).slice(0, 9)]) {
+    assert.deepEqual(gifSize(junk), { w: 0, h: 0 }, String(junk))
+  }
+})
+
+test('redditGifUrl names exactly the url every render puts at index 0, and nothing for a non-gif post', () => {
+  /**
+   * fetch.ts asks this which file to read the size of, and the normalizer builds media[0] from the same
+   * reading. If the two disagreed, a size would be read for one url and attached to another. Asserted
+   * against all three renders a post can have.
+   */
+  const embedFull = { source: 'embed', html: GIF_PAGE }
+  const embedBare = { source: 'embed', html: GIF_PLACEHOLDER }
+  const oauth = { source: 'json', data: listing({ ...base, post_hint: 'image', url: GIF_URL }) }
+  for (const [name, raw, ref] of [['full', embedFull, GIF_REF], ['placeholder', embedBare, eRef('1wuh1g1')], ['oauth', oauth, REF]]) {
+    assert.equal(redditGifUrl(raw), GIF_URL, name)
+    assert.equal(normalizeReddit(raw, ref).media[0].url, redditGifUrl(raw), `${name}: the url read is the url emitted`)
+  }
+  // A type:'image' post with an i.redd.it .gif shares the reading, so fetch.ts sizes it too. Added after
+  // review (2026-10-05): dropping `type === 'image'` from redditGifUrl left the whole suite green, and the
+  // only cost would have been every such gif silently going back to 0x0.
+  const imageGif = { source: 'embed', html: imagePage({ url: GIF_URL, type: 'image' }) }
+  assert.equal(redditGifUrl(imageGif), GIF_URL, 'a type:image post whose url is an i.redd.it .gif')
+  assert.deepEqual(normalizeReddit({ ...imageGif, gifHead: GIF_HEAD }, eRef()).media, [{ kind: 'gif', url: GIF_URL, w: 320, h: 240 }],
+    'and it is sized from the header like a type:gif post, same kind and url as it always had')
+  assert.equal(redditGifUrl({ source: 'embed', html: imagePage() }), null, 'a .jpg image post')
+  assert.equal(redditGifUrl({ source: 'embed', html: imagePage({ url: 'https://v.redd.it/g1abc', type: 'gif' }) }), null, 'a v.redd.it gif-labelled video')
+  assert.equal(redditGifUrl({ source: 'embed', html: imagePage({ url: GIF_URL, type: 'link' }) }), null, 'a link post pointing at a gif')
+  assert.equal(redditGifUrl({ source: 'json', data: listing({ ...base, url: 'https://i.redd.it/x.png' }) }), null)
+  for (const junk of [null, undefined, {}, { source: 'embed' }, { source: 'json', data: 42 }]) assert.equal(redditGifUrl(junk), null)
+})
+
+test('NO RENDER OF A GIF POST PUTS A VIDEO AT INDEX 0: full, placeholder and OAuth all emit the same gif kind and url', () => {
+  /**
+   * THE SAFETY PROPERTY OF THIS WHOLE CHANGE, stated once over every render. All three land under one post
+   * cache key, and /_media/{key}/0 is answered from whichever wrote last, while Discord's media proxy holds
+   * that url as whatever kind it was first told. So the kind at index 0 must not depend on which render
+   * ran, nor on whether its header read succeeded (a probe can fail transiently; only the size may differ).
+   */
+  const renders = [
+    normalizeReddit({ source: 'embed', html: GIF_PAGE, gifHead: GIF_HEAD }, GIF_REF),
+    normalizeReddit({ source: 'embed', html: GIF_PAGE }, GIF_REF),
+    normalizeReddit({ source: 'embed', html: GIF_PLACEHOLDER, gifHead: GIF_HEAD }, eRef('1wuh1g1')),
+    normalizeReddit({ source: 'embed', html: GIF_PLACEHOLDER }, eRef('1wuh1g1')),
+    normalizeReddit({ source: 'json', gifHead: GIF_HEAD, data: listing({ ...base, post_hint: 'image', url: GIF_URL }) }, REF),
+    normalizeReddit(listing({ ...base, post_hint: 'image', url: GIF_URL }), REF),
+  ]
+  for (const post of renders) {
+    assert.equal(post.media.length, 1)
+    assert.equal(post.media[0].kind, 'gif')
+    assert.equal(post.media[0].url, GIF_URL)
+    assert.ok(!('poster' in post.media[0]) && !('remux' in post.media[0]))
+  }
 })
 
 test('embed: a type:gif post hosted on v.redd.it takes the video branch, not the empty card', () => {
-  // Whether Reddit labels its is_gif VIDEOS 'gif' or 'video' is unmeasured. If 'gif', the v.redd.it url
-  // still means a remux video with its cover, which is what this pins.
+  // Reddit DOES label some videos 'gif': measured 2026-10-05 from the dev sandbox, 1 of 36 type:'gif'
+  // posts (r/HighQualityGifs/comments/1wpy40m) plays from v.redd.it. The v.redd.it url means a remux video
+  // with its cover in every render, which is what this pins; it is never read as a gif.
   const html = imagePage({ url: 'https://v.redd.it/g1abc', type: 'gif' }).replace('</body>',
     '<img src="https://external-preview.redd.it/cover.jpg?width=640&amp;s=zzz"></body>')
   const post = normalizeReddit({ source: 'embed', html }, eRef())

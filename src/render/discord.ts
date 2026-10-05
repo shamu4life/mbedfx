@@ -223,7 +223,9 @@ function videoTags(post: Post, origin: string): string[] {
  *  - NO og:video:secure_url. Production has none; the plain head keeps its.
  *  - THE MEDIA URL ENDS IN .mp4. Production's does. router.ts's _media branch strips a trailing
  *    media extension before the integer parse so the suffixed url resolves to the same bytes; the
- *    extensionless form stays live everywhere else, media_attachments included.
+ *    extensionless form stays live everywhere else, media_attachments included, with ONE carve-out
+ *    since 2026-10-05: a gif's media_attachment ends in `.gif` (mastodon.ts attachment() says why;
+ *    it must not be folded back into the extensionless url).
  *  - THE twitter: FAMILY, spelled property= rather than name=. Production spells it that way. That
  *    looks wrong and is copied exactly: the point is to reproduce an observed-working head, not to
  *    correct it. dimTags() already emits property=, so the player dimensions come out matching

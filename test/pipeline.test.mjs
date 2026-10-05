@@ -3538,58 +3538,84 @@ test('REAL FIXTURE: an animated_gif renders a player, not an og:image=mp4', asyn
   assert.ok(!html.includes('video.twimg') && !html.includes('pbs.twimg'), 'no raw CDN url in the GIF head')
 })
 
-test('REAL FIXTURE: a Reddit GIF renders a player in every surface, not the empty card it shipped as', async () => {
+// The first ten bytes of i.redd.it/4gg2f32z3qsh1.gif (GIF89a, 320x240), read 2026-10-05 from the dev sandbox.
+const RD_GIF_HEAD = Uint8Array.from([0x47, 0x49, 0x46, 0x38, 0x39, 0x61, 0x40, 0x01, 0xf0, 0x00])
+const RD_GIF_URL = 'https://i.redd.it/4gg2f32z3qsh1.gif'
+
+test('REAL FIXTURE: a Reddit GIF is its looping .gif in every surface, and its old .mp4 url never 302s to it', async () => {
   /**
-   * Reported 2026-10-04: a Reddit gif post (r/forsen/comments/1wuh1g1) unfurled as text only, because
-   * Reddit labels it type:'gif' and the normalizer had no branch for the word. The fix reads Reddit's own
-   * mp4 rendition off the embed's player, so this drives the REAL captured page through the REAL
-   * normalizer and then every surface that has to agree on it: the Discord head, the activity document
-   * Discord actually draws a media post from, both /_media/ urls, and the converter preview.
+   * REWRITTEN 2026-10-05 from "a Reddit GIF renders a player in every surface". Reported 2026-10-04 as
+   * text only; #98 then shipped Reddit's mp4 rendition, a video Discord draws with a play button and no
+   * loop. The owner chose the loop, so the entry is the original .gif and every surface is driven again:
+   * the Discord head, the activity document Discord draws a media post from, the /_media/ urls (including
+   * the .mp4 one a day of cards still carries), the converter preview and /_api/v1.
    */
   const ref = { p: 'rd', sub: 'forsen', id: '1wuh1g1' }
   const html = readFileSync('test/fixtures/reddit-embed-gif.html', 'utf8')
-  const post = normalizeReddit({ source: 'embed', html }, ref)
+  const post = normalizeReddit({ source: 'embed', html, gifHead: RD_GIF_HEAD }, ref)
   const deps = xDeps(post)
   const head = await (await handle(req('/r/forsen/comments/1wuh1g1/this_man_is_deranged/', DISCORD), fakeEnv(), ctx, deps)).text()
-  assert.match(head, /property="og:video" content="https:\/\/staging\.megapenispoopenfarten\.sex\/_media\/rd%3Aforsen%3A1wuh1g1\/0\.mp4"/)
+  assert.ok(!/og:video|twitter:player/.test(head), 'no player: a GIF is an image, and an image loops')
+  assert.ok(!/property="og:image"/.test(head), 'and C1 holds: the activity document carries the picture, not an og:image')
+  assert.match(head, /application\/activity\+json/)
   assert.ok(!/redd\.it/.test(head), 'no raw Reddit CDN url in the head')
 
-  const status = toMastodonStatus(post, 'https://staging.megapenispoopenfarten.sex', 'videos')
+  const id = encodeStatusId(refKey(ref))
+  const status = await (await handle(req(`/api/v1/statuses/${id}`, DISCORD), fakeEnv(), ctx, deps)).json()
   assert.equal(status.media_attachments.length, 1)
-  assert.equal(status.media_attachments[0].type, 'video')
-  assert.ok(status.media_attachments[0].preview_url.endsWith('/poster0'), 'the png8 poster is the still')
-  // It carries a size, unlike a 0x0 .gif, whose attachment would go out with no meta at all. The
-  // width/height are fudge()d up for video on purpose (originalMeta), so the aspect is what is pinned.
-  assert.ok(status.media_attachments[0].meta?.original, 'a sized attachment')
-  assert.equal(status.media_attachments[0].meta.original.aspect, 320 / 240)
+  const [att] = status.media_attachments
+  assert.equal(att.type, 'image', 'Mastodon `image`, which Discord is expected to loop; never `video`, never `gifv`')
+  assert.equal(att.url, `https://staging.megapenispoopenfarten.sex${mediaRef(ref, 0)}.gif`,
+    'a url never handed out as a video (#98 put a video attachment on the extensionless one for a day)')
+  assert.equal(att.preview_url, att.url, 'a GIF is its own picture')
+  assert.deepEqual([att.meta?.original?.width, att.meta?.original?.height], [320, 240],
+    'the size from the GIF header, so the attachment carries meta.original')
 
-  const video = await handle(req(mediaRef(ref, 0), DISCORD), fakeEnv(), ctx, deps)
-  assert.equal(video.status, 302)
-  assert.match(video.headers.get('location'), /^https:\/\/preview\.redd\.it\/4gg2f32z3qsh1\.gif\?width=320&format=mp4&s=/)
-  const poster = await handle(req(`${mediaRef(ref, 'poster0')}`, DISCORD), fakeEnv(), ctx, deps)
-  assert.equal(poster.status, 302)
-  assert.match(poster.headers.get('location'), /^https:\/\/preview\.redd\.it\/this-man-is-deranged-v0-4gg2f32z3qsh1\.gif\?format=png8&s=/)
+  for (const path of [new URL(att.url).pathname, mediaRef(ref, 0)]) {
+    const res = await handle(req(path, DISCORD), fakeEnv(), ctx, deps)
+    assert.equal(res.status, 302, path)
+    assert.equal(res.headers.get('location'), RD_GIF_URL, `${path} serves the original .gif`)
+  }
+  // THE TRANSITION GUARD. The head #98 rendered for this post promised /_media/{key}/0.mp4 as og:video.
+  const old = await handle(req(`${mediaRef(ref, 0)}.mp4`, DISCORD), fakeEnv(), ctx, deps)
+  assert.equal(old.status, 503, 'a url promised as video answers notReady, never image bytes')
+  assert.equal(old.headers.get('location'), null)
+  assert.equal(old.headers.get('cache-control'), 'no-store')
 
   const card = await (await handle(new Request(`https://mbedfx.app/_card?p=${encodeURIComponent('/r/forsen/comments/1wuh1g1/')}`), fakeEnv(), ctx, deps)).json()
-  assert.equal(card.media?.[0]?.kind, 'video')
-  assert.ok(card.media?.[0]?.poster, 'the preview draws a video from its poster, so a posterless entry would draw nothing')
+  assert.equal(card.media?.[0]?.kind, 'image', 'the preview draws an image from `url`, which animates; as a posterless video it drew nothing')
+  assert.ok(card.media[0].url.endsWith(mediaRef(ref, 0)))
+  assert.equal(card.media[0].poster, null)
+  assert.deepEqual([card.media[0].w, card.media[0].h], [320, 240])
+
+  const api = await (await handle(new Request(`https://mbedfx.app/_api/v1?url=${encodeURIComponent('https://www.reddit.com/r/forsen/comments/1wuh1g1/')}`), fakeEnv(), ctx, deps)).json()
+  assert.equal(api.ok, true)
+  assert.deepEqual(
+    { kind: api.post.media[0].kind, width: api.post.media[0].width, height: api.post.media[0].height, poster: api.post.media[0].poster },
+    { kind: 'image', width: 320, height: 240, poster: null },
+    'published as what the bytes are: an image, sized')
+  assert.ok(api.post.media[0].url.endsWith(mediaRef(ref, 0)), 'on our origin, never i.redd.it')
 })
 
-test('A BARE /comments/{id} LOAD OF A REDDIT GIF NEVER MAKES THE PROMISED VIDEO URL SERVE AN IMAGE', async () => {
+test('A BARE /comments/{id} LOAD OF A REDDIT GIF WRITES THE SAME GIF, AND THE OLD .mp4 URL STILL NEVER SERVES AN IMAGE', async () => {
   /**
-   * Found by an adversarial review of the gif fix before it shipped. A bare /comments/{id} link gets
-   * Reddit's placeholder-sub render, which has no player, and loadPost writes that Post under the SAME
-   * canonical cache key the real-subreddit render uses. Had the normalizer fallen back to the raw .gif
-   * there, the /_media/{key}/0.mp4 url the real card's og:video names would 302 to image/gif after one
-   * bare-link request: Discord's media proxy caches per url, so that is the sticky poisoned-url defect.
+   * REWRITTEN 2026-10-05 from "...NEVER MAKES THE PROMISED VIDEO URL SERVE AN IMAGE". The scenario is the
+   * one an adversarial review found for #98: a bare /comments/{id} link gets Reddit's placeholder-sub
+   * render (no player), and loadPost writes it under the SAME canonical cache key as the real-subreddit
+   * render. #98 had that render write NO media, so index 0 was a video or absent. Now both renders write
+   * the gif (they read the screenview's url and type, which the placeholder render carries: measured
+   * 2026-10-05 from the Claude Code dev sandbox, not a Worker; a Worker's is known to differ), so
+   * index 0 is the same kind whichever wrote last, and only the size can differ (a header read that
+   * failed, simulated here). The .mp4 url #98's cards promised is answered by the media arm's guard.
    * Driven through one shared cache, the real render first, then the bare one.
    */
   const ref = { p: 'rd', sub: 'forsen', id: '1wuh1g1' }
-  const full = normalizeReddit({ source: 'embed', html: readFileSync('test/fixtures/reddit-embed-gif.html', 'utf8') }, ref)
-  // The placeholder render's shape: the same post, the screenview saying type:'gif', and no player.
-  const placeholder = { ...full, media: normalizeReddit({ source: 'embed', html:
-    readFileSync('test/fixtures/reddit-embed-gif.html', 'utf8').replace(/<shreddit-player\b[^>]*>/g, '') }, ref).media }
-  assert.deepEqual(placeholder.media, [], 'the stripped render contributes no media at all')
+  const page = readFileSync('test/fixtures/reddit-embed-gif.html', 'utf8')
+  const full = normalizeReddit({ source: 'embed', html: page, gifHead: RD_GIF_HEAD }, ref)
+  // The placeholder render's shape: the same post, the screenview saying type:'gif', and no player, with
+  // its header read failing, so it carries no size.
+  const placeholder = normalizeReddit({ source: 'embed', html: page.replace(/<shreddit-player\b[^>]*>/g, '') }, { p: 'rd', sub: '', id: '1wuh1g1' })
+  assert.deepEqual(placeholder.media, [{ kind: 'gif', url: RD_GIF_URL, w: 0, h: 0 }], 'the stripped render contributes the same gif')
   const cache = fakeCache()
   let next = full
   const deps = { cache, fetchPost: async () => next, resolveShortlink: async () => ({ kind: 'unresolved' }) }
@@ -3597,19 +3623,126 @@ test('A BARE /comments/{id} LOAD OF A REDDIT GIF NEVER MAKES THE PROMISED VIDEO 
   next = placeholder
   for (const k of [...cache.store.keys()]) cache.store.delete(k)   // the 900s post TTL lapsing between the two
   await handle(req('/comments/1wuh1g1', DISCORD), fakeEnv(), ctx, deps)
-  // TIGHTENED after review: the first version let /_media/ refetch the placeholder itself, so it passed
-  // without the bare load ever writing anything. Now the canonical entry the bare load wrote is the only
-  // place the answer can come from: any further upstream fetch throws.
+  // The canonical entry the bare load wrote is the only place the answer can come from: any further
+  // upstream fetch throws.
   const canonicalKey = [...cache.store.keys()].find(k => String(k).endsWith('/post%3Ard%3Aforsen%3A1wuh1g1'))
   assert.ok(canonicalKey, `the bare /comments/ load wrote under the CANONICAL key, saw ${[...cache.store.keys()].join(', ')}`)
   const written = JSON.parse(await cache.store.get(canonicalKey).clone().text())
-  assert.deepEqual(written.media, [], 'and what it wrote there is the placeholder render, with no media')
+  assert.deepEqual(written.media.map(m => [m.kind, m.url]), full.media.map(m => [m.kind, m.url]),
+    'what it wrote there has the same kind and url at index 0 as the full render')
   deps.fetchPost = async () => { throw new Error('/_media/ must answer from the entry the bare load wrote') }
+  const image = await handle(req(mediaRef(ref, 0), DISCORD), fakeEnv(), ctx, deps)
+  assert.equal(image.status, 302)
+  assert.equal(image.headers.get('location'), RD_GIF_URL, 'the image url serves the gif, as it did after the full render')
   const media = await handle(req(`${mediaRef(ref, 0)}.mp4`, DISCORD), fakeEnv(), ctx, deps)
   const loc = media.headers.get('location') || ''
   assert.ok(!loc.startsWith('https://i.redd.it/'), `the promised video url must never redirect to the .gif, got ${loc}`)
-  assert.ok(media.status === 404 || (media.status === 302 && /format=mp4/.test(loc)),
-    `video bytes or a 404, never an image, got ${media.status} ${loc}`)
+  assert.equal(media.status, 503, `notReady, never an image, got ${media.status} ${loc}`)
+  assert.equal(media.headers.get('cache-control'), 'no-store')
+})
+
+test('A MEDIA URL\'S EXTENSION IS A PROMISE ON ANY PLATFORM: a video spelling never 302s to a picture, an image spelling never 302s to a video, and matching spellings still redirect', async () => {
+  /**
+   * The guards are general on purpose. The Reddit gif move made them reachable, but the shape (a url Discord
+   * was handed as one kind, an entry at that index that is now the other) is the 2026-07-24 poisoned-url
+   * defect, or its 2026-07-19 mirror where an image-role url answered with mp4 bytes and Discord abandoned
+   * the rich card, on any platform where an entry's kind can change under a url. A Bluesky post is used here
+   * so nothing about it is Reddit's: one image entry, one direct video entry and one gif, no remux, no proxy.
+   *
+   * REWRITTEN 2026-10-05 after review, from "A VIDEO-SPELLED MEDIA URL ... while a real video and EVERY
+   * image spelling still redirect". The image spellings on the VIDEO entry (`1.gif`, `1.jpg`, ...) now
+   * answer notReady too (the asImage guard); the image spellings on pictures redirect exactly as before.
+   */
+  const ref = { p: 'bs', handle: 'alice.bsky.social', rkey: '3k2a' }
+  const post = {
+    ref, canonical: 'https://bsky.app/profile/alice.bsky.social/post/3k2a',
+    author: { name: 'Alice', handle: 'alice.bsky.social', url: 'https://bsky.app/profile/alice.bsky.social' },
+    text: 'x', createdAt: new Date('2024-01-01T00:00:00Z'), counts: {}, sensitive: false,
+    media: [
+      { kind: 'image', url: 'https://cdn.example/a.jpg', w: 800, h: 600 },
+      { kind: 'video', url: 'https://cdn.example/b.mp4', w: 720, h: 1280, poster: 'https://cdn.example/b.jpg' },
+      { kind: 'gif', url: 'https://cdn.example/c.gif', w: 320, h: 240 },
+    ],
+  }
+  const deps = xDeps(post)
+  for (const seg of ['0.mp4', '0.webm', '0.mov', '0.m4v', '2.mp4', '1.gif', '1.jpg', '1.jpeg', '1.png', '1.webp']) {
+    const res = await handle(req(mediaRef(ref, seg), DISCORD), fakeEnv(), ctx, deps)
+    assert.equal(res.status, 503, `${seg} on the other kind of entry is notReady`)
+    assert.equal(res.headers.get('location'), null, `${seg} must not redirect`)
+    assert.equal(res.headers.get('cache-control'), 'no-store', `${seg} caches nothing`)
+  }
+  for (const [seg, to] of [['0', 'https://cdn.example/a.jpg'], ['0.jpg', 'https://cdn.example/a.jpg'],
+    ['1.mp4', 'https://cdn.example/b.mp4'], ['1', 'https://cdn.example/b.mp4'], ['2', 'https://cdn.example/c.gif'], ['2.gif', 'https://cdn.example/c.gif']]) {
+    const res = await handle(req(mediaRef(ref, seg), DISCORD), fakeEnv(), ctx, deps)
+    assert.equal(res.status, 302, seg)
+    assert.equal(res.headers.get('location'), to, seg)
+  }
+  // An index past the end keeps its 404: the guard answers a promise about an entry, not a missing one.
+  assert.equal((await handle(req(mediaRef(ref, '9.mp4'), DISCORD), fakeEnv(), ctx, deps)).status, 404)
+})
+
+test('THE NEW .gif ATTACHMENT URL NEVER 302s TO #98\'S MP4, even through a colo whose post cache still holds #98\'s Post', async () => {
+  /**
+   * Found by review of the Reddit gif change (2026-10-05), reproduced there with handle() and two fake caches,
+   * and pinned here the same way. The post cache is per colo (caches.default, POST_TTL 900 s), Discord's
+   * crawler, its activity callback and its media proxy do not reliably share a colo, and a rollout is not
+   * atomic. So colo A renders the status from the NEW Post and hands Discord `/_media/{key}/0.gif` as an
+   * IMAGE attachment, and Discord's proxy fetches it through colo B, which still holds the Post #98 wrote:
+   * index 0 is Reddit's mp4 rendition there. Before the asImage guard that answered 302 to
+   * preview.redd.it/...format=mp4, mp4 bytes behind an image attachment, the measured 2026-07-19 failure
+   * (Discord abandons the whole rich card), on a url that is the same for every future card of the post.
+   */
+  const ref = { p: 'rd', sub: 'forsen', id: '1wuh1g1' }
+  const fresh = normalizeReddit({ source: 'embed', html: readFileSync('test/fixtures/reddit-embed-gif.html', 'utf8'), gifHead: RD_GIF_HEAD }, ref)
+  // What #98's normalizer wrote for this post, entry for entry from the same fixture's player.
+  const mp4 = 'https://preview.redd.it/4gg2f32z3qsh1.gif?width=320&format=mp4&s=b980ae1e4df49136d178f605cd05e89ac921bb5e'
+  const stale = { ...fresh, media: [{ kind: 'video', url: mp4, w: 320, h: 240,
+    poster: 'https://preview.redd.it/this-man-is-deranged-v0-4gg2f32z3qsh1.gif?format=png8&s=e8f08d5ba684bd179ca3a777577ec2f742cfdf50' }] }
+  const colo = (post) => ({ cache: fakeCache(), fetchPost: async () => post, resolveShortlink: async () => ({ kind: 'unresolved' }) })
+  const a = colo(fresh)
+  const b = colo(stale)
+  const status = await (await handle(req(`/api/v1/statuses/${encodeStatusId(refKey(ref))}`, DISCORD), fakeEnv(), ctx, a)).json()
+  const gifUrl = new URL(status.media_attachments[0].url)
+  assert.equal(status.media_attachments[0].type, 'image', 'precondition: colo A hands Discord an image attachment')
+  assert.equal(gifUrl.pathname, `${mediaRef(ref, 0)}.gif`, 'precondition: on the .gif spelling')
+  // Warm colo B's post cache with #98's Post, as fifteen minutes of pre-deploy traffic would have.
+  await handle(req(mediaRef(ref, 0), DISCORD), fakeEnv(), ctx, b)
+  b.fetchPost = async () => { throw new Error('colo B must answer from the Post it already holds') }
+  const res = await handle(req(gifUrl.pathname, DISCORD), fakeEnv(), ctx, b)
+  const loc = res.headers.get('location') || ''
+  assert.ok(!/format=mp4/.test(loc), `an image-promised url must never redirect to the mp4, got ${res.status} ${loc}`)
+  assert.equal(res.status, 503, 'notReady')
+  assert.equal(res.headers.get('cache-control'), 'no-store', 'so nothing pins it, and the next fetch after colo B\'s Post expires gets the gif')
+  // The extensionless url on colo B still answers what #98 promised there, the mp4, unchanged.
+  const old = await handle(req(mediaRef(ref, 0), DISCORD), fakeEnv(), ctx, b)
+  assert.equal(old.headers.get('location'), mp4)
+  // And on colo A the same .gif url serves the gif.
+  const good = await handle(req(gifUrl.pathname, DISCORD), fakeEnv(), ctx, a)
+  assert.equal(good.status, 302)
+  assert.equal(good.headers.get('location'), RD_GIF_URL)
+})
+
+test('A REDDIT GIF\'S DIRECT LINK (d. host and a trailing .mp4) SERVES THE .gif through /0.gif, never the url #98 handed out as a video', async () => {
+  /**
+   * serveDirectMedia redirects to the post's own media url, and the guard never sees the reader's `.mp4`:
+   * a `.mp4` on a POST link asks for "the post's file", whatever it is (docs/API.md, the d. host), and for
+   * a gif post that is the .gif. REWRITTEN 2026-10-05 from "redirects to the extensionless url": on the apex
+   * that url (/_media/rd%3Aforsen%3A1wuh1g1/0) is byte for byte what #98 gave Discord as the VIDEO, so its
+   * media proxy may still hold the mp4 rendition there (an integration review caught it). The redirect now
+   * names `/0.gif`, the same spelling the Mastodon attachment uses, which the router reads as the same entry.
+   */
+  const ref = { p: 'rd', sub: 'forsen', id: '1wuh1g1' }
+  const post = normalizeReddit({ source: 'embed', html: readFileSync('test/fixtures/reddit-embed-gif.html', 'utf8'), gifHead: RD_GIF_HEAD }, ref)
+  const deps = xDeps(post)
+  for (const url of ['https://d.mbedfx.app/r/forsen/comments/1wuh1g1/', 'https://mbedfx.app/r/forsen/comments/1wuh1g1.mp4']) {
+    const first = await handle(new Request(url, { headers: { 'user-agent': DISCORD } }), fakeEnv(), ctx, deps)
+    assert.equal(first.status, 302, url)
+    const hop = new URL(first.headers.get('location'))
+    assert.equal(hop.pathname, `${mediaRef(ref, 0)}.gif`, `${url} redirects to the .gif spelling, never the extensionless url`)
+    const second = await handle(new Request(hop, { headers: { 'user-agent': DISCORD } }), fakeEnv(), ctx, deps)
+    assert.equal(second.status, 302, `${url} -> ${hop}`)
+    assert.equal(second.headers.get('location'), RD_GIF_URL)
+  }
 })
 
 test('REAL FIXTURE: a tombstone renders the AGE-RESTRICTED embed — calm card for a crawler, human 302', async () => {

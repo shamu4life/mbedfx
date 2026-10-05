@@ -1367,9 +1367,16 @@ function withResolver(post: Post, env: Env): Post {
 /**
  * NEVER AN IMAGE ON A VIDEO URL, and now ONE spelling of that rule for BOTH ways we serve video (the
  * container mux and the direct CDN pass-through added 2026-07-25). 503 + no-store: Discord draws the
- * card with no inline player and caches nothing, and the next fetch plays. See serveMuxed above for
- * the poisoned-url defect this reverses — two copies of "the video url must never become an image"
- * would be two places for one of them to drift, and that drift IS the defect.
+ * card with no inline player and caches nothing, and, for those two, the next fetch plays. See
+ * serveMuxed above for the poisoned-url defect this reverses — two copies of "the video url must never
+ * become an image" would be two places for one of them to drift, and that drift IS the defect.
+ *
+ * A THIRD CALLER since 2026-10-05: the media arm's extension guards (`asVideo`, `asImage`), which answer
+ * this when a url spelled as one kind names an entry of the other. There "the next fetch plays" is NOT a
+ * promise. A Reddit gif's `.mp4` url from a #98 card answers 503 for good, because the entry is a gif now
+ * and will stay one; only the `asImage` case, a colo still holding a stale Post, heals once that Post
+ * expires. A permanent 503 on a `/_media/…/0.mp4` is therefore not by itself a container problem: check
+ * what the entry at that index is before investigating the resolver.
  */
 const notReady = () => new Response(null, { status: 503, headers: { 'cache-control': 'no-store' } })
 
@@ -4906,10 +4913,18 @@ function toApiPost(post: Post, origin: string) {
     },
     counts: apiCounts(post),
     media: usableWithIndex(post).map(({ m, i }) => ({
-      // TWO KINDS, NOT THE INTERNAL THREE ('image'|'video'|'gif', types.ts:229; said FOUR until 2026-08-05).
-      // A consumer needs to know whether to draw an <img> or a <video>; 'gif' is a video everywhere it matters
-      // and publishing it would invite a third branch that does nothing. Same collapse the card makes.
-      kind: m.kind === 'video' || m.kind === 'gif' ? 'video' : 'image',
+      // TWO KINDS, NOT THE INTERNAL THREE ('image'|'video'|'gif', types.ts Media.kind; said FOUR until
+      // 2026-08-05). A consumer needs to know whether to draw an <img> or a <video>, and a third value would
+      // invite a branch that does nothing.
+      //
+      // A 'gif' IS AN IMAGE HERE SINCE 2026-10-05, and it was published as 'video' before. Media.kind 'gif'
+      // means the url IS an animated .gif file (mastodon.ts ATTACHMENT_TYPE, twitter/normalize.ts and
+      // mastoapi/normalize.ts all say so), and a <video> element plays no GIF in any browser, so 'video'
+      // told every consumer to draw nothing. The comment here called that "the same collapse the card
+      // makes"; the card makes the opposite one (a gif is a Mastodon `image`, and the plain head's
+      // og:image). Reddit gif posts turned the rare case (Misskey gifs, Reddit type:'image' gifs) into a
+      // common one. /_card below makes the same change, and test/api.test.mjs holds the two equal.
+      kind: m.kind === 'video' ? 'video' : 'image',
       // bytesIndex, never the bare position: a settleMux degraded still lives in the POSTER slot, and
       // addressing it by its array index hits the video entry, which answers 503.
       url: mediaUrl(origin, post, bytesIndex(m, i)),
@@ -5160,7 +5175,14 @@ async function serveDirectMedia(
   // bytesIndex, not the bare position: a degraded still lives in the poster slot, and addressing it
   // by its array index hits the VIDEO entry, which answers 503. The renderers all mint through this
   // for the same reason.
-  return redirect(mediaUrl(origin, got.post, bytesIndex(list[i], i)))
+  //
+  // A GIF TAKES THE `.gif` SPELLING, as its Mastodon attachment does (mastodon.ts attachment() has the
+  // full argument). On the apex the extensionless /_media/{key}/0 of a Reddit gif post is the url #98
+  // handed Discord as a VIDEO on 2026-10-04/05, so Discord's media proxy may still hold the mp4
+  // rendition for it; a url never handed out as a video keeps that memory out of this redirect. The
+  // router reads the suffix as the same entry and the same bytes (asImage), which passes for a gif.
+  const gif = list[i].kind === 'gif' ? '.gif' : ''
+  return redirect(`${mediaUrl(origin, got.post, bytesIndex(list[i], i))}${gif}`)
 }
 
 export async function handle(req: Request, env: Env, ctx: ExecutionContext, d: Deps): Promise<Response> {
@@ -5715,6 +5737,55 @@ export async function handle(req: Request, env: Env, ctx: ExecutionContext, d: D
       // A remux video (present only when the resolver bindings exist — withResolver strips it
       // otherwise) is served as a muxed MP4 from R2/the container; everything else 302s to its url.
       const entry = post && typeof r.index === 'number' ? pickMediaEntry(post, r.index) : null
+      /**
+       * A URL SPELLED AS A VIDEO NEVER ANSWERS WITH AN IMAGE, on any platform. `asVideo` is the router's
+       * reading of a video extension on the index (`/_media/{key}/0.mp4`), which only the spoof head's
+       * og:video and twitter:player mint, so that url was handed to Discord as a video. If the entry it
+       * names is not a video now, the 302 below would send image bytes to a url Discord's media proxy
+       * may already hold as video: the sticky poisoned-url defect serveMuxed's comment records.
+       *
+       * WHY IT EXISTS NOW: Reddit gif posts went out from 2026-10-04 as Reddit's mp4 rendition at index 0,
+       * so a day of cards and Discord messages carry og:video `/_media/rd:{sub}:{id}/0.mp4`. Since
+       * 2026-10-05 that entry is the original .gif (reddit/normalize.ts), and without this the old url
+       * would 302 to it. It is GENERAL on purpose: the same shape was already reachable wherever an
+       * entry's kind can change under a url, such as withResolver's no-container degrade, which turns
+       * a remux video into its poster still at the same index.
+       *
+       * WHAT IT CANNOT COVER, stated so nobody assumes it does: those same day-old cards also named the
+       * EXTENSIONLESS `/_media/{key}/0` as the video, in media_attachments, and that spelling is every
+       * picture's url as well, so it carries no promise this arm can read. Those messages may lose their
+       * player whenever Discord fetches that url again (not measured). New cards are kept clear of it the
+       * other way round: mastodon.ts gives a gif attachment a url of its own, ending `.gif`.
+       *
+       * notReady() AND NOT A 404, because notReady's own comment demands one spelling of "the video url
+       * must never become an image" for every way video is served, and this is that rule. Its "the next
+       * fetch plays" is true for the transient cases (a container bound again); for a Reddit gif it is
+       * not, and the cost is only that: no-store, so nothing is cached and every later fetch gets the
+       * same answer from the post cache. An entry that does not exist keeps its 404 below.
+       */
+      if (r.asVideo && entry && entry.kind !== 'video') return notReady()
+      /**
+       * AND THE MIRROR: A URL SPELLED AS AN IMAGE NEVER ANSWERS WITH A VIDEO. `asImage` is the router's
+       * reading of an image extension on the index, which only mastodon.ts mints (`.gif`, on a gif's
+       * image attachment). Without this, the `.gif` spelling kept Discord's media proxy from answering
+       * the new attachment out of an mp4 it remembered, and then THIS ORIGIN could answer it with one.
+       *
+       * THE SCENARIO, found by review of the Reddit gif change (2026-10-05) and reproduced with handle()
+       * and two fake caches. The post cache is per colo (caches.default, POST_TTL 900 s); the crawler's
+       * HTML, the activity callback and this proxy fetch do not reliably share a colo (FB_META_TTL_MS's
+       * note records that), and a rollout is not atomic. So in the 15 minutes after the deploy, colo A
+       * renders the status from the NEW Post and hands Discord `/_media/rd:{sub}:{id}/0.gif` as an image,
+       * Discord's proxy fetches it through colo B, colo B still holds #98's Post, and index 0 there is
+       * Reddit's mp4 rendition: the 302 below would send mp4 bytes to an image attachment. That is the
+       * MEASURED 2026-07-19 failure (mastodon.ts, A CONVERTED VIDEO WITH NO POSTER IS DROPPED): Discord
+       * fetches the image-role url, receives video bytes, and abandons the whole rich card. And the
+       * `.gif` url is the same for every later card of that post, so whatever the proxy keeps is sticky.
+       *
+       * notReady() for the same reasons as above, and here its "the next fetch" is literally true: no-store,
+       * nothing pinned, and once colo B's #98 Post expires (POST_TTL) the same url 302s to the gif. A
+       * remux video on a `.gif` url is refused before serveMuxed for the same reason: its bytes are mp4.
+       */
+      if (r.asImage && entry && entry.kind === 'video') return notReady()
       if (entry?.remux && env.MEDIA_RESOLVER && env.MEDIA_CACHE) {
         return serveMuxed(req, env, ctx, r.ref, r.index as number, entry.remux)
       }
@@ -6272,7 +6343,11 @@ export async function handle(req: Request, env: Env, ctx: ExecutionContext, d: D
         sensitive: !!post.sensitive,
         createdAt: post.createdAt instanceof Date ? post.createdAt.toISOString() : null,
         media: own.map(({ m, i }) => ({
-          kind: m.kind === 'video' || m.kind === 'gif' ? 'video' : 'image',
+          // A 'gif' is drawn as an IMAGE, since 2026-10-05: the page draws an image from `url` and a video
+          // from its poster, a GIF has no poster, and an <img> animates it, as Discord is expected to loop the
+          // card's `image` attachment (unmeasured until a real paste). Published as 'video' it drew nothing at
+          // all. Same rule as toApiPost.
+          kind: m.kind === 'video' ? 'video' : 'image',
           url: mediaUrl(origin, post, bytesIndex(m, i)),
           /**
            * THE POSTER, BECAUSE `url` ON A VIDEO IS THE MP4 AND AN <img> CANNOT DRAW ONE.

@@ -859,24 +859,65 @@ test('ACCEPTANCE: the ambiguity table is STILL unchanged by the shortlink route'
 // spoof head's og:video / twitter:player pair gained the suffix.
 // ---------------------------------------------------------------------------
 
-test('/_media/{key}/0.mp4 resolves IDENTICALLY to /_media/{key}/0', () => {
-  // Asserted as Route EQUALITY rather than as two separate shape checks, because "resolves to
-  // the same bytes" is the actual requirement: the suffixed URL is a second spelling of one
-  // resource, not a second resource.
+test('/_media/{key}/0.mp4 names the SAME entry as /_media/{key}/0, and records that it was spelled as a video', () => {
+  // "Resolves to the same bytes" is still the requirement for the ENTRY: the suffixed URL is a second
+  // spelling of one resource, not a second resource, so ref and index are asserted equal.
+  //
+  // REWRITTEN 2026-10-05. This asserted full Route equality, and the .mp4 spelling now carries one
+  // field more, `asVideo: true`. Only the spoof head's og:video mints it, so a url spelled that way was
+  // promised to Discord as a VIDEO, and the media arm uses the flag to refuse to answer it with an image
+  // (the sticky poisoned-url defect). It became necessary when Reddit gif posts moved from an mp4 at
+  // index 0 to the original .gif, with a day of cards still promising the mp4.
   const ref = { p: 'tt', id: '777' }
   const key = encodeURIComponent(refKey(ref))
-  assert.deepEqual(r(`/_media/${key}/0.mp4`), r(`/_media/${key}/0`))
-  assert.deepEqual(r(`/_media/${key}/0.mp4`), { kind: 'media', ref, index: 0 })
+  const { asVideo, ...entry } = r(`/_media/${key}/0.mp4`)
+  assert.deepEqual(entry, r(`/_media/${key}/0`), 'the same entry')
+  assert.equal(asVideo, true, 'and the promise that it is a video')
+  assert.deepEqual(r(`/_media/${key}/0.mp4`), { kind: 'media', ref, index: 0, asVideo: true })
+  assert.ok(!('asVideo' in r(`/_media/${key}/0`)), 'the extensionless spelling carries no flag at all')
+})
+
+test('only a VIDEO extension sets asVideo; an image extension, the poster and the avatar never do', () => {
+  // The flag is a promise about what a client was told, so it may only come from a spelling that tells
+  // a client "video". `.gif` is the spelling mastodon.ts now mints for a GIF image attachment, so it in
+  // particular must not carry the flag, or every gif would refuse its own url.
+  const ref = { p: 'tt', id: '777' }
+  const key = encodeURIComponent(refKey(ref))
+  for (const ext of ['mp4', 'm4v', 'mov', 'webm']) {
+    assert.equal(r(`/_media/${key}/3.${ext}`).asVideo, true, `.${ext}`)
+  }
+  for (const seg of ['3', '3.gif', '3.jpg', '3.jpeg', '3.png', '3.webp', 'poster3', 'poster3.jpg', 'avatar']) {
+    assert.ok(!('asVideo' in r(`/_media/${key}/${seg}`)), `${seg} must not carry asVideo`)
+  }
+})
+
+test('only an IMAGE extension on an index sets asImage; a video extension, the bare index, the poster and the avatar never do', () => {
+  // The mirror of asVideo, added after review (2026-10-05). mastodon.ts mints `/_media/{key}/0.gif` for a
+  // gif's IMAGE attachment, and a colo whose post cache still held #98's Post (an mp4 at index 0) would
+  // have 302'd that url to video bytes, the 2026-07-19 defect where Discord abandons the rich card. The
+  // flag is how the media arm knows the url was promised as a picture. It must stay off the extensionless
+  // spelling (every picture's AND every video's url) and off the poster slot, which is always a still and
+  // needs no promise check; same entry either way.
+  const ref = { p: 'tt', id: '777' }
+  const key = encodeURIComponent(refKey(ref))
+  for (const ext of ['gif', 'jpg', 'jpeg', 'png', 'webp']) {
+    assert.deepEqual(r(`/_media/${key}/3.${ext}`), { kind: 'media', ref, index: 3, asImage: true }, `.${ext}`)
+  }
+  for (const seg of ['3', '3.mp4', '3.m4v', '3.mov', '3.webm', 'poster3', 'poster3.gif', 'avatar']) {
+    assert.ok(!('asImage' in r(`/_media/${key}/${seg}`)), `${seg} must not carry asImage`)
+  }
+  assert.equal(r(`/_media/${key}/.gif`).kind, 'notfound', 'Number(\'\') is 0: an empty index with a suffix still names nothing')
 })
 
 test('the .mp4 tolerance covers a DID-handle Bluesky ref and a non-zero index too', () => {
   // The DID case is where the two decode layers live (see the _media branch's comment), so a
   // change to the INDEX segment gets asserted against the hardest KEY segment as well — the two
   // are parsed by the same branch and an edit that reordered them would pass a tt-only test.
+  // `asVideo` rides on the suffixed spelling since 2026-10-05 (see the test above); the entry is unchanged.
   const ref = { p: 'bs', handle: 'did:plc:z72i7hdynmk6r22z27h6tvur', rkey: '3l6o' }
   const key = encodeURIComponent(refKey(ref))
-  assert.deepEqual(r(`/_media/${key}/2.mp4`), { kind: 'media', ref, index: 2 })
-  assert.deepEqual(r(`/_media/${key}/2.mp4`), r(`/_media/${key}/2`))
+  assert.deepEqual(r(`/_media/${key}/2.mp4`), { kind: 'media', ref, index: 2, asVideo: true })
+  assert.deepEqual(r(`/_media/${key}/2.mp4`), { ...r(`/_media/${key}/2`), asVideo: true })
 })
 
 test('the avatar index is UNTOUCHED by the extension tolerance', () => {
@@ -987,7 +1028,8 @@ test('the poster index changes NOTHING about the numeric and avatar segments', (
   const ref = { p: 'tt', id: '777' }
   const key = encodeURIComponent(refKey(ref))
   assert.deepEqual(r(`/_media/${key}/0`), { kind: 'media', ref, index: 0 })
-  assert.deepEqual(r(`/_media/${key}/0.mp4`), { kind: 'media', ref, index: 0 })
+  // `asVideo` since 2026-10-05: the .mp4 spelling records that it promised a video. Same entry.
+  assert.deepEqual(r(`/_media/${key}/0.mp4`), { kind: 'media', ref, index: 0, asVideo: true })
   assert.deepEqual(r(`/_media/${key}/avatar`), { kind: 'media', ref, index: 'avatar' })
   assert.equal(r(`/_media/${key}/avatar.mp4`).kind, 'notfound')
   assert.equal(r(`/_media/${key}/notanindex`).kind, 'notfound')
@@ -1926,8 +1968,9 @@ test('A PATH WITHOUT EITHER SUFFIX IS ROUTED EXACTLY AS BEFORE — no direct fie
 })
 
 test('THE .mp4 STRIP FALLS BACK WHEN THE STRIPPED PATH NAMES NO POST', () => {
-  // /_media/ tolerates its own .mp4 (the spoof head mints it) and must stay a media route.
-  assert.deepEqual(r('/_media/x%3A20/0.mp4'), r('/_media/x%3A20/0'))
+  // /_media/ tolerates its own .mp4 (the spoof head mints it) and must stay a media route. It carries
+  // `asVideo` since 2026-10-05 (the media arm's promise check), and never `direct`.
+  assert.deepEqual(r('/_media/x%3A20/0.mp4'), { ...r('/_media/x%3A20/0'), asVideo: true })
   assert.ok(!('direct' in r('/_media/x%3A20/0.mp4')))
   // A bare token is the handle chooser either way; the suffix reading is discarded, so the chooser shows
   // the path the reader typed.

@@ -654,3 +654,21 @@ test('/_card ECHOES THE ROUTER\'S direct FLAG FOR A .mp4 PATH, and only then', a
   const chooser = await (await handle(cardReq('/A61SaA1.mp4'), envWith(), ctx, depsFor(twitterPost(id)))).json()
   assert.ok(!('direct' in chooser), 'a path the router does not read as a post is not a file either')
 })
+
+test('A GIF IS PUBLISHED AS AN IMAGE on both surfaces, because a <video> plays no GIF and the preview drew nothing', async () => {
+  /**
+   * CHANGED 2026-10-05; until then both toApiPost and /_card published Media.kind 'gif' as "video". That
+   * kind means the url IS an animated .gif file, which an <img> animates and a <video> cannot play in any
+   * browser, so every consumer following the published kind drew nothing: the converter draws a video
+   * from its poster, and a GIF has none. The card itself already sent it as a Mastodon `image`. Reddit gif
+   * posts, now their original .gif, made this the common case, so it is pinned on both surfaces at once.
+   */
+  const post = twitterPost('2000000000000000040', { media: [{ kind: 'gif', url: 'https://example.invalid/g.gif', w: 320, h: 240 }] })
+  const { body: api } = await get(apiReq('https://x.com/apiwatch/status/2000000000000000040'), post)
+  const { body: card } = await get(cardReq('/apiwatch/status/2000000000000000040'), post)
+  assert.deepEqual(
+    { kind: api.post.media[0].kind, poster: api.post.media[0].poster, width: api.post.media[0].width, height: api.post.media[0].height },
+    { kind: 'image', poster: null, width: 320, height: 240 })
+  assert.equal(card.media[0].kind, 'image', 'and the preview draws it from `url`, where the bytes are')
+  assert.equal(card.media[0].url, api.post.media[0].url, 'the same url on both surfaces')
+})

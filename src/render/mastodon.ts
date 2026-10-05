@@ -35,9 +35,19 @@ import { buildContentHtml, statParts, withMoreInPostMarker, withVideoGalleryMark
  * player an image file is Phase 1's I-1 defect exactly (an HLS playlist advertised as
  * og:video rendered a dead player), and Discord animates a GIF served as an image anyway.
  * Reddit reaches this: an i.redd.it `.gif` surfaces as kind:'gif' and maps here to 'image' — a real
- * animated gif Discord plays as a picture, exactly the intent. That is a post Reddit labels
- * type:'image'; one it labels type:'gif' goes out since 2026-10-04 as Reddit's own mp4 rendition,
- * kind:'video' with a poster and a size (reddit/normalize.ts gifPlayer), and never reaches this row.
+ * animated gif Discord plays as a picture, exactly the intent. That covers a post Reddit labels
+ * type:'image' and, since 2026-10-05, one it labels type:'gif', which for one day (2026-10-04) went out
+ * as Reddit's mp4 rendition, kind:'video', and so drew a player that did not loop. The original .gif is
+ * sent because an animated IMAGE is what Discord is expected to loop. That is EXPECTED, NOT MEASURED,
+ * for a .gif: the owner's paste after deploy is the check. The nearest production precedent is FxEmbed,
+ * read in its source (not measured against Discord): for Twitter's GIFs it sends an `image` attachment
+ * of an animated TRANSCODE with the true size, never 'gifv', and for Discordbot that transcode is a
+ * `.webp` by default, a `.gif` only when the link carries `?gif=` (packages/atmosphere helpers/media.ts,
+ * the KITCHENSINK_GIF experiment at percentage 1, which its experimentCheck reads as always on). So
+ * their Discord traffic is evidence for an animated image attachment in general, not for a .gif one.
+ * Whether Discord honours 'gifv' at all is not measured here, which is one more reason this row stays
+ * 'image'. The size comes from the GIF's own header when fetch.ts could read it (reddit/normalize.ts
+ * gifSize), so originalMeta below usually has one to send.
  * (Bluesky video is a remux kind:'video'
  * since 2026-07-22, and TikTok emits 'video' or a still cover — neither a 'gif'.)
  */
@@ -282,7 +292,27 @@ function attachment(post: Post, origin: string, m: Media, index: number, hasVide
   // that position addresses the VIDEO slot, which answers 503 no-store until the mux lands (it never
   // does for a video the container refuses outright). The still's bytes are at poster{index}. Every
   // other entry gets the bare index, byte for byte — see bytesIndex, the only reader of posterOnly.
-  const own = mediaUrl(origin, post, bytesIndex(m, index))
+  //
+  // A GIF's url ends in `.gif` (router.ts reads it as the same entry and the same bytes), and that
+  // spelling is the point rather than cosmetics. Added 2026-10-05 with Reddit gif posts moving from #98's
+  // mp4 rendition to the original .gif: for a day, `/_media/{key}/0` on those posts was a VIDEO
+  // attachment, and Discord's media proxy caches the bytes it got per url (the 2026-07-24 poisoned-url
+  // measurement, worker.ts serveMuxed). The new IMAGE attachment on the extensionless url could be
+  // answered from whatever the proxy kept, the mp4 rendition, and an image-role url that answers with
+  // mp4 bytes is MEASURED, not hypothetical: it is the 2026-07-19 defect recorded below (A CONVERTED
+  // VIDEO WITH NO POSTER IS DROPPED, and the preview_url payload diff), where Discord fetched the
+  // picture, received video bytes, and abandoned the whole rich card. A url never handed out as a video
+  // is what keeps the proxy's memory out of it, so do not "normalise" this back to mediaUrl() alone.
+  //
+  // THE SPELLING DOES NOT COVER OUR OWN ORIGIN BY ITSELF. For the 15 minutes after a deploy, a colo whose
+  // post cache still holds #98's Post would answer `/0.gif` with a 302 to that mp4; the router records
+  // the image spelling as `asImage` and worker.ts's media arm answers notReady instead (its comment has
+  // the scenario). Every gif entry takes the suffix, which changes the url, never the bytes, of
+  // Misskey's and Reddit's type:'image' gifs. worker.ts serveDirectMedia (the d. host and a trailing
+  // .mp4 on a post link) takes the same suffix for the same reason: on the apex its redirect target was
+  // byte for byte the url #98 handed Discord as the video. Every other surface keeps the extensionless
+  // url: none of them is what Discord fetched for these posts.
+  const own = `${mediaUrl(origin, post, bytesIndex(m, index))}${m.kind === 'gif' ? '.gif' : ''}`
   const declared = attachmentType(m)
   const poster = declared === 'video' ? posterUrl(post, origin, m, index) : null
 

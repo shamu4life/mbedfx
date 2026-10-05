@@ -19,6 +19,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   (`DIRECT_SUFFIX`), so the router stays host-blind, and `/_card` echoes the router's verdict so the
   converter previews a `.mp4` link as the file without a second copy of the rule.
 
+### Changed
+
+- **`/_api/v1` and `/_card` publish a GIF as `"image"`, not `"video"`.** An entry whose bytes are an
+  animated `.gif` (Reddit GIF posts, Reddit `image` posts with a `.gif`, Misskey GIFs) was published as
+  a posterless video, which no browser's `<video>` can play and the converter preview drew as nothing.
+  The enum is unchanged; the meaning now matches the bytes and the card, which always sent a GIF as a
+  Mastodon `image`. `docs/API.md` and `public/openapi.json` say so.
+
 ### Fixed
 
 - **Every Pinterest pin answered "Couldn't load".** Pinterest's pin endpoint now refuses any request
@@ -74,11 +82,34 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   timestamp. The exact name is matched, never a wildcard, because the same page carries sibling blocks
   holding other people's posts. `/_smoke` stayed green through it, so the `th` row now demands a player.
 
-- **Reddit GIF posts rendered as text only.** Reddit labels them `type: "gif"`, which no branch knew.
-  They now play Reddit's own mp4 rendition with its poster and real size (25 KB against 556 KB for the
-  `.gif`, measured from a dev sandbox, not a Worker). A render with no player, and the OAuth fallback,
-  yield no media rather than an image, because every render of a post shares one cache key and an
-  image there would sit behind a url promised as video.
+- **Reddit GIF posts rendered as text only, and then played without looping.** Reddit labels them
+  `type: "gif"`, which no branch knew. From 2026-10-04 they played Reddit's own mp4 rendition, which
+  Discord draws as a video with a play button and no loop. They now go out as the original `.gif`, an
+  image attachment, which Discord is expected to loop; that is unmeasured until the owner pastes one.
+  FxEmbed also sends Twitter's GIFs as an animated image, never `gifv`, but as a `.webp` transcode for
+  Discord by default, so it is precedent for an animated image attachment rather than for a `.gif` one.
+  The size comes from the file's own header, one ten-byte ranged read when the post is fetched. If that
+  read fails the gif goes out at `0x0`, which may leave Discord drawing no picture (measured on a
+  YouTube poster in July; Reddit's 0x0 stills are recorded as rendering, and the conflict is unsettled),
+  and that card is cached like any other for up to 15 minutes. THE TRADE IS FILE SIZE, and the owner
+  chose the loop for Reddit only: 556 KB against 25 KB for the mp4 on the reported post, but across 36
+  GIF posts the originals ran 0.4 to 99.1 MB (median 11.9 MB, 19 of them over 10 MB), against 0.025 to
+  4.1 MB for the five renditions checked. Whether Discord draws the largest is not measured. All of it
+  was measured from a dev sandbox, not a Worker. Twitter GIFs are unchanged: still a video. Every render
+  of a post (the full one, a bare `/comments/` link's placeholder render, the OAuth fallback) emits the
+  same entry, because they share one cache key. The `.mp4` url a day of cards promised as video now
+  answers 503 rather than redirecting to the picture. The card's attachment url ends in `.gif`, a url
+  no card ever handed Discord as a video, and a colo still holding the old mp4 Post answers 503 on it
+  too rather than redirecting an image to video bytes.
+
+- **A media url's extension is now a promise, on any platform.** A `/_media/` url ending in a video
+  extension (`.mp4`, the spelling only `og:video` mints) whose entry is not a video answers 503
+  `no-store` instead of a 302 to image bytes, the defect that made Discord cache "this video is an
+  image" for good in July. The mirror holds too: a url ending in an image extension (`.gif`, which
+  only a GIF's attachment mints) whose entry is a video answers 503 instead of a 302 to mp4 bytes,
+  which is the July defect where Discord abandoned the whole rich card. Reddit GIFs made both
+  reachable; the first was already reachable on a deploy without the container, where a remuxed video
+  degrades to its poster at the same index.
 
 - **Reddit videos with audio uploaded between about May 2024 and November 2025 would not play.**
   Their `/_media/` answered 503 (8 of 8 asked as Discordbot) because the container's ffmpeg, a 7.1

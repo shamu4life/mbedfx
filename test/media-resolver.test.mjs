@@ -166,6 +166,21 @@ test('resolver absent: the remux video degrades to its poster image (302 to the 
   assert.equal(res.headers.get('location'), 'https://cdn.bsky.app/thumb.jpg', 'withResolver stripped it to the cover')
 })
 
+test('resolver absent: the .mp4 spelling of that degraded entry answers notReady, never the thumbnail', async () => {
+  /**
+   * The same degrade, asked through the url og:video mints. A card rendered while the container WAS bound
+   * promised /_media/{key}/0.mp4 as a video, and withResolver turns that entry into its poster still at the
+   * same index, so before 2026-10-05 this 302'd a video url to a JPEG: the sticky poisoned-url defect,
+   * reachable on any deploy that lost its container. The media arm's video-url guard (added for Reddit gif
+   * posts, general on purpose) answers it with notReady, which is exactly right here: once the container is
+   * bound again, the next fetch plays. The extensionless url above keeps its 302: it was never a promise.
+   */
+  const res = await handle(mediaReq('0.mp4'), noResolver(), ctx, { cache: fakeCache(), fetchPost: async () => remuxPost() })
+  assert.equal(res.status, 503)
+  assert.equal(res.headers.get('location'), null)
+  assert.equal(res.headers.get('cache-control'), 'no-store')
+})
+
 
 // ── THE SHORTCUT AND ITS FALLBACK.
 //

@@ -46,7 +46,8 @@
  *   - Instagram's 599 KB decoy, TikTok's login wall, and every other 200-with-a-lie this repo has
  *     catalogued. A second ask returns the same lie. Those are the callers' classifiers' job.
  *   - Media probes and paginated walks inside a time budget. See the call sites left alone in
- *     src/platforms/instagram/fetch.ts and src/platforms/tiktok/fetch.ts, which say why in place.
+ *     src/platforms/instagram/fetch.ts, src/platforms/tiktok/fetch.ts and (since 2026-10-05, the
+ *     ten-byte read of a Reddit gif's size) src/platforms/reddit/fetch.ts, which say why in place.
  *
  * NO BACKOFF, DELIBERATELY. 200ms does not reset a rate-limit window, so a sleep buys nothing against
  * the case it appears to address, while adding latency to every failing card and to every test that

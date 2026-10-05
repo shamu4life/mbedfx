@@ -254,7 +254,9 @@ test('EVERY PLATFORM FETCH EITHER RETRIES OR SAYS WHY NOT — derived from the s
         // AND THE MARKER ALONE IS NOT THE EXEMPTION — the REASON is. A bare `// NO-RETRY` is a mute
         // button, and this repo's history is mostly comments that stopped being true, so an exemption
         // has to state a claim someone can later find wrong. 40 characters is about one clause: not a
-        // bar for quality, just too long to be a shrug. The three live exemptions run 263, 270 and 431.
+        // bar for quality, just too long to be a shrug. The four live exemptions run 263, 256, 270 and
+        // 431 (instagram, reddit's gif-size read since 2026-10-05, tiktok, innertube; measured with this
+        // regex on 2026-10-05).
         const reason = (/NO-RETRY\b:?([\s\S]*)/.exec(near)?.[1] ?? '').replace(/\W+/g, ' ').trim()
         if (reason.length < 40) unexplained.push(`${file}:${i + 1}  ${line.trim()}`)
       })
