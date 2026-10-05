@@ -16,7 +16,14 @@ raised. It is what makes an age-gated source resolvable at all -- without it yt-
 echoed into an error, or returned; see _CookieJar.
 
 Response: 200 video/mp4 (streamed) on success; 4xx/5xx application/json {"error"} on failure. GET
-/health -> 200. REMUX not transcode: `-c copy -movflags +faststart` — lossless, milliseconds of CPU.
+/health -> 200. Wherever ffmpeg writes the file (a {video} tracks mux, a yt-dlp merge, the HLS fixup)
+it is a REMUX, not a transcode: `-c copy -movflags +faststart`, lossless, milliseconds of CPU. A
+single-format {page} download is the site's own file written verbatim, so it is neither remuxed nor
+necessarily faststart, and not necessarily ISO-BMFF: WebM, FLV and MPEG-TS are passed through
+unjudged. An ISO-BMFF result is sent only when its top-level boxes are all whole and an mdat carries
+data (_mux_result_verdict); otherwise it answers 502 "incomplete result". That catches a file cut off
+inside a box, which is what a verbatim download that stops early leaves. It does NOT catch a short
+input that ffmpeg rewrote into whole boxes; see the note above _mux_result_verdict.
 
 SECURITY. The Worker reaches this over its container binding (an internal path, not a public route),
 but this defends in depth anyway:
@@ -32,6 +39,7 @@ import ipaddress
 import json
 import os
 import socket
+import struct
 import subprocess
 import tempfile
 import time
@@ -501,6 +509,148 @@ def _mux_page(page: str, out: str, jar=None) -> None:
                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 
+# A MUX RESULT HAS TO BE A WHOLE FILE, NOT MERELY A NON-EMPTY ONE.
+#
+# WHAT SHIPPED WITHOUT THIS. Measured 2026-10-05 from the Claude Code dev sandbox (a non-Cloudflare
+# cloud IP) against production: /_media/yt%3AtxqiwrbYGrs/0 answered 200 video/mp4 with 59,576 bytes,
+# which walk as ftyp(24) + moov(59,536) + free(8) + the first 8 bytes of an mdat whose header declares
+# 4,398,607 bytes. The file stops right after that header, so not one sample is present. It is
+# YouTube's own progressive mp4 written verbatim by `_mux_page`: ftyp `mp42`, "ISO Media file produced
+# by Google Inc." and no Lavf tag, so no ffmpeg merge touched it. WHICH FORMAT it was is an inference,
+# not a reading: one progressive file of h264 480x360 + aac fits format 18 and the selector's
+# `b[ext=mp4][height<=?720]` arm, but nothing logged which format yt-dlp chose or why `134+140` was
+# not taken. It came out short while yt-dlp still exited 0. The handler refused only size 0 or
+# size > MAX_BYTES, so it answered 200, the Worker's putMuxed stored it at `mux/{refKey}/{index}`, and
+# every later unfurl of that video is served the same broken file. WHY yt-dlp exited 0 on a short file
+# was NOT determined.
+#
+# WHETHER IT HAPPENS EVERY TIME WAS NOT DETERMINED EITHER. The same check (a sibling run from the dev
+# sandbox, 2026-10-05 around 00:50Z) fetched two other cold muxes from production, and both were
+# complete, but neither took this path. Read from their saved bytes: YouTube _OBlgSz8sSM is an ffmpeg
+# merge (Lavf61.7.103, h264 Main 480x360, which fits `134+140`), and Dailymotion x9hrdya is also
+# ffmpeg-written (Lavf61.7.103). Only one of the two is YouTube, and they say nothing about the
+# verbatim arm. Nobody re-muxed txqiwrbYGrs. If this video, or format 18 from this
+# egress, comes back short every time, then after the stored object is deleted (see do_POST) every
+# re-mux answers 502 and the card stays a still: honest, but not a playing video.
+#
+# WHY BOXES AND NOT ffprobe. The same 59,576 bytes, read in the dev sandbox with ffprobe 6.1.1, exit 0
+# and report h264 480x360 + aac, duration 118.96s: the moov is intact, and a moov is all a probe reads.
+# Only decoding finds the hole ("partial file", nothing written). Walking the top-level boxes finds it
+# from the box sizes alone, without reading the file into memory and without a second subprocess.
+#
+# WHAT THE OUTPUT CAN BE, read from `_mux_tracks`, `_mux_page` and the pinned yt-dlp 2026.8.19 source:
+#   * `_mux_tracks` is ffmpeg `-f mp4`: always ISO-BMFF.
+#   * `_mux_page` with a SPLIT selection (`134+140`, `bv*+ba`) merges through ffmpeg into mp4, because of
+#     `--merge-output-format mp4`: always ISO-BMFF.
+#   * `_mux_page` with ONE format writes that format's bytes VERBATIM to `-o out`. A literal output path
+#     is not re-extensioned (YoutubeDL._prepare_filename), and nothing remuxes it. That is the case that
+#     broke. It is ISO-BMFF for every `ext=mp4` arm, and HLS with ext mp4 is too (FFmpegFixupM3u8PP
+#     rewrites MPEG-TS into mp4), but the `b[height<=?720]` and bare `b` arms admit a progressive format
+#     of ANY ext. So WebM/Matroska, FLV and MPEG-TS can reach this file under a .mp4 name.
+#   Fragmented MP4 (ftyp, moov, then moof+mdat pairs) arrives from a fragmented HLS or DASH download,
+#   and passes: every box in it is whole.
+#
+# THOSE THREE FOREIGN CONTAINERS ARE PASSED THROUGH AS BEFORE, explicitly, and not judged. This walk
+# cannot say whether one is complete, and refusing them would turn a card that may play today into a
+# 503 on a guess: whether Discord plays a WebM served as video/mp4 is not measured. Whether any platform
+# this container serves reaches those arms at all is not measured either. They are recognised by their
+# signatures, none of which can open a valid file here: each, read as a box size, is larger than the
+# default MAX_BYTES.
+# ANYTHING ELSE that does not walk is refused.
+#
+# WHAT "COMPLETE" PROVES. Every top-level box is whole, nothing trails the last one, there is a moov,
+# and at least one mdat carries data. So it catches ONE OUTPUT FILE THAT STOPS INSIDE A BOX, or that
+# has no moov or no media. A verbatim download keeps whatever bytes arrived, so a short one stops
+# inside a box, and that is the measured defect.
+#
+# WHAT IT DOES NOT SEE: A SHORT INPUT THAT ffmpeg REWROTE. ffmpeg writes whole boxes around whatever it
+# managed to read, and exits 0. Measured 2026-10-05 in the dev sandbox with ffmpeg 6.1.1 (production
+# runs a 7.1.x, which was not tried), using `-c copy -movflags +faststart -f mp4`, the flags
+# `_mux_tracks` and `--merge-output-format mp4` both reach:
+#   * a 20s faststart mp4 cut to the production shape (ending 8 bytes into its mdat) logs "partial
+#     file", exits 0, and writes 262 bytes: ftyp 32, a moov of 214 with no streams, free 8, and an mdat
+#     of 8 with nothing in it. The empty-mdat rule below refuses that one.
+#   * the same file cut halfway through its mdat comes out as a whole 9.87s file, and nothing here can
+#     tell it from a real 9.87s video. It passes.
+# So a short download on the merge arms (`134+140`, `bv*+ba`), on a `{video}` tracks mux, or through
+# the HLS fixup is caught only when not one sample survived. A fragmented file that ends on a whole
+# fragment passes too (measured the same way: an ffmpeg `frag_keyframe+empty_moov` file cut at a moof
+# walks as complete), and so, by reading rather than measurement, does one missing a fragment from the
+# middle: yt-dlp 2026.8.19 skips an unavailable fragment by default (`skip_unavailable_fragments`,
+# options.py) and concatenates the rest. Whether any of these happens in production was NOT measured. Comparing the output's duration with the duration the
+# extractor declared would cover them, and is a separate change. The walk also does not prove the
+# moov's sample offsets land inside the mdat; that was not seen, and not looked for.
+#
+# THE RULES, and what each one stops:
+#   * size 1 means a 64-bit largesize follows; size 0 means "to the end of the file" (ISO/IEC 14496-12).
+#     Both are legal, and refusing either would refuse a valid file.
+#   * a box smaller than its own header (8, 16 with a largesize, +16 for `uuid`'s extended type) is not
+#     a box, and following it would loop or walk backwards.
+#   * a box ending past EOF is THE measured defect.
+#   * trailing bytes that do not form a box are refused, because a few bytes after the last whole box
+#     are indistinguishable from a download that stopped inside the next box's header.
+#   * every top-level type must be four printable ASCII characters, as every top-level type is (ftyp,
+#     moov, mdat, free, skip, wide, moof, mfra, sidx, styp, uuid, ...). Without the rule, eight trailing
+#     zero bytes would read as a size-0 box and pass as "the rest of the file".
+#   * a moov, and AT LEAST ONE mdat WITH DATA IN IT, because a file without either has nothing to play.
+#     "With data" is what refuses ffmpeg's 262-byte rewrite above, whose boxes are all whole. It is at
+#     least one and not every one, so an empty mdat beside a real one is not refused on a reading the
+#     measurement never made.
+#   * at most MP4_MAX_BOXES top-level boxes. The walk runs after the subprocess, so no wall bounds it.
+#     Timed in the dev sandbox: 1,000,000 eight-byte boxes walk in 1.05s, so a MAX_BYTES file made of
+#     nothing else (~49M boxes) would hold a resolver slot for about a minute there, and longer on the
+#     instance's fraction of a vCPU. The densest real layout, one moof+mdat pair per frame at 60 fps for
+#     MAX_SECONDS, is 180,000 boxes, so a file past the cap is refused rather than walked to the end.
+#     That refusal shares the "incomplete result" string although such a file need not be short.
+MP4_COMPLETE, MP4_INCOMPLETE, MP4_FOREIGN = "complete", "incomplete", "foreign"
+MP4_MAX_BOXES = 1_000_000
+
+
+def _mux_result_verdict(path: str) -> str:
+    """`MP4_COMPLETE`, `MP4_INCOMPLETE` or `MP4_FOREIGN` for the file at `path`. See the note above.
+
+    Seeks from box to box and reads only headers, so the cost is one small read per top-level box
+    rather than the file.
+    """
+    total = os.path.getsize(path)
+    seen, media = set(), False
+    with open(path, "rb") as f:
+        head = f.read(189)
+        if (head[:4] == b"\x1aE\xdf\xa3"                                  # EBML: WebM / Matroska
+                or head[:3] == b"FLV"                                      # FLV
+                or (len(head) == 189 and head[0] == 0x47 == head[188])):  # MPEG-TS: two sync bytes
+            return MP4_FOREIGN
+        offset = boxes = 0
+        while offset < total:
+            f.seek(offset)
+            hdr = f.read(8)
+            if len(hdr) < 8:
+                return MP4_INCOMPLETE
+            size, kind = struct.unpack(">I4s", hdr)
+            header = 8
+            if size == 1:
+                large = f.read(8)
+                if len(large) < 8:
+                    return MP4_INCOMPLETE
+                size, header = struct.unpack(">Q", large)[0], 16
+            elif size == 0:
+                size = total - offset
+            if kind == b"uuid":
+                header += 16
+            if not all(0x20 <= c <= 0x7E for c in kind):
+                return MP4_INCOMPLETE
+            if size < header or offset + size > total:
+                return MP4_INCOMPLETE
+            seen.add(kind)
+            if kind == b"mdat" and size > header:
+                media = True
+            offset += size
+            boxes += 1
+            if boxes > MP4_MAX_BOXES:
+                return MP4_INCOMPLETE
+    return MP4_COMPLETE if b"moov" in seen and media else MP4_INCOMPLETE
+
+
 def _mux_sources(d: dict) -> tuple[str | None, str | None]:
     """The direct format urls `_mux_page` would resolve, or (None, None) to make the Worker use it.
 
@@ -881,6 +1031,11 @@ def _probe_clients():
         # RESOLVER_GENERATION), and without a marker that looks exactly like the fix not working.
         "ffmpeg": _ffmpeg_version(),
         "hlsExtensionPicky": _hls_picky_answer(),
+        # THE SHAPE MARKER for the completeness walk (_mux_result_verdict), for the same reason as the
+        # two above: its presence says this instance refuses a truncated mux with "incomplete result"
+        # instead of answering 200 for the Worker to store. The value names the check, so a later,
+        # stricter one can say so without a new key.
+        "muxCheck": "boxes",
         "ms": int((time.monotonic() - started) * 1000),
         "serving": [r["client"] for r in rows if r["gvs"] == "ok"],
         "clients": rows,
@@ -1054,6 +1209,22 @@ class Handler(BaseHTTPRequestHandler):
             size = os.path.getsize(out)
             if size == 0 or size > MAX_BYTES:
                 return self._json_error(502, "empty or oversized result")
+            # A NON-EMPTY FILE IS NOT A WHOLE ONE. Without this, a verbatim download that stopped short and
+            # still exited 0 answered 200 and the Worker stored it at `mux/{refKey}/{index}` for good:
+            # measured 2026-10-05 from the dev sandbox, production's yt:txqiwrbYGrs/0 is 59,576 bytes
+            # ending in an mdat header that declares 4,398,607. The walk refuses a file cut off inside a
+            # box, one with no moov, one whose mdats hold no data, and one past the box cap. It does not
+            # refuse a short input that ffmpeg rewrote into whole boxes (see _mux_result_verdict).
+            # Its OWN 502 string, not the one above, so the Worker counts `mux_incomplete` rather than
+            # `mux_empty`: `mux_empty` has meant "nothing usable, or too much" since 2026-08-23, and a
+            # non-empty file the walk refuses is a different finding about a different failure.
+            # IT DOES NOT REPAIR AN OBJECT ALREADY IN R2: the Worker serves a stored mux without asking
+            # here again. mux/yt:txqiwrbYGrs/0 stays broken until the owner deletes it from the
+            # mbedfx-media bucket, or the bucket's `expire-60d` lifecycle rule (recorded in
+            # wrangler.jsonc as re-added 2026-07-30; it lives on the bucket, not in this repo) removes
+            # it 60 days after it was written, a date nobody has measured.
+            if _mux_result_verdict(out) == MP4_INCOMPLETE:
+                return self._json_error(502, "incomplete result")
 
             self.send_response(200)
             self.send_header("content-type", "video/mp4")

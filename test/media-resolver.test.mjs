@@ -1,5 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
+import { readFileSync } from 'node:fs'
 import { handle } from '../src/worker.ts'
 import { refKey } from '../src/refkey.ts'
 
@@ -290,13 +291,18 @@ test('EVERY CONTAINER FAILURE GETS ITS OWN NAME — 504 is OURS, 502 is THEIRS, 
    * refused us" are opposite claims about which system to go and look at, and the reported incident
    * cost a night precisely because nothing had ever written down which one it was.
    *
-   * NOTE THE TWO 502s. The container uses that status for a gate AND for a run that produced nothing
-   * usable, so the body — not the status — is what separates mux_gate from mux_empty.
+   * NOTE THE THREE 502s. The container uses that status for a gate, for a run that produced nothing
+   * usable, and since 2026-10-05 for a run that exited 0 with a file the container's box walk refuses,
+   * so the body — not the status — is what separates mux_gate from mux_empty from mux_incomplete. That
+   * third row is new: before it, the short file answered 200 and this table had nothing to say about it, because
+   * it was counted mux_ok and stored (production's yt:txqiwrbYGrs/0, measured 2026-10-05 from the dev
+   * sandbox). Left unmapped, its string would fall through to mux_gate and blame the upstream.
    */
   const cases = [
     [504, '{"error":"mux timed out"}', 'mux_timeout', 'our own wall, not the upstream'],
     [502, '{"error":"mux failed"}', 'mux_gate', 'yt-dlp exited non-zero — the upstream refused'],
     [502, '{"error":"empty or oversized result"}', 'mux_empty', 'it ran and produced nothing usable'],
+    [502, '{"error":"incomplete result"}', 'mux_incomplete', 'it exited 0 with a file the box walk refuses'],
     [503, '', 'mux_pool', 'a cold boot or an exhausted instance pool'],
     [400, '{"error":"invalid source"}', 'mux_badsource', 'the container SSRF guard refused our url'],
     [500, '{"error":"internal error"}', 'mux_error', 'unclassified — should stay at zero'],
@@ -310,6 +316,79 @@ test('EVERY CONTAINER FAILURE GETS ITS OWN NAME — 504 is OURS, 502 is THEIRS, 
     assert.equal(rows[0].blobs[1], outcome, `${status} "${body}" is ${outcome}: ${why}`)
     assert.equal(rows[0].blobs[0], 'st', 'the platform is read back off the slot key')
     assert.equal(rows[0].blobs[2], 'none', 'a mux is collapsed across callers, so it has no client')
+  }
+})
+
+test('every 502 the container\'s mux path can send has a counter name of its own, read from server.py itself', async () => {
+  /**
+   * THE TABLE ABOVE IS HAND-ENUMERATED, and that is the shape CLAUDE.md warns about for parseRefKey:
+   * a new container error string that nobody adds here is counted as mux_gate, silently, and blames
+   * the upstream for whatever the new string meant. "incomplete result" would have done exactly that.
+   * So the strings are read out of container/server.py and each one must land on a DIFFERENT outcome,
+   * none of them the unclassified mux_error. The meta mode's own 502 ("meta failed") is excluded: it
+   * answers the metadata call, which never reaches muxOutcomeOf.
+   *
+   * EACH STRING MUST WRITE EXACTLY ONE MUX ROW, checked before the outcome is read. Without that, a
+   * string that wrote no row at all read back as `undefined`, which is not 'mux_error' and counts as
+   * its own member of the Set, so a refactor that silently stopped counting one string still passed.
+   */
+  const py = readFileSync(new URL('../container/server.py', import.meta.url), 'utf8')
+  const strings = [...new Set([...py.matchAll(/_json_error\(502, "([^"]+)"\)/g)].map(m => m[1]))]
+    .filter(s => !s.startsWith('meta '))
+  assert.ok(strings.includes('incomplete result') && strings.includes('mux failed'),
+    `the extraction must find the strings it is guarding: ${JSON.stringify(strings)}`)
+  // Its own id, so no other test's in-flight mux for AE_REF can answer for this one.
+  const ref = { p: 'st', id: 'strings502' }
+  const post = () => ({ ...aePost(), ref, canonical: 'https://streamable.com/strings502' })
+  const req = () => new Request(
+    `https://staging.megapenispoopenfarten.sex/_media/${encodeURIComponent(refKey(ref))}/0`,
+    { headers: { 'user-agent': 'Discordbot/2.0' } })
+  const outcomes = []
+  for (const s of strings) {
+    const { env, points } = countingMuxEnv(async () => new Response(JSON.stringify({ error: s }), { status: 502 }))
+    await handle(req(), env, ctx, { cache: fakeCache(), fetchPost: async () => post() })
+    const rows = muxRows(points)
+    assert.equal(rows.length, 1, `"${s}" must write exactly one mux row, got ${rows.length}`)
+    const outcome = rows[0].blobs[1]
+    assert.ok(typeof outcome === 'string' && outcome.startsWith('mux_'), `"${s}" must name a mux_ outcome`)
+    assert.notEqual(outcome, 'mux_error', `"${s}" must be classified, not left to mux_error`)
+    outcomes.push(outcome)
+  }
+  assert.equal(new Set(outcomes).size, strings.length,
+    `each 502 string needs its own outcome, got ${JSON.stringify(Object.fromEntries(strings.map((s, i) => [s, outcomes[i]])))}`)
+})
+
+test('the published mux query in docs/METRICS.md lists every mux outcome the union declares, and says how many', () => {
+  /**
+   * THE QUERY'S IN LIST IS HAND-KEPT, and leaving an outcome out of it is silent. Analytics Engine SQL
+   * refuses the `LIKE 'mux\\_%'` that would have made it automatic (METRICS.md says why), so the
+   * operator's mux query names every outcome, and an outcome added to `Outcome2` in src/analytics.ts
+   * but not to that list simply drops its rows from the answer. That is the parseRefKey shape CLAUDE.md
+   * warns about. The count spelled out beside it had already drifted once: it said "eight" while nine
+   * were listed, and nothing failed. So both are derived here: the `mux_*` literals of the union, the
+   * literals of the query's IN list, and the number words in the prose.
+   */
+  const ts = readFileSync(new URL('../src/analytics.ts', import.meta.url), 'utf8')
+  const md = readFileSync(new URL('../docs/METRICS.md', import.meta.url), 'utf8')
+  const from = ts.indexOf('export type Outcome2 =')
+  assert.ok(from >= 0, 'src/analytics.ts must still declare Outcome2')
+  const union = ts.slice(from, ts.indexOf('\nexport ', from + 1))
+  const declared = [...new Set(union.split('\n')
+    .filter(l => /^\s*\|\s*'mux_/.test(l))
+    .flatMap(l => [...l.matchAll(/'(mux_[a-z_]+)'/g)].map(m => m[1])))].sort()
+  assert.ok(declared.includes('mux_ok') && declared.includes('mux_incomplete'),
+    `the extraction must find the union it is guarding: ${JSON.stringify(declared)}`)
+  const inLine = md.split('\n').find(l => /blob2 IN \(/.test(l) && l.includes("'mux_ok'"))
+  assert.ok(inLine, 'METRICS.md must still carry the mux query with its IN list')
+  const listed = [...inLine.matchAll(/'(mux_[a-z_]+)'/g)].map(m => m[1])
+  assert.equal(new Set(listed).size, listed.length, `the IN list repeats an outcome: ${inLine.trim()}`)
+  assert.deepEqual([...listed].sort(), declared,
+    'every mux outcome in src/analytics.ts must be in the METRICS.md query, and nothing else')
+  const WORDS = { eight: 8, nine: 9, ten: 10, eleven: 11, twelve: 12, thirteen: 13, fourteen: 14 }
+  for (const re of [/Enumerate the (\w+)\s+outcomes/, /The (\w+) outcomes are documented/]) {
+    const m = md.match(re)
+    assert.ok(m, `METRICS.md must still say how many outcomes there are (${re})`)
+    assert.equal(WORDS[m[1].toLowerCase()], declared.length, `"${m[0]}" must match the ${declared.length} declared`)
   }
 })
 
