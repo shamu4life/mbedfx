@@ -196,7 +196,7 @@ Every setting below has a working default, and a fresh deploy needs none of them
 
 `IG_GRAPHQL_DOC_ID` pins Instagram's shortcode GraphQL query, which Meta rotates. When the pinned id dies, the older recoveries carry the card and the `copyright_gql` counter drops to zero. Re-pinning it is a config change and needs no release.
 
-`REDDIT_CLIENT_ID` / `REDDIT_CLIENT_SECRET` turn on Reddit's OAuth fallback. Both must be set for it to run at all (`src/platforms/reddit/fetch.ts:129`), and it runs only after the credential-free embed read comes back empty.
+`REDDIT_CLIENT_ID` / `REDDIT_CLIENT_SECRET` turn on Reddit's OAuth fallback. Both must be set for it to run at all (`src/platforms/reddit/fetch.ts:199`), and it runs only after the credential-free embed read comes back empty.
 
 `TRANSLATE_GOOGLE=off` leaves Workers AI serving translation on its own.
 

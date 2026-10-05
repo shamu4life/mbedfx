@@ -212,6 +212,10 @@ The pair describes the bytes at `url`, not the original video: `posterW ?? w` an
 (`toApiPost`, `src/worker.ts`), and a `still` entry reports the poster frame's size. Both rows were
 added 2026-08-04 (`3a2406f`).
 
+A Reddit GIF's pair is the size its own file states: the first ten bytes of the .gif, read with one
+ranged request when the post is fetched (`gifSize`, `src/platforms/reddit/normalize.ts`). If that read
+fails or times out, the pair is `0` and nothing else about the entry changes.
+
 ### `media`
 
 Entries with no servable url are dropped. The rest keep their position in the unfiltered array
@@ -220,7 +224,11 @@ position after the filter publishes entry N at entry N+1's bytes, or a 404 past 
 `test/api.test.mjs:372` pins that off-by-one. A degraded still is addressed through its poster slot,
 never that bare number (`bytesIndex`, `src/render/embed.ts:52`), which goes on naming the video
 entry and answers `503`. `kind` collapses `Media.kind`'s three values (`src/types.ts`) to two,
-publishing a `gif` as `"video"` (`toApiPost`, `src/worker.ts`).
+publishing a `gif` as `"image"` (`toApiPost`, `src/worker.ts`): the bytes at `url` are an animated .gif
+file, which an `<img>` animates and a `<video>` cannot play, and it carries no `poster`. Until
+2026-10-05 a `gif` was published as `"video"`, which told every consumer, the converter page included,
+to draw nothing. Reddit GIF posts are the common case since that date, served as their original .gif
+so Discord loops them; Misskey GIFs and Reddit posts labelled `image` with a .gif were always `gif`.
 
 ### `still`
 
@@ -256,6 +264,12 @@ the platform.
 | remuxed video | R2 bytes, answering range requests, so a player can seek |
 | images, avatars, posters, already-progressive video | `302` to the CDN under `cache-control: public, max-age=300` (`MEDIA_MAX_AGE`, `src/cache.ts:8`) |
 | Instagram, Twitch and Threads video | proxied rather than redirected (the `media` arm of `src/worker.ts`; the three platforms are scoped in `proxyableVideoUrl`, `src/mediaproxy.ts`) |
+
+The payload's urls carry no extension. The card's `og:video` adds `.mp4` to the same url, and that
+spelling is a promise: a media url ending in a video extension (`.mp4`, `.m4v`, `.mov`, `.webm`) whose
+entry is not a video answers `503` with `cache-control: no-store`, never a redirect to a picture.
+That is the `asVideo` guard in the `media` arm, added 2026-10-05 when Reddit GIF posts moved from an
+mp4 to their original .gif under urls a day of cards had promised as video.
 
 ### The `/v` and `/p` gallery suffix
 

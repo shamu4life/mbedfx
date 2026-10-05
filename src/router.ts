@@ -1842,7 +1842,8 @@ function routeInner(url: URL): Route {
     const poster = /^poster(\d+)(?:\.(?:jpg|jpeg|png|gif|webp))?$/.exec(raw[2])
     if (poster) return { kind: 'media', ref, index: { poster: Number(poster[1]) } }
     // A TRAILING MEDIA EXTENSION IS DECORATION, stripped before the integer parse — so
-    // /_media/{key}/0.mp4 and /_media/{key}/0 are two spellings of one resource.
+    // /_media/{key}/0.mp4 and /_media/{key}/0 are two spellings of one resource (the video spelling
+    // also carries `asVideo`, below, so the media arm can refuse to answer it with an image).
     //
     // WHY IT EXISTS: production fxtiktok's og:video / twitter:player URL ends in '.mp4' and ours
     // ended in a bare '/0'. That suffix is one delta in the production-parity head shipped
@@ -1862,10 +1863,18 @@ function routeInner(url: URL): Route {
     //  - Number('') is 0, NOT NaN. An unconditional strip would resolve /_media/{key}/.mp4 to the
     //    FIRST media entry, serving real bytes for a URL we never minted. `\d+` is what forbids
     //    that, and '0.exe' / 'x.mp4' / '0.mp4.mp4' fall out the same way.
-    const suffixed = /^(\d+)\.(?:mp4|m4v|mov|webm|jpg|jpeg|png|gif|webp)$/.exec(raw[2])
+    const suffixed = /^(\d+)\.(mp4|m4v|mov|webm|jpg|jpeg|png|gif|webp)$/.exec(raw[2])
     const i = Number(suffixed ? suffixed[1] : raw[2])
     if (!Number.isInteger(i) || i < 0) return { kind: 'notfound' }
-    return { kind: 'media', ref, index: i }
+    // THE SUFFIX IS STILL DECORATION FOR WHICH ENTRY IS MEANT, BUT A VIDEO ONE IS ALSO A PROMISE, recorded
+    // since 2026-10-05 as `asVideo` (see Route). The bytes come from the same entry either way; what the
+    // flag adds is the media arm's refusal to answer a url spelled as a video with an IMAGE, the sticky
+    // poisoned-url defect, which became reachable for Reddit gif posts when their index 0 stopped being
+    // an mp4. Read here because it is pathname, the one thing this router may read. The extensionless and
+    // image spellings carry no flag, so every route they produced before is produced byte for byte.
+    return suffixed && /^(?:mp4|m4v|mov|webm)$/.test(suffixed[2])
+      ? { kind: 'media', ref, index: i, asVideo: true }
+      : { kind: 'media', ref, index: i }
   }
 
   // Platform paths carry ordinary URL-encoded segments, so they DO get decoded.

@@ -1793,8 +1793,13 @@ test('PARITY: og:video and both twitter:player URLs are ONE url, on our origin, 
   // The suffixed url must actually RESOLVE — a head that advertises a 404 player is worse than
   // one that advertises none. This is the renderer↔router round trip, asserted end to end rather
   // than trusting router.test.mjs to have picked the same spelling.
+  //
+  // REWRITTEN 2026-10-05: the route now also carries `asVideo: true`, the router's record that this url
+  // was spelled as a video, which the media arm uses to refuse to answer it with an image. Same entry,
+  // same ref, same index as before; the flag is the only change, and it is the half that keeps the
+  // head's promise honest when an entry's kind changes under a url Discord already holds.
   const got = route(new URL(video))
-  assert.deepEqual(got, { kind: 'media', ref: ttVideo.ref, index: 0 })
+  assert.deepEqual(got, { kind: 'media', ref: ttVideo.ref, index: 0, asVideo: true })
 })
 
 test('PARITY: media_attachments and the avatar keep the EXTENSIONLESS url', async () => {
@@ -1807,6 +1812,12 @@ test('PARITY: media_attachments and the avatar keep the EXTENSIONLESS url', asyn
   // And no image url anywhere gains one either.
   const slides = toMastodonStatus(ttSlides, ORIGIN)
   assert.deepEqual(slides.media_attachments.map(a => a.url), [0, 1, 2].map(i => `${ORIGIN}/_media/tt%3A778/${i}`))
+  // ONE CARVE-OUT SINCE 2026-10-05, and it is a GIF, not an image: its attachment url ends in `.gif`.
+  // Reddit gif posts were a VIDEO attachment on the extensionless url for a day (#98), and Discord's
+  // media proxy caches per url, so their new IMAGE attachment needs a url never handed out as a video.
+  // See mastodon.ts attachment(). Plain images, above, are untouched.
+  const gif = toMastodonStatus({ ...ttSlides, media: [{ kind: 'gif', url: 'https://cdn/a.gif', w: 320, h: 240 }] }, ORIGIN)
+  assert.equal(gif.media_attachments[0].url, `${ORIGIN}/_media/tt%3A778/0.gif`)
 })
 
 test('PARITY MUST-NOT-BREAK: the tt SLIDESHOW head is untouched — canonical, twitter:card, activity', async () => {

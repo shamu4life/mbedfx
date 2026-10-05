@@ -1069,8 +1069,11 @@ test('a GIF beside a video IS mixed — the test is on the EMITTED type, not on 
     { kind: 'image', url: 'https://cdn/1.jpg', w: 1080, h: 1080 },
   ]
   const homogeneous = toMastodonStatus(q, ORIGIN, 'stills')
+  // The gif's url ends in `.gif` since 2026-10-05 (mastodon.ts attachment(): a url never handed to
+  // Discord as a video, for the Reddit gif posts that were one for a day). Still its OWN entry, index 0;
+  // what this test is about, that nothing is redirected to a poster, is unchanged.
   assert.deepEqual(homogeneous.media_attachments.map(a => a.url),
-    [`${ORIGIN}/_media/ig%3Ap%3AABC/0`, `${ORIGIN}/_media/ig%3Ap%3AABC/1`],
+    [`${ORIGIN}/_media/ig%3Ap%3AABC/0.gif`, `${ORIGIN}/_media/ig%3Ap%3AABC/1`],
     'gif+image is homogeneous — both entries keep their OWN url, nothing is redirected to a poster')
 })
 

@@ -19,6 +19,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   (`DIRECT_SUFFIX`), so the router stays host-blind, and `/_card` echoes the router's verdict so the
   converter previews a `.mp4` link as the file without a second copy of the rule.
 
+### Changed
+
+- **`/_api/v1` and `/_card` publish a GIF as `"image"`, not `"video"`.** An entry whose bytes are an
+  animated `.gif` (Reddit GIF posts, Reddit `image` posts with a `.gif`, Misskey GIFs) was published as
+  a posterless video, which no browser's `<video>` can play and the converter preview drew as nothing.
+  The enum is unchanged; the meaning now matches the bytes and the card, which always sent a GIF as a
+  Mastodon `image`. `docs/API.md` and `public/openapi.json` say so.
+
 ### Fixed
 
 - **Every Pinterest pin answered "Couldn't load".** Pinterest's pin endpoint now refuses any request
@@ -74,11 +82,25 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   timestamp. The exact name is matched, never a wildcard, because the same page carries sibling blocks
   holding other people's posts. `/_smoke` stayed green through it, so the `th` row now demands a player.
 
-- **Reddit GIF posts rendered as text only.** Reddit labels them `type: "gif"`, which no branch knew.
-  They now play Reddit's own mp4 rendition with its poster and real size (25 KB against 556 KB for the
-  `.gif`, measured from a dev sandbox, not a Worker). A render with no player, and the OAuth fallback,
-  yield no media rather than an image, because every render of a post shares one cache key and an
-  image there would sit behind a url promised as video.
+- **Reddit GIF posts rendered as text only, and then played without looping.** Reddit labels them
+  `type: "gif"`, which no branch knew. From 2026-10-04 they played Reddit's own mp4 rendition, which
+  Discord draws as a video with a play button and no loop. They now go out as the original `.gif`, an
+  image attachment, which Discord loops, the way FxEmbed sends Twitter's GIFs. The size comes from the
+  file's own header, one ten-byte ranged read when the post is fetched, and is `0x0` if that read fails.
+  THE TRADE IS FILE SIZE, and the owner chose the loop for Reddit only: 556 KB against 25 KB for the mp4
+  on the reported post, but across 36 GIF posts the originals ran 0.4 to 99.1 MB (median 11.9 MB, 19 of
+  them over 10 MB) against 0.09 to 4.1 MB for the renditions checked. Whether Discord draws the largest
+  is not measured. All of it was measured from a dev sandbox, not a Worker. Twitter GIFs are unchanged:
+  still a video. Every render of a post (the full one, a bare `/comments/` link's placeholder render, the
+  OAuth fallback) emits the same entry, because they share one cache key. The `.mp4` url a day of cards
+  promised as video now answers 503 rather than redirecting to the picture, and the card's attachment
+  url ends in `.gif`, so Discord's media proxy cannot answer it from an mp4 it kept for the old url.
+
+- **A media url spelled as a video never redirects to a picture, on any platform.** A `/_media/` url
+  ending in `.mp4` (the spelling only `og:video` mints) whose entry is no longer a video answers 503
+  `no-store` instead of a 302 to image bytes, the defect that made Discord cache "this video is an
+  image" for good in July. Reddit GIFs made it reachable; it was already reachable on a deploy without
+  the container, where a remuxed video degrades to its poster at the same index.
 
 - **Reddit videos with audio uploaded between about May 2024 and November 2025 would not play.**
   Their `/_media/` answered 503 (8 of 8 asked as Discordbot) because the container's ffmpeg, a 7.1

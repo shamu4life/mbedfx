@@ -35,9 +35,13 @@ import { buildContentHtml, statParts, withMoreInPostMarker, withVideoGalleryMark
  * player an image file is Phase 1's I-1 defect exactly (an HLS playlist advertised as
  * og:video rendered a dead player), and Discord animates a GIF served as an image anyway.
  * Reddit reaches this: an i.redd.it `.gif` surfaces as kind:'gif' and maps here to 'image' — a real
- * animated gif Discord plays as a picture, exactly the intent. That is a post Reddit labels
- * type:'image'; one it labels type:'gif' goes out since 2026-10-04 as Reddit's own mp4 rendition,
- * kind:'video' with a poster and a size (reddit/normalize.ts gifPlayer), and never reaches this row.
+ * animated gif Discord plays as a picture, exactly the intent. That covers a post Reddit labels
+ * type:'image' and, since 2026-10-05, one it labels type:'gif', which for one day (2026-10-04) went out
+ * as Reddit's mp4 rendition, kind:'video', and so drew a player that did not loop. The original .gif is
+ * what loops, which is the reason it is sent: FxEmbed sends Twitter's GIFs the same way, as an `image`
+ * attachment of a .gif with its true size, and never as 'gifv'. Whether Discord honours 'gifv' at all is
+ * not measured here, which is one more reason this row stays 'image'. The size comes from the GIF's own
+ * header (reddit/normalize.ts gifSize), so originalMeta below has one to send.
  * (Bluesky video is a remux kind:'video'
  * since 2026-07-22, and TikTok emits 'video' or a still cover — neither a 'gif'.)
  */
@@ -282,7 +286,19 @@ function attachment(post: Post, origin: string, m: Media, index: number, hasVide
   // that position addresses the VIDEO slot, which answers 503 no-store until the mux lands (it never
   // does for a video the container refuses outright). The still's bytes are at poster{index}. Every
   // other entry gets the bare index, byte for byte — see bytesIndex, the only reader of posterOnly.
-  const own = mediaUrl(origin, post, bytesIndex(m, index))
+  //
+  // A GIF's url ends in `.gif` (router.ts reads it as decoration, the same entry and the same bytes), and
+  // that spelling is the point rather than cosmetics. Added 2026-10-05 with Reddit gif posts moving from
+  // #98's mp4 rendition to the original .gif: for a day, `/_media/{key}/0` on those posts was a VIDEO
+  // attachment, and Discord's media proxy caches the bytes it got per url (the 2026-07-24 poisoned-url
+  // measurement, worker.ts serveMuxed). The new IMAGE attachment on the extensionless url could be
+  // answered from whatever the proxy kept, the mp4 rendition. What Discord does with mp4 bytes behind an
+  // image attachment is not measured (the measured direction is the reverse); a url never handed out as
+  // a video cannot find out. It also matches the shape FxEmbed's working GIF attachments carry, a url
+  // ending in the file's extension. Every gif entry takes it, which changes the url, never the bytes, of
+  // Misskey's and Reddit's type:'image' gifs. The other surfaces keep the extensionless url: none of
+  // them is what Discord fetched for these posts.
+  const own = `${mediaUrl(origin, post, bytesIndex(m, index))}${m.kind === 'gif' ? '.gif' : ''}`
   const declared = attachmentType(m)
   const poster = declared === 'video' ? posterUrl(post, origin, m, index) : null
 

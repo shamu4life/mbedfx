@@ -393,7 +393,7 @@
           "kind": {
             "type": "string",
             "enum": ["image", "video"],
-            "description": "Two kinds, not the internal three: a GIF is published as `video`, which is what it is everywhere it matters."
+            "description": "Two kinds, not the internal three: whether to draw an `<img>` or a `<video>`. An animated GIF is published as `image`, since 2026-10-05 (it was `video` before, which no browser's `<video>` can play): the bytes at `url` are a .gif file, an `<img>` animates it, and it carries no poster."
           },
           "url": {
             "type": "string",
@@ -405,7 +405,7 @@
           },
           "width": {
             "type": ["number", "null"],
-            "description": "The width of the bytes at `url`, not of the original video: a `still` entry reports the poster frame's size. `0` is far more common than `null` and means the platform reported no size. A remuxed video deliberately carries 0 so a player reads the real dimensions out of the file. `null` means the cached value was not a finite number. Both mean unknown; divide by neither."
+            "description": "The width of the bytes at `url`, not of the original video: a `still` entry reports the poster frame's size, and a Reddit GIF the size its own file header states. `0` is far more common than `null` and means the platform reported no size, or the read failed. A remuxed video deliberately carries 0 so a player reads the real dimensions out of the file. `null` means the cached value was not a finite number. Both mean unknown; divide by neither."
           },
           "height": {
             "type": ["number", "null"],
