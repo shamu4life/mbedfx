@@ -20,11 +20,15 @@ yt-dlp knows. Those posts are cover stills without it.
 ```
 
 - **200 `video/mp4`** is the muxed file, streamed. The Worker pipes it straight into R2 and serves
-  range reads from there, so each video is muxed at most once. It is sent only when every top-level
-  ISO-BMFF box in the file is whole (`_mux_result_verdict`); a download that exited 0 and still came
-  out short answers `502 {"error":"incomplete result"}` instead, because R2 would otherwise keep it
-  and serve it to every later view. WebM, FLV and MPEG-TS, which a single-format `{page}` download
-  can write under the `.mp4` name, are passed through unjudged.
+  range reads from there, so each video is muxed at most once. An ISO-BMFF result is sent only when
+  every top-level box in it is whole and an mdat carries data (`_mux_result_verdict`). A file cut off
+  inside a box, or with no moov or no media, answers `502 {"error":"incomplete result"}` instead,
+  because R2 would otherwise keep it and serve it to every later view. That is what a single-format
+  `{page}` download that stops early leaves, since it is written verbatim. A short INPUT that ffmpeg
+  rewrites (a merge, a `{video}` tracks mux, the HLS fixup) comes out as whole boxes and passes unless
+  no sample survived; whether that happens in production was not measured. WebM, FLV and MPEG-TS,
+  which a single-format `{page}` download can write under the `.mp4` name, are passed through
+  unjudged.
 - **4xx/5xx `application/json` `{"error"}`** means the Worker falls back to the cover still.
 - `GET /health` → `200 ok`.
 
@@ -158,7 +162,8 @@ written and there was nothing stale to retire). Under the split that stops being
 
 ## The mux
 
-The mux is a stream copy, `-c copy -movflags +faststart`, never a transcode. The caps are
+Wherever ffmpeg writes the file, the mux is a stream copy, `-c copy -movflags +faststart`, never a
+transcode. A single-format `{page}` download is the site's own file, written verbatim. The caps are
 env-overridable, in `container/server.py`: `MAX_SECONDS=1500`, `MAX_BYTES=393216000` (a 375 MB
 output ceiling), `PROC_TIMEOUT=120`, and `MUX_PAGE_TIMEOUT=360` for the `{page}` mux alone. Both
 size ceilings went up together on 2026-08-03: a stream copy makes output size the source bitrate

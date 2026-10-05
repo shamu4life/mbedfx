@@ -217,12 +217,18 @@ export type Outcome2 =
    *                the page mux was split out — so a rise here on a `{page}` platform after that date
    *                means something quite different from the same rise before it.
    *   mux_empty    502 + "empty or oversized result" — it ran and produced nothing usable.
-   *   mux_incomplete (2026-10-05) 502 + "incomplete result" — it exited 0 and wrote a file that stops
-   *                short: a top-level box runs past the end, or there is no moov or no mdat
-   *                (container/server.py, _mux_result_verdict). Nothing is stored. BEFORE THAT DATE
-   *                THIS WAS `mux_ok`: the file answered 200 and was stored, so `mux_ok` rows from
-   *                before it can include a video that never plays (yt:txqiwrbYGrs/0, measured
-   *                2026-10-05). Whose fault a short download is was not determined.
+   *   mux_incomplete (2026-10-05) 502 + "incomplete result" — it exited 0 and wrote an ISO-BMFF file
+   *                the container's box walk refuses. The rules are listed at _mux_result_verdict in
+   *                container/server.py: a box smaller than its header or running past the end,
+   *                trailing bytes that form no box, a type that is not printable ASCII, no moov, no
+   *                mdat with data in it, or more than MP4_MAX_BOXES top-level boxes. That last one
+   *                shares the string although such a file need not be short. Nothing is stored.
+   *                BEFORE THAT DATE THESE WERE `mux_ok`: the file answered 200 and was stored, so
+   *                `mux_ok` rows from before it can include a video that never plays
+   *                (yt:txqiwrbYGrs/0, measured 2026-10-05 from the dev sandbox, not a Worker).
+   *                AFTER IT `mux_ok` STILL CAN: a short input that ffmpeg rewrites (a merge, a tracks
+   *                mux, the HLS fixup) comes out as whole boxes and is refused only when no sample
+   *                survived. Whose fault a short download is was not determined.
    *   mux_pool     503 — a cold boot, or "Maximum number of running container instances exceeded".
    *                A rise here degrades EVERY platform's card, not just the one in blob1.
    *   mux_badsource 400 — the container's SSRF guard refused the url we sent it.

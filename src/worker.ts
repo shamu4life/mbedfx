@@ -1718,8 +1718,10 @@ const RESOLVER_SLOTS = 4
  * Every request an old instance serves can write ANOTHER such object, and each one stays until it is
  * deleted by hand or the bucket's 60-day expiry takes it. Measured 2026-10-05 from the dev sandbox:
  * production's yt:txqiwrbYGrs/0 is one, 59,576 bytes of an mp4 whose mdat declares 4,398,607. This
- * bump does NOT remove that object or any other already stored; it only stops new ones. Every meta
- * record is fine. The marker is `muxCheck: "boxes"` in `/_clients`.
+ * bump does NOT remove that object or any other already stored. It stops new ones OF THAT SHAPE, a
+ * file cut off inside a box or with no media in it; a short input that ffmpeg rewrote into whole,
+ * shorter boxes still passes (see _mux_result_verdict's note). Every meta record is fine. The marker
+ * is `muxCheck: "boxes"` in `/_clients`.
  */
 const RESOLVER_GENERATION = 'g16'
 /**
@@ -1861,7 +1863,8 @@ function withCookieJar<T extends object>(body: T, env: Env, platform: Credential
  * THREE DIFFERENT 502s, and telling them apart is most of the point. container/server.py answers 502
  * for a non-zero yt-dlp exit (`"mux failed"` — the upstream refused us: a 403, a PO-token demand, a
  * sign-in wall), for a run that completed with nothing usable (`"empty or oversized result"`), and
- * since 2026-10-05 for a run that exited 0 with a file that stops short (`"incomplete result"`). The
+ * since 2026-10-05 for a run that exited 0 with a file the container's box walk refuses (`"incomplete
+ * result"`: cut off inside a box, no moov, no mdat with data, or past the box cap). The
  * first is usually the upstream's verdict, but on a `{video}` source it is our own ffmpeg's exit (see
  * analytics.ts `mux_gate`); the second is ours; whose fault the third is was not determined (see
  * `_mux_result_verdict` in container/server.py). A single `mux_gate` covering them would point the
@@ -5363,9 +5366,11 @@ export async function handle(req: Request, env: Env, ctx: ExecutionContext, d: D
    *       chunked-without-length control: a validator that refuses length-less video fails it.
    *   `/_wait/c/{n}/{videoId}[/{tag}]` — THE MOOV/MDAT SPLIT. The video urls land on
    *       `/_wait/mediac/{n}/…`, which serves the file's `ftyp` and `moov` boxes IMMEDIATELY and
-   *       the `mdat` {n} seconds later. Our muxes are `+faststart`, so this is the real file's own
-   *       shape, and it is what a fragmented-mp4 stream would look like: the init segment in the
-   *       first second, the media as it is produced. It separates "the validator reads the moov"
+   *       the `mdat` {n} seconds later. Every mux ffmpeg writes is `+faststart`, so this is the real
+   *       file's own shape. (A single-format {page} download is the site's own file verbatim; the
+   *       one YouTube file of that kind read from production, from the dev sandbox on 2026-10-05,
+   *       was moov-first too.) It is what a fragmented-mp4 stream would look like: the init segment
+   *       in the first second, the media as it is produced. It separates "the validator reads the moov"
    *       from "the validator downloads the whole file".
    *   `/_wait/p/{ndoc}/{nmedia}/{videoId}[/{tag}]` — THE PRODUCTION SHAPE (2026-09-02). The document
    *       is held {ndoc} seconds (4 is what YT_MUX_BOT_MS gives Discord today, ~4.2s at the
@@ -5503,8 +5508,9 @@ export async function handle(req: Request, env: Env, ctx: ExecutionContext, d: D
         let at = 0
         for (const c of chunks) { all.set(c, at); at += c.byteLength }
         // Walk the top-level boxes: [size u32][type 4cc], size 1 = 64-bit largesize follows,
-        // size 0 = to end of file. Stop past `moov`; a file with mdat before moov is not one of
-        // ours (the container writes +faststart), so 64 KiB is the fallback cut, not a guess.
+        // size 0 = to end of file. Stop past `moov`. A file with mdat before moov did not come
+        // out of an ffmpeg write (those are +faststart); a single-format {page} download is the
+        // site's own file verbatim and need not be, so 64 KiB is the fallback cut, not a guess.
         const moovEnd = (b: Uint8Array): number => {
           const dv = new DataView(b.buffer, b.byteOffset, b.byteLength)
           let off = 0

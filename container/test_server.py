@@ -749,7 +749,7 @@ def _box(kind, payload=b""):
     return struct.pack(">I4s", 8 + len(payload), kind) + payload
 
 
-FTYP = _box(b"ftyp", b"mp42" + b"\0\0\0\0" + b"isommp42")   # 24 bytes, as YouTube's format 18 has
+FTYP = _box(b"ftyp", b"mp42" + b"\0\0\0\0" + b"isommp42")   # 24 bytes, as the production file's is
 MOOV = _box(b"moov", b"\0" * 64)
 MDAT = _box(b"mdat", b"\x11" * 256)
 WHOLE = FTYP + MOOV + _box(b"free") + MDAT                  # the faststart shape ffmpeg writes
@@ -761,6 +761,17 @@ def _production_short_file():
     nothing after it. The moov's contents are zeroes here; only its size matters to the walk."""
     return (FTYP + _box(b"moov", b"\0" * (59_536 - 8)) + _box(b"free")
             + struct.pack(">I4s", 4_398_607, b"mdat"))
+
+
+def _ffmpeg_rewrite_of_the_short_file():
+    """What ffmpeg wrote when handed a file of the production shape: measured 2026-10-05 in the dev
+    sandbox with ffmpeg 6.1.1 (not production's 7.1.x), running `-c copy -movflags +faststart -f mp4`
+    over a 20s faststart mp4 cut 8 bytes into its mdat. It logged "partial file", exited 0, and wrote
+    262 bytes: ftyp 32, a moov of 214 with no streams, free 8, and an 8-byte mdat with nothing in it.
+    Every box is whole. The ftyp is the measured one byte for byte; the moov's contents are zeroes here,
+    since only its size matters to the walk."""
+    return (_box(b"ftyp", b"isom" + b"\0\0\x02\0" + b"isomiso2avc1mp41") + _box(b"moov", b"\0" * 206)
+            + _box(b"free") + _box(b"mdat"))
 
 
 class _TempFiles(unittest.TestCase):
@@ -786,8 +797,13 @@ class MuxCompleteness(_TempFiles):
     stored it under a key with no generation in it. ffprobe calls that file healthy (exit 0, duration
     118.96s), so these cases are about box sizes, the one thing the short file gets wrong.
 
-    BOTH DIRECTIONS ARE PINNED. A walk that refused a legal size-0 box, a 64-bit largesize or a
-    fragmented file would turn playable videos into 503s, which is the same failure from the other side.
+    BOTH DIRECTIONS ARE PINNED. A walk that refused a legal size-0 box, a 64-bit largesize, a uuid box
+    or a fragmented file would turn playable videos into 503s, which is the same failure from the other
+    side.
+
+    WHAT THESE DO NOT CLAIM. A short INPUT that ffmpeg rewrites comes out as whole boxes, and only the
+    case where no sample survived is refused here (the 262-byte rewrite). A rewrite that kept half the
+    samples is a whole, shorter file, and no case below pretends the walk can see it.
     """
 
     def test_a_whole_faststart_mp4_is_complete(self):
@@ -830,6 +846,34 @@ class MuxCompleteness(_TempFiles):
 
     def test_no_mdat_is_incomplete(self):
         self.assertEqual(self.verdict(FTYP + MOOV), srv.MP4_INCOMPLETE)
+
+    def test_ffmpegs_whole_box_rewrite_of_the_short_file_is_incomplete_because_its_mdat_is_empty(self):
+        """THE DEFECT ONE STEP REMOVED. The production file went out verbatim. Given the flags the merge
+        arm, a tracks mux and the HLS fixup use, ffmpeg 6.1.1 in the dev sandbox rewrote an input of the
+        same shape into this 262-byte file, every box whole, and exited 0. Without the rule that an mdat
+        must carry data it walks as complete, the handler answers 200, and R2 stores a video with no
+        samples for good."""
+        data = _ffmpeg_rewrite_of_the_short_file()
+        self.assertEqual(len(data), 262, "the fixture must be the measured length to the byte")
+        self.assertEqual(self.verdict(data), srv.MP4_INCOMPLETE)
+
+    def test_an_empty_mdat_is_refused_only_when_no_other_mdat_carries_data(self):
+        """The rule is AT LEAST ONE mdat with data. Requiring every mdat to hold data would refuse a
+        layout nobody measured as broken; the size-0 form, which runs to EOF, is empty when the file
+        ends right after its header, and is refused like the 32-bit one."""
+        self.assertEqual(self.verdict(FTYP + MOOV + _box(b"mdat") + MDAT), srv.MP4_COMPLETE)
+        self.assertEqual(self.verdict(FTYP + MOOV + _box(b"mdat")), srv.MP4_INCOMPLETE)
+        self.assertEqual(self.verdict(FTYP + MOOV + struct.pack(">I4s", 0, b"mdat")), srv.MP4_INCOMPLETE)
+        self.assertEqual(self.verdict(FTYP + MOOV + struct.pack(">I4sQ", 1, b"mdat", 16)), srv.MP4_INCOMPLETE)
+
+    def test_a_whole_top_level_uuid_box_is_complete(self):
+        """uuid boxes occur at top level in real files (XMP metadata, PIFF), and their header is 24
+        bytes: 8 plus a 16-byte extended type. A walk that refused them, or counted the header wrong,
+        would turn those files into 503s, and the too-small case below would not notice. The 24-byte
+        box with no payload is the boundary."""
+        self.assertEqual(self.verdict(FTYP + _box(b"uuid", b"\0" * 16 + b"payload") + MOOV + MDAT),
+                         srv.MP4_COMPLETE)
+        self.assertEqual(self.verdict(FTYP + _box(b"uuid", b"\0" * 16) + MOOV + MDAT), srv.MP4_COMPLETE)
 
     def test_trailing_bytes_that_do_not_form_a_box_are_incomplete(self):
         """A few bytes after the last whole box look exactly like a download that stopped inside the
@@ -890,8 +934,10 @@ class DoPostCompleteness(unittest.TestCase):
 
     THE DEFECT, from the other end: the walk is worthless unless do_POST acts on it, and the error
     string is worthless unless it differs from "empty or oversized result", because the Worker's
-    muxOutcomeOf tells failures apart by that string alone. subprocess.run is stubbed to write the
-    file yt-dlp or ffmpeg would have written; no process runs and no name is resolved.
+    muxOutcomeOf tells failures apart by that string alone. subprocess.run is stubbed to write a chosen
+    file at the output path, so these drive the handler's own path with a given result. Which results a
+    real yt-dlp or ffmpeg writes is measured in _mux_result_verdict's note, not asserted here. No
+    process runs and no name is resolved.
     """
 
     def setUp(self):
@@ -917,8 +963,13 @@ class DoPostCompleteness(unittest.TestCase):
         status, _, body = _drive_post({"page": PAGE})
         self.assertEqual((status, json.loads(body)), (502, {"error": "incomplete result"}))
 
-    def test_a_short_tracks_mux_answers_the_same(self):
-        self._writes(FTYP + MOOV + MDAT[:40])
+    def test_a_tracks_mux_with_no_samples_answers_the_same(self):
+        """REWRITTEN 2026-10-05 after review. It used to feed the `{video}` path a truncated file
+        (FTYP + MOOV + MDAT[:40]), which ffmpeg was never seen to write: ffmpeg writes whole boxes
+        around whatever input it read. It now feeds the 262-byte file ffmpeg was measured writing from
+        an input of the production shape, so the `{video}` path is driven with a result its own ffmpeg
+        can produce. It still pins what it pinned: the tracks path reaches the same check and string."""
+        self._writes(_ffmpeg_rewrite_of_the_short_file())
         status, _, body = _drive_post({"video": "https://cdn.example/v.mp4"})
         self.assertEqual((status, json.loads(body)), (502, {"error": "incomplete result"}))
 

@@ -122,7 +122,7 @@ onto one piece of work, so no single client owns the mux and naming one would be
 
 The ten outcomes are documented at their definition (`src/analytics.ts`). The split that matters
 most: **`mux_timeout` is ours and `mux_gate` is usually theirs.** The container answers 502 for a
-non-zero exit, for an empty result, and since 2026-10-05 for a file that stops short, so those are
+non-zero exit, for an empty result, and since 2026-10-05 for a file its box walk refuses, so those are
 separated here into `mux_gate`, `mux_empty` and `mux_incomplete` rather than left as one number that
 points at the wrong system.
 
@@ -131,7 +131,11 @@ exited 0 with a short file answered 200, was counted `mux_ok`, and was stored fo
 2026-10-05 from a dev sandbox (not a Worker), production's `mux/yt:txqiwrbYGrs/0` is 59,576 bytes of
 an mp4 whose mdat declares 4,398,607. So `mux_ok` from before that date can include videos that never
 play, and a `mux_incomplete` count after it is a rate that was previously invisible, not a new
-regression. Whose fault a short download is was not determined.
+regression. `mux_ok` after it can still include a short video: the walk refuses a file cut off inside
+a box, or with no moov or no media, and a short input that ffmpeg rewrites (a merge, a tracks mux, the
+HLS fixup) comes out as whole boxes. The full rule list is at `_mux_result_verdict` in
+`container/server.py`; one of its refusals, the box cap, is not about length at all. Whose fault a
+short download is was not determined.
 
 "Usually" because `mux_gate` means the process exited non-zero, and on a `{video}` source that
 process is the container's own ffmpeg. Every Reddit video with audio uploaded between about 2024-05

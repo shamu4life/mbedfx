@@ -31,19 +31,33 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   measured; the pn row will say after deploy. Pinterest's image and video hosts still serve with no
   user-agent, so media was never the problem.
 
-- **A video that downloaded short was stored, and served broken to every later view.** Measured
-  2026-10-05 from a dev sandbox (not a Worker): production's `/_media/yt%3AtxqiwrbYGrs/0` answers
-  200 with 59,576 bytes, an mp4 whose last box is an mdat header declaring 4,398,607 bytes with none of
-  them present. yt-dlp had exited 0 and the container refused only an empty or oversized file, so the
-  Worker stored it under a key with no generation, and nothing ever replaced it. ffprobe calls that
-  file healthy, since its moov is intact. The container now walks the file's top-level boxes and
-  answers 502 `incomplete result` when one runs past the end, bytes trail the last one, or there is no
-  moov or no mdat. Nothing is stored, the card falls back to its still as for any failed mux, and the
-  Worker counts it as the new `mux_incomplete` (until now these were counted `mux_ok`). Fragmented
-  mp4, size-0 and 64-bit boxes pass. WebM, FLV and MPEG-TS, which a single-format download can write
-  under the `.mp4` name, are passed through as before, because whether Discord plays one is not
-  measured. Why yt-dlp exited 0 on a short download was not determined. `RESOLVER_GENERATION` is
-  bumped so no pooled instance keeps storing short files, and `/_clients` reports `muxCheck: "boxes"`.
+- **A video that downloaded short was stored, and served broken to every later view. That shape is
+  now refused.** Measured 2026-10-05 from a dev sandbox (not a Worker): production's
+  `/_media/yt%3AtxqiwrbYGrs/0` answers 200 with 59,576 bytes, an mp4 whose last box is an mdat header
+  declaring 4,398,607 bytes with none of them present. It is YouTube's own file written verbatim, a
+  single-format download (which format is inferred, not logged). yt-dlp had exited 0 and the container
+  refused only an empty or oversized file, so the Worker stored it under a key with no generation, and
+  nothing ever replaced it. ffprobe calls that file healthy, since its moov is intact. The container
+  now walks the file's top-level boxes and answers 502 `incomplete result` when one runs past the end
+  or is smaller than its header, bytes trail the last one, there is no moov, or no mdat carries data.
+  Nothing is stored, the card falls back to its still as for any failed mux, and the Worker counts it
+  as the new `mux_incomplete` (until now these were counted `mux_ok`). Fragmented mp4, size-0, 64-bit
+  and `uuid` boxes pass. WebM, FLV and MPEG-TS, which a single-format download can write under the
+  `.mp4` name, are passed through as before, because whether Discord plays one is not measured. Why
+  yt-dlp exited 0 on a short download was not determined, and neither was whether this video comes
+  back short every time. `RESOLVER_GENERATION` is bumped so no pooled instance keeps storing files of
+  that shape, and `/_clients` reports `muxCheck: "boxes"`.
+
+  **What it does not catch.** The walk sees a file cut off inside a box, which is what a verbatim
+  download that stops early leaves. A short input that ffmpeg rewrites (the `134+140` merge YouTube
+  tries first, a `{video}` tracks mux, the HLS fixup) comes out as whole boxes, and ffmpeg exits 0.
+  Measured in the same sandbox with ffmpeg 6.1.1 (production runs a 7.1.x, not tried), using the
+  flags the mux uses: an input of the production shape became a 262-byte file with an empty mdat,
+  which the "an mdat carries data" rule refuses, and an input cut halfway became a whole 9.87s file of
+  a 20s video, which passes. A fragmented file that ends on a whole fragment passes too, and so would
+  one with a fragment skipped (yt-dlp skips an unavailable fragment by default). Whether any of these
+  happens in production was not measured; comparing the output's duration with the declared one would
+  cover them, and is a separate change.
 
   **The object already stored is not fixed by this.** The owner has to delete
   `mux/yt:txqiwrbYGrs/0` from the `mbedfx-media` bucket (`wrangler r2 object delete
