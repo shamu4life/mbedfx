@@ -7,18 +7,24 @@ import {
   normalizePinterest, pinImage, pinTitle, pinVideo,
 } from '../src/platforms/pinterest/normalize.ts'
 import { proxyableVideoUrl } from '../src/mediaproxy.ts'
+import { fetchPinterest } from '../src/platforms/pinterest/fetch.ts'
 
 /**
  * PINTEREST — the cleanest surface this project has integrated.
  *
- * ONE HEADER IS THE ENTIRE GATE. `X-Pinterest-PWS-Handler` on
- * `/resource/PinResource/get/`, bisected header by header (2026-07-27): no headers -> 403
- * `Invalid Resource Request`; X-Requested-With, X-APP-VERSION, X-Pinterest-AppState, Referer and
- * X-Pinterest-Source-Url each alone -> still 403; this one alone -> 200 with the full pin. No cookie
- * is sent and none is required, and `robots.txt` explicitly allows the path (`Allow: /resource/*​/get/`).
+ * TWO HEADERS ARE THE GATE on `/resource/PinResource/get/`. The first is `X-Pinterest-PWS-Handler`,
+ * bisected header by header (2026-07-27): no headers -> 403 `Invalid Resource Request`;
+ * X-Requested-With, X-APP-VERSION, X-Pinterest-AppState, Referer and X-Pinterest-Source-Url each
+ * alone -> still 403; this one alone -> 200 with the full pin. No cookie is sent and none is required,
+ * and `robots.txt` explicitly allows the path (`Allow: /resource/*​/get/`).
  *
- * IT IS NOT A UA GATE — the opposite of every Meta surface here. Identical 200s measured for
- * `curl/8.0`, a Discordbot UA, and NO user-agent header at all.
+ * THE SECOND IS A NON-EMPTY USER-AGENT, and this header used to say the opposite. On 2026-07-27 it
+ * read "IT IS NOT A UA GATE": identical 200s for `curl/8.0`, a Discordbot UA and NO user-agent at
+ * all. Rewritten 2026-10-05, when every pin in production had started failing: re-measured from the
+ * Claude Code dev sandbox (a non-Cloudflare cloud IP, not a Worker), no UA and an empty UA both answer
+ * 403 `{"message":"Looks like you don't have permission to access this page…","status":403}`, and
+ * every non-empty UA tried (curl, two Chromes, Discordbot, facebookexternalhit) answers 200 with the
+ * pin. A Worker's fetch sends no UA unless told to. The fetcher tests at the bottom pin both headers.
  */
 const F = new URL('./fixtures/', import.meta.url)
 const load = n => JSON.parse(readFileSync(new URL(n, F), 'utf8')).resource_response.data
@@ -221,4 +227,77 @@ test('Pinterest disturbs no neighbour', () => {
   assert.equal(r('/xqc/status/20').ref.p, 'x')
   assert.equal(r('/lemmy.world/post/49966212').ref.p, 'lm')
   assert.equal(r('/r/pics/comments/abc123').ref.p, 'rd')
+})
+
+/**
+ * A STAND-IN FOR PinResource THAT KEEPS THE TWO WALLS MEASURED ON 2026-10-05 (dev sandbox, not a
+ * Worker), each with the body it really answers, so a fetcher that drops either header gets exactly
+ * what production got. Never touches the network: it replaces globalThis.fetch and records every ask.
+ */
+const PIN_BODY = readFileSync(new URL('pinterest-pin-image.json', F), 'utf8')
+async function withFakePinterest(body) {
+  const real = globalThis.fetch
+  const asks = []
+  globalThis.fetch = async (input, init = {}) => {
+    const h = new Headers(init.headers)
+    asks.push({ url: String(input), headers: h })
+    if (!(h.get('user-agent') ?? '').trim()) {
+      return new Response(JSON.stringify({
+        message: "Looks like you don't have permission to access this page. Your pinterest request id: 1.",
+        status: 403,
+      }), { status: 403, headers: { 'content-type': 'application/json' } })
+    }
+    if (h.get('x-pinterest-pws-handler') !== 'www/pin/[id].js') {
+      return new Response('Invalid Resource Request', { status: 403, headers: { 'content-type': 'text/plain' } })
+    }
+    return new Response(PIN_BODY, { status: 200, headers: { 'content-type': 'application/json' } })
+  }
+  try {
+    return { got: await body(), asks }
+  } finally {
+    globalThis.fetch = real
+  }
+}
+
+test('the pin request carries a non-empty user-agent beside the handler header, because Pinterest 403s every pin asked without one', async () => {
+  /**
+   * THE DEFECT: Pinterest was down on every pin in production. fetchPinterest sent only the handler
+   * header and `accept`, a Worker's fetch adds no user-agent of its own, and somewhere between
+   * 2026-08-12 and 2026-10-05 PinResource began refusing UA-less requests with 403 "Looks like you
+   * don't have permission to access this page". /_smoke's pn row drew a failure card and /_api/v1
+   * answered fetch_fail for 5 of 5 pins. The handler header alone, which was the whole gate in July,
+   * is not enough now, so this asserts BOTH ride on the same request.
+   *
+   * An empty or whitespace user-agent counts as none: measured from the dev sandbox, a present but
+   * empty UA got the same 403 as an absent one.
+   */
+  const { got, asks } = await withFakePinterest(() => fetchPinterest(REF))
+  assert.equal(asks.length, 1, 'one ask: a 200 is never asked again')
+  const [ask] = asks
+  assert.match(ask.url, /^https:\/\/www\.pinterest\.com\/resource\/PinResource\/get\/\?/)
+  assert.ok((ask.headers.get('user-agent') ?? '').trim().length > 0, 'a non-empty user-agent is sent')
+  assert.equal(ask.headers.get('x-pinterest-pws-handler'), 'www/pin/[id].js', 'and the handler header with it')
+  // Content, not status: the fetcher came back holding THE pin, its own id and headline intact.
+  assert.equal(got.ok, true)
+  assert.equal(got.pin.id, '66287425756772418')
+  assert.equal(pinTitle(got.pin), "Great grandma's Dilly Bread")
+})
+
+test('the no-user-agent 403 body is a refusal, never a pin, even if it ever arrives as a 200', async () => {
+  /**
+   * The wall answers JSON, so it parses. It is refused today by the status check, but CLAUDE.md's
+   * first rule is that status proves nothing and several upstreams decoy with HTTP 200. This pins that
+   * the PAYLOAD check alone also refuses it: it has no `resource_response`, so it can never become a
+   * card with an empty title.
+   */
+  const wall = JSON.stringify({ message: "Looks like you don't have permission to access this page.", status: 403 })
+  for (const status of [403, 200]) {
+    const real = globalThis.fetch
+    globalThis.fetch = async () => new Response(wall, { status, headers: { 'content-type': 'application/json' } })
+    try {
+      assert.deepEqual(await fetchPinterest(REF), { ok: false, reason: 'assert_fail' }, `HTTP ${status}`)
+    } finally {
+      globalThis.fetch = real
+    }
+  }
 })

@@ -1087,7 +1087,8 @@ export async function liveFetchPost(
       return normalizePeerTube(got.video, ref)
     }
     case 'pn': {
-      // Pinterest: ONE unauthenticated, cookie-free call gated by a single header. Its video is a
+      // Pinterest: ONE unauthenticated, cookie-free call, gated by a handler header and (found
+      // 2026-10-05) a non-empty user-agent, both explained in pinterest/fetch.ts. Its video is a
       // real progressive mp4 that serves to a Discordbot UA, so it keeps the plain /_media/ 302 —
       // no byte proxy and no container, unlike Instagram, Twitch and the yt-dlp tier.
       const got = await fetchPinterest(ref)

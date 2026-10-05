@@ -32,6 +32,19 @@ export function pinTitle(pin: Record<string, unknown>): string {
  * at all, which is why this platform keeps the plain /_media/ 302 instead of streaming bytes the way
  * Instagram and Twitch must.
  *
+ * THE MEDIA HOSTS ARE NOT WHERE THE 2026-10 UA GATE IS. When PinResource began 403ing requests with no
+ * user-agent (see pinterest/fetch.ts), this claim was re-measured on 2026-10-05 from the Claude Code
+ * dev sandbox (a non-Cloudflare cloud IP behind an HTTPS proxy, NOT a Worker), with NO user-agent, a
+ * Discordbot UA and a desktop Chrome UA alike: V_720P on v1.pinimg.com answered a 0-1023 range request
+ * with 206 `video/mp4` and bytes 4-11 `ftypisom`, and two `originals/` jpegs on i.pinimg.com answered
+ * 200 `image/jpeg` with a JPEG signature. Same bytes for all three. Only the metadata endpoint moved.
+ *
+ * TODAY IT BARELY MATTERS WHICH UA pinimg wants, because this Worker never fetches these urls: /_media/
+ * answers with a 302 and Discord's own media fetcher follows it with Discord's UA, and the converter
+ * preview loads them in the viewer's browser. It starts to matter the day someone moves Pinterest onto
+ * the byte proxy (proxyableVideoUrl), because then the Worker's UA-less fetch is the one pinimg sees.
+ * The sandbox says that would still work. From Cloudflare egress it has not been measured.
+ *
  * The HLS renditions (V_HLSV4, V_HLSV3_MOBILE) are deliberately ignored: Discord cannot play HLS, and
  * advertising one as og:video is the dead-player defect this project fixed in Phase 1.
  */

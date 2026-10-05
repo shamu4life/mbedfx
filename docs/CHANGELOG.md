@@ -21,6 +21,16 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- **Every Pinterest pin answered "Couldn't load".** Pinterest's pin endpoint now refuses any request
+  that carries no user-agent (HTTP 403, "Looks like you don't have permission to access this page"),
+  and a Worker's fetch sends none unless told to. It used to accept one, and the fetcher was written
+  against that. `/_smoke`'s pn row drew a failure card and `/_api/v1` answered `fetch_fail` on 5 of 5
+  pins. The fetcher now sends the same desktop Chrome user-agent the Reddit and Twitch fetchers send.
+  Measured from a dev sandbox, not a Worker: no user-agent and an empty one both get the 403, and
+  every non-empty one tried gets the pin. Whether that is enough from Cloudflare's egress is not yet
+  measured; the pn row will say after deploy. Pinterest's image and video hosts still serve with no
+  user-agent, so media was never the problem.
+
 - **Every Threads post had fallen back to one picture.** Threads renamed the server-rendered block the
   normaliser reads (now `BarcelonaPostPageTargetQueryRelayPreloader_`), so every post took the OG
   fallback, whose single image is Threads' own rendered share card. Reported as a carousel showing one
