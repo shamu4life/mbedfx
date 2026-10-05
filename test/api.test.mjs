@@ -622,3 +622,35 @@ test('A DELETED SHARE CODE IS A DEAD POST, NOT A NON-POST — the sibling the ga
   assert.deepEqual(await card.json(), { ok: false, reason: 'fetch_fail' },
     'the converter preview says the same thing, with no gate invented')
 })
+
+test('A .mp4 ON THE url IS IGNORED BY THE API, like /v and /p — it describes the post, not the url form', async () => {
+  /**
+   * Since 2026-10-04 a trailing `.mp4` on a post url means "the file" (router.ts DIRECT_SUFFIX). That is a
+   * RESPONSE shape for Discord and browsers; the API answers about the post, so the suffix changes
+   * nothing here. Before the suffix existed, production answered this url `ok:false, fetch_fail`, with a
+   * canonical ending `.mp4`, because the id had swallowed it.
+   */
+  const id = '2102147636702634195'
+  let asked = null
+  const { res, body } = await get(apiReq(`https://x.com/X/status/${id}.mp4`), ref => { asked = ref; return twitterPost(id) })
+  assert.equal(res.status, 200)
+  assert.equal(body.ok, true)
+  assert.deepEqual(asked, { p: 'x', id }, 'the clean id was fetched')
+  assert.ok(!body.post.canonical.endsWith('.mp4'), `no .mp4 in the canonical, got ${body.post.canonical}`)
+})
+
+test('/_card ECHOES THE ROUTER\'S direct FLAG FOR A .mp4 PATH, and only then', async () => {
+  /**
+   * The converter draws its media-only preview from this, rather than from its own copy of the suffix
+   * rule (see landing-convert.test.mjs for the copy that drifted). Present only when the router set it,
+   * so every other /_card answer is byte-identical to before.
+   */
+  const id = '2102147636702634195'
+  const file = await (await handle(cardReq(`/X/status/${id}.mp4`), envWith(), ctx, depsFor(twitterPost(id)))).json()
+  assert.equal(file.ok, true)
+  assert.equal(file.direct, true)
+  const card = await (await handle(cardReq(`/X/status/${id}`), envWith(), ctx, depsFor(twitterPost(id)))).json()
+  assert.ok(!('direct' in card), 'absent, not false, on an ordinary link')
+  const chooser = await (await handle(cardReq('/A61SaA1.mp4'), envWith(), ctx, depsFor(twitterPost(id)))).json()
+  assert.ok(!('direct' in chooser), 'a path the router does not read as a post is not a file either')
+})

@@ -585,7 +585,9 @@ test('route() STAYS HOST-AGNOSTIC — the d. decision is about the RESPONSE, nev
    * So: the same path must route identically under every host, and the d. host chooses only what
    * shape of RESPONSE comes back.
    */
-  for (const p of ['/jack/status/20', '/watch?v=dQw4w9WgXcQ', '/reel/DX7byl-oyGR/', '/dm/xaqwy7q', '/_prep?p=/x']) {
+  // '/jack/status/20.mp4' since 2026-10-04: the direct-media SUFFIX is read by route(), because it is
+  // pathname, and so it must route identically under every host exactly like everything else here.
+  for (const p of ['/jack/status/20', '/jack/status/20.mp4', '/watch?v=dQw4w9WgXcQ', '/reel/DX7byl-oyGR/', '/dm/xaqwy7q', '/_prep?p=/x']) {
     const apex = route(new URL(`https://mbedfx.app${p}`))
     const direct = route(new URL(`https://d.mbedfx.app${p}`))
     assert.deepEqual(direct, apex, `${p} must route identically under d.`)
@@ -727,6 +729,177 @@ test('THE APEX IS UNCHANGED BY ALL OF THAT — a share link still renders a card
   const res = await handle(bot, envWith(fakeResolver().binding), c, deps({ resolveRedditShare: async () => resolved }))
   assert.equal(res.status, 200)
   assert.match(res.headers.get('content-type') || '', /text\/html/, 'still a card on the apex')
+})
+
+/* ===================== THE .mp4 SUFFIX: THE PATH SPELLING OF d. =====================
+ *
+ * Asked for 2026-10-04: "https://megapenispoopenfarten.sex/X/status/2102147636702634195.mp4 fails. This is in
+ * direct contrast to fxtwitter … supporting both would be ideal." Production answered that url with
+ * "Couldn't load this Twitter post", because the id became '2102147636702634195.mp4'. router.ts reads the
+ * suffix (DIRECT_SUFFIX) and sets Route.direct; from there it is the d. host's code path, which is what
+ * every test below pins: the same answers as the d. section above, on the ordinary host.
+ */
+const apexReq = (p, ua = DISCORD_UA, host = 'mbedfx.app') => new Request(`https://${host}${p}`, { headers: { 'user-agent': ua } })
+const CHROME_UA = 'Mozilla/5.0 (Macintosh) AppleWebKit/537.36 Chrome/126 Safari/537.36'
+
+test('A TRAILING .mp4 ON THE APEX REDIRECTS TO THE POST\'S OWN MEDIA, exactly as the d. host does', async () => {
+  const { ctx: c } = ctx()
+  const res = await handle(apexReq('/jack/status/20.mp4'), envWith(fakeResolver().binding), c, deps())
+  assert.equal(res.status, 302, 'bytes, not the failure card the id-with-.mp4 used to produce')
+  // The ref is the one the url WITHOUT the suffix names, so the bytes come from the same /_media/
+  // namespace the card's own og:video points at, and the redirect stays on the request's origin.
+  assert.equal(res.headers.get('location'), 'https://mbedfx.app/_media/x%3A20/0')
+})
+
+test('A .mp4 LINK SERVES A PERSON AND A BROWSER-UA MEDIA PROXY THE SAME BYTES — no human/bot split', async () => {
+  /**
+   * Discord's media proxy presents a browser UA (classify.ts), and fxtwitter gives a browser the file
+   * too (measured 2026-10-04: a 302 to the video for Discordbot and Chrome alike). The usual "bounce a
+   * person to the original post" must not fire, or a .mp4 link opened in a browser lands on x.com, and
+   * one Discord fetches with its proxy UA draws nothing.
+   */
+  const { ctx: c } = ctx()
+  for (const ua of [CHROME_UA, 'Mozilla/5.0 (X11; Linux x86_64; rv:92.0) Gecko/20100101 Firefox/92.0']) {
+    const res = await handle(apexReq('/jack/status/20.mp4', ua), envWith(fakeResolver().binding), c, deps())
+    assert.equal(res.status, 302)
+    assert.equal(res.headers.get('location'), 'https://mbedfx.app/_media/x%3A20/0', ua)
+  }
+})
+
+test('A WARM CARD IS NEVER SERVED FOR A .mp4 URL ON THE SAME ORIGIN, AND THE BYTES ARE NEVER CACHED AS A CARD', async () => {
+  /**
+   * The trap the d. host could not fall into. There the ORIGIN is part of respCacheKey, so a card and the
+   * bytes never share an entry. A .mp4 on the apex has the same ref, client and origin as the card, so
+   * the two keys are IDENTICAL, and the only thing separating the answers is that renderPostRoute takes
+   * its direct branch BEFORE it reads the response cache. Warm the card first, then ask for the file.
+   */
+  const { ctx: c, settle } = ctx()
+  const seen = []
+  const inner = fakeCache()
+  const cache = {
+    async match(k) { seen.push(['match', String(k)]); return inner.match(k) },
+    async put(k, v) { seen.push(['put', String(k)]); return inner.put(k, v) },
+  }
+  const d2 = deps({ cache })
+  const env = envWith(fakeResolver().binding)
+  const card = await handle(apexReq('/jack/status/20'), env, c, d2)
+  assert.equal(card.status, 200)
+  await settle()
+  seen.length = 0
+  const file = await handle(apexReq('/jack/status/20.mp4'), env, c, d2)
+  await settle()
+  assert.equal(file.status, 302, 'the file, not the warm card sitting under the same key')
+  assert.ok(!seen.some(([op, k]) => k.includes('resp')),
+    `no response-cache read or write for a direct request, saw ${JSON.stringify(seen)}`)
+  const again = await handle(apexReq('/jack/status/20'), env, c, d2)
+  assert.equal(again.status, 200, 'and the card is still a card afterwards')
+  assert.match(again.headers.get('content-type') || '', /text\/html/)
+})
+
+test('A .mp4 ON A POST WITH NOTHING TO SERVE ANSWERS THE SAME PLAIN-TEXT 404 AS d.', async () => {
+  const { ctx: c } = ctx()
+  const res = await handle(apexReq('/jack/status/20.mp4'), envWith(fakeResolver().binding), c, deps({ fetchPost: async () => null }))
+  assert.equal(res.status, 404)
+  assert.match(res.headers.get('content-type'), /text\/plain/)
+  assert.equal(res.headers.get('cache-control'), 'no-store')
+  assert.ok(!(await res.text()).includes('<meta'), 'no markup under a url named like a video')
+})
+
+test('A .mp4 REDDIT SHARE LINK AND A .mp4 TIKTOK SHORT LINK SERVE BYTES TOO, with the suffix kept out of the code', async () => {
+  /**
+   * The other two kinds that converge on serveDirectMedia. The resolver must receive the code WITHOUT
+   * '.mp4' (a share code with the suffix glued on resolves to nothing), and a person gets the file, not
+   * a bounce to the platform.
+   */
+  const { ctx: c } = ctx()
+  let shareUrl = null
+  const resolved = { ref: { p: 'rd', kind: 'comments', id: 'abc123' }, canonical: 'https://www.reddit.com/r/linuxmemes/comments/abc123/x/' }
+  const share = await handle(apexReq('/r/linuxmemes/s/VRg1iSFn4k.mp4', CHROME_UA), envWith(fakeResolver().binding), c,
+    deps({ resolveRedditShare: async (url) => { shareUrl = url; return resolved } }))
+  assert.equal(share.status, 302)
+  assert.match(share.headers.get('location'), /^https:\/\/mbedfx\.app\/_media\//)
+  assert.ok(/\/s\/VRg1iSFn4k$/.test(shareUrl), `the resolver is asked for the share url WITHOUT .mp4, got ${shareUrl}`)
+
+  let shortCode = null
+  const post = {
+    ref: { p: 'tt', id: '7246058829106973978' },
+    canonical: 'https://www.tiktok.com/@someone/video/7246058829106973978',
+    author: { name: 'n', handle: 'h', url: 'https://example.invalid' },
+    text: '', createdAt: new Date('2026-07-01T00:00:00Z'), counts: {}, sensitive: false,
+    media: [{ kind: 'video', url: 'https://example.invalid/v.mp4', w: 5, h: 5 }],
+  }
+  const short = await handle(apexReq('/t/ZTAvgEAL3.mp4', CHROME_UA), envWith(fakeResolver().binding), c,
+    deps({ resolveShortlink: async (p, code) => { shortCode = code; return { kind: 'post', post } } }))
+  assert.equal(short.status, 302)
+  assert.match(short.headers.get('location'), /^https:\/\/mbedfx\.app\/_media\/tt%3A7246058829106973978\//)
+  assert.equal(shortCode, 'ZTAvgEAL3')
+})
+
+test('AN UNRESOLVED .mp4 SHORT LINK ANSWERS PLAIN TEXT AND NEVER POISONS THE PLAIN LINK\'S CACHED CHOOSER', async () => {
+  /**
+   * Caught by an adversarial review before this shipped. The short-link arm caches its chooser under
+   * shortRespCacheKey(p, code, client, origin), and route() strips '.mp4' out of the code, so
+   * `/t/{code}.mp4` and `/t/{code}` share that key on the apex. Rendering the chooser for the .mp4
+   * request put it under the key, and the plain link then served a chooser naming `/t/{code}.mp4`.
+   */
+  const { ctx: c, settle } = ctx()
+  const puts = []
+  const inner = fakeCache()
+  const cache = { match: k => inner.match(k), async put(k, v) { puts.push(String(k)); return inner.put(k, v) } }
+  const d2 = deps({ cache, resolveShortlink: async () => ({ kind: 'unresolved' }) })
+  const env = envWith(fakeResolver().binding)
+  const file = await handle(apexReq('/t/ZZqqZZqq9.mp4'), env, c, d2)
+  await settle()
+  assert.equal(file.status, 404)
+  assert.match(file.headers.get('content-type'), /text\/plain/)
+  assert.deepEqual(puts.filter(k => k.includes('resp')), [], 'nothing response-cached for a direct request')
+  const plain = await handle(apexReq('/t/ZZqqZZqq9'), env, c, d2)
+  const html = await plain.text()
+  assert.equal(plain.status, 200)
+  assert.ok(!html.includes('.mp4'), 'the plain link renders its own chooser, not one minted for the .mp4 url')
+})
+
+test('AN UNRESOLVED SHARE OR SHORT LINK ON A DIRECT URL IS THE PLAIN-TEXT 404 THE d. HOST DOCUMENTS, never HTML', async () => {
+  /**
+   * Measured on production 2026-10-04 before the fix: d.<host>/t/{code} for a code that does not resolve
+   * answered the HTML chooser, and d.<host>/r/{sub}/s/{code} the HTML failure card, while docs/API.md
+   * promises a plain-text 404. The `.mp4` suffix reaches the same three arms, so both spellings are pinned.
+   */
+  const { ctx: c } = ctx()
+  const env = envWith(fakeResolver().binding)
+  const d2 = deps({ resolveShortlink: async () => ({ kind: 'unresolved' }), resolveRedditShare: async () => null })
+  for (const req of [
+    dReq('/t/ZZqqZZqq9'), dReq('/r/linuxmemes/s/ZZqqZZqq9'), dReq('/share/1ZZqqZZqq9'),
+    apexReq('/t/ZZqqZZqq8.mp4'), apexReq('/r/linuxmemes/s/ZZqqZZqq8.mp4'), apexReq('/share/1ZZqqZZqq8.mp4'),
+  ]) {
+    const res = await handle(req, env, c, d2)
+    assert.equal(res.status, 404, req.url)
+    assert.match(res.headers.get('content-type'), /text\/plain/, req.url)
+    assert.equal(res.headers.get('cache-control'), 'no-store', req.url)
+    assert.ok(!(await res.text()).includes('<'), `${req.url}: no markup`)
+  }
+})
+
+test('d. AND .mp4 TOGETHER STILL SERVE BYTES ON d. — measured broken before, a 404 for an id ending .mp4', async () => {
+  const { ctx: c } = ctx()
+  const res = await handle(dReq('/jack/status/20.mp4'), envWith(fakeResolver().binding), c, deps())
+  assert.equal(res.status, 302)
+  assert.equal(res.headers.get('location'), 'https://d.mbedfx.app/_media/x%3A20/0')
+})
+
+test('A MASKED-LINK OVER-CAPTURE ON THE APEX RENDERS THE POST, not "Couldn\'t load" — Discord bug #6279', async () => {
+  /**
+   * `[text](https://host/X/status/{id}).` makes Discordbot request `/X/status/{id}).` (discord-api-docs
+   * #6279). Measured 2026-10-04: production answered that with "Couldn't load this Twitter post". The
+   * card for the clean id is the right answer, and it is the same card: one ref, one cache entry.
+   */
+  const { ctx: c } = ctx()
+  let asked = null
+  const res = await handle(apexReq('/jack/status/20).'), envWith(fakeResolver().binding), c,
+    deps({ fetchPost: async ref => { asked = ref; return stubFetchPost(ref) } }))
+  assert.equal(res.status, 200)
+  assert.deepEqual(asked, { p: 'x', id: '20' }, "the clean id was fetched, not '20).'")
+  assert.ok(!(await res.text()).includes("Couldn't load"), 'the post, not a failure card')
 })
 
 test('/_prep LEAVES A LINK ALONE WHEN IT ALREADY NAMES THE SAME POST', async () => {
@@ -978,4 +1151,51 @@ test('/_prep STILL UNFURLS A LINK THAT NAMES NO POST UNTIL IT IS RESOLVED', asyn
   assert.equal(j.ok, true)
   assert.ok(!j.url.includes('/t/'), `the opaque code is replaced, got ${j.url}`)
   assert.match(j.url, /7650584217042144526/, 'with the real post it resolved to')
+})
+
+test('/_prep KEEPS A PASTED .mp4 THROUGH A SHARE-CODE UNFURL, so the page never swaps a file link for a card link', async () => {
+  /**
+   * Caught by review. A share code or short link names no post until it is resolved, so /_prep hands the
+   * page the permalink, rebuilt from the platform canonical, and the page replaces the reader's link with
+   * it. The rebuilt permalink had no `.mp4`: the reader typed a link to the FILE and copied a CARD link.
+   * The answer must route as the same post with `direct`, for all three kinds that resolve this way.
+   */
+  const { ctx: c } = ctx()
+  const cases = [
+    ['/r/linuxmemes/s/VRg1iSFn4k.mp4', deps({ fetchPost: echoRedditPost, resolveRedditShare: async () => redditShareResolved('linuxmemes', 'prep2rd') })],
+    ['/t/ZTAxTF9aE.mp4', deps({ resolveShortlink: async () => shortResolved })],
+    ['/share/Fixture05X.mp4', deps({ resolveMetaShare: async () => 'https://www.threads.com/@dexerto/post/DbWxxQjFe4u?xmt=AQG0&slof=1' })],
+    // A Facebook TYPED share: here `ref` stays the share ref while `shown` becomes the resolved reel, and a
+    // first version compared against `ref`, never matched, and handed back the share code (second review).
+    ['/share/v/AbCdEf123.mp4', deps({ resolveMetaShare: async () => 'https://www.facebook.com/reel/1234567890123' })],
+  ]
+  for (const [p, d] of cases) {
+    const j = await (await handle(prep(p), envWith(fakeResolver().binding), c, d)).json()
+    assert.equal(j.ok, true, p)
+    assert.ok(new URL(j.url).pathname.endsWith('.mp4'), `${p}: the suffix survives, got ${j.url}`)
+    assert.ok(!j.url.includes('/share/') && !j.url.includes('/s/') && !j.url.includes('/t/'), `${p}: unfurled, not the share code: ${j.url}`)
+    const back = route(new URL(j.url))
+    assert.equal(back.kind, 'post', p)
+    assert.equal(back.direct, true, `${p}: and the router reads it as the file`)
+  }
+})
+
+test('/_prep WARMS THE POST ITS LINK NAMES — an unfurled Facebook share warms the permalink, not the share', async () => {
+  /**
+   * Found in the third review round. The Facebook branch unfurls a typed share (/share/v/{code}) to its
+   * permalink, and the page hands that permalink out, yet the warm still rendered the SHARE ref: the
+   * reel shown (and, with `.mp4`, the /_media/ url Discord fetches at once) started cold while the page
+   * said the video was downloading. The stub container records which page each mux was asked for.
+   */
+  for (const p of ['/share/v/AbCdEf124', '/share/v/AbCdEf125.mp4']) {
+    const { ctx: c, settle } = ctx()
+    const res = fakeResolver()
+    const d = deps({ resolveMetaShare: async () => 'https://www.facebook.com/reel/1234567890124' })
+    const j = await (await handle(prep(p), envWith(res.binding), c, d)).json()
+    await settle()
+    assert.equal(j.warming, true, p)
+    assert.ok(new URL(j.url).pathname.startsWith('/reel/1234567890124'), `${p}: the page is handed the reel, got ${j.url}`)
+    assert.ok(res.seen.pages.some(u => u.endsWith('/page/1234567890124')), `${p}: the reel is what was warmed, saw ${res.seen.pages}`)
+    assert.ok(!res.seen.pages.some(u => /AbCdEf12[45]/.test(u)), `${p}: and not the share code`)
+  }
 })

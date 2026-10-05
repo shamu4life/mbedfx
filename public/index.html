@@ -928,10 +928,19 @@ function mbedfxConvert(input, host, gallery) {
      * The same hole has existed for /story.php since 2026-08-01. Both are closed here: the id is
      * carried, and the worker's router claims the resulting path.
      */
+    /**
+     * A `.mp4` TYPED ONTO THE PATH OF A QUERY-ID LINK (`watch.mp4?v=`, `photo/.mp4?fbid=`) asks for the
+     * file, a spelling the worker's router reads (router.ts DIRECT_SUFFIX). It is held aside while the id
+     * is read off the query and put back on the path after, because the query branches below match exact
+     * paths and the fallback drops the query, which turned these into a ['x','ig'] chooser for a YouTube
+     * link (found by the completeness review, 2026-10-04).
+     */
+    var qpath = path.replace(/\/?\.mp4$/i, '') || '/';
+    var qsuf = qpath !== path ? '.mp4' : '';
     if (platform === 'Facebook') {
       var fbid = u.searchParams.get('fbid');
-      if (fbid && /^\d{5,}$/.test(fbid) && /^\/(photo|photo\.php)\/?$/.test(path)) {
-        return out('/photo/?fbid=' + fbid, 'Facebook', '', 'fb');
+      if (fbid && /^\d{5,}$/.test(fbid) && /^\/(photo|photo\.php)\/?$/.test(qpath)) {
+        return out('/photo/' + qsuf + '?fbid=' + fbid, 'Facebook', '', 'fb');
       }
       var sfbid = u.searchParams.get('story_fbid');
       var sid = u.searchParams.get('id');
@@ -977,9 +986,9 @@ function mbedfxConvert(input, host, gallery) {
     if (platform === 'Dailymotion' && seg.length === 1) return out('/dm/' + seg[0], 'Dailymotion', '', 'dm');
 
     // YouTube is the one place a query parameter carries the id rather than tracking.
-    if (platform === 'YouTube' && (seg[0] === 'watch' || path === '/watch')) {
+    if (platform === 'YouTube' && (seg[0] === 'watch' || qpath === '/watch')) {
       var v = u.searchParams.get('v');
-      if (v) return out('/watch?v=' + v, 'YouTube', '', 'yt');
+      if (v) return out('/watch' + qsuf + '?v=' + v, 'YouTube', '', 'yt');
     }
     if (seg.length === 0) return no("That's the site's front page, not a post.");
     return out(path, platform, '', pcode);
@@ -1707,7 +1716,10 @@ function mbedfxConvert(input, host, gallery) {
   function syncMediaOnlyAvailability(j) {
     var box = $('mediaOnly');
     if (!box) return;
-    var has = !!(j && j.ok && (j.media || []).length);
+    // A video still being prepared counts, the same exception drawMediaOnly makes: a posterless one comes
+    // back with its entry dropped until the mux lands, and disabling the box then unticked it and quietly
+    // dropped the reader's `d.` while the caption said the file was on its way (round-four review).
+    var has = !!(j && j.ok && ((j.media || []).length || j.muxing || j.muxSlow));
     var lab = box.parentNode;
     box.disabled = !has;
     if (lab && lab.setAttribute) {
@@ -1731,9 +1743,24 @@ function mbedfxConvert(input, host, gallery) {
      */
     var m = (j && j.ok && (j.media || [])[0]) || null;
     var still = m ? (m.kind === 'video' ? m.poster : (m.poster || m.url)) : '';
-    var line = j && j.ok
-      ? 'Discord attaches this file. No card, no caption.'
-      : (j && j.gate ? j.gate : 'Nothing to attach. This link has no media.');
+    /**
+     * THE LINE TURNS ON WHAT THE LINK WILL ACTUALLY SERVE, not on whether the post was read. A post with no
+     * usable media answers a direct url with a plain-text 404, so "attaches this file" over it would be
+     * the confident wrong preview (the box can be switched off when there is nothing to attach; a pasted
+     * `.mp4` cannot). And a video still being prepared, or one this preview stopped watching after six
+     * minutes, may draw nothing if pasted now (docs/API.md, the d. host), so it says that instead.
+     */
+    // The mux state is asked FIRST: a video with no poster that is still being prepared comes back with
+    // its entry dropped (no still to stand in for it), so "no media" there would be wrong; the link does
+    // serve the file once the mux lands (third review round).
+    var has = !!(j && j.ok && (j.media || []).length);
+    var line = (j && j.ok && j.muxSlow)
+      ? 'Still being prepared after six minutes. This preview has stopped checking. Pasted right now, it may show nothing.'
+      : (j && j.ok && j.muxing)
+        ? 'The video is still being prepared. Pasted right now, it may show nothing.'
+        : has
+          ? 'Discord attaches this file. No card, no caption.'
+          : (j && j.gate ? j.gate : 'Nothing to attach. This link has no media.');
     preview.innerHTML = '<div class="sentrow"><span class="sent" id="sentline"></span>'
       + '<button type="button" id="copy2">Copy</button></div>'
       + '<div class="pv mediaonly-pv">'
@@ -1771,9 +1798,6 @@ function mbedfxConvert(input, host, gallery) {
       .then(function (j) {
         if (seq !== cardSeq) return;
         lastCard = { path: path, j: j };
-        // Media-only needs the SAME answer — it is where the media urls come from — just drawn as the
-        // file rather than as a card. Skipping the fetch is what left the page previewing nothing.
-        if (mediaOnly) { drawMediaOnly(url, j); return; }
         /**
          * AT THE CAP THE PAYLOAD ITSELF IS SETTLED, not a copy of it passed to one draw.
          *
@@ -1802,7 +1826,16 @@ function mbedfxConvert(input, host, gallery) {
          * because the thing that was supposed to stop it already gave up.
          */
         if (j && j.muxing && waited >= MUX_WATCH_TOTAL_MS) { j.muxing = false; j.muxSlow = true; }
-        drawCard(url, j);
+        // Media-only needs the SAME answer — it is where the media urls come from — just drawn as the
+        // file rather than as a card. Skipping the fetch is what left the page previewing nothing.
+        // `j.direct` is the ROUTER's reading of a trailing `.mp4` on the path, echoed by /_card: Discord
+        // attaches that file exactly as it does for a d. link, so it previews the way the box does.
+        // DRAWN AFTER THE MUX BOOKKEEPING ABOVE, NOT BEFORE IT, so the file drawing keeps polling a video
+        // that is still being prepared exactly as the card does. Returning early, as it first did, froze
+        // the preview on a poster still captioned as the file Discord attaches, while a paste at that
+        // moment draws nothing (docs/API.md, the d. host). Caught by review.
+        if (mediaOnly || (j && j.direct)) drawMediaOnly(url, j);
+        else drawCard(url, j);
         if (j && j.muxing) {
           cardTimer = setTimeout(function () {
             // Re-checked on fire: the reader may have typed since, and that newer card wins.
@@ -1960,17 +1993,21 @@ function mbedfxConvert(input, host, gallery) {
        * already in hand the other kind can be drawn immediately — no blank gap, and no second request
        * that could land out of order behind the first.
        *
-       * cardSeq is bumped so any fetch still in flight cannot land on top of this draw; without that,
-       * a toggle during a slow request drew the previous post's answer in the new kind.
+       * cardSeq is bumped WHEN THE POST CHANGED, so a fetch still in flight for the previous post cannot
+       * land on top of this draw; without that, a toggle during a slow request drew the previous post's
+       * answer in the new kind. For the same post it is left alone (see below).
        */
       var url = result.textContent || '';
       var path = url ? url.slice(url.indexOf('/', 8)) : '';
-      cardSeq++;
       if (lastCard && lastCard.path === path) {
-        if (mediaOnly) drawMediaOnly(url, lastCard.j);
+        if (mediaOnly || (lastCard.j && lastCard.j.direct)) drawMediaOnly(url, lastCard.j);
         else drawCard(url, lastCard.j);
+        // NO cardSeq BUMP FOR THE SAME POST: a mux poll armed for this path must keep running, and card()
+        // reads `mediaOnly` when it draws, so it lands as the right kind. Bumping here killed that poll
+        // and froze "still being prepared" on screen after the toggle (found in the second review round).
         return;
       }
+      cardSeq++;
       preview.className = 'preview';
       preview.innerHTML = '';
       schedulePrep();

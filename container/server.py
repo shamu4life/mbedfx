@@ -238,6 +238,55 @@ FFMPEG_PROTOCOLS = "http,https,tcp,tls,crypto"
 # dropped read rather than failing. Verified 2026-07-22: turns a failing Bluesky mux clean. Applied per
 # INPUT (before each -i), which is where ffmpeg reads http options.
 HTTP_OPTS = ["-http_persistent", "0", "-reconnect", "1", "-reconnect_streamed", "1", "-reconnect_delay_max", "5"]
+# REDDIT'S HLS IS OPENED WITH THE HLS DEMUXER'S EXTENSION CHECK OFF, and only Reddit's.
+#
+# WHAT BREAKS WITHOUT IT. No Reddit video WITH AUDIO uploaded between about 2024-05-01 and
+# 2025-11-01 muxes on this image. Whether any ever played in production is not recorded: the base
+# image is unpinned, and git history only reaches the 2026-08-09 squash, so the ffmpeg in earlier
+# builds is unknown. Those uploads carry their audio renditions as MPEG-TS in files named .aac
+# (HLS_AUDIO_64.aac / HLS_AUDIO_128.aac; served as audio/MP2T; first bytes 47 40 00 10; Raygun's are
+# last-modified 2024-08-14, its upload date). FFmpeg 7.1.1 added `extension_picky` to the hls
+# demuxer, on by default, and it refuses MPEG-TS from a url that does not end in a TS-ish extension:
+# "detected format mpegts extension none mismatches allowed extensions". ffmpeg exits 183 while
+# still OPENING the input, so `-map` cannot route around it, this server answers 502 "mux failed",
+# the Worker counts `mux_gate` and serves 503 no-store, and every alarm retry fails the same way, so
+# the video never plays. The image's ffmpeg is a 7.1 point release no older than 7.1.1: production's
+# own mux output is tagged Lavf61.7.103, the tag a 7.1.5 build writes, where 7.1.1 writes 61.7.100.
+# It comes from Debian trixie through the unpinned `python:3.12-slim`.
+#
+# NOT A REDDIT CHANGE, though the post's age predicts it exactly: the age picks the packaging Reddit
+# used at upload time. Earlier uploads put audio in .ts files or real ADTS in .aac, and uploads from
+# 2025-11-11 on are CMAF fMP4. All of those pass the check. Across the boundary the master playlist
+# text is structurally identical, so the Worker cannot tell a failing post from a passing one by its
+# url.
+#
+# WHERE IT WAS MEASURED, 2026-10-04: in the Claude Code dev sandbox (a non-Cloudflare cloud IP), not
+# on Cloudflare. This module's own `_mux_tracks`, run under a Debian-source 7.1.5 build, failed on
+# the Raygun master (v.redd.it/muy8yipuynid1) with rc 183. Three changes each turned the same bytes
+# into a 3,279,884 B h264 360x450 + aac faststart MP4: adding `-extension_picky 0`, renaming only
+# the audio files .aac -> .ts, or running ffmpeg 6.1.1 with nothing changed. Production, asked as
+# Discordbot the same day, matched that split: 8 of 8 videos from that window answered 503, and 12
+# of 12 from every other window answered 206. `-allowed_extensions ALL` was tried and does NOT help,
+# and `-allowed_segment_extensions ALL` could not: for MPEG-TS, hls.c's test_segment compares the
+# url with a list hard-coded beside the check, and `extension_picky 0` is the one switch that skips
+# it (read from 7.1.5's source).
+#
+# WHY REDDIT ONLY, rather than every HLS input. Off, test_segment returns before EITHER of its
+# checks, so the segment-extension allowlist goes too. Both are defence in depth against a playlist
+# that names a segment as something it is not, and this is the narrowest relaxation that fixes what
+# was measured. Bluesky's segments are .ts and pass, so they keep both. What still bounds a Reddit
+# input is FFMPEG_PROTOCOLS above: no file, data or concat, whatever a playlist names. (Nested
+# segment urls never went through `_safe_url`, with or without this.)
+#
+# WHY IT IS PROBED, NOT ASSUMED. The option arrived with the check (in 7.1.1; absent from 7.0.2 and
+# 7.1, read from source), so asking for the option is asking for the check. An unknown option aborts
+# the whole mux before a byte is read (6.1.1: "Unrecognized option 'extension_picky'", rc 8), the
+# same shape of trap the README records for `-http_persistent`. So an ffmpeg that does not list it
+# (a self-hoster's, which container/README.md says to run; 6.1.1 measured) gets neither the check
+# nor the flag, and the mux works as it did.
+REDDIT_HLS_HOST = "v.redd.it"
+HLS_PROBE_TIMEOUT = 3
+_hls_picky_known: bool | None = None
 CHUNK = 1 << 16
 
 
@@ -270,10 +319,63 @@ def _safe_url(url: object) -> str:
     return url
 
 
+def _ffmpeg_has_extension_picky() -> bool:
+    """Whether this ffmpeg's hls demuxer has `extension_picky` (7.1.1 and later). Asked once.
+
+    ONLY AN ANSWER IS CACHED. A probe that could not run (timeout, missing binary, non-zero exit)
+    returns False for this call and asks again next time: caching it would pin the old behaviour,
+    every 2024-05..2025-11 Reddit video with audio failing, for the life of a pooled instance over
+    one slow start. `_hls_picky_known` stays None in that case, which is how /_clients tells "could
+    not ask" from "no".
+
+    Asked lazily, from the first Reddit HLS mux, rather than at import, which would run a real ffmpeg
+    every time this module loads, every test run included. The cost is that the first Reddit mux on
+    an instance records the probe's argv ahead of its own, which is why test_server.py's RedditHls
+    stubs it.
+
+    THE TIMEOUT COMES OUT OF THE TRACKS ALARM'S SLACK. This runs on the request path before the mux,
+    which is walled at PROC_TIMEOUT, and src/muxpolicy.ts's MUX_FIRST_ATTEMPT_TRACKS_MS keeps 20 s
+    over that wall. The listing took about 50 ms in the dev sandbox; 3 s is generous for it and
+    leaves most of the slack, and an unanswered probe is asked again on the next mux.
+    """
+    global _hls_picky_known
+    if _hls_picky_known is None:
+        try:
+            out = subprocess.run(["ffmpeg", "-hide_banner", "-h", "demuxer=hls"], capture_output=True,
+                                 timeout=HLS_PROBE_TIMEOUT, stdin=subprocess.DEVNULL)
+        except Exception:
+            return False
+        if out.returncode != 0:
+            return False
+        text = (out.stdout or b"").decode("utf-8", "replace")
+        _hls_picky_known = any(line.lstrip().startswith("-extension_picky ") for line in text.splitlines())
+    return _hls_picky_known
+
+
+def _hls_picky_answer() -> bool | None:
+    """The probe's answer for /_clients: True, False, or None when it could not be asked."""
+    _ffmpeg_has_extension_picky()
+    return _hls_picky_known
+
+
+def _input_opts(url: str) -> list[str]:
+    """The options that go before one input's `-i`, which is where ffmpeg reads per-input options.
+
+    Takes the url `_safe_url` has already passed, so a refused source never reaches the probe.
+    """
+    opts = ["-protocol_whitelist", FFMPEG_PROTOCOLS, *HTTP_OPTS]
+    parts = urlsplit(url)
+    if parts.hostname == REDDIT_HLS_HOST and parts.path.endswith(".m3u8") and _ffmpeg_has_extension_picky():
+        opts += ["-extension_picky", "0"]
+    return opts
+
+
 def _mux_tracks(video: str, audio: str | None, out: str) -> None:
-    cmd = ["ffmpeg", "-nostdin", "-y", "-protocol_whitelist", FFMPEG_PROTOCOLS, *HTTP_OPTS, "-i", _safe_url(video)]
+    video = _safe_url(video)
+    cmd = ["ffmpeg", "-nostdin", "-y", *_input_opts(video), "-i", video]
     if audio:
-        cmd += ["-protocol_whitelist", FFMPEG_PROTOCOLS, *HTTP_OPTS, "-i", _safe_url(audio), "-map", "0:v:0", "-map", "1:a:0"]
+        audio = _safe_url(audio)
+        cmd += [*_input_opts(audio), "-i", audio, "-map", "0:v:0", "-map", "1:a:0"]
     cmd += ["-c", "copy", "-movflags", "+faststart", "-fs", str(MAX_BYTES), "-f", "mp4", out]
     subprocess.run(cmd, check=True, timeout=PROC_TIMEOUT, stdin=subprocess.DEVNULL,
                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
@@ -771,6 +873,14 @@ def _probe_clients():
     return {
         "video": PROBE_VIDEO,
         "ytdlp": _ytdlp_version(),
+        # THE SHAPE MARKER for the Reddit HLS fix (REDDIT_HLS_HOST): the key's presence says the running
+        # instance has the code, and `hlsExtensionPicky: true` says its ffmpeg has the check, so Reddit
+        # playlists are opened with it off. `false` is an ffmpeg that answered without it; `null` is a
+        # probe that could not run, reported as unknown rather than as a "no" it never heard. A pooled
+        # instance can keep an old image after a deploy reports done (see worker.ts
+        # RESOLVER_GENERATION), and without a marker that looks exactly like the fix not working.
+        "ffmpeg": _ffmpeg_version(),
+        "hlsExtensionPicky": _hls_picky_answer(),
         "ms": int((time.monotonic() - started) * 1000),
         "serving": [r["client"] for r in rows if r["gvs"] == "ok"],
         "clients": rows,
@@ -782,6 +892,16 @@ def _ytdlp_version():
     try:
         out = subprocess.run(["yt-dlp", "--version"], capture_output=True, timeout=10)
         return (out.stdout or b"").decode().strip()[:32]
+    except Exception:
+        return "unknown"
+
+
+def _ffmpeg_version():
+    """The third word of `ffmpeg -version`'s first line (`6.1.1-3ubuntu5` on the dev sandbox)."""
+    try:
+        out = subprocess.run(["ffmpeg", "-version"], capture_output=True, timeout=10, stdin=subprocess.DEVNULL)
+        words = (out.stdout or b"").decode("utf-8", "replace").split(None, 3)
+        return words[2][:48] if len(words) > 2 and words[:2] == ["ffmpeg", "version"] else "unknown"
     except Exception:
         return "unknown"
 
@@ -951,8 +1071,12 @@ class Handler(BaseHTTPRequestHandler):
         except subprocess.TimeoutExpired:
             self._json_error(504, "mux timed out")
         except subprocess.CalledProcessError:
-            # stderr is suppressed on purpose — it can carry the source url. Any non-200 tells the
-            # Worker to fall back to the cover still.
+            # stderr is suppressed on purpose — it can carry the source url. When this is the Worker's
+            # last attempt it counts as `mux_gate` and /_media/ answers a no-store 503 (serveMuxed's
+            # notReady); a failed `{video}` shortcut that has a `{page}` fallback is neither counted
+            # nor served. Either way it means "ffmpeg or yt-dlp exited non-zero", which includes OUR
+            # ffmpeg refusing an input: every 2024-05..2025-11 Reddit video with audio landed here
+            # until REDDIT_HLS_HOST above.
             self._json_error(502, "mux failed")
         except Exception:
             self._json_error(500, "internal error")

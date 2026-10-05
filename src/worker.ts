@@ -1087,7 +1087,8 @@ export async function liveFetchPost(
       return normalizePeerTube(got.video, ref)
     }
     case 'pn': {
-      // Pinterest: ONE unauthenticated, cookie-free call gated by a single header. Its video is a
+      // Pinterest: ONE unauthenticated, cookie-free call, gated by a handler header and (found
+      // 2026-10-05) a non-empty user-agent, both explained in pinterest/fetch.ts. Its video is a
       // real progressive mp4 that serves to a Discordbot UA, so it keeps the plain /_media/ 302 —
       // no byte proxy and no container, unlike Instagram, Twitch and the yt-dlp tier.
       const got = await fetchPinterest(ref)
@@ -1700,8 +1701,17 @@ const RESOLVER_SLOTS = 4
  * from a platform gate — the probe's `fetch: http-403` reads exactly like the `*-webapp-prime` cookie
  * wall — and the wrong conclusion was one step away. Ship a shape marker with any container change
  * whose result you intend to act on.
+ *
+ * g14 -> g15, 2026-10-04, THE SAME USE A THIRD TIME, AND THIS ONE BUMPED WITH THE CHANGE, NOT AFTER A
+ * STALE IMAGE WAS FOUND. Every record is fine. The container now opens Reddit's HLS with
+ * `-extension_picky 0` (see container/server.py, REDDIT_HLS_HOST): every Reddit video with audio
+ * uploaded 2024-05..2025-11 had been answering 503 because the image's ffmpeg (a 7.1 release no older
+ * than 7.1.1) refuses that generation's MPEG-TS-in-.aac audio.
+ * Both earlier bumps record that a deploy reporting done can leave instances on the old image, so this
+ * one is bumped with the change rather than after it is found not to have landed. Its marker, the one
+ * the paragraph above says to ship, is `ffmpeg` plus `hlsExtensionPicky` in `/_clients`.
  */
-const RESOLVER_GENERATION = 'g14'
+const RESOLVER_GENERATION = 'g15'
 /**
  * THE STORED-RECORD HALF, pinned at the value the shared string had when it split, so the split
  * itself invalidates nothing. Read by metaCacheKey and by nothing else.
@@ -1841,8 +1851,9 @@ function withCookieJar<T extends object>(body: T, env: Env, platform: Credential
  * TWO DIFFERENT 502s, and telling them apart is most of the point. container/server.py answers 502
  * for BOTH a non-zero yt-dlp exit (`"mux failed"` — the upstream refused us: a 403, a PO-token
  * demand, a sign-in wall) and a run that completed with nothing usable (`"empty or oversized
- * result"`). The first is YouTube's verdict and the second is ours, and a single `mux_gate` covering
- * both would point the next reader at the wrong system.
+ * result"`). The first is usually the upstream's verdict, but on a `{video}` source it is our own
+ * ffmpeg's exit (see analytics.ts `mux_gate`); the second is ours. A single `mux_gate` covering both
+ * would point the next reader at the wrong system.
  *
  * MATCHED, NEVER ECHOED. The body is compared against fixed literals this repo owns; nothing from it
  * is ever stored or logged. yt-dlp's stderr is suppressed inside the container because it can carry
@@ -4909,19 +4920,27 @@ function toApiPost(post: Post, origin: string) {
 
 async function renderPostRoute(
   ref: PostRef, canonical: string, d: Deps, env: Env, ctx: ExecutionContext, client: ClientClass, origin: string,
-  gallery?: GalleryMode,
+  direct: boolean, gallery?: GalleryMode,
 ): Promise<Response> {
   /**
-   * THE d. HOST SHORT-CIRCUITS HERE, so it covers every route rather than the one it was first wired
-   * into. Reported on a Reddit /r/{sub}/s/{code} share link, which "does nothing different from the
-   * version without d." — true, because that is a different route kind from a pasted permalink, as
-   * are Meta /share/ codes and every shortlink. All of them converge on THIS function once their ref
-   * is known, so checking here covers the set, and covers any future route that joins it without
-   * anyone having to remember.
+   * A DIRECT-MEDIA REQUEST SHORT-CIRCUITS HERE, so it covers every route rather than the one it was
+   * first wired into. Reported on a Reddit /r/{sub}/s/{code} share link, which "does nothing different
+   * from the version without d." — true, because that is a different route kind from a pasted
+   * permalink, as are Meta /share/ codes and every shortlink. All of them converge on THIS function once
+   * their ref is known, so checking here covers the set, and covers any future route that joins it
+   * without anyone having to remember.
    *
-   * The host comes off `origin`, which is already the request's own rather than a constant.
+   * `direct` means a `d.` host (decided in handle(), off the request's own hostname) OR a trailing
+   * `.mp4` on the path (decided in route(), host-blind; since 2026-10-04). It is a REQUIRED parameter, not
+   * a default, so a future caller that forgets it is a type error rather than a route where `.mp4`
+   * silently renders a card.
+   *
+   * ABOVE THE CACHE READ, AND IT HAS TO STAY THERE. On a d. host the origin is part of respCacheKey, so a
+   * card and the bytes could never share an entry. A `.mp4` request on the apex has the SAME ref, client
+   * and origin as the card, so the keys are identical: moving this below `d.cache.match` would serve a
+   * warm card to a request for the file. serveDirectMedia never writes the response cache either.
    */
-  if (isDirectMediaOrigin(origin)) return serveDirectMedia(ref, d, env, ctx, client, origin)
+  if (direct) return serveDirectMedia(ref, d, env, ctx, client, origin)
   const rkey = cacheUrl(respCacheKey(ref, client, origin, gallery))
   const cached = await d.cache.match(rkey)
   if (cached) return cached
@@ -5070,20 +5089,22 @@ async function renderPostRoute(
  * `d.` IS A PREFIX TEST, NOT A DOMAIN LIST, so it works on every serving domain — including the ones
  * this file does not know about, which is the same reason `origin` is always the request's own rather
  * than a constant. It is anchored so a host merely CONTAINING "d." cannot match.
+ *
+ * THE PATH SPELLING, since 2026-10-04: a trailing `.mp4` on the post url (`/X/status/{id}.mp4`), which is
+ * what fxtwitter users type. That one IS read in route(), because it is pathname, and arrives here as
+ * Route.direct; handle() ORs the two into one `direct`, and everything downstream treats them the same.
  */
 const DIRECT_MEDIA_HOST = /^d\.[^.]+\./i
 
 /**
- * The same test, asked of an ORIGIN rather than a hostname, because that is what the render path has
- * to hand. Spelled once so the two callers cannot drift, and total: an unparseable origin is simply
- * not a direct-media host.
+ * THE DIRECT-MEDIA FAILURE ANSWER, one spelling for every arm that can reach it: plain text, a real 404,
+ * never cached. A direct request promises bytes; answering a failure with an HTML embed would hand a
+ * media player a document, and `curl -O` a page of markup named like a video.
  */
-function isDirectMediaOrigin(origin: string): boolean {
-  try {
-    return DIRECT_MEDIA_HOST.test(new URL(origin).hostname)
-  } catch {
-    return false
-  }
+function directNotFound(why: string): Response {
+  return new Response(`no media: ${why}\n`, {
+    status: 404, headers: { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' },
+  })
 }
 
 /**
@@ -5094,7 +5115,7 @@ function isDirectMediaOrigin(origin: string): boolean {
  *
  * NO HUMAN/BOT SPLIT, deliberately, and it is the one place in this file without one. Everywhere else
  * a human is redirected to the original post because a card is for a crawler; here the bytes ARE the
- * product and a person pasting a d. link wants the file, not the post they already had.
+ * product and a person pasting a d. or `.mp4` link wants the file, not the post they already had.
  */
 async function serveDirectMedia(
   ref: PostRef, d: Deps, env: Env, ctx: ExecutionContext, client: ClientClass, origin: string,
@@ -5102,19 +5123,13 @@ async function serveDirectMedia(
   const got = await getPost(ref, d, env, client, ctx)
   if (!got.post) {
     count(env, ref.p, 'fetch_fail', client)
-    // PLAIN TEXT, NEVER A CARD. This host promises bytes; answering a failure with an HTML embed
-    // would hand a media player a document, and `curl -O` a page of markup named like a video.
-    return new Response('no media: this post could not be read\n', {
-      status: 404, headers: { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' },
-    })
+    return directNotFound('this post could not be read')
   }
   const list = mediaOf(got.post)
   const i = list.findIndex(m => usable(m))
   if (i < 0) {
     count(env, ref.p, 'media_miss', client)
-    return new Response('no media: this post has nothing to serve\n', {
-      status: 404, headers: { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' },
-    })
+    return directNotFound('this post has nothing to serve')
   }
   count(env, ref.p, 'media_hit', client)
   // bytesIndex, not the bare position: a degraded still lives in the poster slot, and addressing it
@@ -5632,11 +5647,13 @@ export async function handle(req: Request, env: Env, ctx: ExecutionContext, d: D
   // would make staging embeds point Discord's media proxy at the live prod worker.
   const origin = url.origin
   const client = classify(req.headers.get('user-agent'))
-  // Computed once and consulted by every post-yielding arm: on a d. host a HUMAN wants the bytes too,
-  // so the usual "bounce a person to the original post" must not fire. renderPostRoute makes the
-  // same check for the render half.
-  const direct = DIRECT_MEDIA_HOST.test(url.hostname)
   const r = route(url)
+  // Computed once and consulted by every post-yielding arm: a d. host, or a trailing `.mp4` that route()
+  // read off the path, asks for the post's bytes, and then a HUMAN wants the bytes too, so the usual
+  // "bounce a person to the original post" must not fire. renderPostRoute takes the same value for the
+  // render half. The two halves of the test live where each is allowed to: the hostname here, the path
+  // in the host-blind router.
+  const direct = DIRECT_MEDIA_HOST.test(url.hostname) || ('direct' in r && r.direct === true)
 
   switch (r.kind) {
     case 'site':
@@ -5984,6 +6001,9 @@ export async function handle(req: Request, env: Env, ctx: ExecutionContext, d: D
        * url would have been a link we then could not read.
        */
       let shown = inner.canonical
+      // Set when the Facebook branch below unfurls a typed share to its permalink: that permalink, not
+      // the share, is what the page will hand out, so it is what has to be warmed (see the warm below).
+      let unfurled: { ref: PostRef; canonical: string } | null = null
       if (ref.p === 'fb' && ref.kind === 'share') {
         let loc: string | null = null
         try {
@@ -5992,26 +6012,10 @@ export async function handle(req: Request, env: Env, ctx: ExecutionContext, d: D
           loc = null
         }
         const resolved = loc ? route(new URL(stripMetaTracking(loc), 'https://www.facebook.com')) : null
-        if (resolved?.kind === 'post' && resolved.ref.p === 'fb') shown = resolved.canonical
-      }
-      const warms = prewarmable(ref) !== null
-      if (warms) {
-        // The render is discarded; the point is its SIDE EFFECTS — the post lands in the cache and
-        // the mux starts. waitUntil keeps it alive past this response, exactly as settleMux does.
-        /**
-         * CONSUMED, NOT CANCELLED. `res.body.cancel()` looked like the tidy way to throw away a
-         * render nobody reads, and it HANGS: renderPostRoute clones its response to populate the
-         * cache, so the body is teed, and cancelling one branch while the other is still unread never
-         * settles. Measured — the prep JSON returned in 23ms and the waitUntil promise was still
-         * pending 8 seconds later, which on a Worker means an isolate held open for nothing.
-         * arrayBuffer() drains it, which is what actually releases both branches.
-         */
-        ctx.waitUntil(
-          renderPostRoute(ref, inner.canonical, d, env, ctx, 'discord', origin)
-            .then(res => res.arrayBuffer())
-            .then(() => undefined)
-            .catch(() => undefined),
-        )
+        if (resolved?.kind === 'post' && resolved.ref.p === 'fb') {
+          shown = resolved.canonical
+          unfurled = { ref: resolved.ref, canonical: resolved.canonical }
+        }
       }
       /**
        * DO NOT RE-SPELL A LINK THAT WAS ALREADY RIGHT.
@@ -6035,7 +6039,63 @@ export async function handle(req: Request, env: Env, ctx: ExecutionContext, d: D
       const alreadyRight = shown === inner.canonical
         && pasted.kind === 'post'
         && refKey(pasted.ref) === refKey(ref)
-      const shownUrl = alreadyRight ? target : new URL(shown)
+      let shownUrl = alreadyRight ? target : new URL(shown)
+      /**
+       * A PASTED `.mp4` SURVIVES THE UNFURL. A share code or short link with the suffix asks for the file,
+       * and the permalink rebuilt from `shown` above has no suffix, so the page would replace the link the
+       * reader typed with a card link (caught by review: `/r/{sub}/s/{code}.mp4`, `/t/{code}.mp4` and
+       * `/share/{code}.mp4` all came back bare, while /_card for the same path said direct). The d. host
+       * survives this on its own because the page re-applies the host; nothing re-applies a path suffix.
+       *
+       * PROVED, NOT ASSUMED: the suffixed permalink is used only if route() reads it back as the same post
+       * the unsuffixed one names, with `direct`. Otherwise the pasted target goes back untouched, which
+       * still serves the file when pasted, rather than a permalink that would silently be a card. A query
+       * canonical passes (`/watch.mp4?v={id}` is the file); the guard is for a candidate that would route
+       * anywhere else.
+       *
+       * COMPARED WITH THE POST `shown` NAMES, NOT WITH `ref`. For a Facebook typed share the Facebook
+       * branch above rewrites `shown` to the resolved permalink while `ref` stays the share ref, so a first
+       * version compared a resolved reel with the share it came from, never matched, and handed back the
+       * share code (found in the second review round), which is the per-share-act token that unfurl
+       * exists to drop.
+       */
+      if (!alreadyRight && 'direct' in pasted && pasted.direct === true) {
+        const cand = new URL(shownUrl.toString())
+        cand.pathname = `${cand.pathname.replace(/\/+$/, '')}.mp4`
+        const back = route(cand)
+        const want = route(new URL(shown))
+        shownUrl = back.kind === 'post' && back.direct === true && want.kind === 'post'
+          && refKey(back.ref) === refKey(want.ref) ? cand : target
+      }
+      /**
+       * WARM THE POST THE HANDED-OUT LINK NAMES. Moved below the url decision for that reason: a Facebook
+       * typed share is unfurled to its permalink, and a first version still warmed the SHARE ref, so the
+       * reel the page showed (and, with `.mp4`, the /_media/ url Discord fetches at once) started cold
+       * while the page said the video was downloading (found in the third review round). When the
+       * pasted share code itself comes back (the `.mp4` round trip fell back), the share ref is warmed.
+       */
+      const handsOutUnfurled = unfurled !== null && shownUrl !== target
+      const warmRef = handsOutUnfurled && unfurled ? unfurled.ref : ref
+      const warmCanonical = handsOutUnfurled && unfurled ? unfurled.canonical : inner.canonical
+      const warms = prewarmable(warmRef) !== null
+      if (warms) {
+        // The render is discarded; the point is its SIDE EFFECTS — the post lands in the cache and
+        // the mux starts. waitUntil keeps it alive past this response, exactly as settleMux does.
+        /**
+         * CONSUMED, NOT CANCELLED. `res.body.cancel()` looked like the tidy way to throw away a
+         * render nobody reads, and it HANGS: renderPostRoute clones its response to populate the
+         * cache, so the body is teed, and cancelling one branch while the other is still unread never
+         * settles. Measured — the prep JSON returned in 23ms and the waitUntil promise was still
+         * pending 8 seconds later, which on a Worker means an isolate held open for nothing.
+         * arrayBuffer() drains it, which is what actually releases both branches.
+         */
+        ctx.waitUntil(
+          renderPostRoute(warmRef, warmCanonical, d, env, ctx, 'discord', origin, direct)
+            .then(res => res.arrayBuffer())
+            .then(() => undefined)
+            .catch(() => undefined),
+        )
+      }
       return Response.json({
         ok: true,
         url: `${origin}${shownUrl.pathname}${shownUrl.search}`,
@@ -6075,13 +6135,24 @@ export async function handle(req: Request, env: Env, ctx: ExecutionContext, d: D
        */
       const described = await describeTarget(r.target, d, env, ctx, client, origin)
       if (!described) return Response.json({ ok: false, reason: 'unparseable' }, { status: 400 })
+      /**
+       * WHETHER DISCORD WILL ATTACH THE FILE RATHER THAN DRAW A CARD, as the ROUTER reads the target: a
+       * trailing `.mp4` (router.ts DIRECT_SUFFIX). Echoed so the converter can draw its media-only
+       * preview for such a link without a second copy of the router's rule in the page; a first version
+       * had one, and an adversarial review measured it already disagreeing with route() on
+       * `/A61SaA1.mp4` (a chooser) and `/fxtwitter.com/…/{id}.mp4` (notfound). Present only when true,
+       * so every existing answer is byte-identical. The d. host is not part of it: the page chooses
+       * that itself, with its media-only box.
+       */
+      const target = (() => { try { return route(new URL(r.target, origin)) } catch { return null } })()
+      const directOf = target && 'direct' in target && target.direct === true ? { direct: true as const } : {}
       if (!described.ok) {
         // The page shows the same 🔞/🔒 wording Discord would, rather than inventing its own. `gate`
         // is undefined on every non-gate failure and JSON.stringify omits it, which is the shape this
         // endpoint has always returned — the candidates describeTarget also computes are deliberately
         // NOT emitted here, because the page has its own chooser and /_prep is what feeds it.
         return described.reason === 'fetch_fail'
-          ? Response.json({ ok: false, reason: 'fetch_fail', gate: described.gate })
+          ? Response.json({ ok: false, reason: 'fetch_fail', gate: described.gate, ...directOf })
           : Response.json({ ok: false, reason: described.reason })
       }
       const post = described.post
@@ -6089,6 +6160,7 @@ export async function handle(req: Request, env: Env, ctx: ExecutionContext, d: D
       const own = usableWithIndex(post)
       return Response.json({
         ok: true,
+        ...directOf,
         /**
          * THE ONE THING THE PAGE COULD NOT PREVIOUSLY LEARN: that this answer is incomplete.
          *
@@ -6298,7 +6370,7 @@ export async function handle(req: Request, env: Env, ctx: ExecutionContext, d: D
       // cache-check, fetch, render, cache — is renderPostRoute, shared with the reddit share route so
       // a fetch_fail gets the distinct 🔞/🔒 or generic card identically whichever url shape was pasted.
       if (!direct && client === 'human') return redirect(r.canonical)
-      return renderPostRoute(r.ref, r.canonical, d, env, ctx, client, origin, r.gallery)
+      return renderPostRoute(r.ref, r.canonical, d, env, ctx, client, origin, direct, r.gallery)
     }
 
     /**
@@ -6375,12 +6447,16 @@ export async function handle(req: Request, env: Env, ctx: ExecutionContext, d: D
       }
       if (!resolved) {
         count(env, 'rd', 'fetch_fail', client)
+        // A direct request (d. host or `.mp4`) never reaches serveDirectMedia from here, so its
+        // plain-text failure is given here; an HTML card on a url that promises bytes is the defect
+        // directNotFound exists to prevent.
+        if (direct) return directNotFound('this share link could not be resolved')
         return render(
           { kind: 'failure', canonical: r.canonical, platform: 'rd', reason: 'could not fetch post' },
           client, origin,
         )
       }
-      return renderPostRoute(resolved.ref, resolved.canonical, d, env, ctx, client, origin, r.gallery)
+      return renderPostRoute(resolved.ref, resolved.canonical, d, env, ctx, client, origin, direct, r.gallery)
     }
 
     case 'metashare': {
@@ -6446,6 +6522,8 @@ export async function handle(req: Request, env: Env, ctx: ExecutionContext, d: D
          */
         const platform = loc ? metaPlatformOf(loc) : null
         count(env, platform ?? 'none', 'fetch_fail', client)
+        // Direct request: plain text, for the reason the redditshare arm above gives.
+        if (direct) return directNotFound('this share link could not be resolved')
         return render(
           {
             kind: 'failure',
@@ -6459,7 +6537,7 @@ export async function handle(req: Request, env: Env, ctx: ExecutionContext, d: D
       // inner.canonical is rebuilt from ref fields by router.ts, so every share parameter the
       // redirect carried — share_url, rdid, xmt, slof — is already gone.
       if (!direct && client === 'human') return redirect(inner.canonical)
-      return renderPostRoute(inner.ref, inner.canonical, d, env, ctx, client, origin, r.gallery)
+      return renderPostRoute(inner.ref, inner.canonical, d, env, ctx, client, origin, direct, r.gallery)
     }
 
     case 'shortlink': {
@@ -6518,9 +6596,11 @@ export async function handle(req: Request, env: Env, ctx: ExecutionContext, d: D
       // writes the resolved post under the CANONICAL key too, so the short link, the long-form
       // permalink and every /_media/ hit still share one entry.
       const rkey = cacheUrl(shortRespCacheKey(r.p, r.code, client, origin))
-      // NOT ON A d. HOST. These entries hold the HTML card this arm answers with, and the d. host
-      // promises bytes — a card cached under the direct origin would keep being served for the whole
-      // RESP_TTL. The direct answer is returned below, once the code has resolved to a ref.
+      // NOT FOR A DIRECT REQUEST. These entries hold the HTML card this arm answers with, and a d. host
+      // or a `.mp4` suffix promises bytes — a card cached under the direct origin would keep being served
+      // for the whole RESP_TTL. And for `.mp4` on the apex the skip is what separates the two answers at
+      // all: the card and the file share this key (same code, client and origin). The direct answer is
+      // returned below, once the code has resolved to a ref.
       const hit = direct ? null : await d.cache.match(rkey)
       if (hit) return hit
 
@@ -6552,6 +6632,27 @@ export async function handle(req: Request, env: Env, ctx: ExecutionContext, d: D
       }, d)
 
       if (!post) {
+        /**
+         * A DIRECT REQUEST THAT RESOLVED TO NO POST GETS THE PLAIN-TEXT 404, BEFORE ANY OF THE THREE
+         * HTML ANSWERS BELOW, and that ordering fixes two things.
+         *
+         * The contract: a d. host or a `.mp4` url promises bytes, and the gated card, the gone card and
+         * the chooser are all HTML (measured on production 2026-10-04: d.<host>/t/{code} for an
+         * unresolved code answered the chooser, 200 text/html, contradicting docs/API.md).
+         *
+         * And a cache collision the `.mp4` suffix would otherwise have introduced. The chooser below is
+         * response-cached under shortRespCacheKey(p, code, client, origin), and route() strips `.mp4` out
+         * of the code, so `/t/{code}.mp4` and `/t/{code}` share that key on the apex. Caught by an
+         * adversarial review before this shipped, measured with a recording cache: the chooser rendered
+         * for the `.mp4` request was put under the key, and the plain link then served it, naming
+         * `/t/{code}.mp4` in its text. Answering here, with nothing put, closes it.
+         */
+        if (direct) {
+          // The SAME counter each HTML twin below writes, so a TikTok block reads the same on direct and
+          // card traffic; METRICS.md records that tt/ambiguous now also covers this 404.
+          count(env, r.p, seen.at?.kind === 'gated' || seen.at?.kind === 'gone' ? 'fetch_fail' : 'ambiguous', client)
+          return directNotFound('this short link could not be resolved to a post')
+        }
         if (seen.at?.kind === 'gated') {
           /**
            * IT IS TIKTOK'S, AND IT IS WALLED — private or age-restricted. The SAME answer the
