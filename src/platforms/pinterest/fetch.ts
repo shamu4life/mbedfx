@@ -5,16 +5,68 @@ import { askTwice } from '../../fetchretry.ts'
 /**
  * I/O ONLY. Pinterest's own web-app resource endpoint, unauthenticated and cookie-free.
  *
- * ONE HEADER IS THE ENTIRE GATE. `X-Pinterest-PWS-Handler` — nothing else. Bisected header by header
- * (2026-07-27): with no headers the endpoint answers 403 `Invalid Resource Request`; adding
- * X-Requested-With, X-APP-VERSION, X-Pinterest-AppState, Referer or X-Pinterest-Source-Url
- * individually stays 403; adding ONLY this one returns 200 with the full pin. No cookie is sent and
- * none is required.
+ * TWO HEADERS ARE THE GATE: `X-Pinterest-PWS-Handler` and a non-empty `user-agent`. They guard two
+ * different walls, and each wall answers with its own body, which is how to tell them apart in a log:
  *
- * IT IS NOT A UA GATE, which is the opposite of every Meta surface this project has fought. Measured
- * identical 200s for `curl/8.0`, a Discordbot UA, and NO user-agent header at all. The header's VALUE
- * must be a recognised handler name (an allowlist — `garbage` and `` both 403) but need not be the
- * right one for the route, so the literal below is stable rather than route-derived.
+ *   no user-agent, handler or not   -> 403 JSON {"message":"Looks like you don't have permission to
+ *                                      access this page. Your pinterest request id: …","status":403}
+ *   a user-agent, no handler        -> 403, the bare text `Invalid Resource Request`
+ *   a user-agent and the handler    -> 200 with the full pin
+ *
+ * THE HANDLER HEADER. Bisected header by header (2026-07-27): with no headers the endpoint answered
+ * 403 `Invalid Resource Request`; adding X-Requested-With, X-APP-VERSION, X-Pinterest-AppState,
+ * Referer or X-Pinterest-Source-Url individually stayed 403; adding ONLY this one returned 200 with
+ * the full pin. No cookie is sent and none is required. The header's VALUE must be a recognised
+ * handler name (an allowlist — `garbage` and `` both 403) but need not be the right one for the
+ * route, so the literal below is stable rather than route-derived.
+ *
+ * THE USER-AGENT, AND WHY THIS COMMENT USED TO SAY THE OPPOSITE. As first committed on 2026-08-09,
+ * this section was headed "IT IS NOT A UA GATE" and recorded identical 200s for `curl/8.0`, a
+ * Discordbot UA and NO user-agent header at all. That sentence sat beside the 2026-07-27 bisect but
+ * carried no date of its own, so all that is known of when it was measured is "by 2026-08-09". So this
+ * fetcher sent no UA, and a Worker's fetch adds none of its own: it was riding on the absence being
+ * allowed. That stopped after 2026-08-28, when docs/METRICS.md records /_smoke running 17/17 green
+ * (src/smoke.ts had carried the pn row since 2026-08-12, so pin 66287425756772418 was one of the
+ * seventeen), and before 2026-10-05, when every pin in production failed: the pn row drew a failure
+ * card and /_api/v1 answered fetch_fail on 5 of 5 pins sampled.
+ *
+ * THE DAY IT CHANGED CAN STILL BE RECOVERED, AND HAS NOT BEEN. The half-hourly smoke cron writes
+ * smoke_ok / smoke_fail per platform to Analytics Engine (the query is under "The self-check" in
+ * docs/METRICS.md). Narrowed to blob1 = 'pn' from 2026-08-28 on, it gives the first failing tick to the
+ * half hour. Retention is three months, so the late-August points are the first to expire. It was not
+ * run for this change because the dev sandbox has no Analytics Engine read access.
+ *
+ * Re-measured 2026-10-05 from the Claude Code dev sandbox (a non-Cloudflare cloud IP behind an HTTPS
+ * proxy, NOT a Worker), with the exact URL and headers built below, two asks per arm on each of pin
+ * 66287425756772418 (an image pin) and pin 4855512095802122 (a video pin), same answer both times:
+ *
+ *   no user-agent header                  -> 403, the JSON above
+ *   `user-agent` present but EMPTY        -> 403, the same JSON (one ask, image pin): non-empty is
+ *                                            what is checked, not merely present
+ *   curl/8.5.0                            -> 200, full pin
+ *   Chrome 121 (BROWSER_UA below)         -> 200, full pin, grid_title and V_720P intact
+ *   Chrome 150                            -> 200, full pin
+ *   Discordbot/2.0, bare and Mozilla form -> 200, full pin
+ *   facebookexternalhit/1.1               -> 200, full pin
+ *
+ * Every non-empty value tried passed, so from the sandbox this is an absence check, not a UA
+ * allowlist. Remove the header and every pin is the 403 above.
+ *
+ * WHETHER A UA IS ENOUGH FROM CLOUDFLARE EGRESS IS NOT YET MEASURED. Everything above is the sandbox.
+ * Production's failure is consistent with the no-UA arm, which this fixes, but a datacenter IP can
+ * meet a wall a cloud sandbox does not, and CLAUDE.md lists three that did. The first measurement from
+ * a Worker will be /_smoke's pn row after this deploys. If that row still draws a failure card with a
+ * UA set, suspect the egress next, not the header.
+ *
+ * WHY A BROWSER UA AND NOT A CRAWLER'S. Every non-empty value measured alike, so the evidence is a tie
+ * and the choice is convention. This is the web app's own XHR endpoint and the request already carries
+ * the web app's handler header, so a browser UA makes it the request Pinterest's own page sends. A
+ * crawler UA next to an app-internal header is a pairing no real client sends. The other web-app API
+ * fetchers here, twitch/fetch.ts and twitter/fetch.ts, make the same choice, but neither file records
+ * why, so that is precedent and not a second argument. facebook/normalize.ts does record a reason that
+ * carries over: an upstream identity that is not Discord's stays independent of whichever client
+ * happens to be unfurling. The string is BROWSER_UA from reddit/fetch.ts and twitch/fetch.ts,
+ * verbatim, so one future bump finds all three.
  *
  * ROBOTS.TXT EXPLICITLY ALLOWS THIS PATH: `Allow: /resource/*​/get/`. Worth recording because it is
  * the rare case where the surface we use is one the site publishes permission for.
@@ -23,11 +75,15 @@ import { askTwice } from '../../fetchretry.ts'
  *   __PWS_DATA__  exists and parses, but on a pin page it holds only the app shell
  *                 (`renderMode: "shellReady"`, zero occurrences of `"pin"`). Pinterest streams the
  *                 shell and fills the pin through React Suspense boundaries. Do not build on it.
- *   oembed.json   works with no headers at all, but is thin: title, author, and a 236px thumbnail.
- *                 No video, no dimensions, no counts. Kept in mind as a fallback, not a source.
+ *   oembed.json   works with no headers at all (still true 2026-10-05 from the dev sandbox, no UA:
+ *                 200 JSON), but is thin: title, author, and a 236px thumbnail. No video, no
+ *                 dimensions, no counts. Kept in mind as a fallback, not a source.
  */
 
 const HANDLER = 'www/pin/[id].js'
+
+/** See "THE USER-AGENT" above: without a non-empty one, every pin is a 403. */
+const BROWSER_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36'
 
 export type PinterestFetch =
   | { ok: true; pin: Record<string, unknown> }
@@ -54,13 +110,19 @@ export async function fetchPinterest(ref: Extract<PostRef, { p: 'pn' }>): Promis
   const res = await askTwice(`https://www.pinterest.com/resource/PinResource/get/?${qs}`, {
     headers: {
       'X-Pinterest-PWS-Handler': HANDLER,
+      // Load-bearing, though nothing in the response depends on WHICH UA, so it reads as decoration.
+      // A Worker's fetch sends no user-agent by default, Pinterest now 403s every pin that arrives
+      // without one, and that is exactly the all-pins outage found on 2026-10-05.
+      'user-agent': BROWSER_UA,
       accept: 'application/json',
     },
     redirect: 'manual',
   })
   // A dead pin id is a clean HTTP 404 (measured on ids 0, 1 and 999999999999999999), so status is a
-  // cheap first filter — but the REAL assertion is the payload shape below, because a 403
-  // `Invalid Resource Request` is also JSON and would otherwise parse.
+  // cheap first filter — but the REAL assertion is the payload shape below, because the no-user-agent
+  // 403 ({"message":"Looks like you don't have permission…","status":403}) is JSON and would otherwise
+  // parse. The handler wall is not the parse hazard: re-measured 2026-10-05 from the dev sandbox, it is
+  // 24 bytes of bare text, `Invalid Resource Request`, with no content-type, and res.json() throws on it.
   if (res.status !== 200) return { ok: false, reason: 'assert_fail' }
   let body: unknown
   try {
