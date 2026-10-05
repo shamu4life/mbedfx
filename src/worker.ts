@@ -1710,8 +1710,18 @@ const RESOLVER_SLOTS = 4
  * Both earlier bumps record that a deploy reporting done can leave instances on the old image, so this
  * one is bumped with the change rather than after it is found not to have landed. Its marker, the one
  * the paragraph above says to ship, is `ffmpeg` plus `hlsExtensionPicky` in `/_clients`.
+ *
+ * g15 -> g16, 2026-10-05, BUMPED WITH THE CHANGE FOR THE SAME REASON, and here the stale window is
+ * worse than a slow card. The container now walks every mux result's ISO-BMFF boxes and answers 502
+ * "incomplete result" for a short file (container/server.py, _mux_result_verdict), where it used to
+ * answer 200 and let putMuxed store it at `mux/{refKey}/{index}`, a key with no generation in it.
+ * Every request an old instance serves can write ANOTHER such object, and each one stays until it is
+ * deleted by hand or the bucket's 60-day expiry takes it. Measured 2026-10-05 from the dev sandbox:
+ * production's yt:txqiwrbYGrs/0 is one, 59,576 bytes of an mp4 whose mdat declares 4,398,607. This
+ * bump does NOT remove that object or any other already stored; it only stops new ones. Every meta
+ * record is fine. The marker is `muxCheck: "boxes"` in `/_clients`.
  */
-const RESOLVER_GENERATION = 'g15'
+const RESOLVER_GENERATION = 'g16'
 /**
  * THE STORED-RECORD HALF, pinned at the value the shared string had when it split, so the split
  * itself invalidates nothing. Read by metaCacheKey and by nothing else.
@@ -1848,12 +1858,21 @@ function withCookieJar<T extends object>(body: T, env: Env, platform: Credential
  * mapped to a counter name. This is the whole of the diagnosability fix's judgement, and it is a pure
  * function so it can be tested without a container.
  *
- * TWO DIFFERENT 502s, and telling them apart is most of the point. container/server.py answers 502
- * for BOTH a non-zero yt-dlp exit (`"mux failed"` — the upstream refused us: a 403, a PO-token
- * demand, a sign-in wall) and a run that completed with nothing usable (`"empty or oversized
- * result"`). The first is usually the upstream's verdict, but on a `{video}` source it is our own
- * ffmpeg's exit (see analytics.ts `mux_gate`); the second is ours. A single `mux_gate` covering both
- * would point the next reader at the wrong system.
+ * THREE DIFFERENT 502s, and telling them apart is most of the point. container/server.py answers 502
+ * for a non-zero yt-dlp exit (`"mux failed"` — the upstream refused us: a 403, a PO-token demand, a
+ * sign-in wall), for a run that completed with nothing usable (`"empty or oversized result"`), and
+ * since 2026-10-05 for a run that exited 0 with a file that stops short (`"incomplete result"`). The
+ * first is usually the upstream's verdict, but on a `{video}` source it is our own ffmpeg's exit (see
+ * analytics.ts `mux_gate`); the second is ours; whose fault the third is was not determined (see
+ * `_mux_result_verdict` in container/server.py). A single `mux_gate` covering them would point the
+ * next reader at the wrong system.
+ *
+ * `"incomplete result"` GETS ITS OWN NAME rather than joining `mux_empty`. Before that string existed
+ * a short file was not a failure at all: it answered 200, was counted `mux_ok`, and was stored for good
+ * (production's yt:txqiwrbYGrs/0, 59,576 bytes of an mp4 whose mdat declares 4,398,607; measured
+ * 2026-10-05 from the dev sandbox). Folding it into `mux_empty` would change what that counter has
+ * meant since 2026-08-23 on the day it changed, and a 59 KB file is not empty. Unmapped, it would land
+ * in `mux_gate` and blame the upstream for a download yt-dlp called finished.
  *
  * MATCHED, NEVER ECHOED. The body is compared against fixed literals this repo owns; nothing from it
  * is ever stored or logged. yt-dlp's stderr is suppressed inside the container because it can carry
@@ -1863,7 +1882,10 @@ function muxOutcomeOf(status: number, body: string): MuxOutcome {
   if (status === 504) return 'mux_timeout'
   if (status === 503) return 'mux_pool'
   if (status === 400) return 'mux_badsource'
-  if (status === 502) return body.includes('empty or oversized result') ? 'mux_empty' : 'mux_gate'
+  if (status === 502) {
+    if (body.includes('incomplete result')) return 'mux_incomplete'
+    return body.includes('empty or oversized result') ? 'mux_empty' : 'mux_gate'
+  }
   return 'mux_error'
 }
 

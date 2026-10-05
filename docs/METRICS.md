@@ -111,7 +111,7 @@ ten minutes to warm could only be answered with arithmetic. Since 1.14.6 the `wa
 which reads as `0` — so filter to the mux rows before averaging it, or the zeros will drag every
 average to nothing. **Not with `LIKE 'mux\_%'`**: Analytics Engine SQL rejects a backslash in a
 string literal outright (HTTP 422, `backslash and single-quote characters in strings are
-unsupported`), so the escape that makes the underscore literal is not available. Enumerate the eight
+unsupported`), so the escape that makes the underscore literal is not available. Enumerate the ten
 outcomes instead, as the query below does.
 
 ### The mux rows
@@ -120,10 +120,18 @@ outcomes instead, as the query below does.
 HTML render and the activity render within ~2s of a single paste and `muxOnce` collapses all three
 onto one piece of work, so no single client owns the mux and naming one would be arbitrary.
 
-The eight outcomes are documented at their definition (`src/analytics.ts`). The split that matters
-most: **`mux_timeout` is ours and `mux_gate` is usually theirs.** The container answers 502 for both a
-non-zero exit and an empty result, so those are separated here into `mux_gate` and `mux_empty`
-rather than left as one number that points at the wrong system.
+The ten outcomes are documented at their definition (`src/analytics.ts`). The split that matters
+most: **`mux_timeout` is ours and `mux_gate` is usually theirs.** The container answers 502 for a
+non-zero exit, for an empty result, and since 2026-10-05 for a file that stops short, so those are
+separated here into `mux_gate`, `mux_empty` and `mux_incomplete` rather than left as one number that
+points at the wrong system.
+
+`mux_incomplete` is new, and the rows it now counts were not failures before it. A download that
+exited 0 with a short file answered 200, was counted `mux_ok`, and was stored for good: measured
+2026-10-05 from a dev sandbox (not a Worker), production's `mux/yt:txqiwrbYGrs/0` is 59,576 bytes of
+an mp4 whose mdat declares 4,398,607. So `mux_ok` from before that date can include videos that never
+play, and a `mux_incomplete` count after it is a rate that was previously invisible, not a new
+regression. Whose fault a short download is was not determined.
 
 "Usually" because `mux_gate` means the process exited non-zero, and on a `{video}` source that
 process is the container's own ffmpeg. Every Reddit video with audio uploaded between about 2024-05
@@ -139,7 +147,7 @@ SELECT blob1 AS platform, blob2 AS outcome,
        SUM(_sample_interval * double2) / SUM(_sample_interval) AS avg_ms
 FROM mbedfx_counters
 WHERE timestamp > NOW() - INTERVAL '24' HOUR
-  AND blob2 IN ('mux_ok','mux_gate','mux_timeout','mux_empty','mux_pool','mux_badsource','mux_error','mux_refused','mux_joined')
+  AND blob2 IN ('mux_ok','mux_gate','mux_timeout','mux_empty','mux_incomplete','mux_pool','mux_badsource','mux_error','mux_refused','mux_joined')
 GROUP BY platform, outcome ORDER BY platform, n DESC
 ```
 
@@ -170,13 +178,15 @@ measures from the egress that matters: every earlier argument in this project ab
 was settled on a laptop, and a laptop is a residential IP.
 
 ```sh
-curl -s 'https://mbedfx.app/_clients' | jq '{ok, ms, ytdlp, ffmpeg, hlsExtensionPicky, serving, clients}'
+curl -s 'https://mbedfx.app/_clients' | jq '{ok, ms, ytdlp, ffmpeg, hlsExtensionPicky, muxCheck, serving, clients}'
 ```
 
 `ffmpeg` and `hlsExtensionPicky` (since 2026-10-04) say which image the probed instance is running:
 the ffmpeg version, and whether its hls demuxer has the extension check that Reddit's playlists are
 opened without. Both keys missing means the instance predates that change, which is the stale-image
-state `RESOLVER_GENERATION` exists to end.
+state `RESOLVER_GENERATION` exists to end. `muxCheck: "boxes"` (since 2026-10-05) says the instance
+walks every mux result's boxes and refuses a short file instead of handing it to R2; missing means an
+image that would still store one.
 
 It takes no input — the video id and the client list are constants in `container/server.py`, the same
 property that makes `/_smoke` comparable run to run. It rides the existing authenticated `/resolve`,

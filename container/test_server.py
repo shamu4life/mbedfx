@@ -25,8 +25,13 @@ NO NETWORK. Every test either avoids _safe_url's DNS lookup or stubs the resolve
 suite's rule. subprocess.run is stubbed everywhere so no yt-dlp or ffmpeg ever runs.
 """
 import importlib.util
+import io
+import json
 import os
+import shutil
 import socket
+import struct
+import tempfile
 import unittest
 import urllib.request
 
@@ -739,6 +744,220 @@ class NoRedirectOpener(unittest.TestCase):
         self.assertTrue(issubclass(srv._NoRedirect, urllib.request.HTTPRedirectHandler))
 
 
+def _box(kind, payload=b""):
+    """One ISO-BMFF box with a 32-bit size: 4-byte size, 4-byte type, payload."""
+    return struct.pack(">I4s", 8 + len(payload), kind) + payload
+
+
+FTYP = _box(b"ftyp", b"mp42" + b"\0\0\0\0" + b"isommp42")   # 24 bytes, as YouTube's format 18 has
+MOOV = _box(b"moov", b"\0" * 64)
+MDAT = _box(b"mdat", b"\x11" * 256)
+WHOLE = FTYP + MOOV + _box(b"free") + MDAT                  # the faststart shape ffmpeg writes
+
+
+def _production_short_file():
+    """The exact shape production served for yt:txqiwrbYGrs/0 on 2026-10-05 (dev sandbox, read as
+    Discordbot): ftyp(24) + moov(59,536) + free(8) + an mdat header declaring 4,398,607 bytes, and
+    nothing after it. The moov's contents are zeroes here; only its size matters to the walk."""
+    return (FTYP + _box(b"moov", b"\0" * (59_536 - 8)) + _box(b"free")
+            + struct.pack(">I4s", 4_398_607, b"mdat"))
+
+
+class _TempFiles(unittest.TestCase):
+    def setUp(self):
+        self.dir = tempfile.mkdtemp()
+
+    def tearDown(self):
+        shutil.rmtree(self.dir, ignore_errors=True)
+
+    def verdict(self, data):
+        path = os.path.join(self.dir, f"f{len(os.listdir(self.dir))}.mp4")
+        with open(path, "wb") as f:
+            f.write(data)
+        return srv._mux_result_verdict(path)
+
+
+class MuxCompleteness(_TempFiles):
+    """A MUX RESULT IS ONLY SERVED WHEN EVERY TOP-LEVEL BOX IS WHOLE.
+
+    THE DEFECT. Production stored, and serves to every unfurl, a 59,576-byte YouTube mp4 whose mdat
+    header declares 4,398,607 bytes with not one of them present (measured 2026-10-05 from the dev
+    sandbox). yt-dlp exited 0 and the handler refused only size 0 or size > MAX_BYTES, so the Worker
+    stored it under a key with no generation in it. ffprobe calls that file healthy (exit 0, duration
+    118.96s), so these cases are about box sizes, the one thing the short file gets wrong.
+
+    BOTH DIRECTIONS ARE PINNED. A walk that refused a legal size-0 box, a 64-bit largesize or a
+    fragmented file would turn playable videos into 503s, which is the same failure from the other side.
+    """
+
+    def test_a_whole_faststart_mp4_is_complete(self):
+        self.assertEqual(self.verdict(WHOLE), srv.MP4_COMPLETE)
+
+    def test_the_exact_file_production_stored_is_incomplete(self):
+        data = _production_short_file()
+        self.assertEqual(len(data), 59_576, "the fixture must be the measured length to the byte")
+        self.assertEqual(self.verdict(data), srv.MP4_INCOMPLETE)
+
+    def test_a_box_running_past_the_end_of_the_file_is_incomplete(self):
+        overrun = struct.pack(">I4s", 8 + 500, b"moov") + b"\0" * 100
+        self.assertEqual(self.verdict(FTYP + overrun), srv.MP4_INCOMPLETE)
+
+    def test_a_last_box_of_size_zero_runs_to_the_end_and_is_complete(self):
+        """Size 0 means "to the end of the file" (ISO/IEC 14496-12); it is legal on the last box."""
+        to_eof = struct.pack(">I4s", 0, b"mdat") + b"\x11" * 300
+        self.assertEqual(self.verdict(FTYP + MOOV + to_eof), srv.MP4_COMPLETE)
+
+    def test_a_64_bit_largesize_box_is_read_and_complete(self):
+        payload = b"\x11" * 300
+        large = struct.pack(">I4sQ", 1, b"mdat", 16 + len(payload)) + payload
+        self.assertEqual(self.verdict(FTYP + MOOV + large), srv.MP4_COMPLETE)
+
+    def test_a_largesize_that_overruns_is_incomplete(self):
+        large = struct.pack(">I4sQ", 1, b"mdat", 16 + 4_398_607) + b"\x11" * 300
+        self.assertEqual(self.verdict(FTYP + MOOV + large), srv.MP4_INCOMPLETE)
+
+    def test_a_fragmented_mp4_is_complete(self):
+        """moof+mdat pairs after the moov are how fragmented HLS and DASH downloads arrive."""
+        frag = FTYP + MOOV + b"".join(_box(b"moof", b"\0" * 40) + MDAT for _ in range(3)) + _box(b"mfra")
+        self.assertEqual(self.verdict(frag), srv.MP4_COMPLETE)
+
+    def test_a_fragmented_mp4_cut_inside_its_last_fragment_is_incomplete(self):
+        frag = FTYP + MOOV + _box(b"moof", b"\0" * 40) + MDAT + _box(b"moof", b"\0" * 40) + MDAT[:100]
+        self.assertEqual(self.verdict(frag), srv.MP4_INCOMPLETE)
+
+    def test_no_moov_is_incomplete(self):
+        self.assertEqual(self.verdict(FTYP + _box(b"free") + MDAT), srv.MP4_INCOMPLETE)
+
+    def test_no_mdat_is_incomplete(self):
+        self.assertEqual(self.verdict(FTYP + MOOV), srv.MP4_INCOMPLETE)
+
+    def test_trailing_bytes_that_do_not_form_a_box_are_incomplete(self):
+        """A few bytes after the last whole box look exactly like a download that stopped inside the
+        next box's header, so they are refused. Eight zero bytes are the sneaky case: read as a box
+        they are size 0, "to the end of the file", and only the type rule stops them passing."""
+        self.assertEqual(self.verdict(WHOLE + b"junk"), srv.MP4_INCOMPLETE)
+        self.assertEqual(self.verdict(WHOLE + b"\0" * 8), srv.MP4_INCOMPLETE)
+
+    def test_a_box_smaller_than_its_own_header_is_incomplete(self):
+        """Following a size under the header would loop on one offset or walk backwards."""
+        for bad in (struct.pack(">I4s", 4, b"free"), struct.pack(">I4sQ", 1, b"free", 8),
+                    _box(b"uuid", b"\0" * 8)):  # uuid's header is 24: 8 + its 16-byte extended type
+            self.assertEqual(self.verdict(FTYP + bad + MOOV + MDAT), srv.MP4_INCOMPLETE, bad)
+
+    def test_a_file_past_the_box_cap_is_refused_and_the_cap_clears_any_real_layout(self):
+        real = srv.MP4_MAX_BOXES
+        try:
+            srv.MP4_MAX_BOXES = 5
+            self.assertEqual(self.verdict(FTYP + MOOV + _box(b"free") * 10 + MDAT), srv.MP4_INCOMPLETE)
+        finally:
+            srv.MP4_MAX_BOXES = real
+        # One moof+mdat pair per frame at 60 fps for the longest video the match filter admits.
+        self.assertGreater(srv.MP4_MAX_BOXES, srv.MAX_SECONDS * 60 * 2)
+
+    def test_webm_flv_and_mpeg_ts_are_recognised_as_foreign_rather_than_called_incomplete(self):
+        """A single-format {page} download is written verbatim, and the `b[height<=?720]` and `b`
+        arms admit any ext, so these can arrive under a .mp4 name. The walk cannot judge them, and
+        calling them "incomplete" would refuse a file on a reading the walk never made."""
+        ts_packet = b"\x47" + b"\0" * 187
+        for data in (b"\x1aE\xdf\xa3" + b"\0" * 64, b"FLV\x01\x05\0\0\0\x09" + b"\0" * 64, ts_packet * 3):
+            self.assertEqual(self.verdict(data), srv.MP4_FOREIGN, data[:8])
+        self.assertEqual(self.verdict(ts_packet[:100]), srv.MP4_INCOMPLETE,
+                         "one sync byte in a file too short to show a second is not a stream")
+
+
+def _drive_post(body):
+    """Run Handler.do_POST without a socket and return (status, headers, body).
+
+    BaseHTTPRequestHandler needs only these attributes to answer, and everything it writes lands in
+    `wfile`. This drives the real method, so the status and the error string are what production
+    would send rather than a reading of the source.
+    """
+    raw = json.dumps(body).encode()
+    h = srv.Handler.__new__(srv.Handler)
+    h.rfile, h.wfile = io.BytesIO(raw), io.BytesIO()
+    h.headers = {"content-length": str(len(raw))}
+    h.path, h.command, h.request_version = "/resolve", "POST", "HTTP/1.1"
+    h.requestline, h.client_address, h.close_connection = "POST /resolve HTTP/1.1", ("127.0.0.1", 0), False
+    h.do_POST()
+    head, _, payload = h.wfile.getvalue().partition(b"\r\n\r\n")
+    lines = head.decode("latin-1").split("\r\n")
+    headers = {k.lower(): v for k, v in (line.split(": ", 1) for line in lines[1:])}
+    return int(lines[0].split()[1]), headers, payload
+
+
+class DoPostCompleteness(unittest.TestCase):
+    """THE HANDLER REFUSES A SHORT FILE WITH ITS OWN 502, so the Worker neither stores nor miscounts it.
+
+    THE DEFECT, from the other end: the walk is worthless unless do_POST acts on it, and the error
+    string is worthless unless it differs from "empty or oversized result", because the Worker's
+    muxOutcomeOf tells failures apart by that string alone. subprocess.run is stubbed to write the
+    file yt-dlp or ffmpeg would have written; no process runs and no name is resolved.
+    """
+
+    def setUp(self):
+        self._run, self._resolve, self._secret = srv.subprocess.run, srv.socket.getaddrinfo, srv.RESOLVER_SECRET
+        srv.RESOLVER_SECRET = None
+        srv.socket.getaddrinfo = lambda host, port, **kw: [
+            (socket.AF_INET, socket.SOCK_STREAM, socket.IPPROTO_TCP, "", ("93.184.216.34", port))
+        ]
+
+    def tearDown(self):
+        srv.subprocess.run, srv.socket.getaddrinfo, srv.RESOLVER_SECRET = self._run, self._resolve, self._secret
+
+    def _writes(self, data):
+        def run(cmd, **kwargs):
+            out = cmd[cmd.index("-o") + 1] if "-o" in cmd else cmd[-1]  # yt-dlp's -o, ffmpeg's last arg
+            with open(out, "wb") as f:
+                f.write(data)
+            return type("Result", (), {"returncode": 0, "stdout": b""})()
+        srv.subprocess.run = run
+
+    def test_a_short_page_mux_answers_502_incomplete_result(self):
+        self._writes(_production_short_file())
+        status, _, body = _drive_post({"page": PAGE})
+        self.assertEqual((status, json.loads(body)), (502, {"error": "incomplete result"}))
+
+    def test_a_short_tracks_mux_answers_the_same(self):
+        self._writes(FTYP + MOOV + MDAT[:40])
+        status, _, body = _drive_post({"video": "https://cdn.example/v.mp4"})
+        self.assertEqual((status, json.loads(body)), (502, {"error": "incomplete result"}))
+
+    def test_a_whole_file_is_still_served_byte_for_byte(self):
+        """The control: without it, a handler that refused everything would pass the two above."""
+        self._writes(WHOLE)
+        status, headers, body = _drive_post({"page": PAGE})
+        self.assertEqual(status, 200)
+        self.assertEqual(headers["content-type"], "video/mp4")
+        self.assertEqual(int(headers["content-length"]), len(WHOLE))
+        self.assertEqual(body, WHOLE)
+
+    def test_an_empty_file_keeps_its_own_string(self):
+        self._writes(b"")
+        status, _, body = _drive_post({"page": PAGE})
+        self.assertEqual((status, json.loads(body)), (502, {"error": "empty or oversized result"}))
+
+    def test_a_foreign_container_is_passed_through_as_before(self):
+        """The explicit decision in _mux_result_verdict's note: not judged, so not refused."""
+        webm = b"\x1aE\xdf\xa3" + b"\0" * 64
+        self._writes(webm)
+        status, _, body = _drive_post({"page": PAGE})
+        self.assertEqual((status, body), (200, webm))
+
+    def test_clients_carries_the_marker_that_says_this_instance_walks_its_output(self):
+        """A pooled instance can keep an old image after a deploy reports done (worker.ts
+        RESOLVER_GENERATION), and an old one would store short files again. The key's presence is how
+        an operator tells the two apart from outside."""
+        real = (srv._probe_one, srv._probe_tiktok, srv._hls_picky_known)
+        srv._probe_one = lambda c: {"client": c, "gvs": "ok"}
+        srv._probe_tiktok = lambda: {}
+        srv._hls_picky_known = True
+        srv.subprocess.run = lambda cmd, **kw: type("R", (), {"stdout": b"", "returncode": 0})()
+        try:
+            self.assertEqual(srv._probe_clients().get("muxCheck"), "boxes")
+        finally:
+            srv._probe_one, srv._probe_tiktok, srv._hls_picky_known = real
+
+
 class HandlerShape(unittest.TestCase):
     """THE HTTP SURFACE IS A METHOD TABLE, and nothing here was checking it was still one.
 
@@ -772,7 +991,8 @@ class HandlerShape(unittest.TestCase):
         # The mirror of the above, and the half that localises the failure: if these ever became
         # attributes of Handler, the class body has eaten them again.
         for name in ("_probe_one", "_probe_clients", "_probe_error", "_probe_tiktok",
-                     "_ffmpeg_has_extension_picky", "_ffmpeg_version", "_input_opts"):
+                     "_ffmpeg_has_extension_picky", "_ffmpeg_version", "_input_opts",
+                     "_mux_result_verdict"):
             self.assertTrue(callable(getattr(srv, name, None)), f"{name} must be module level")
             self.assertFalse(hasattr(srv.Handler, name), f"{name} must NOT be inside Handler")
 

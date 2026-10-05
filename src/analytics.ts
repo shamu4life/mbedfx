@@ -217,6 +217,12 @@ export type Outcome2 =
    *                the page mux was split out — so a rise here on a `{page}` platform after that date
    *                means something quite different from the same rise before it.
    *   mux_empty    502 + "empty or oversized result" — it ran and produced nothing usable.
+   *   mux_incomplete (2026-10-05) 502 + "incomplete result" — it exited 0 and wrote a file that stops
+   *                short: a top-level box runs past the end, or there is no moov or no mdat
+   *                (container/server.py, _mux_result_verdict). Nothing is stored. BEFORE THAT DATE
+   *                THIS WAS `mux_ok`: the file answered 200 and was stored, so `mux_ok` rows from
+   *                before it can include a video that never plays (yt:txqiwrbYGrs/0, measured
+   *                2026-10-05). Whose fault a short download is was not determined.
    *   mux_pool     503 — a cold boot, or "Maximum number of running container instances exceeded".
    *                A rise here degrades EVERY platform's card, not just the one in blob1.
    *   mux_badsource 400 — the container's SSRF guard refused the url we sent it.
@@ -229,7 +235,7 @@ export type Outcome2 =
    *
    * `blob3` IS `'none'` ON EVERY MUX ROW, deliberately — see countMux for why a mux has no client.
    */
-  | 'mux_ok' | 'mux_gate' | 'mux_timeout' | 'mux_empty'
+  | 'mux_ok' | 'mux_gate' | 'mux_timeout' | 'mux_empty' | 'mux_incomplete'
   | 'mux_pool' | 'mux_badsource' | 'mux_error' | 'mux_refused' | 'mux_joined'
   /**
    * THE CARD DEGRADED TO A STILL — per RENDER, and deliberately outside the `mux_*` block.
@@ -244,7 +250,7 @@ export type Outcome2 =
    * silently join the countMux domain while being emitted through plain `count()` — blob3 a real
    * client where METRICS.md promises `none`, double2 unset where METRICS.md promises elapsed ms, and
    * the operator's mux-rows-only average quietly poisoned. The type system would not have caught it.
-   * The name is the guard. (That filter is spelled as an eight-value `IN` list, not as
+   * The name is the guard. (That filter is spelled as an `IN` list of every mux outcome, not as
    * `LIKE 'mux\\_%'` — Analytics Engine SQL refuses a backslash inside a string literal with a bare
    * HTTP 422, which is how the published query in docs/METRICS.md turned out never to have run.)
    *

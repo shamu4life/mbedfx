@@ -31,6 +31,28 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   measured; the pn row will say after deploy. Pinterest's image and video hosts still serve with no
   user-agent, so media was never the problem.
 
+- **A video that downloaded short was stored, and served broken to every later view.** Measured
+  2026-10-05 from a dev sandbox (not a Worker): production's `/_media/yt%3AtxqiwrbYGrs/0` answers
+  200 with 59,576 bytes, an mp4 whose last box is an mdat header declaring 4,398,607 bytes with none of
+  them present. yt-dlp had exited 0 and the container refused only an empty or oversized file, so the
+  Worker stored it under a key with no generation, and nothing ever replaced it. ffprobe calls that
+  file healthy, since its moov is intact. The container now walks the file's top-level boxes and
+  answers 502 `incomplete result` when one runs past the end, bytes trail the last one, or there is no
+  moov or no mdat. Nothing is stored, the card falls back to its still as for any failed mux, and the
+  Worker counts it as the new `mux_incomplete` (until now these were counted `mux_ok`). Fragmented
+  mp4, size-0 and 64-bit boxes pass. WebM, FLV and MPEG-TS, which a single-format download can write
+  under the `.mp4` name, are passed through as before, because whether Discord plays one is not
+  measured. Why yt-dlp exited 0 on a short download was not determined. `RESOLVER_GENERATION` is
+  bumped so no pooled instance keeps storing short files, and `/_clients` reports `muxCheck: "boxes"`.
+
+  **The object already stored is not fixed by this.** The owner has to delete
+  `mux/yt:txqiwrbYGrs/0` from the `mbedfx-media` bucket (`wrangler r2 object delete
+  "mbedfx-media/mux/yt:txqiwrbYGrs/0" --remote`, or the dashboard), and the next view re-muxes it.
+  Left alone, it is served until the bucket's `expire-60d` lifecycle rule removes it, 60 days after it
+  was written. That rule is recorded in `wrangler.jsonc` as re-added on 2026-07-30; it lives on the
+  bucket, so this repo cannot show it is still there, and when the object was written is not known.
+  Other short files stored before this change, on any platform, are not known and not found by it.
+
 - **Every Threads post had fallen back to one picture.** Threads renamed the server-rendered block the
   normaliser reads (now `BarcelonaPostPageTargetQueryRelayPreloader_`), so every post took the OG
   fallback, whose single image is Threads' own rendered share card. Reported as a carousel showing one

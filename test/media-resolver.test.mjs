@@ -1,5 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
+import { readFileSync } from 'node:fs'
 import { handle } from '../src/worker.ts'
 import { refKey } from '../src/refkey.ts'
 
@@ -290,13 +291,18 @@ test('EVERY CONTAINER FAILURE GETS ITS OWN NAME — 504 is OURS, 502 is THEIRS, 
    * refused us" are opposite claims about which system to go and look at, and the reported incident
    * cost a night precisely because nothing had ever written down which one it was.
    *
-   * NOTE THE TWO 502s. The container uses that status for a gate AND for a run that produced nothing
-   * usable, so the body — not the status — is what separates mux_gate from mux_empty.
+   * NOTE THE THREE 502s. The container uses that status for a gate, for a run that produced nothing
+   * usable, and since 2026-10-05 for a run that exited 0 with a file that stops short, so the body —
+   * not the status — is what separates mux_gate from mux_empty from mux_incomplete. That third row is
+   * new: before it, the short file answered 200 and this table had nothing to say about it, because
+   * it was counted mux_ok and stored (production's yt:txqiwrbYGrs/0, measured 2026-10-05 from the dev
+   * sandbox). Left unmapped, its string would fall through to mux_gate and blame the upstream.
    */
   const cases = [
     [504, '{"error":"mux timed out"}', 'mux_timeout', 'our own wall, not the upstream'],
     [502, '{"error":"mux failed"}', 'mux_gate', 'yt-dlp exited non-zero — the upstream refused'],
     [502, '{"error":"empty or oversized result"}', 'mux_empty', 'it ran and produced nothing usable'],
+    [502, '{"error":"incomplete result"}', 'mux_incomplete', 'it exited 0 with a file that stops short'],
     [503, '', 'mux_pool', 'a cold boot or an exhausted instance pool'],
     [400, '{"error":"invalid source"}', 'mux_badsource', 'the container SSRF guard refused our url'],
     [500, '{"error":"internal error"}', 'mux_error', 'unclassified — should stay at zero'],
@@ -311,6 +317,38 @@ test('EVERY CONTAINER FAILURE GETS ITS OWN NAME — 504 is OURS, 502 is THEIRS, 
     assert.equal(rows[0].blobs[0], 'st', 'the platform is read back off the slot key')
     assert.equal(rows[0].blobs[2], 'none', 'a mux is collapsed across callers, so it has no client')
   }
+})
+
+test('every 502 the container\'s mux path can send has a counter name of its own, read from server.py itself', async () => {
+  /**
+   * THE TABLE ABOVE IS HAND-ENUMERATED, and that is the shape CLAUDE.md warns about for parseRefKey:
+   * a new container error string that nobody adds here is counted as mux_gate, silently, and blames
+   * the upstream for whatever the new string meant. "incomplete result" would have done exactly that.
+   * So the strings are read out of container/server.py and each one must land on a DIFFERENT outcome,
+   * none of them the unclassified mux_error. The meta mode's own 502 ("meta failed") is excluded: it
+   * answers the metadata call, which never reaches muxOutcomeOf.
+   */
+  const py = readFileSync(new URL('../container/server.py', import.meta.url), 'utf8')
+  const strings = [...new Set([...py.matchAll(/_json_error\(502, "([^"]+)"\)/g)].map(m => m[1]))]
+    .filter(s => !s.startsWith('meta '))
+  assert.ok(strings.includes('incomplete result') && strings.includes('mux failed'),
+    `the extraction must find the strings it is guarding: ${JSON.stringify(strings)}`)
+  // Its own id, so no other test's in-flight mux for AE_REF can answer for this one.
+  const ref = { p: 'st', id: 'strings502' }
+  const post = () => ({ ...aePost(), ref, canonical: 'https://streamable.com/strings502' })
+  const req = () => new Request(
+    `https://staging.megapenispoopenfarten.sex/_media/${encodeURIComponent(refKey(ref))}/0`,
+    { headers: { 'user-agent': 'Discordbot/2.0' } })
+  const outcomes = []
+  for (const s of strings) {
+    const { env, points } = countingMuxEnv(async () => new Response(JSON.stringify({ error: s }), { status: 502 }))
+    await handle(req(), env, ctx, { cache: fakeCache(), fetchPost: async () => post() })
+    const outcome = muxRows(points)[0]?.blobs[1]
+    assert.notEqual(outcome, 'mux_error', `"${s}" must be classified, not left to mux_error`)
+    outcomes.push(outcome)
+  }
+  assert.equal(new Set(outcomes).size, strings.length,
+    `each 502 string needs its own outcome, got ${JSON.stringify(Object.fromEntries(strings.map((s, i) => [s, outcomes[i]])))}`)
 })
 
 test('A SUCCESSFUL MUX IS COUNTED WITH ITS DURATION — the field the incident had no answer for', async () => {

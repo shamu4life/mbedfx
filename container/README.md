@@ -20,7 +20,11 @@ yt-dlp knows. Those posts are cover stills without it.
 ```
 
 - **200 `video/mp4`** is the muxed file, streamed. The Worker pipes it straight into R2 and serves
-  range reads from there, so each video is muxed at most once.
+  range reads from there, so each video is muxed at most once. It is sent only when every top-level
+  ISO-BMFF box in the file is whole (`_mux_result_verdict`); a download that exited 0 and still came
+  out short answers `502 {"error":"incomplete result"}` instead, because R2 would otherwise keep it
+  and serve it to every later view. WebM, FLV and MPEG-TS, which a single-format `{page}` download
+  can write under the `.mp4` name, are passed through unjudged.
 - **4xx/5xx `application/json` `{"error"}`** means the Worker falls back to the cover still.
 - `GET /health` → `200 ok`.
 
@@ -100,6 +104,7 @@ in `PROBE_CLIENTS` and then RANGE-FETCHES the format that client chose, reportin
 ```jsonc
 { "video": "jNQXAC9IVRw", "ytdlp": "2026.08.19", "ms": 20233,
   "ffmpeg": "<version>", "hlsExtensionPicky": true,   // since 2026-10-04; null = probe could not run
+  "muxCheck": "boxes",                                 // since 2026-10-05; absent = stores short muxes
   "serving": ["default", "web_embedded", "tv_simply", "mweb", "web_safari"],
   "clients": [ { "client": "default", "extracted": true, "formats": 24,
                  "gvs": "ok", "bytes": 65536, "ms": 3378 }, … ] }
@@ -271,7 +276,7 @@ curl -s -X POST localhost:8080/resolve \
 
 A few MB of `video/mp4` with a valid `ftyp` means the whole path works. A JSON `{"error"}` body
 means it does not, and the code carries the reason: `401` the secret, `400` a source the SSRF gate
-refused, `502` a failed or empty mux, `504` the wall clock — which is `PROC_TIMEOUT` (120s) on
+refused, `502` a failed, empty or incomplete mux, `504` the wall clock — which is `PROC_TIMEOUT` (120s) on
 `{video}` and `{page, meta}`, and `MUX_PAGE_TIMEOUT` (360s) on the `{page}` mux, because yt-dlp has
 to extract and then download the whole file before it can send a byte. That was `PROC_TIMEOUT + 60`
 (180s) until 2026-08-29; it is its own variable now because the two walls scale with different
