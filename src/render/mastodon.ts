@@ -2,7 +2,7 @@ import type { GalleryMode, Media, Platform, Post } from '../types.ts'
 import { mediaList } from '../media.ts'
 import { refKey } from '../refkey.ts'
 import { encodeStatusId } from '../statusid.ts'
-import { byline, bytesIndex, fudge, isSensitive, mediaOf, mediaUrl, stockState, str, usable } from './embed.ts'
+import { byline, bytesIndex, fudge, isSensitive, isSpoiler, mediaOf, mediaUrl, stockState, str, usable } from './embed.ts'
 import { buildContentHtml, statParts, withMoreInPostMarker, withVideoGalleryMarker } from './text.ts'
 
 /**
@@ -727,6 +727,15 @@ export function toMastodonStatus(post: Post, origin: string, mode: GalleryMode):
     // Discord came for. The sensitivity SIGNAL is not lost by omitting them — it rides
     // `content` as the `[sensitive] ` label (see contentWithMarker). Label without blur.
     spoiler_text: '',
+    /**
+     * EXCEPT ON A SPOILER-TAGGED POST, where hiding the media is the point: the owner chose Discord's
+     * blur for these on 2026-10-11, over hiding the picture outright. Whether Discord blurs a
+     * `sensitive` status, drops its media or ignores the flag is NOT MEASURED; a real Mastodon status
+     * of this exact shape (sensitive, no warning text) is the test, pasted into Discord. Every other
+     * post keeps the byte-identical document it had. `spoiler_text` stays empty: the body already
+     * says `[spoiler]`, and a second, untested field would make the paste unreadable.
+     */
+    ...(isSpoiler(post) ? { sensitive: true } : {}),
     visibility: 'public',
     // Phase 3a landed TikTok, so this IS the per-ref.p lookup the Phase 2 comment promised
     // here. `website` stays null for every platform: it is the application's OWN homepage, and

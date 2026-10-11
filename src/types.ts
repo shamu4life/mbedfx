@@ -562,11 +562,22 @@ export type Post = {
   /**
    * THE URL A LINK POST POINTS AT — a Reddit post whose content is a YouTube video, a tweet, a clip.
    * Set by the Reddit normalizer only, from what the poster submitted, and never by anything a renderer
-   * draws: the worker reads it at render time (src/linkref.ts linkedRef, worker.ts composeLinked) to give
+   * draws: the worker reads it at render time (src/linkref.ts linkedRef, worker.ts linkedFor) to give
    * the card the LINKED post's own media under the linked post's own /_media/ key. Untrusted: it comes
    * from whoever posted, so it reaches a fetcher only as a ref route() minted for a fixed-origin platform.
    */
   link?: string
+  /**
+   * THE WHOLE POST IS TAGGED A SPOILER, which Reddit draws blurred under "This post may contain spoilers."
+   * Set by the Reddit normalizer only, which has already replaced the body with `[spoiler]`, so no surface
+   * can show the text. Renderers read this to keep the MEDIA out of sight as well: the activity document
+   * marks the status `sensitive`, Mastodon's blur, which Discord is being tried on (the owner's call,
+   * 2026-10-11), and the Discord head names no picture or video of its own (render/discord.ts).
+   *
+   * NOT `sensitive`, which says the content is adult. A spoiler gives a story away, and the API publishes
+   * the two separately so neither is read as the other.
+   */
+  spoiler?: true
   createdAt: Date
   media: Media[]
   counts: { likes?: number; reposts?: number; replies?: number; views?: number }

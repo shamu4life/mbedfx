@@ -254,6 +254,13 @@ export const isSensitive = (post: Post): boolean =>
   !!post.sensitive || (!!post.quote?.sensitive && mediaOf(post.quote).some(usable))
 
 /**
+ * "Keep this post's media out of sight": a whole post tagged as a spoiler (types.ts Post.spoiler). Its text is
+ * already `[spoiler]` from the normalizer, so this decides only the media: the activity document asks Discord
+ * to blur it and the Discord head names none. `=== true` because a cache record is not a normalizer's output.
+ */
+export const isSpoiler = (post: Post): boolean => post?.spoiler === true
+
+/**
  * "This post has a video Discord can actually play." ONE definition, because BOTH heads in
  * discord.ts now ask it — renderSpoof for its og:video fallback and renderPost for the plain
  * head's video branch — and they must not answer it differently. The same rule usable() and

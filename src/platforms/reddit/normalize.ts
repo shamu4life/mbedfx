@@ -1,5 +1,5 @@
 import type { Media, Post, PostRef } from '../../types.ts'
-import { decodeEntities, redditHtmlToText, redditMarkdownToText } from './body.ts'
+import { decodeEntities, redditHtmlToText, redditMarkdownToText, SPOILER_MARK } from './body.ts'
 import { archiveCaption, crawlerCaption, feedCaption, pickCaption } from './caption.ts'
 
 type Any = Record<string, any>
@@ -101,17 +101,41 @@ export function redditFullRender(html: string): boolean {
 }
 
 /**
+ * THE BUTTON REDDIT DRAWS OVER A POST IT BLURS. The same element serves two overlays: "This post may contain
+ * spoilers." and "This post contains mature or adult content." (2026-10-11, embed.reddit.com from a
+ * residential IP with fetch.ts's BROWSER_UA, NOT a Worker: 14 of 14 spoiler-tagged pages of every type
+ * (text, multi_media, image, gallery, video, link, crosspost) and 3 of 3 NSFW pages carried it; 13 of 13
+ * pages that were neither did not). The page's own `nsfw` is what tells the two apart: false on all 14
+ * spoiler pages, true on all 3 NSFW ones. The overlay's English sentence would also tell them apart, and is
+ * not read, so a localised page cannot change the answer.
+ */
+const BLUR_BUTTON = /<shreddit-embed-spoiler-button\b/
+
+/**
+ * THE POST IS SPOILER-TAGGED: blurred, and not for being adult. A post that is both reads as NSFW only (its
+ * overlay names the adult content), so it keeps the `[sensitive]` label and its body, the same as before.
+ * Arctic Shift's `spoiler` flag disagreed with the live page twice in that sample (one tag added and one
+ * removed after the archive read the post), which is why the page decides.
+ */
+function spoilerTagged(html: string, post: Any | null): boolean {
+  return BLUR_BUTTON.test(html) && post?.nsfw !== true
+}
+
+/**
  * WHETHER THE BODY HAS TO BE ASKED FOR ELSEWHERE (caption.ts): a live post whose page carries no rtjson
  * body. That is every picture, gallery, video, gif, link and crosspost post (0 of 72 with a body carried
  * it on embed.reddit.com, 2026-10-11), and a text post only when the render is a placeholder. A text post
  * in a full render with no rtjson is a title-only post and is not asked about.
+ *
+ * NEVER FOR A SPOILER-TAGGED POST: its body is replaced by `[spoiler]` whatever it says (buildFromEmbed), so
+ * the three requests, one of them rationed to a request a minute, would fetch text nobody is shown.
  */
 export function redditNeedsCaption(html: string): boolean {
   if (!CANONICAL.test(html) || /\/undefined"/.test(html) || html.includes('This post has been deleted')) return false
   if (rtjsonInner(html) !== null) return false
-  const type = screenview(html)?.type
-  if (typeof type !== 'string') return false
-  return type !== 'text' || !redditFullRender(html)
+  const post = screenview(html)
+  if (typeof post?.type !== 'string' || spoilerTagged(html, post)) return false
+  return post.type !== 'text' || !redditFullRender(html)
 }
 
 /** Hosts whose urls are Reddit's own: a link to one is a Reddit post or Reddit media, never delegated. */
@@ -429,7 +453,16 @@ function buildFromEmbed(html: string, ref: Extract<PostRef, { p: 'rd' }>, gifHea
    * sources caption.ts names, which fetch.ts asks only when redditNeedsCaption says the page has none.
    */
   const inner = rtjsonInner(html)
-  const body = capBody(inner !== null ? redditHtmlToText(inner) : captionOf(caption, sub, ref.id)?.text ?? '')
+  /**
+   * A SPOILER-TAGGED POST'S BODY IS `[spoiler]`, whatever it says and even when it says nothing, the owner's
+   * call (2026-10-11). Reddit hides the whole post, and the card says why its picture is blurred rather than
+   * showing an empty body under one. The title stays: Reddit shows it, and subreddits that use the tag
+   * require spoiler-free titles.
+   */
+  const spoiler = spoilerTagged(html, post)
+  const body = spoiler
+    ? SPOILER_MARK
+    : capBody(inner !== null ? redditHtmlToText(inner) : captionOf(caption, sub, ref.id)?.text ?? '')
   const link = linkOf(post.type, post.url)
 
   return {
@@ -442,6 +475,7 @@ function buildFromEmbed(html: string, ref: Extract<PostRef, { p: 'rd' }>, gifHea
     title,
     text: body,
     ...(link ? { link } : {}),
+    ...(spoiler ? { spoiler: true as const } : {}),
     createdAt: created,
     media: redditEmbedMedia(html, post, gifHead),
     counts: {
@@ -517,10 +551,15 @@ function buildFromOAuth(raw: unknown, ref: Extract<PostRef, { p: 'rd' }>, gifHea
       : `https://www.reddit.com/r/${sub}/comments/${ref.id}`,
     author: { name: `u/${d.author}`, handle: d.author, url: `https://www.reddit.com/user/${d.author}` },
     // Title/body split so the renderer can bold the headline (same as the embed path). selftext is
-    // MARKDOWN here, which the cards showed raw (asterisks, `[text](url)`) until 2026-10-11.
+    // MARKDOWN here, which the cards showed raw (asterisks, `[text](url)`) until 2026-10-11. A
+    // spoiler-tagged post is `[spoiler]`, as on the embed path, and on the same terms: an NSFW post is
+    // read as NSFW only, because the embed page cannot see its spoiler tag and both renders share a key.
     title: d.title,
-    text: capBody(typeof d.selftext === 'string' ? redditMarkdownToText(d.selftext) : ''),
+    text: d.spoiler === true && d.over_18 !== true
+      ? SPOILER_MARK
+      : capBody(typeof d.selftext === 'string' ? redditMarkdownToText(d.selftext) : ''),
     ...(d.is_self !== true ? (l => (l ? { link: l } : {}))(linkOf('link', d.url)) : {}),
+    ...(d.spoiler === true && d.over_18 !== true ? { spoiler: true as const } : {}),
     createdAt: created,
     media: redditOAuthMedia(d, gifHead),
     counts: { likes: Number(d.score) || 0, replies: Number(d.num_comments) || 0 },

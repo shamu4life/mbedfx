@@ -339,6 +339,24 @@ test('A COLD COLO STILL GETS THE MEDIA: a slow Reddit load does not starve the l
   assert.ok(ms < 2300 + 2700 + MUX_WAIT_FLOOR_MS + 400, `and bounded, ${ms}ms`)
 })
 
+test('THE CONVERTER\'S PREVIEW STARTS THE LINKED VIDEO, so a Reddit link post gets the head start a YouTube link gets', async () => {
+  /**
+   * The owner asked for this on 2026-10-11 ("start converting its video right away, as it already does for
+   * direct YouTube links"), and it was already true: the page asks /_card 900 ms after a paste, /_card
+   * settles the linked post as itself, and that dispatches the mux and arms its alarm. /_prep (600 ms) is
+   * not widened to Reddit because it would fetch the Reddit post a second time 300 ms earlier, and the feed
+   * among its caption sources is rationed to one request a minute. This pins the head start where it lives.
+   */
+  const rd = rdRef('lnk0032'); const yt = { p: 'yt', id: 'lnkSSSSSS32', over: { duration: 1191 } }
+  const resolver = recordingResolver()
+  const path = encodeURIComponent(`/r/${rd.sub}/comments/${rd.id}/x/`)
+  const card = await (await handle(human(`https://mbedfx.app/_card?p=${path}`), envWith({ resolver }), retainingCtx(), depsFor(rd, yt))).json()
+  assert.ok(resolver.jobs.some(b => b.includes(`youtube.com/watch?v=${yt.id}`)),
+    `the YouTube mux is dispatched from the preview: ${JSON.stringify(resolver.jobs)}`)
+  assert.equal(card.muxing, true, 'and the page is told, so it draws "Preparing the video" and polls')
+  assert.match(card.media[0].url, new RegExp(`/_media/${enc(yt)}/`), 'under the YouTube key the card will name')
+})
+
 test('A COMPOSED CARD THAT DEGRADES IS COUNTED UNDER REDDIT, beside its ok', async () => {
   // card_degraded / ok is a per-platform ratio; filed under yt, Reddit traffic inflated YouTube's.
   const ae = recordingAE()

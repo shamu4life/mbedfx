@@ -33,6 +33,17 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - **A Reddit `multi_media` post's inline pictures are its media**, rebuilt as clean `i.redd.it` urls the
   way gallery slides are.
 
+- **A spoiler-tagged Reddit post keeps its spoiler.** Reddit draws a whole post tagged as a spoiler
+  blurred under "This post may contain spoilers."; the card showed its picture, and with the caption
+  sources above it would have shown its caption too. Its body is now `[spoiler]` whatever it says, its
+  media stays, and the activity document marks the status `sensitive`, Mastodon's blur, which Discord is
+  being tried on (owner's call: blur over hiding the picture). The Discord head names no picture or video
+  of its own for such a post, the converter preview blurs it, and `/_api/v1` and `/_card` publish
+  `spoiler: true`, separate from `sensitive`. The tag is read off the page: Reddit draws the same reveal
+  button over NSFW posts, and the page's own `nsfw` flag tells the two apart (14 of 14 spoiler pages,
+  3 of 3 NSFW pages, 0 of 13 others, residential, 2026-10-11). A spoiler-tagged post asks no caption
+  source, which saves three requests. **Not measured: what Discord draws for a `sensitive` status.**
+
 - **Post links work on `sorryifuckedyour.mom` and `hotsinglesnear.you`.** Both domains belong to the
   owner's `you-stupid` Worker, which keeps its own page at `/` and its own files, and hands every other
   path to this Worker through a service binding. So `hotsinglesnear.you/jack/status/20` draws the same

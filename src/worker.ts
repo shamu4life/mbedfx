@@ -6,7 +6,7 @@ import { render } from './render/index.ts'
 import { redirect } from './render/fail.ts'
 import { toMastodonStatus, toOEmbed } from './render/mastodon.ts'
 import { pickMedia, pickMediaEntry } from './media.ts'
-import { bytesIndex, byline, mediaOf, mediaUrl, str, themeColor, usable } from './render/embed.ts'
+import { bytesIndex, byline, isSpoiler, mediaOf, mediaUrl, str, themeColor, usable } from './render/embed.ts'
 import { clampText, statParts } from './render/text.ts'
 import { proxyableVideoUrl, serveDirectVideo } from './mediaproxy.ts'
 import { parseRefKey, refKey } from './refkey.ts'
@@ -4960,6 +4960,12 @@ function toApiPost(post: Post, origin: string) {
      */
     text: str(post.text) || '',
     sensitive: !!post.sensitive,
+    /**
+     * THE WHOLE POST IS TAGGED A SPOILER (Reddit's tag, since 2026-10-11). `text` is then `[spoiler]`, and
+     * without this a consumer could not tell that marker from a post that says exactly that. Separate from
+     * `sensitive`, which says the content is adult: a consumer filtering one must not catch the other.
+     */
+    spoiler: isSpoiler(post),
     author: {
       ...apiAuthor(post.author),
       avatar: str(post.author?.avatar) ? mediaUrl(origin, post, 'avatar') : null,
@@ -6557,6 +6563,8 @@ async function serve(req: Request, env: Env, ctx: ExecutionContext, d: Deps): Pr
           }
           : null,
         sensitive: !!post.sensitive,
+        // The page blurs the preview's media for this, as Discord is asked to blur the card's.
+        spoiler: isSpoiler(post),
         createdAt: post.createdAt instanceof Date ? post.createdAt.toISOString() : null,
         media: own.map(({ m, i }) => ({
           // A 'gif' is drawn as an IMAGE, since 2026-10-05: the page draws an image from `url` and a video

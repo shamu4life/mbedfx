@@ -79,6 +79,7 @@
                         "title": null,
                         "text": "just setting up my twttr",
                         "sensitive": false,
+                        "spoiler": false,
                         "author": {
                           "name": "jack",
                           "handle": "jack",
@@ -346,6 +347,10 @@
             "type": "boolean",
             "description": "The post's own flag. The cards apply a wider rule that also fires for a sensitive quoted post that contributed a picture to the gallery; v1 publishes neither that rule nor the quote's media."
           },
+          "spoiler": {
+            "type": "boolean",
+            "description": "The whole post is tagged a spoiler, which only Reddit's tag sets today. `text` is then exactly `[spoiler]`, and `media` is unchanged: the cards ask Discord to blur it. Separate from `sensitive`, which says the content is adult; a Reddit post that is both is published as `sensitive` only."
+          },
           "author": { "$ref": "#/components/schemas/Author" },
           "counts": { "$ref": "#/components/schemas/Counts" },
           "media": {
@@ -358,7 +363,7 @@
             "oneOf": [{ "$ref": "#/components/schemas/Quote" }, { "type": "null" }]
           }
         },
-        "required": ["platform", "canonical", "createdAt", "title", "text", "sensitive", "author", "counts", "media", "quote"],
+        "required": ["platform", "canonical", "createdAt", "title", "text", "sensitive", "spoiler", "author", "counts", "media", "quote"],
         "additionalProperties": false
       },
       "Author": {

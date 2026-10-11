@@ -3,7 +3,7 @@ import { mediaList } from '../media.ts'
 import { refKey } from '../refkey.ts'
 import { encodeStatusId } from '../statusid.ts'
 import { esc, html } from './fail.ts'
-import { byline, bytesIndex, describe, dimTags, mediaOf, mediaUrl, pendingMuxIndex, playableVideo, stockState, str, themeColor, usable } from './embed.ts'
+import { byline, bytesIndex, describe, dimTags, isSpoiler, mediaOf, mediaUrl, pendingMuxIndex, playableVideo, stockState, str, themeColor, usable } from './embed.ts'
 import { buildPlainText } from './text.ts'
 
 /**
@@ -393,6 +393,14 @@ function renderSpoof(post: Post, origin: string, mode?: GalleryMode): Response {
   const canonical = esc(str(post.canonical))
   const hasMedia = mediaList(post).some(usable)
   /**
+   * A SPOILER-TAGGED POST NAMES NO MEDIA IN THIS HEAD (2026-10-11). The activity document is where its
+   * picture or video lives, marked for Discord's blur (mastodon.ts); an og:video or og:image here would
+   * hand the same file, unblurred, to whatever reads the head instead of the document. Without them this
+   * is the slideshow head, measured to draw the activity card (the twitter:card table below): the activity
+   * link, twitter:card and rel=canonical, and no media tag.
+   */
+  const spoiler = isSpoiler(post)
+  /**
    * A MUX IS RUNNING AND THE DOCUMENT WILL PROMISE IT (2026-09-02, the release that turned a
    * structural 0% into a number). Until then a cold YouTube head had no playable video, so the
    * stock gate below fired and the activity link was omitted — and Discord never fetched the
@@ -400,7 +408,7 @@ function renderSpoof(post: Post, origin: string, mode?: GalleryMode): Response {
    * the native player that day: NO og:video, the activity link, an og:image on the poster slot, and
    * neither twitter:card nor rel=canonical. See Media.pendingMux and src/muxpolicy.ts.
    */
-  const pendingAt = pendingMuxIndex(post)
+  const pendingAt = spoiler ? -1 : pendingMuxIndex(post)
   /**
    * ON THE STOCK BRANCH og:title IS THE VIDEO'S TITLE (2026-09-04). Everywhere else the byline: the
    * activity card carries the title in its content and the author in its account block, and
@@ -418,7 +426,7 @@ function renderSpoof(post: Post, origin: string, mode?: GalleryMode): Response {
   // without a playable video, which is what scopes every video-branch divergence below. The
   // `hasMedia` branch already guarantees ZERO og:image on a video post, so this block inherits the
   // C1 suppression rather than needing a guard of its own.
-  const videoOg = spoofVideoTags(post, origin, title)
+  const videoOg = spoiler ? [] : spoofVideoTags(post, origin, title)
 
   // THE STOCK GATE — see stockPlayerTags. yt only; only when there is NO playable video (the three
   // states the activity card renders as a frozen photo); never on an age-gated post. Mutually
@@ -426,7 +434,8 @@ function renderSpoof(post: Post, origin: string, mode?: GalleryMode): Response {
   // AND NEVER WHILE A PROMISABLE MUX IS IN FLIGHT: the iframe would be taken and the document
   // never read. The stock player is now exactly the three states it was written for — live,
   // over the ceiling, and no duration verdict — plus the no-container deploy.
-  const stockOg = stock && !videoOg.length && post.ref?.p === 'yt'
+  // Never on a spoiler either, which no yt ref is today: the iframe would be the video in the clear.
+  const stockOg = stock && !spoiler && !videoOg.length && post.ref?.p === 'yt'
     ? stockPlayerTags(post, origin, post.ref.id)
     : []
 

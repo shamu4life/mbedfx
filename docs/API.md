@@ -93,6 +93,7 @@ PeerTube ids from `test/fixtures/` and the Mastodon one from the converter page'
     "title": null,
     "text": "just setting up my twttr",
     "sensitive": false,
+    "spoiler": false,
     "author": {
       "name": "jack",
       "handle": "jack",
@@ -140,6 +141,7 @@ again 2026-08-11 against every shape in `public/openapi.json`.
 | `title` | string | **yes** |
 | `text` | string | no |
 | `sensitive` | boolean | no |
+| `spoiler` | boolean | no |
 | `author` | object | no |
 | `author.name` | string | **yes** |
 | `author.handle` | string | **yes** |
@@ -206,6 +208,14 @@ and a body Reddit cut short ends in `…`. A spoiler is `[spoiler]` wherever the
 post page, Reddit's feed, the archive); a short caption read from Reddit's crawler description alone
 shows one as Reddit's own link preview does, in the clear, because Reddit drops the markers there
 (measured on r/Jujutsufolk/comments/1x2vdbg, 2026-10-11).
+
+### `spoiler`
+
+`true` when the whole post is tagged a spoiler, which only Reddit's tag sets today. `text` is then
+exactly `[spoiler]`, whatever the post says, and `media` is unchanged: the cards ask Discord to blur it
+rather than leaving it out. It is separate from `sensitive`, which says the content is adult. A Reddit
+post that is both is published as `sensitive` only, because Reddit's page names the adult content and
+not the spoiler.
 
 `deserializePost` validates the ref, the canonical and the date, nothing else. `text` goes out
 through `str()` (`src/render/embed.ts`, applied in `toApiPost`): a cached value of the wrong type is
