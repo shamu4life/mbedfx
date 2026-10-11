@@ -754,6 +754,12 @@ footer .fine { font-size: 12px; opacity: .8; }
  * hands out the two. Note the position is narrower than it was: forsen.sex is NOT secret — it is named
  * in README.md and published as a base url in public/openapi.json — it is simply not offered here.
  *
+ * THE TWO GUEST HOSTS ARE RECOGNISED AND NOT ADVERTISED, for forsen.sex's reason and one of their own.
+ * sorryifuckedyour.mom and hotsinglesnear.you serve cards through another Worker (src/guesthost.ts),
+ * so without them here a link pasted from one would be read as a fediverse instance, the 2026-09-11
+ * defect again. This page is never served on them (the guest host declines `/`), so mbedfxDefaultHost
+ * never returns one in practice; they are in the list for recognition.
+ *
  * A visitor on a host in NEITHER list is handed mbedfx.app links, which is the same fallback localhost
  * and a file:// open have always had, and they work — see the unrecognised-host test, which exists
  * because emitting links to a host that may not be ours is the one outcome worth ruling out. A visitor
@@ -763,7 +769,7 @@ footer .fine { font-size: 12px; opacity: .8; }
  * "*.mbedfx.app is a wildcard, so d.mbedfx.app would have read as its own domain and media-only would
  * compose a second prefix onto it: d.d.mbedfx.app."
  */
-var OUR_HOSTS = ['mbedfx.app', 'megapenispoopenfarten.sex', 'forsen.sex'];
+var OUR_HOSTS = ['mbedfx.app', 'megapenispoopenfarten.sex', 'forsen.sex', 'sorryifuckedyour.mom', 'hotsinglesnear.you'];
 var PUBLIC_HOSTS = ['mbedfx.app', 'megapenispoopenfarten.sex'];
 
 /**

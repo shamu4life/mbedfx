@@ -9,6 +9,20 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- **Post links work on `sorryifuckedyour.mom` and `hotsinglesnear.you`.** Both domains belong to the
+  owner's `you-stupid` Worker, which keeps its own page at `/` and its own files, and hands every other
+  path to this Worker through a service binding. So `hotsinglesnear.you/jack/status/20` draws the same
+  card as `mbedfx.app/jack/status/20`, every callback the card names stays on that host, and a person
+  who clicks it is sent to the post. Only embed routes are answered there (posts, profiles, share codes,
+  short links, `/_media/`, the activity document and oEmbed), each marked `x-mbedfx-guest: served`.
+  Everything else, `/`, `robots.txt`, a bare `/{word}`, the JSON API, the converter's endpoints and the
+  diagnostics, is a plain unmarked 404, and `you-stupid` serves its own page instead, so a typo on
+  those domains still lands where it did. A failure here also comes back unmarked, so it can never
+  replace that page. Both hosts are refused by the fediverse SSRF guard and recognised by the
+  converter, which does not offer them. `d.` does not work on them (no DNS for it); `.mp4` does.
+  New in `src/guesthost.ts`, tested offline in `test/guesthost.test.mjs`. Not yet measured from a
+  Worker: it needs `you-stupid`'s binding deployed.
+
 - **A trailing `.mp4` on any post link serves the file, the way fxtwitter does.**
   `megapenispoopenfarten.sex/X/status/{id}.mp4` used to answer "Couldn't load this Twitter post",
   because the id swallowed the suffix. It is now the path spelling of the `d.` host and takes the same

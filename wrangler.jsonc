@@ -215,6 +215,13 @@
   // here alone is a silent SSRF hole: a fediverse ref names its own origin, so /{our-host}/post/1
   // would induce the Worker to fetch itself through the edge. The two lists are coupled and nothing
   // enforces it but this comment and the test that pins them together.
+  //
+  // TWO MORE HOSTS SERVE CARDS AND ARE DELIBERATELY NOT HERE: sorryifuckedyour.mom and
+  // hotsinglesnear.you (src/guesthost.ts, 2026-10-11). They are custom domains of the owner's
+  // you-stupid Worker, which keeps `/` and its own files and hands every other path to this Worker
+  // through a service binding. Listing them below would make the next deploy try to take the domains
+  // off you-stupid. They are in OWN_HOSTS like every serving domain, and test/guesthost.test.mjs fails
+  // if one is ever added to this array.
   "routes": [
     // The two staging.* custom domains that used to sit here were retired 2026-08-03 in favour of
     // Workers Builds preview urls. THIS COMMENT USED TO SAY THAT IS WHERE TESTING HAPPENS. It is not,

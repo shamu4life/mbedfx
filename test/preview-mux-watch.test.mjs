@@ -135,11 +135,13 @@ test('THE OLD POLL-COUNT CAP IS GONE — elapsed time, not a number of tries', (
 
 test('THE PAGE STILL CARRIES NO EM DASH AND NO SECOND PERSON in the new copy', () => {
   // Both were owner requests and both have been re-broken by later work before. The new strings are
-  // exactly the kind of edit that re-breaks them.
+  // exactly the kind of edit that re-breaks them. The host-list lines are exempt for the reason
+  // test/landing-convert.test.mjs gives: hotsinglesnear.you is a hostname, not the page talking.
   const body = HTML.slice(HTML.indexOf('<body'))
     .replace(/\/\*[\s\S]*?\*\//g, '')
     .replace(/^\s*\/\/.*$/gm, '')
     .replace(/<!--[\s\S]*?-->/g, '')
+    .replace(/^var (OUR|PUBLIC)_HOSTS = \[[^\]\n]*\];$/gm, '')
   assert.equal((body.match(/—/g) || []).length, 0)
   assert.equal((body.match(/\b(you|your)\b/gi) || []).length, 0)
 })

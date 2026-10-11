@@ -1,6 +1,7 @@
 import type { ClientClass, GalleryMode, Media, MuxJob, Platform, Post, PostRef, Profile, ProfileRef, Route } from './types.ts'
 import { classify } from './classify.ts'
 import { route } from './router.ts'
+import { GUEST_MARK, guestDeclined, guestServes, isGuestHost } from './guesthost.ts'
 import { render } from './render/index.ts'
 import { redirect } from './render/fail.ts'
 import { toMastodonStatus, toOEmbed } from './render/mastodon.ts'
@@ -5185,7 +5186,26 @@ async function serveDirectMedia(
   return redirect(`${mediaUrl(origin, got.post, bytesIndex(list[i], i))}${gif}`)
 }
 
+/**
+ * THE ENTRY POINT, and the one place a GUEST HOST is told apart (src/guesthost.ts has the whole
+ * argument). On mbedfx's own domains this is serve() and nothing else.
+ *
+ * On a guest host it declines every route that is not an embed BEFORE serve() runs, so a declined
+ * path costs no fetch, no cache read and no counter, and marks what it does answer. The mark goes on
+ * here rather than in serve() because serve() has dozens of returns and a mark that one of them forgot
+ * would hand that answer's page back to the dating site. There is no try/catch, as everywhere else in
+ * this file: a throw reaches the guest Worker unmarked, and that Worker serves its own page.
+ */
 export async function handle(req: Request, env: Env, ctx: ExecutionContext, d: Deps): Promise<Response> {
+  if (!isGuestHost(new URL(req.url).hostname)) return serve(req, env, ctx, d)
+  if (!guestServes(route(new URL(req.url)))) return guestDeclined()
+  const res = await serve(req, env, ctx, d)
+  const marked = new Response(res.body, res)
+  marked.headers.set(GUEST_MARK, 'served')
+  return marked
+}
+
+async function serve(req: Request, env: Env, ctx: ExecutionContext, d: Deps): Promise<Response> {
   const url = new URL(req.url)
 
   /**

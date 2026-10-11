@@ -184,7 +184,9 @@ Only these three hosts run mbedfx:
 
 `mbedfx.app` · `megapenispoopenfarten.sex` · `forsen.sex`
 
-`d.` works on all three. A wildcard DNS record covers exactly one label; a deeper name such as `d.staging.mbedfx.app` would need a record of its own. Anything else using the name is not mbedfx.
+`d.` works on all three.
+
+Two more domains serve the same cards as guests: `sorryifuckedyour.mom` and `hotsinglesnear.you`. Their front pages belong to another site, so only post links work there: swap the host and the post unfurls as usual. The converter, the JSON API and `d.` stay on the three hosts above; a trailing `.mp4` works on all five. A wildcard DNS record covers exactly one label; a deeper name such as `d.staging.mbedfx.app` would need a record of its own. Anything else using the name is not mbedfx.
 
 ### Optional configuration
 

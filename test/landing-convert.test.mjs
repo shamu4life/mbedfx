@@ -863,11 +863,18 @@ test('THE PAGE STILL CARRIES NO VISIBLE EM DASH AND NO SECOND PERSON', () => {
    * A rule that is only ever applied by hand gets re-broken by the next edit, so it is asserted.
    *
    * Comments are exempt: they are not visible copy, and the file's explanatory density is deliberate.
+   *
+   * SO ARE THE TWO HOST-LIST DECLARATIONS, since 2026-10-11, and only those two lines. A hostname is a
+   * name, not a sentence, and the guest host hotsinglesnear.you ends in the label `you`, which this
+   * test read as the page addressing its reader. The lists are data the page never prints: a domain
+   * reaches the screen only as a toggle button, whose markup is outside these lines and still checked,
+   * so advertising that domain later would still have to get past this test.
    */
   const body = HTML.slice(HTML.indexOf('<body'))
     .replace(/\/\*[\s\S]*?\*\//g, '')
     .replace(/^\s*\/\/.*$/gm, '')
     .replace(/<!--[\s\S]*?-->/g, '')
+    .replace(/^var (OUR|PUBLIC)_HOSTS = \[[^\]\n]*\];$/gm, '')
   assert.equal((body.match(/—/g) || []).length, 0, 'no em dash in anything a visitor reads')
   assert.equal((body.match(/\b(you|your)\b/gi) || []).length, 0, 'and nothing addresses the reader')
 })
