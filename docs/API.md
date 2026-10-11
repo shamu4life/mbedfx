@@ -577,7 +577,9 @@ half-answer out of any cache in between.
 - `pending: true`: a translation lost its race and `text` is the original. The translation is still
   being written; a re-request carries it. Also set when a Reddit link post's linked post (below,
   [Media urls](#media-urls)) did not load in time, or came back empty without a private or
-  age-restricted wall, and `media` is empty for now; a re-request asks for it again.
+  age-restricted wall, and `media` is empty for now; a re-request asks for it again. That case is the
+  one exception to the next paragraph: a linked post that is gone for good cannot be told from one that
+  failed once, so it keeps `pending` set. Ask again once, not in a loop.
 
 Neither is an error. Both clear on their own and an answer that ignores them is still correct. The
 work behind them runs in two different places, which is what sets the horizons above: a translation

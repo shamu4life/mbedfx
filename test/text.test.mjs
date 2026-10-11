@@ -472,6 +472,11 @@ test('TRAILING BLANK LINES ARE NOT BODY — a complete post is never marked as c
   const text = Array.from({ length: 10 }, (_, i) => `line ${i + 1}`).join('\n') + '\n\n'
   assert.ok(!buildPlainText({ ...cap, text }).includes('...'), 'ten lines and a trailing newline pass through')
   assert.ok(!buildPlainText({ ...cap, text: 'q'.repeat(499) + '\n\n' }).includes('...'), 'so do 499 characters and one')
+  // And they are not carried through either (second review, 2026-10-11): returned untrimmed, forty trailing
+  // newlines put a ten-line body at 41 lines and 32 unbreakable breaks above the counts row.
+  const padded = buildPlainText({ ...cap, text: 'look at this' + '\n'.repeat(40) + ' '.repeat(3000) })
+  assert.equal(padded, 'look at this', 'the body, without the whitespace after it')
+  assert.ok(!buildContentHtml({ ...cap, text: 'look at this' + '\n'.repeat(40) }).includes('<br>'), 'no breaks after the body')
 })
 
 test('A CAPPED TRANSLATION KEEPS THE ENGLISH, because translation puts it first', () => {

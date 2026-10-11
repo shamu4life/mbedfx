@@ -46,8 +46,9 @@ import { byline, str } from './embed.ts'
  * or a surrogate pair as its high half, which JSON carries as an escape and a client draws as a box.
  *
  * TRAILING WHITESPACE IS NOT BODY: a body that ends in blank lines (Lemmy stores one with a final newline)
- * is measured without them, so a complete body is never marked as cut, and is returned exactly as it came
- * when it fits.
+ * is measured AND returned without them, so a complete body is never marked as cut, and forty trailing
+ * newlines cannot carry a ten-line body past the line cap (review, 2026-10-11: returning the untrimmed text
+ * put 32 unbreakable <br> between a Lemmy body and its counts row).
  */
 export const DESC_MAX = 500
 export const DESC_MAX_LINES = 10
@@ -72,8 +73,7 @@ function cutAt(s: string, limit: number): string {
 }
 
 export function clampText(s: string): string {
-  const whole = normalizeBreaks(s)
-  let out = whole.trimEnd()
+  let out = normalizeBreaks(s).trimEnd()
   let cut = false
   const lines = out.split('\n')
   if (lines.length > DESC_MAX_LINES) {
@@ -86,7 +86,7 @@ export function clampText(s: string): string {
     out = cutAt(out, DESC_MAX - ELLIPSIS.length).trimEnd()
     cut = true
   }
-  return cut ? out + ELLIPSIS : whole
+  return cut ? out + ELLIPSIS : out
 }
 
 /**

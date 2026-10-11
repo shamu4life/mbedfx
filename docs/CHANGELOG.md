@@ -71,8 +71,9 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 - **A card shows up to 500 characters or 10 lines of a post's body, on every platform** (owner's
   numbers, replacing 253 characters). The line cap keeps the counts row inside Discord's ~20-line cut
-  of an activity card. A cut never splits an emoji. The converter's preview cuts at the same place and
-  leaves the same blank line after a title.
+  of an activity card. A cut never splits an emoji or a flag, and trailing blank lines are dropped
+  rather than counted. The converter's preview cuts at the same place and leaves the same blank line
+  after a title.
 
 - **Reddit bodies read the way Reddit shows them.** Paragraphs, line breaks, numbered and bulleted
   lists and table rows keep their shape, Reddit's template indentation is gone, and a spoiler is

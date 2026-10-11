@@ -196,9 +196,10 @@ export function gifSize(head: unknown): { w: number; h: number } {
  * THE ONE READING OF "THIS POST IS A REDDIT GIF", shared by every render that can see the post and by
  * fetch.ts, which asks it which file to read the size of. The url it returns is the url media[0] will be.
  *
- * It looks at the post's `url` and `type` and nothing else, and that restriction is the design. Every
- * render of a post lands under ONE post cache key (loadPost writes the placeholder-sub render of a bare
- * /comments/{id} link, and the OAuth render, under the same canonical key as the full one), and the
+ * It looks at the post's `url` and `type` and nothing else, and that restriction is the design. Renders of
+ * a post share post cache keys (the OAuth render lands under the same canonical key as the full one; a
+ * placeholder render of a bare /comments/{id} link, since 2026-10-11, only under the bare key it was asked
+ * under, and only when fetch.ts's re-ask under the real sub failed), and the
  * /_media/{key}/0 url that cache answers has already been handed to Discord, whose media proxy caches per
  * url. So index 0 must be the SAME KIND in every render, or a url Discord holds as one kind serves the
  * other: the sticky poisoned-url defect worker.ts's notReady() exists for. `url` and `type` are present in
@@ -408,7 +409,15 @@ function buildFromEmbed(html: string, ref: Extract<PostRef, { p: 'rd' }>, gifHea
   if (Number.isNaN(created.getTime())) return null
 
   const author = (html.match(/https:\/\/www\.reddit\.com\/user\/([^/"?]+)/) || [])[1] || '[unknown]'
-  const sub = canon[2]
+  /**
+   * THE SUB IN THE REF DECIDES THE CACHE KEY, so a placeholder render keeps the one it was asked under.
+   * loadPost writes a Post under its own ref's key as well as the requested one, and the page's canonical
+   * sub made a stripped render of a bare /comments/{id} link (no author, counts or body) the card for the
+   * ORDINARY link too, for up to 900 s in that colo (measured in production, 2026-10-11). fetch.ts now asks
+   * again under the real sub, so a placeholder reaches here only when that re-ask failed, and then it is
+   * the bare link's thinner card alone. A full render takes the canonical sub, as it always did.
+   */
+  const sub = redditFullRender(html) ? canon[2] : (ref.sub ?? '')
   const score = parseInt((html.match(/<faceplate-number number="(\d+)"/) || [])[1] || '', 10)
   const comments = parseInt(((html.match(/([\d,]+)\s+comments?/) || [])[1] || '').replace(/,/g, ''), 10)
 

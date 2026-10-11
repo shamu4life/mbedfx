@@ -322,3 +322,28 @@ test('A LINKED POST THAT FAILS ONCE IS NOT PINNED: the next render shows its med
   assert.equal(j.pending, true, 'incomplete, so a consumer asks again')
   assert.match(res.headers.get('cache-control'), /no-store/)
 })
+
+/* ===================== FROM THE SECOND REVIEW, 2026-10-11 ===================== */
+
+test('A COLD COLO STILL GETS THE MEDIA: a slow Reddit load does not starve the linked load', async () => {
+  // The first fix cut the linked load to what was left of YT_META_BOT_MS after the Reddit load, and a cold
+  // colo (2.3 s Reddit, 2.1 s YouTube) shipped `media_attachments: []`, the original report, frozen.
+  const rd = rdRef('lnk0030'); const yt = { p: 'yt', id: 'lnkQQQQQQ30', post: (ref) => slow(2100, ytPost(ref)) }
+  const deps = depsFor(rd, yt)
+  const fetchRd = deps.fetchPost
+  deps.fetchPost = async (ref) => (ref.p === 'rd' ? slow(2300, await fetchRd(ref)) : fetchRd(ref))
+  const t0 = Date.now()
+  const j = await (await handle(bot(activity(rd)), envWith(), retainingCtx(), deps)).json()
+  const ms = Date.now() - t0
+  assert.equal(j.media_attachments.length, 1, 'the linked video, promised')
+  assert.ok(ms < 2300 + 2700 + MUX_WAIT_FLOOR_MS + 400, `and bounded, ${ms}ms`)
+})
+
+test('A COMPOSED CARD THAT DEGRADES IS COUNTED UNDER REDDIT, beside its ok', async () => {
+  // card_degraded / ok is a per-platform ratio; filed under yt, Reddit traffic inflated YouTube's.
+  const ae = recordingAE()
+  const rd = rdRef('lnk0031'); const yt = { p: 'yt', id: 'lnkRRRRRR31', over: { duration: 1191 } }
+  await handle(bot(head(rd)), envWith({ ae, resolver: failingResolver() }), retainingCtx(), depsFor(rd, yt))
+  assert.deepEqual(rowsOf(ae, 'card_degraded').map(r => r.blobs[0]), ['rd'])
+  assert.deepEqual(rowsOf(ae, 'ok').map(r => r.blobs[0]), ['rd'])
+})

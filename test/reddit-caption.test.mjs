@@ -287,10 +287,24 @@ test('A CUT CAPTION WHOSE FEED AND ARCHIVE HANG STILL ENDS INSIDE THE CAPTION BU
 
 const meta = (s) => `<meta name="description" content="${s.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;')}">`
 
-test('RAW SPOILER MARKUP IN A DESCRIPTION IS MASKED, and a cut inside one keeps its cut', () => {
+test('A CLOSED SPOILER PAIR IN A DESCRIPTION IS MASKED; A LONE >! THERE IS LITERAL TEXT', () => {
+  /**
+   * REWRITTEN 2026-10-11 after the second review. This first masked an unclosed `>!` to the end of the
+   * description too, as if Reddit's cut had landed inside a spoiler. But Reddit drops a real spoiler's
+   * markers from the description (measured), so a lone `>!` there is something the poster typed, and
+   * masking it hid the rest of the caption. A closed pair is still masked: it costs nothing if literal.
+   */
   assert.deepEqual(crawlerCaption(meta('Ep 12: >!Solomon dies!< GG'), 's'), { kind: 'body', text: 'Ep 12: [spoiler] GG', cut: false })
-  assert.deepEqual(crawlerCaption(meta('Ep 12: >!Solomon dies in the final round…'), 's'),
-    { kind: 'body', text: 'Ep 12: [spoiler]…', cut: true }, 'still cut, so the archive may still complete it')
+  assert.deepEqual(crawlerCaption(meta('wow >! that ending, and the rest of the caption is still here…'), 's'),
+    { kind: 'body', text: 'wow >! that ending, and the rest of the caption is still here…', cut: true })
+})
+
+test('INVISIBLE CHARACTERS IN A DESCRIPTION DO NOT STOP IT MATCHING THE ARCHIVE', () => {
+  // The measured spoiler-led caption opens with the zero-width text its spoiler hid; the archive's converted
+  // text drops zero-width characters, so the description has to as well, or the two never agree.
+  const crawler = crawlerCaption(meta('\u200b Even though it is clearly never stated that Sukuna has, or would have, a maximum technique I think it is interesting to debate atleast between his…'), 's')
+  const archived = archiveCaption(JSON.stringify({ data: [{ id: 'z', selftext: '>!&#x200B;!<Even though it is clearly never stated that Sukuna has, or would have, a maximum technique I think it is interesting to debate atleast between his two strongest attacks.' }] }), 'z')
+  assert.equal(pickCaption(crawler, null, archived).source, 'archive')
 })
 
 test('A DESCRIPTION THAT SHOWS A SPOILER IN THE CLEAR IS COMPLETED FROM THE ARCHIVE WITH IT MASKED', () => {

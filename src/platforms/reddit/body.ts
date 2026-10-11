@@ -21,8 +21,10 @@
  */
 
 /**
- * THE MOST TEXT EITHER CONVERTER PRODUCES: above the normalizer's 4000-character storage bound, so a body
- * that long is still seen as cut there and marked, and far above the card's 500. Work past it is discarded.
+ * HOW FAR EITHER CONVERTER READS: the HTML one stops once its output passes this many characters (before
+ * tidying, which only shrinks it), the markdown one converts only this many characters of input. Above the
+ * normalizer's 4000-character storage bound, so a body that long is still seen as cut there and marked, and
+ * far above the card's 500. Work past it is discarded.
  */
 export const BODY_CONVERT_MAX = 6000
 
@@ -54,6 +56,9 @@ export function decodeEntities(s: string): string {
  * the BOM, and the C0 controls other than newline and tab. ZWJ is kept; it is part of emoji sequences.
  */
 const INVISIBLE = /[\u200b\ufeff\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g
+
+/** `s` without INVISIBLE's characters: what the converters drop, for a source caption.ts compares with them. */
+export const stripInvisible = (s: string): string => s.replace(INVISIBLE, '')
 
 /**
  * A SPOILER IS REPLACED, NEVER SHOWN, wherever the source marks it. Reddit hides `>!text!<` behind a click;
@@ -211,10 +216,13 @@ export function redditHtmlToText(html: string, max = BODY_CONVERT_MAX): string {
   return tidy(buf)
 }
 
-/** Trailing spaces off every line, at most one blank line in a row, and no blank lines at either end. */
+/**
+ * Trailing spaces off every line, at most one blank line in a row, and no blank lines at either end. A line
+ * that is nothing but table bars (a row of empty cells) carries nothing and goes too.
+ */
 function tidy(s: string): string {
   return s
-    .split('\n').map(l => l.trimEnd()).join('\n')
+    .split('\n').map(l => l.trimEnd()).filter(l => !/^[\s|]*\|[\s|]*$/.test(l)).join('\n')
     .replace(/\n{3,}/g, '\n\n')
     .trim()
 }
@@ -228,19 +236,34 @@ function tidy(s: string): string {
  *
  * `unwrap` keeps the hidden text and drops only the markers, for caption.ts's comparison with Reddit's
  * description, which shows a spoiler's text without its markers (measured, r/Jujutsufolk/comments/1x2vdbg).
+ * `keepOpen` leaves an opener with no closer as the literal text it then is, for that description: there
+ * a lone `>!` was typed, not cut (Reddit drops real markers), and masking it would hide the caption.
+ *
+ * LINEAR in the length of the text: the next closer and the end of the current paragraph are each found
+ * once and reused by every opener before them, so many openers in one paragraph cost one scan, not one
+ * scan each (the first version rescanned to the end per opener: 2.2 s for a 500 KB run in workerd).
  */
-export function maskSpoilers(md: string, unwrap = false): string {
+export function maskSpoilers(md: string, unwrap = false, keepOpen = false): string {
   let out = ''
   let at = 0
+  let close = -2
+  let paraEnd = -1
+  const para = /\n[ \t]*\n/g
   for (;;) {
     const open = md.indexOf('>!', at)
     if (open < 0) return out + md.slice(at)
-    const close = md.indexOf('!<', open + 2)
-    const para = /\n[ \t]*\n/g
-    para.lastIndex = open + 2
-    const blank = para.exec(md)
-    const paraEnd = blank ? blank.index : md.length
+    if (close !== -1 && close < open + 2) close = md.indexOf('!<', open + 2)
+    if (paraEnd <= open) {
+      para.lastIndex = open + 2
+      const blank = para.exec(md)
+      paraEnd = blank ? blank.index : md.length
+    }
     const end = close >= 0 && close < paraEnd ? close : -1
+    if (end < 0 && keepOpen) {
+      out += md.slice(at, open + 2)
+      at = open + 2
+      continue
+    }
     const hidden = md.slice(open + 2, end >= 0 ? end : paraEnd)
     out += md.slice(at, open) + (unwrap ? hidden : SPOILER_MARK)
     at = end >= 0 ? end + 2 : paraEnd
@@ -263,8 +286,10 @@ export function maskSpoilers(md: string, unwrap = false): string {
  */
 export function redditMarkdownToText(md: string, opts: { spoilers?: 'mask' | 'unwrap' } = {}): string {
   const cut = md.length > BODY_CONVERT_MAX
-  const src = maskSpoilers(decodeEntities((cut ? md.slice(0, BODY_CONVERT_MAX) : md).replace(/\r\n?/g, '\n')).replace(INVISIBLE, ''),
-    opts.spoilers === 'unwrap')
+  let head = cut ? md.slice(0, BODY_CONVERT_MAX) : md
+  // Never half a character at the cut: a lone high surrogate would reach the card as a replacement box.
+  if (cut && /[\ud800-\udbff]$/.test(head)) head = head.slice(0, -1)
+  const src = maskSpoilers(decodeEntities(head.replace(/\r\n?/g, '\n')).replace(INVISIBLE, ''), opts.spoilers === 'unwrap')
   const out: string[] = []
   let fence = false
   for (const raw of src.split('\n')) {

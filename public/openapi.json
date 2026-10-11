@@ -251,7 +251,7 @@
           },
           "pending": {
             "type": "boolean",
-            "description": "A translation lost its race and `text` is the original. The translation is still being written; a re-request carries it."
+            "description": "A translation lost its race and `text` is the original; the translation is still being written, and a re-request carries it. Or a Reddit link post's linked post did not load in time, or came back empty without a private or age-restricted wall, and `media` is empty for now; a re-request asks for it again. A linked post that is gone for good keeps this set: ask again once, not in a loop."
           },
           "post": { "$ref": "#/components/schemas/Post" }
         },

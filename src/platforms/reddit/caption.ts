@@ -1,4 +1,4 @@
-import { decodeEntities, maskSpoilers, redditHtmlToText, redditMarkdownToText } from './body.ts'
+import { decodeEntities, maskSpoilers, redditHtmlToText, redditMarkdownToText, stripInvisible } from './body.ts'
 
 /**
  * Pure: the BODY of a Reddit post that embed.reddit.com does not carry. No I/O; fetch.ts fetches the
@@ -38,9 +38,16 @@ import { decodeEntities, maskSpoilers, redditHtmlToText, redditMarkdownToText } 
  * only spoiler-led caption in a sample of ~1,600 posts). So a caption read from the description ALONE shows
  * a spoiler as Reddit's own Discord preview of the same link shows it, which is in the clear. Wherever a
  * second source answers, its markers win: the feed's body replaces the description, and the archive's text
- * is compared with its spoilers unwrapped and shown with them masked. Raw `>!…!<` in a description, should
- * Reddit ever leave one, is masked too.
+ * is compared with its spoilers unwrapped and shown with them masked. A closed `>!…!<` pair in a
+ * description, should Reddit ever leave one, is masked too; a lone `>!` is left as the literal text it is
+ * there, since Reddit drops the markers of a real spoiler, and masking it would hide the caption after it.
  */
+
+/**
+ * The most of a description read: Reddit's runs to ~150 characters (149 measured, with its counts prefix),
+ * and nothing past this is a caption. It bounds everything done to the text after this point.
+ */
+const DESCRIPTION_MAX = 2000
 
 /** What the crawler page said about the body. `cut` means Reddit shortened it and ended it with `…`. */
 export type CrawlerCaption =
@@ -76,7 +83,9 @@ export function crawlerCaption(html: string, sub: string): CrawlerCaption {
   if (!html || blocked(html)) return { kind: 'unknown' }
   const m = /<meta name="description" content="([^"]*)"/.exec(html)
   if (!m) return { kind: 'unknown' }
-  const desc = decodeEntities(m[1]).replace(/\s+/g, ' ').trim()
+  // Invisible characters go as the converters drop them, or the zero-width text of a spoiler like the
+  // measured one would stop the description matching the archive's converted text (review, 2026-10-11).
+  const desc = stripInvisible(decodeEntities(m[1].slice(0, DESCRIPTION_MAX))).replace(/\s+/g, ' ').trim()
   const rest = desc.replace(COUNTS_PREFIX, '')
   // "{N} {members|subscribers|…} in the {sub} community." is the subreddit's description, shown when the
   // post itself has none. Keyed on THIS post's subreddit so a body that happens to mention a community
@@ -86,10 +95,7 @@ export function crawlerCaption(html: string, sub: string): CrawlerCaption {
   }
   if (rest === '[removed]' || rest === '[deleted]') return { kind: 'none' }
   const cut = rest.endsWith('\u2026')
-  // A cut that lands inside a spoiler swallows the `…` into the mask, so it is put back: the body is
-  // still cut, and the archive is still the way to complete it.
-  const text = maskSpoilers(rest)
-  return { kind: 'body', text: cut && !text.endsWith('\u2026') ? `${text}\u2026` : text, cut }
+  return { kind: 'body', text: maskSpoilers(rest, false, true), cut }
 }
 
 /** The feed entry's body, read only from the entry whose id is this post's. */
@@ -126,7 +132,9 @@ export function archiveCaption(json: string, id: string): ArchiveCaption | null 
   const st = row?.selftext
   if (typeof st !== 'string' || !st.trim() || st === '[removed]' || st === '[deleted]') return null
   const masked = redditMarkdownToText(st)
-  return masked ? { masked, plain: redditMarkdownToText(st, { spoilers: 'unwrap' }) } : null
+  if (!masked) return null
+  // The second reading differs only when there is a spoiler to unwrap, so it is not made otherwise.
+  return { masked, plain: st.includes('>!') || st.includes('&gt;!') ? redditMarkdownToText(st, { spoilers: 'unwrap' }) : masked }
 }
 
 const flat = (s: string) => s.replace(/\s+/g, ' ').trim()
@@ -140,7 +148,8 @@ const flat = (s: string) => s.replace(/\s+/g, ' ').trim()
  *    Reddit's cut text with its `…`. The prefix is all that can be checked: an edit inside the part
  *    Reddit shows is caught (the archive is refused), and one made AFTER it, once the archive had
  *    ingested the post, is not, so the card then shows the archived tail. That is the trade the owner
- *    accepted with the archive (2026-10-11); it is bounded by the card's 500 characters;
+ *    accepted with the archive (2026-10-11). A card shows at most 500 characters of it; /_api/v1
+ *    publishes up to the 4000 the normalizer stores;
  *  - "no body" from either Reddit source is final; the archive is never asked to overrule Reddit.
  *
  * `source` is for the counters only.

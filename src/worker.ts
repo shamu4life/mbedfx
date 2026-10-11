@@ -707,7 +707,9 @@ export async function liveFetchPost(
       // app creds happen to be set. The embed surface can't tell a private sub from a missing post
       // (both are the not-found shell), so a removed/private/deleted post is a null Post -> the generic
       // "couldn't load"; the 'private' -> 🔒 gate only fires on the OAuth fallback.
-      const got = await fetchReddit(ref, env, html => prewarmLinked(html, env, ctx))
+      // Not for a person's request (the converter's preview, a browser on /_api/v1): those are the seams a
+      // direct paste never prewarms from, and a doomed video would cost a container call there for nothing.
+      const got = await fetchReddit(ref, env, client === 'human' ? undefined : html => prewarmLinked(html, env, ctx))
       if (!got.ok) {
         count(env, 'rd', got.reason, client)
         if (got.reason === 'private' && report) report.reason = 'private'
@@ -5037,6 +5039,13 @@ function toApiPost(post: Post, origin: string) {
 const NO_LINK = { linked: null, pending: false, attempted: false } as const
 
 /**
+ * WHAT A COLD LINKED LOAD IS ALWAYS GIVEN on the activity document: a YouTube load is bounded by Innertube's
+ * own 2500 ms abort (median ~1.7 s), so this lets it finish however long the Reddit load before it took. The
+ * trade is a later document in a cold colo, against one with no media at all, which Discord freezes.
+ */
+const LINK_COLD_LOAD_MS = 2700
+
+/**
  * `pending` means THE CARD IS MISSING LINKED MEDIA THAT MAY STILL ARRIVE, and every caller treats it the way
  * it treats a degraded card: not response-cached, and `pending` on the JSON surfaces. Two causes, both
  * reviewed 2026-10-11: the linked load missed this render's budget, or it came back empty without a wall.
@@ -6139,8 +6148,11 @@ async function serve(req: Request, env: Env, ctx: ExecutionContext, d: Deps): Pr
        * came of it. A post with no link pays nothing: `left` is Infinity and every budget is as it was.
        * oEmbed reads the author and the canonical only, so it does not compose.
        */
+      // The linked load keeps at least LINK_COLD_LOAD_MS, however long the Reddit load took: cut to what was
+      // left, a cold colo shipped a document with NO media, the very report this composition fixes, frozen in
+      // the message (review, 2026-10-11). `left`, measured from the top, still bounds every arm after it.
       const link = r.kind === 'activity'
-        ? await linkedFor(post, d, env, client, ctx, YT_META_BOT_MS - (Date.now() - armStarted))
+        ? await linkedFor(post, d, env, client, ctx, Math.max(LINK_COLD_LOAD_MS, YT_META_BOT_MS - (Date.now() - armStarted)))
         : NO_LINK
       const media = link.linked ? tagLinked(link.linked) : post
       const left = link.attempted ? Math.max(MUX_WAIT_FLOOR_MS, YT_MUX_BOT_MS - (Date.now() - armStarted)) : Infinity
