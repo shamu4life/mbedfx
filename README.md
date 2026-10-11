@@ -80,7 +80,7 @@ https://megapenispoopenfarten.sex/jack/status/20.mp4
 
 That goes for links whose post id sits after the `?` too: `/watch.mp4?v=…`, `/photo/.mp4?fbid=…`. A `.mp4` typed onto the end of the query instead (`watch?v=….mp4`) isn't read: a YouTube link stays a card, and a Facebook one gets the which-site chooser.
 
-The converter page has a **media only** checkbox next to the domain buttons. A `d.` url renders no card; [docs/API.md](docs/API.md#the-d-host) has the rest. With one of the two guest domains selected (see [Official domains](#official-domains)), which have no `d.`, the box puts `.mp4` on the path instead.
+The converter page has a **media only** checkbox next to the domain buttons. A `d.` url renders no card; [docs/API.md](docs/API.md#the-d-host) has the rest. It works on every domain the converter offers, the two guest domains included (see [Official domains](#official-domains)).
 
 ## Supported sites
 
@@ -186,7 +186,7 @@ Only these three hosts run mbedfx:
 
 `d.` works on all three.
 
-Two more domains serve the same cards as guests: `sorryifuckedyour.mom` and `hotsinglesnear.you`. Their front pages belong to another site, so only post links and Bluesky profile links work there: swap the host and the post unfurls as usual. The converter offers both as domain buttons, next to `mbedfx.app` and `megapenispoopenfarten.sex` (`forsen.sex` works but isn't offered). The converter page itself, the JSON API and `d.` stay on the three hosts above; a trailing `.mp4` works on all five, so that is what **media only** emits on a guest domain. A link on a guest domain that names neither a post nor a Bluesky profile, a bare `/{handle}` for instance, opens the other site's page rather than the which-site chooser, and the converter's preview says so. A wildcard DNS record covers exactly one label; a deeper name such as `d.staging.mbedfx.app` would need a record of its own. Anything else using the name is not mbedfx.
+Two more domains serve the same cards as guests: `sorryifuckedyour.mom` and `hotsinglesnear.you`. Their front pages belong to another site, so only post links and Bluesky profile links work there: swap the host and the post unfurls as usual. The converter offers both as domain buttons, next to `mbedfx.app` and `megapenispoopenfarten.sex` (`forsen.sex` works but isn't offered). The converter page itself and the JSON API stay on the three hosts above. `d.` works on all five (`d.hotsinglesnear.you/jack/status/20` is the file), and so does a trailing `.mp4`. A link on a guest domain that names neither a post nor a Bluesky profile, a bare `/{handle}` for instance, opens the other site's page rather than the which-site chooser, and the converter's preview says so. A wildcard DNS record covers exactly one label; a deeper name such as `d.staging.mbedfx.app` would need a record of its own. Anything else using the name is not mbedfx.
 
 ### Optional configuration
 

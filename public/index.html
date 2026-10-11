@@ -773,15 +773,18 @@ footer .fine { font-size: 12px; opacity: .8; }
  * new domains show up as options for selection on the site unlike forsen.sex". sorryifuckedyour.mom and
  * hotsinglesnear.you serve cards through another Worker (src/guesthost.ts), and they were first added
  * here for recognition only, because without them a link pasted from one is read as a fediverse
- * instance, the 2026-09-11 defect again. That reason still holds; offering them is the new half. Two
- * things differ from the official three, and both are handled below rather than left to a visitor:
+ * instance, the 2026-09-11 defect again. That reason still holds; offering them is the new half. One
+ * thing differs from the official three, and it is handled below rather than left to a visitor:
  *
- *   - NO `d.`. you-stupid has no DNS or route for d.<guest>, so media only takes the `.mp4` path
- *     spelling on these (GUEST_HOSTS, mbedfxMediaOnly).
  *   - ONLY EMBED PATHS. A guest host answers post, profile and share links and passes everything else
  *     (a bare handle the router would offer a chooser for, a path that names nothing) to the other
  *     site's own page. The page cannot tell which a link is without the router, so /_card says so
  *     (`guestDeclines`) and the preview repeats it (see drawCard).
+ *
+ * `d.` IS THE SAME ON THEM, since 2026-10-11 (owner's ask, "fix the d. precursor for the new domains"):
+ * d.sorryifuckedyour.mom and d.hotsinglesnear.you are custom domains of the same you-stupid Worker
+ * (shamu4life/you-stupid#22), so media only is the d. host there as everywhere (mbedfxMediaOnly). For a
+ * day before that they had no DNS, and the box put a `.mp4` on the path instead.
  *
  * This page is never SERVED on a guest host (it declines `/`), so mbedfxDefaultHost never returns one
  * in practice; arriving there is the dating page, not this one.
@@ -799,9 +802,9 @@ var OUR_HOSTS = ['mbedfx.app', 'megapenispoopenfarten.sex', 'forsen.sex', 'sorry
 var PUBLIC_HOSTS = ['mbedfx.app', 'megapenispoopenfarten.sex', 'sorryifuckedyour.mom', 'hotsinglesnear.you'];
 /**
  * THE GUEST HOSTS, the same list as src/guesthost.ts GUEST_HOSTS (this page has no build step and
- * cannot import it, so test/landing-convert.test.mjs compares the two). Everything this list changes is
- * a consequence of another Worker owning the domain: no `d.` (mbedfxMediaOnly) and a narrower set of
- * paths answered (drawCard's guest line).
+ * cannot import it, so test/landing-convert.test.mjs compares the two). What this list changes is a
+ * consequence of another Worker owning the domain: a narrower set of paths answered (drawCard's guest
+ * line). It no longer changes media only, which is the d. host on every domain since 2026-10-11.
  */
 var GUEST_HOSTS = ['sorryifuckedyour.mom', 'hotsinglesnear.you'];
 
@@ -1109,59 +1112,27 @@ function mbedfxConvert(input, host, gallery) {
 }
 
 /**
- * MEDIA ONLY, SPELLED THE WAY THE LINK'S HOST CAN CARRY IT. Takes a finished link (mbedfxConvert's, or a
- * worker-supplied one already re-pointed) and returns the link to the file instead of the card.
+ * MEDIA ONLY: THE `d.` HOST, which answers with the post's bytes instead of a card. Takes a finished link
+ * (mbedfxConvert's, or a worker-supplied one already re-pointed) and prefixes `d.` onto the WHOLE host,
+ * so it composes with the domain toggle without either control knowing about the other, and leaves the
+ * path exactly as it was. A wildcard DNS record covers exactly ONE label, and a Workers preview host has
+ * no wildcard at all, so the d. form resolves on the production domains only.
  *
- * ON THE THREE OFFICIAL HOSTS, AND A PREVIEW: THE `d.` HOST, byte for byte what this page emitted before
- * guest hosts existed. Prefixed onto the WHOLE host, so it composes with the domain toggle without
- * either control knowing about the other. A wildcard DNS record covers exactly ONE label, and a Workers
- * preview host has no wildcard at all, so the d. form resolves on the production domains only.
+ * THE SAME ON THE TWO GUEST HOSTS since 2026-10-11. d.sorryifuckedyour.mom and d.hotsinglesnear.you are
+ * custom domains of the you-stupid Worker that owns those zones (shamu4life/you-stupid#22), its host
+ * checks take any subdomain, so the request reaches this worker through the same binding, and the worker
+ * reads the `d.` off the hostname there as anywhere (worker.ts DIRECT_MEDIA_HOST; pinned in
+ * test/guesthost.test.mjs). For a day before that (#102) a guest host had no d., and this put a `.mp4`
+ * on the path instead, with a dozen rules for where it could go (before `/p`, never twice, its own
+ * segment after a `)`, never on a profile). The `.mp4` spelling is still a post route on every host and
+ * works when typed; the page no longer emits it.
  *
- * ON A GUEST HOST: A `.mp4` ON THE PATH. There is no d.<guest> (you-stupid owns the zone and has no
- * record or route for it), so a d. link there resolves nowhere. The `.mp4` spelling is read by the
- * router (router.ts DIRECT_SUFFIX) as the same post with `direct`, which guestServes answers, so the
- * same file comes back through the binding. Where it goes is read off peelSuffixes:
- *
- *   - GLUED TO THE POST SEGMENT, BEFORE ANY `?`: `/X/status/20.mp4`, `/watch.mp4?v={id}`. Typed onto
- *     the query value it is not read.
- *   - BEFORE THE STILLS SUFFIX, not after it: `/X/status/20.mp4/p`, the spelling this page already
- *     hands out for a pasted `.mp4` with "all as stills" ticked. mbedfxConvert's already-ours branch
- *     strips a trailing /p or /v, so a link copied back in still answers to the stills box; `/p.mp4`
- *     would survive that strip and freeze the mode into the link.
- *   - NOT TWICE. A link that already asks for the file (a pasted `20.mp4`, `/p/{code}/.mp4`, a
- *     `/_media/…/0.mp4`) is left as it is: the router peels ONE glued `.mp4`, so `20.mp4.mp4` stays the
- *     honest failure id '20.mp4' rather than the post.
- *   - AS ITS OWN SEGMENT AFTER A `)`. Glued after a `)`, the router reads `).mp4` as Discord's
- *     masked-link over-capture (router.ts OVERCAPTURE) and drops the `.mp4` with it, so a pasted
- *     `…/20)` would have come back as a card. `/20)/.mp4` peels as the file, then as the trim.
- *   - NOT ON THE BARE ROOT, which names no post (withGallery's rule too).
- *   - NOT ON A BLUESKY PROFILE, `/profile/{handle}` or `/bs/profile/{handle}`. A profile has no file,
- *     and the router reads no `.mp4` on one (router.ts route: "a profile has no gallery and no file"),
- *     so `/profile/bsky.app.mp4` is `notfound` and on a guest host opens the other site's page. The
- *     link is left as the profile card instead, which is what the d. host answers for a profile on
- *     the official hosts too (worker.ts, the profile case: "a d. profile link renders the same card").
- *
- * The path the page ASKS the worker about (/_prep, /_card) never carries this `.mp4`, just as it never
- * carried the d.: see sentBase in the DOM half for why media only is applied to the shown link alone.
- * test/landing-convert.test.mjs feeds every combination this page can emit on a guest host through the
- * real router and guestServes.
+ * The path the page ASKS the worker about (/_prep, /_card) never carries the d.: see sentBase in the DOM
+ * half for why media only is applied to the shown link alone.
  */
 function mbedfxMediaOnly(url) {
   var m = /^(https:\/\/)([^\/?#]+)(.*)$/.exec(String(url == null ? '' : url));
-  if (!m) return url;
-  if (!mbedfxIsGuest(m[2])) return m[1] + 'd.' + m[2] + m[3];
-  var q = m[3].indexOf('?');
-  var head = (q < 0 ? m[3] : m[3].slice(0, q)).replace(/\/+$/, '');
-  var tail = q < 0 ? '' : m[3].slice(q);
-  if (/^\/(bs\/)?profile\/[^\/]+$/.test(head)) return url;
-  var seg = head.split('/');                    // seg[0] is the '' before the leading '/'
-  if (seg.length < 2) return url;
-  var at = seg.length - 1;
-  if (at > 1 && (seg[at] === 'p' || seg[at] === 'v')) at--;
-  if (/\.mp4$/i.test(seg[at])) return url;
-  if (/\)|%29/i.test(seg[at])) seg.splice(at + 1, 0, '.mp4');
-  else seg[at] += '.mp4';
-  return m[1] + m[2] + seg.join('/') + tail;
+  return m ? m[1] + 'd.' + m[2] + m[3] : url;
 }
 
 /**
@@ -1205,16 +1176,17 @@ function mbedfxPrepResolved(asked, answer) {
   var origin = mbedfxDefaultHost(location.hostname);
   var host = origin.host;
   /**
-   * MEDIA-ONLY emits a link that answers with the post's BYTES instead of a card: the d. host on the
-   * official domains, a `.mp4` on the path on a guest host, which has no d. (mbedfxMediaOnly has the
-   * spelling and why). Composes with the domain toggle without either control knowing about the other.
+   * MEDIA-ONLY emits a link that answers with the post's BYTES instead of a card: the d. host, on every
+   * domain (mbedfxMediaOnly has why the guest hosts are included since 2026-10-11). Composes with the
+   * domain toggle without either control knowing about the other.
    *
    * APPLIED TO THE SHOWN LINK AND NOTHING ELSE. `sentBase` is the link on the chosen host WITHOUT media
    * only, and it is what the page asks the worker about (/_prep, /_card) and what it files answers
-   * under (resolvedTo, lastCard). With the d. host that came for free, because d. never touched the
-   * path. A `.mp4` does, and keying on the shown link would have made ticking the box on a guest host
-   * look like a different post: a refetch on every toggle where media only promises none, and a
-   * resolved share code reverting to the code itself, the privacy regression resolvedTo exists to stop.
+   * under (resolvedTo, lastCard). With the d. host that comes for free, because d. never touches the
+   * path. It is kept anyway: for a day the guest hosts' media only was a `.mp4` on the path, and keying
+   * on the shown link made ticking the box there look like a different post (a refetch on every toggle
+   * where media only promises none, and a resolved share code reverting to the code itself, the privacy
+   * regression resolvedTo exists to stop). Nothing should depend on media only staying in the host.
    */
   var mediaOnly = false;
   var sentBase = '';
@@ -1247,8 +1219,8 @@ function mbedfxPrepResolved(asked, answer) {
    *
    * The work is mbedfxRepoint's, in the pure block, so the test can hold a /_prep answer against a
    * fresh conversion on every host. This returns the BASE link on the chosen host; setResult adds
-   * media only in that host's spelling (d. or `.mp4`), so a worker-supplied url and a fresh conversion
-   * pass through the one function on the way to the screen and cannot come out spelled differently.
+   * media only (the d. host), so a worker-supplied url and a fresh conversion pass through the one
+   * function on the way to the screen and cannot come out spelled differently.
    */
   function onChosenHost(u) { return mbedfxRepoint(u, host, false); }
 
@@ -1447,7 +1419,7 @@ function mbedfxPrepResolved(asked, answer) {
      * because prep compared that bare link with its own d. version, saw a difference and rewrote the
      * row, captioned "Share link resolved to the real post" about a link nothing had resolved. prep now
      * compares base with base (see there), which ends the false caption and would have left the forced
-     * link without its d. or `.mp4` for good, so the link is shown right the first time instead.
+     * link without its d. for good, so the link is shown right the first time instead.
      */
     setResult('https://' + host + '/' + code + path);
     result.style.display = ''; copy.style.display = '';
@@ -2094,8 +2066,8 @@ function mbedfxPrepResolved(asked, answer) {
     // Media-only fetches the SAME card payload; only the drawing differs. It used to return here
     // without scheduling anything, which is why the page previewed nothing at all.
     // sentBase rather than the shown link, read when the timer fires so a resolved share code is the
-    // one described: the shown link carries a guest host's media-only `.mp4`, and asking about that
-    // would file the answer under a path the next toggle no longer matches (see sentBase).
+    // one described, and so no media-only spelling can file the answer under a path the next toggle no
+    // longer matches (see sentBase).
     cardTimer = setTimeout(function () { card(sentBase || r.url); }, 900);
   }
 
@@ -2231,8 +2203,9 @@ function mbedfxPrepResolved(asked, answer) {
        * land on top of this draw; without that, a toggle during a slow request drew the previous post's
        * answer in the new kind. For the same post it is left alone (see below).
        *
-       * sentBase, NOT THE SHOWN LINK: on a guest host media only puts a `.mp4` on the shown path, so
-       * the shown link never matched the card held for it and every toggle there refetched.
+       * sentBase, NOT THE SHOWN LINK: while a guest host's media only put a `.mp4` on the shown path
+       * (a day in 2026-10), the shown link never matched the card held for it and every toggle there
+       * refetched. The d. host leaves the path alone, and the base stays the key regardless.
        */
       var url = sentBase || '';
       var path = url ? url.slice(url.indexOf('/', 8)) : '';
