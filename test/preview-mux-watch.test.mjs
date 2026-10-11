@@ -135,13 +135,22 @@ test('THE OLD POLL-COUNT CAP IS GONE — elapsed time, not a number of tries', (
 
 test('THE PAGE STILL CARRIES NO EM DASH AND NO SECOND PERSON in the new copy', () => {
   // Both were owner requests and both have been re-broken by later work before. The new strings are
-  // exactly the kind of edit that re-breaks them. The host-list lines are exempt for the reason
-  // test/landing-convert.test.mjs gives: hotsinglesnear.you is a hostname, not the page talking.
-  const body = HTML.slice(HTML.indexOf('<body'))
+  // exactly the kind of edit that re-breaks them.
+  //
+  // REWRITTEN 2026-10-11, for the reason test/landing-convert.test.mjs gives in full: the guest hosts
+  // became domain buttons that day (owner's call), so hotsinglesnear.you is in visible markup and not
+  // only in the two host-list lines this used to exempt. Every hostname the page lists in OUR_HOSTS is
+  // a name, not the page talking, and is stripped wherever it appears; every other sentence is checked.
+  const ours = HTML.match(/var OUR_HOSTS = \[([^\]]*)\]/)
+  assert.ok(ours, 'the page declares OUR_HOSTS')
+  const names = ours[1].split(',').map(x => x.trim().replace(/^'|'$/g, '')).filter(Boolean)
+  assert.ok(names.length > 0 && names.every(h => /^[a-z0-9-]+(\.[a-z0-9-]+)+$/.test(h)),
+    'only whole dotted hostnames are excused, never a bare word like "you"')
+  let body = HTML.slice(HTML.indexOf('<body'))
     .replace(/\/\*[\s\S]*?\*\//g, '')
     .replace(/^\s*\/\/.*$/gm, '')
     .replace(/<!--[\s\S]*?-->/g, '')
-    .replace(/^var (OUR|PUBLIC)_HOSTS = \[[^\]\n]*\];$/gm, '')
+  for (const h of names) body = body.split(h).join('')
   assert.equal((body.match(/—/g) || []).length, 0)
   assert.equal((body.match(/\b(you|your)\b/gi) || []).length, 0)
 })

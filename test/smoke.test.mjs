@@ -156,9 +156,18 @@ test('EVERY DOMAIN THE PAGE OFFERS IS ONE THE WORKER SERVES — a subset, delibe
    * test/landing-convert.test.mjs, which exists because emitting links to a host that may not be ours
    * is the one outcome worth ruling out, and which is why the page does not simply trust whatever
    * host served it.
+   *
+   * EXTENDED 2026-10-11 WITH GUEST_HOSTS, when the owner asked for sorryifuckedyour.mom and
+   * hotsinglesnear.you to be offered as buttons. They are served, but not through wrangler.jsonc: they
+   * are custom domains of the owner's you-stupid Worker, which hands this one its embed paths over a
+   * service binding (src/guesthost.ts), and listing them in routes would try to take the domains off
+   * that Worker (test/guesthost.test.mjs forbids it). Reading routes alone therefore called two working
+   * domains unserved. The served set is routes plus GUEST_HOSTS, the same union the two tests below
+   * already use, and the subset rule is otherwise unchanged: a button must still name a domain that
+   * reaches this Worker one way or the other.
    */
   const cfg = JSON.parse(readFileSync('wrangler.jsonc', 'utf8').replace(/^\s*\/\/.*$/gm, ''))
-  const served = new Set((cfg.routes ?? []).map(r => r.pattern.split('/')[0]))
+  const served = new Set([...(cfg.routes ?? []).map(r => r.pattern.split('/')[0]), ...GUEST_HOSTS])
   const page = readFileSync('public/index.html', 'utf8')
 
   const m = page.match(/var PUBLIC_HOSTS = \[([^\]]*)\]/)
@@ -166,7 +175,7 @@ test('EVERY DOMAIN THE PAGE OFFERS IS ONE THE WORKER SERVES — a subset, delibe
   const offered = m[1].split(',').map(x => x.trim().replace(/^'|'$/g, '')).filter(Boolean)
   assert.ok(offered.length > 0, 'and it offers at least one domain')
   for (const host of offered) {
-    assert.ok(served.has(host), `the page offers ${host}, which wrangler.jsonc does not serve`)
+    assert.ok(served.has(host), `the page offers ${host}, which neither wrangler.jsonc nor GUEST_HOSTS serves`)
   }
 
   // Every offered domain needs a button, or the toggle cannot reach it. The reverse is checked too:

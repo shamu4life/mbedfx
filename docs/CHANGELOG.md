@@ -18,10 +18,20 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   Everything else, `/`, `robots.txt`, a bare `/{word}`, the JSON API, the converter's endpoints and the
   diagnostics, is a plain unmarked 404, and `you-stupid` serves its own page instead, so a typo on
   those domains still lands where it did. A failure here also comes back unmarked, so it can never
-  replace that page. Both hosts are refused by the fediverse SSRF guard and recognised by the
-  converter, which does not offer them. `d.` does not work on them (no DNS for it); `.mp4` does.
-  New in `src/guesthost.ts`, tested offline in `test/guesthost.test.mjs`. Not yet measured from a
-  Worker: it needs `you-stupid`'s binding deployed.
+  replace that page. Both hosts are refused by the fediverse SSRF guard. `d.` does not work on them
+  (no DNS for it); `.mp4` does. New in `src/guesthost.ts`, tested offline in `test/guesthost.test.mjs`.
+  Not yet measured from a Worker: it needs `you-stupid`'s binding deployed.
+
+- **The converter offers `sorryifuckedyour.mom` and `hotsinglesnear.you` as domain buttons**, beside
+  `mbedfx.app` and `megapenispoopenfarten.sex` (owner's call; `forsen.sex` stays recognised and not
+  offered). With one of them selected, **media only** puts `.mp4` on the path instead of `d.` on the
+  host, since they have no `d.`: `/jack/status/20.mp4`, `/jack/status/20.mp4/p` with all as stills,
+  `/watch.mp4?v=…`, and never a second `.mp4` on a link that already has one. A share link the page
+  resolves gets the same spelling. A link the converter emits that a guest host does not answer (a
+  bare `/{handle}`, a path that names neither a post nor a Bluesky profile) is still handed out, and
+  the preview now says it opens the other site's page there; `/_card` echoes the guest rule as
+  `guestDeclines` so the page has no copy of it. Tested by feeding every link kind, with each toggle,
+  through the real router and `guestServes`.
 
 - **A trailing `.mp4` on any post link serves the file, the way fxtwitter does.**
   `megapenispoopenfarten.sex/X/status/{id}.mp4` used to answer "Couldn't load this Twitter post",
@@ -42,6 +52,30 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   Mastodon `image`. `docs/API.md` and `public/openapi.json` say so.
 
 ### Fixed
+
+- **"All as stills" no longer breaks a TikTok `/t/` share link or a Bluesky profile link.** Ticked
+  before pasting one, it appended `/p`, which the router reads on neither, so the converter handed out
+  a `notfound` link on every domain. The box now leaves `/t/{code}` and `/profile/{handle}` alone, and
+  on a guest domain **media only** leaves a profile link as the profile card too, as `d.` does.
+
+- **The converter keeps the id of every link whose id sits in the query.** A Facebook watch link
+  (`facebook.com/watch/?v=…`) came out a bare `/watch`, and `permalink.php?story_fbid=…&id=…`, or a
+  `story.php` link with a `pfbid…` id or a named owner, came out a bare path too: the which-site
+  chooser on every domain, and the other site's page on a guest domain. Pasting the converter's own
+  `/photo/?fbid=…` or `/embed?clip=…` link back in lost its id the same way. All now carry the id, and
+  only the id, so tracking parameters still drop.
+
+- **Pasting a `d.` link back into the converter re-points it.** `d.mbedfx.app/…` was read as an
+  unknown site and turned into a `notfound` link. It is now recognised as an mbedfx link, and the
+  **media only** box decides whether the result keeps the file spelling.
+
+- **"Share link resolved to the real post" no longer appears over an ordinary link.** After the page
+  had checked any post link, clicking another domain button put that line over it, although nothing
+  had been resolved. It now appears only when the worker hands back a different link.
+
+- **A forced site reading respects media only.** Picking a site from the chooser wrote the link
+  without `d.`, which only appeared once `/_prep` answered, under a "Share link resolved" note about a
+  link nothing had resolved. It is shown right the first time now, with no such note.
 
 - **Every Pinterest pin answered "Couldn't load".** Pinterest's pin endpoint now refuses any request
   that carries no user-agent (HTTP 403, "Looks like you don't have permission to access this page"),

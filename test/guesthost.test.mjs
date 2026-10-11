@@ -2,7 +2,8 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { handle } from '../src/worker.ts'
-import { GUEST_HOSTS, GUEST_MARK, isGuestHost } from '../src/guesthost.ts'
+import { GUEST_HOSTS, GUEST_MARK, guestServes, isGuestHost } from '../src/guesthost.ts'
+import { route } from '../src/router.ts'
 
 /**
  * GUEST HOSTS: sorryifuckedyour.mom and hotsinglesnear.you belong to the owner's you-stupid Worker,
@@ -172,4 +173,40 @@ test('a guest host is never claimed as a route here, because another Worker owns
   for (const g of GUEST_HOSTS) {
     assert.ok(!claimed.some(h => h === g || h.endsWith(`.${g}`)), `${g} belongs to you-stupid, not to wrangler.jsonc`)
   }
+})
+
+test('/_card says when a guest host would pass the path to the other site, and only then', async () => {
+  /**
+   * Since 2026-10-11 the converter offers the guest hosts as domain buttons (owner's call), and it can
+   * emit a path a guest host declines: a profile pasted from x.com is a bare `/{handle}`, which the
+   * router answers with a chooser. On mbedfx.app that draws the chooser or "Not found"; on a guest host
+   * it is the other site's own page that Discord unfurls. The converter's preview says so, and it learns
+   * which paths those are HERE rather than from a copy of guestServes' list in the page, which a new
+   * Route kind would silently fall out of (the converter's `direct` lesson). So `guestDeclines` must be
+   * exactly `!guestServes(route(path))`, present only when true, so every answer about a path a guest
+   * host serves is byte-identical to what it was.
+   *
+   * Asked on mbedfx.app, where the page lives: the router is host-blind, so the answer does not depend
+   * on which of our domains served the page.
+   */
+  const cardOf = async p => {
+    const res = await handle(new Request(`https://mbedfx.app/_card?p=${encodeURIComponent(p)}`), env(), ctx, deps())
+    return res.json()
+  }
+  const cases = ['/jack', '/@jack', '/x/jack', '/', '/jack/likes', '/jack/status/20', '/jack/status/20.mp4', '/profile/bsky.app']
+  for (const p of cases) {
+    const j = await cardOf(p)
+    const declines = !guestServes(route(new URL(p, 'https://mbedfx.app')))
+    if (declines) assert.equal(j.guestDeclines, true, `${p}: a guest host declines it, and /_card says so`)
+    else assert.ok(!('guestDeclines' in j), `${p}: a guest host serves it, so the key is absent, not false`)
+  }
+  // The cases must cover both answers, or the loop above proves nothing.
+  assert.equal((await cardOf('/jack')).guestDeclines, true)
+  assert.equal((await cardOf('/jack')).reason, 'ambiguous', 'the reason it always had is unchanged beside it')
+  const post = await cardOf('/jack/status/20')
+  assert.equal(post.ok, true)
+  assert.ok(!('guestDeclines' in post))
+  const profile = await cardOf('/profile/bsky.app')
+  assert.equal(profile.reason, 'profile')
+  assert.ok(!('guestDeclines' in profile), 'a profile is answered on a guest host, so it is not flagged')
 })

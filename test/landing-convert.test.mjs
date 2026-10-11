@@ -2,6 +2,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { route } from '../src/router.ts'
+import { GUEST_HOSTS, guestServes } from '../src/guesthost.ts'
 
 /**
  * THE LANDING PAGE IS TESTED AGAINST THE ROUTER, not against my memory of the router.
@@ -39,7 +40,11 @@ function loadConverter() {
   const src = m[1]
   assert.ok(!/document\.|window\.|navigator\./.test(src),
     'the converter block must stay DOM-free so it can be tested in isolation')
-  return new Function(`${src}; return { convert: mbedfxConvert, defaultHost: mbedfxDefaultHost }`)()
+  return new Function(`${src}; return {
+    convert: mbedfxConvert, defaultHost: mbedfxDefaultHost, mediaOnly: mbedfxMediaOnly,
+    repoint: mbedfxRepoint, isGuest: mbedfxIsGuest, pageGuests: GUEST_HOSTS, publicHosts: PUBLIC_HOSTS,
+    ourHosts: OUR_HOSTS, prepResolved: mbedfxPrepResolved,
+  }`)()
 }
 
 /** Lift the documented example paths out of the page's own platform table. */
@@ -51,7 +56,7 @@ function loadPlatformTable() {
   return new Function(`const MONO = 'var(--brand-mono)'; return ${m[1]}`)()
 }
 
-const { convert, defaultHost } = loadConverter()
+const { convert, defaultHost, mediaOnly, repoint, isGuest, pageGuests, publicHosts, ourHosts, prepResolved } = loadConverter()
 const PLATFORMS = loadPlatformTable()
 
 /** Display name on the embed -> the platform code the router mints. */
@@ -727,19 +732,35 @@ test('THE FOOTER BELONGS TO THE PAGE, NOT TO A CHANNEL', () => {
   assert.match(HTML, /Not affiliated with Discord/, 'and it still carries the trademark note')
 })
 
-test('THE MEDIA-ONLY TOGGLE EMITS A d. LINK, and composes with the domain toggle', () => {
+test('THE MEDIA-ONLY TOGGLE EMITS A d. LINK ON EVERY HOST THAT HAS ONE, and composes with the domain toggle', () => {
   /**
    * Requested 2026-08-02. The d. host answers with the post's bytes instead of a card; this exposes
-   * that on the page. Pinned at the markup level because the two controls are INDEPENDENT — media-only
-   * is an on/off, the domain is a one-of-two — and the failure that matters is one silently replacing
-   * the other rather than composing with it.
+   * that on the page. The two controls are INDEPENDENT (media-only is an on/off, the domain is a
+   * one-of-several) and the failure that matters is one silently replacing the other rather than
+   * composing with it.
+   *
+   * REWRITTEN 2026-10-11, when the guest hosts became domain buttons. This pinned the source text
+   * `function sendHost() { return mediaOnly ? 'd.' + host : host; }` and counted conversions that
+   * bypassed sendHost(). A guest host has no d. (you-stupid owns the zone, src/guesthost.ts), so media
+   * only moved into mbedfxMediaOnly in the pure block, which spells it per host, and sendHost() went:
+   * the d. stays on the official hosts and a guest host gets a `.mp4` on the path (the guest-host tests
+   * below). The property is unchanged and is now checked by RUNNING the page's function rather than by
+   * matching its spelling: on every host that has a d., the WHOLE host is prefixed, byte for byte what
+   * sendHost() produced, so it composes with whichever domain is selected.
    */
   assert.match(HTML, /id="mediaOnly"/, 'the control exists')
-  assert.match(HTML, /function sendHost\(\)\s*\{\s*return mediaOnly \? 'd\.' \+ host : host; \}/,
-    'the d. prefix is applied to the WHOLE host, so it composes with whichever domain is selected')
-  // Every conversion must go through it, or the copied link and the previewed link can disagree.
-  assert.equal((HTML.match(/mbedfxConvert\(input\.value, host\)/g) || []).length, 0,
-    'no conversion bypasses sendHost()')
+  for (const h of ['mbedfx.app', 'megapenispoopenfarten.sex', 'forsen.sex', 'abc123-mbedfx.redevit.workers.dev']) {
+    for (const p of ['/jack/status/20', '/watch?v=dQw4w9WgXcQ', '/jack/status/20/p', '/X/status/20.mp4', '/']) {
+      assert.equal(mediaOnly(`https://${h}${p}`), `https://d.${h}${p}`,
+        `${h}: the d. prefix goes on the whole host and the path is left exactly as it was`)
+    }
+  }
+  // Every link that reaches the screen goes through it, or the copied link and the previewed link can
+  // disagree. setResult is the one writer of the result row, and it applies media only.
+  assert.match(HTML, /function sendLink\(base\) \{ return mediaOnly \? mbedfxMediaOnly\(base\) : base; \}/)
+  assert.deepEqual(HTML.match(/result\.textContent = [^;]*;/g), ['result.textContent = sendLink(base);'],
+    'no line writes the result row except setResult, so no link reaches the screen without media only')
+  assert.equal((HTML.match(/sendHost\(\)/g) || []).length, 0, 'and no caller is left on the host-only spelling')
 })
 
 test('MEDIA-ONLY PREVIEWS THE FILE — no Discord card, but not nothing either', () => {
@@ -850,10 +871,29 @@ test('A WORKER-SUPPLIED URL IS RE-POINTED AT THE CHOSEN HOST', () => {
    * PRE-EXISTING AND WIDER than media-only: the same line discarded the domain toggle too, which went
    * unnoticed because losing a whole `d.` is visible where losing a swap between two domains is not.
    */
-  assert.match(HTML, /function onChosenHost\(u\)/, 'there is one place that re-points such a url')
-  assert.match(HTML, /x\.hostname = sendHost\(\)/, 'and it uses the host the reader actually chose')
+  /*
+   * REWRITTEN 2026-10-11. This matched `x.hostname = sendHost()` inside onChosenHost. sendHost() is gone
+   * (a guest host has no d., see the media-only test above), and the re-pointing moved into the pure
+   * block as mbedfxRepoint so it can be RUN here instead of matched: onChosenHost hands it the selected
+   * host and returns the base link, and setResult adds media only, the same last step a fresh
+   * conversion takes. What is pinned is unchanged: one place re-points, it uses the host the reader
+   * chose, and the raw worker url never reaches the row.
+   */
+  assert.match(HTML, /function onChosenHost\(u\) \{ return mbedfxRepoint\(u, host, false\); \}/,
+    'there is one place that re-points such a url, and it uses the host the reader actually chose')
+  assert.match(HTML, /setResult\(known \? onChosenHost\(known\) : r\.url\);/, 'render goes through it')
+  // REWRITTEN 2026-10-11: the condition gained `resolved &&` (mbedfxPrepResolved, see the false-caption
+  // test below), so an answer that resolved nothing rewrites nothing. What is pinned here is unchanged:
+  // the answer goes through onChosenHost, compared base with base.
+  assert.match(HTML, /var unfurled = onChosenHost\(j\.url\);\s+if \(resolved && unfurled && unfurled !== url\) \{\s+setResult\(unfurled\);/,
+    'and so does a /_prep answer, compared base with base so media only cannot read as a resolution')
   assert.ok(!/result\.textContent = j\.url;/.test(HTML),
     'the raw worker url is never written straight to the result row')
+  // The behaviour on the official hosts, run: the d. survives a re-point exactly as it did.
+  const w = 'https://mbedfx.app/@mysticaquarium/video/7660566211100511518'
+  assert.equal(repoint(w, 'megapenispoopenfarten.sex', false), 'https://megapenispoopenfarten.sex/@mysticaquarium/video/7660566211100511518')
+  assert.equal(repoint(w, 'megapenispoopenfarten.sex', true), 'https://d.megapenispoopenfarten.sex/@mysticaquarium/video/7660566211100511518')
+  assert.equal(repoint('not a url', 'mbedfx.app', true), 'not a url', 'a url it cannot parse comes back as it was')
 })
 
 test('THE PAGE STILL CARRIES NO VISIBLE EM DASH AND NO SECOND PERSON', () => {
@@ -864,17 +904,27 @@ test('THE PAGE STILL CARRIES NO VISIBLE EM DASH AND NO SECOND PERSON', () => {
    *
    * Comments are exempt: they are not visible copy, and the file's explanatory density is deliberate.
    *
-   * SO ARE THE TWO HOST-LIST DECLARATIONS, since 2026-10-11, and only those two lines. A hostname is a
-   * name, not a sentence, and the guest host hotsinglesnear.you ends in the label `you`, which this
-   * test read as the page addressing its reader. The lists are data the page never prints: a domain
-   * reaches the screen only as a toggle button, whose markup is outside these lines and still checked,
-   * so advertising that domain later would still have to get past this test.
+   * A HOSTNAME LISTED IN OUR_HOSTS IS A PROPER NOUN WHEREVER IT APPEARS, and is removed before the
+   * check. REWRITTEN 2026-10-11. The first exemption that day covered only the two `var OUR_HOSTS` /
+   * `var PUBLIC_HOSTS` lines, because the guest host hotsinglesnear.you ends in the label `you`, and
+   * it said that advertising that domain "would still have to get past this test". Advertising it
+   * then became the owner's call, the same day: "I would like to see it so that the two new domains
+   * show up as options for selection on the site unlike forsen.sex". A domain button is labelled with
+   * its domain (the nickname test above), so the name now sits in visible markup and in GUEST_HOSTS,
+   * and a line-based exemption either fails the owner's request or grows a line per place the name is
+   * written. A domain name is the page naming a site, not the page talking to its reader, so the names
+   * are stripped instead. They are read from the page's own OUR_HOSTS rather than typed here, so only
+   * a name the page actually serves is excused, a domain added later needs no second edit, and every
+   * other sentence, including whatever surrounds a hostname, is still checked.
    */
-  const body = HTML.slice(HTML.indexOf('<body'))
+  const names = ourHosts
+  assert.ok(names.length > 0 && names.every(h => /^[a-z0-9-]+(\.[a-z0-9-]+)+$/.test(h)),
+    'only whole dotted hostnames are excused, never a bare word like "you"')
+  let body = HTML.slice(HTML.indexOf('<body'))
     .replace(/\/\*[\s\S]*?\*\//g, '')
     .replace(/^\s*\/\/.*$/gm, '')
     .replace(/<!--[\s\S]*?-->/g, '')
-    .replace(/^var (OUR|PUBLIC)_HOSTS = \[[^\]\n]*\];$/gm, '')
+  for (const h of names) body = body.split(h).join('')
   assert.equal((body.match(/—/g) || []).length, 0, 'no em dash in anything a visitor reads')
   assert.equal((body.match(/\b(you|your)\b/gi) || []).length, 0, 'and nothing addresses the reader')
 })
@@ -968,4 +1018,493 @@ test('A QUERY WITHOUT A USABLE ID IS STILL REFUSED, so the branch cannot invent 
     assert.ok(!routed || routed.kind !== 'post' || routed.ref.p !== 'fb',
       `${u} must not become a Facebook photo post`)
   }
+})
+
+
+/* ============ THE GUEST HOSTS AS DOMAIN BUTTONS (owner's call, 2026-10-11) ============
+ *
+ * "with mbedfx I would like to see it so that the two new domains show up as options for selection on
+ * the site unlike forsen.sex". sorryifuckedyour.mom and hotsinglesnear.you are custom domains of the
+ * owner's you-stupid Worker, which hands this one its embed paths over a service binding
+ * (src/guesthost.ts). Two things make a guest host different from the official three, and each has a
+ * test below, because each is a way for the page to hand out a link that does not do what it says:
+ *
+ *   - there is no d.<guest>, so media only has to be the `.mp4` path spelling there;
+ *   - only embed routes are answered (guestServes), and every other path opens the other site's page.
+ *
+ * Every link is checked the way this file checks everything: the PAGE's own output, fed through the
+ * REAL router and the REAL guestServes, asserting on what comes back (kind, ref, direct, gallery).
+ */
+
+/** Every link KIND the converter emits: REAL_PASTES, the share and short links, the query-id links,
+ *  and the pasted `.mp4` spellings it passes through. */
+const GUEST_PASTES = [
+  ...REAL_PASTES.map(([paste]) => paste),
+  'https://www.tiktok.com/t/ZTSw2mYwR',
+  'https://www.threads.com/share/Fixture08X',
+  'https://www.facebook.com/share/v/Fixture03X',
+  'https://www.reddit.com/r/BatmanArkham/s/uucSZtDEbI',
+  'https://www.facebook.com/photo/?fbid=1596906755391068',
+  'https://www.facebook.com/photo.php?fbid=1596906755391068&set=a.774304400984645&type=3',
+  'https://www.facebook.com/story.php?story_fbid=1596906778724399&id=100052152768666',
+  'https://www.facebook.com/permalink.php?story_fbid=1596906778724399&id=100052152768666',
+  'https://www.facebook.com/story.php?story_fbid=pfbid02AbCdEfGhIjKlMnOpQrStUv&id=100052152768666',
+  'https://www.facebook.com/watch/?v=10153231379946729',
+  'https://www.twitch.tv/embed?clip=DeliciousDelightfulPicklesWOOP&parent=example.com',
+  'https://imgur.com/a/abc12',
+  'https://imgur.com/gallery/abc12',
+  'https://x.com/X/status/2102147636702634195.mp4',
+  'https://www.youtube.com/watch.mp4?v=dQw4w9WgXcQ',
+  'https://www.facebook.com/photo/.mp4?fbid=1092409469807430',
+  'https://www.instagram.com/p/DaQ5CPTki4E/.mp4',
+  'https://www.instagram.com/p/DaQ5CPTki4E/v.mp4',
+  'https://hotsinglesnear.you/jack/status/20/p',
+  'https://sorryifuckedyour.mom/jack/status/20.mp4',
+]
+
+/** A route with the two suffix flags taken off, so "the same post" can be compared across spellings. */
+const bare = r => { const { direct, gallery, ...rest } = r; return rest }
+const NAMES_A_POST = ['post', 'shortlink', 'redditshare', 'metashare']
+
+test('THE GUEST HOSTS ARE OFFERED AS BUTTONS LABELLED WITH THEIR DOMAINS, AND forsen.sex STILL IS NOT', () => {
+  /**
+   * The owner's request, pinned both ways round. Each guest host is in PUBLIC_HOSTS and has a button
+   * labelled with the domain it emits (the nickname rule above); forsen.sex keeps the 2026-09-11
+   * position, recognised and never offered. The page's GUEST_HOSTS must be src/guesthost.ts's list
+   * exactly: the page cannot import it (no build step), and a host in one list but not the other would
+   * get a d. link that resolves nowhere, or lose its d. for nothing.
+   */
+  assert.deepEqual([...pageGuests].sort(), [...GUEST_HOSTS].sort(), 'the page and the Worker agree on which hosts are guests')
+  for (const g of GUEST_HOSTS) {
+    assert.ok(publicHosts.includes(g), `${g} is offered`)
+    const esc = g.replace(/\./g, '\\.')
+    assert.match(HTML, new RegExp(`data-host="${esc}"[^>]*>\\s*${esc}\\s*<`), `the ${g} button is labelled ${g}`)
+    assert.equal(defaultHost(g).family, g, 'a visitor on it would see its own button pressed, now that one exists')
+    assert.equal(isGuest(g), true)
+    assert.equal(convert('https://x.com/jack/status/20', g).url, `https://${g}/jack/status/20`)
+  }
+  assert.ok(!publicHosts.includes('forsen.sex'), 'forsen.sex is still not offered')
+  assert.ok(!/data-host="forsen\.sex"/.test(HTML), 'and has no button')
+  assert.ok(ourHosts.includes('forsen.sex'), 'though it is still recognised as ours')
+  for (const h of ['mbedfx.app', 'megapenispoopenfarten.sex', 'forsen.sex']) assert.equal(isGuest(h), false)
+})
+
+test('MEDIA ONLY ON A GUEST HOST IS A .mp4 ON THE PATH, NEVER d., and every toggle combination is the file of the same post', () => {
+  /**
+   * THE DEFECT: sendHost() put `d.` on whatever host was selected, and there is no d.<guest>. you-stupid
+   * owns those zones and has no record or route for it, so with a guest host selected the media-only
+   * box would have handed out a link that does not resolve at all. The `.mp4` path spelling is a post
+   * route the guest host serves (router.ts DIRECT_SUFFIX), so that is what the page emits there.
+   *
+   * Every link kind the converter emits, with "all as stills" off and on, on both guest hosts. For each:
+   * the plain link must be one the guest host serves, and the media-only link must stay on the guest
+   * host, be served, carry `direct`, and name the SAME post in the same gallery mode as the plain one.
+   * That last part is what a misplaced `.mp4` breaks: `20.mp4.mp4` is an honest failure id, a `.mp4`
+   * after a `)` is eaten as Discord's over-capture, and one stranded in the query is never read.
+   */
+  let checked = 0
+  for (const host of GUEST_HOSTS) {
+    for (const paste of GUEST_PASTES) {
+      for (const gallery of [undefined, 'stills']) {
+        const r = convert(paste, host, gallery)
+        assert.ok(r.ok, `${paste} must convert`)
+        const plain = route(new URL(r.url))
+        assert.ok(guestServes(plain), `${r.url} must be served on ${host} (got ${plain.kind})`)
+        assert.ok(NAMES_A_POST.includes(plain.kind), `${r.url} names a post (got ${plain.kind})`)
+
+        const file = mediaOnly(r.url)
+        const u = new URL(file)
+        assert.equal(u.hostname, host, `${file}: media only stays on the guest host`)
+        assert.ok(!file.includes(`d.${host}`), `${file}: never a d. on a guest host`)
+        assert.match(u.pathname, /\.mp4(\/|$)/i, `${file}: the .mp4 is on the path, before any query`)
+        assert.equal((u.pathname.match(/\.mp4/gi) || []).length, 1, `${file}: exactly one .mp4`)
+        const got = route(u)
+        assert.ok(guestServes(got), `${file} must be served on ${host} (got ${got.kind})`)
+        assert.equal(got.direct, true, `${file} must be read as the file`)
+        assert.equal(got.kind, plain.kind, `${file} keeps the route kind of ${r.url}`)
+        assert.deepEqual(bare(got), bare(plain), `${file} names the same post as ${r.url}`)
+        assert.equal(got.gallery, plain.gallery, `${file} keeps the gallery mode of ${r.url}`)
+        // A TikTok short link takes no mode (see the short-link test below), so it is the one kind the
+        // stills box leaves alone; everything else must still be asking for stills.
+        if (gallery === 'stills' && plain.kind !== 'shortlink') assert.equal(got.gallery, 'stills', `${file} still asks for stills`)
+        checked++
+      }
+    }
+  }
+  assert.ok(checked >= 4 * REAL_PASTES.length, `the sweep must stay wide to mean anything (was ${checked})`)
+
+  // The shapes, spelled out once so a reader can see them. Glued to the post segment, before /p and ?.
+  const on = (paste, gallery) => new URL(mediaOnly(convert(paste, 'hotsinglesnear.you', gallery).url))
+  const shape = u => u.pathname + u.search
+  assert.equal(shape(on('https://x.com/jack/status/20')), '/jack/status/20.mp4')
+  assert.equal(shape(on('https://x.com/jack/status/20', 'stills')), '/jack/status/20.mp4/p')
+  assert.equal(shape(on('https://www.youtube.com/watch?v=dQw4w9WgXcQ')), '/watch.mp4?v=dQw4w9WgXcQ')
+  assert.equal(shape(on('https://www.youtube.com/watch?v=dQw4w9WgXcQ', 'stills')), '/watch.mp4/p?v=dQw4w9WgXcQ')
+  assert.equal(shape(on('https://www.facebook.com/photo/?fbid=1596906755391068')), '/photo.mp4?fbid=1596906755391068')
+  assert.equal(shape(on('https://www.twitch.tv/embed?clip=DeliciousDelightfulPicklesWOOP')), '/embed.mp4?clip=DeliciousDelightfulPicklesWOOP')
+  assert.equal(shape(on('https://www.instagram.com/p/DbN6SsKum-9/')), '/p/DbN6SsKum-9.mp4')
+  assert.equal(shape(on('https://www.tiktok.com/t/ZTSw2mYwR')), '/t/ZTSw2mYwR.mp4')
+})
+
+test('A .mp4 ALREADY ON THE LINK IS NOT DOUBLED ON A GUEST HOST, and a ) does not swallow it', () => {
+  /**
+   * The two placements the sweep above would only catch by luck. The router peels ONE glued `.mp4`, so
+   * adding a second to a pasted fxtwitter-style link makes `20.mp4.mp4`, a failure id rather than the
+   * post. And a `.mp4` glued after a `)` is read as Discord's masked-link over-capture and dropped with
+   * it (router.ts OVERCAPTURE), so a pasted `…/20)` came back a card while the preview said file.
+   */
+  const cases = [
+    ['https://x.com/X/status/2102147636702634195.mp4', undefined, '/X/status/2102147636702634195.mp4'],
+    ['https://x.com/X/status/2102147636702634195.mp4', 'stills', '/X/status/2102147636702634195.mp4/p'],
+    ['https://www.instagram.com/p/DaQ5CPTki4E/.mp4', undefined, '/p/DaQ5CPTki4E/.mp4'],
+    ['https://www.instagram.com/p/DaQ5CPTki4E/v.mp4', 'stills', '/p/DaQ5CPTki4E/v.mp4/p'],
+    ['https://www.youtube.com/watch.mp4?v=dQw4w9WgXcQ', undefined, '/watch.mp4?v=dQw4w9WgXcQ'],
+    ['https://x.com/jack/status/20)', undefined, '/jack/status/20)/.mp4'],
+    ['https://x.com/jack/status/20)', 'stills', '/jack/status/20)/.mp4/p'],
+  ]
+  for (const [paste, gallery, want] of cases) {
+    const u = new URL(mediaOnly(convert(paste, 'sorryifuckedyour.mom', gallery).url))
+    assert.equal(u.pathname + u.search, want, paste)
+    const got = route(u)
+    assert.equal(got.kind, 'post', `${want} names the post`)
+    assert.equal(got.direct, true, `${want} is the file`)
+    assert.equal(got.gallery, gallery, `${want} carries the mode it was given, and no other`)
+  }
+  // A /_media/ link pasted back in already IS a file; media only leaves it as the media route it is.
+  const media = mediaOnly(convert('https://mbedfx.app/_media/x%3A20/0.mp4', 'hotsinglesnear.you').url)
+  assert.equal(media, 'https://hotsinglesnear.you/_media/x%3A20/0.mp4')
+  assert.equal(route(new URL(media)).kind, 'media')
+  assert.ok(guestServes(route(new URL(media))))
+  // And the bare root names no post, so it gets no suffix, as withGallery's rule has it.
+  assert.equal(mediaOnly('https://hotsinglesnear.you/'), 'https://hotsinglesnear.you/')
+})
+
+test('A /_prep ANSWER IS RE-POINTED EXACTLY AS A FRESH CONVERSION IS, on every host, with media only on or off', () => {
+  /**
+   * /_prep answers with a url built on the request's origin (the official host serving the page), and
+   * onChosenHost re-points it. That used to set `hostname = sendHost()`, which on a guest host would
+   * have produced d.<guest>, and which could never have added the `.mp4` the guest spelling needs.
+   * Now the answer is re-pointed to the BASE link and media only is added by the same last step a fresh
+   * conversion takes. So for a worker url naming exactly what the converter would have emitted, the two
+   * must be identical, character for character, on every host either control can select.
+   */
+  const pairs = [
+    ['https://x.com/jack/status/20', 'https://mbedfx.app/jack/status/20'],
+    ['https://www.tiktok.com/@mysticaquarium/video/7660566211100511518', 'https://mbedfx.app/@mysticaquarium/video/7660566211100511518'],
+    ['https://www.youtube.com/watch?v=dQw4w9WgXcQ', 'https://megapenispoopenfarten.sex/watch?v=dQw4w9WgXcQ'],
+    ['https://www.facebook.com/photo/?fbid=1596906755391068', 'https://mbedfx.app/photo/?fbid=1596906755391068'],
+    ['https://x.com/X/status/2102147636702634195.mp4', 'https://mbedfx.app/X/status/2102147636702634195.mp4'],
+  ]
+  const sendLink = (base, on) => (on ? mediaOnly(base) : base)
+  for (const host of [...publicHosts, 'forsen.sex']) {
+    for (const on of [false, true]) {
+      for (const [paste, workerUrl] of pairs) {
+        const fresh = sendLink(convert(paste, host).url, on)
+        assert.equal(sendLink(repoint(workerUrl, host, false), on), fresh, `${host} ${on ? '+media only' : ''}: ${workerUrl}`)
+        assert.equal(repoint(workerUrl, host, on), fresh, 'and mbedfxRepoint with media only says the same')
+        if (isGuest(host)) {
+          assert.ok(!fresh.includes('d.'), `${fresh}: no d. on a guest host`)
+          if (on) assert.equal(route(new URL(fresh)).direct, true, `${fresh} is the file`)
+        } else if (on) {
+          assert.ok(fresh.startsWith(`https://d.${host}/`), `${fresh}: the d. survives a re-point on ${host}`)
+        }
+      }
+    }
+  }
+  // A resolved share code: the permalink /_prep hands back gets the guest spelling too, and is served.
+  const resolved = repoint('https://mbedfx.app/@mysticaquarium/video/7660566211100511518', 'hotsinglesnear.you', true)
+  assert.equal(resolved, 'https://hotsinglesnear.you/@mysticaquarium/video/7660566211100511518.mp4')
+  assert.ok(guestServes(route(new URL(resolved))) && route(new URL(resolved)).direct === true)
+})
+
+test('THE PAGE ASKS THE WORKER ABOUT THE LINK WITHOUT MEDIA ONLY, so a guest host\'s .mp4 never splits one post into two', () => {
+  /**
+   * THE DEFECT THIS PREVENTS. /_prep, /_card, resolvedTo and lastCard were all keyed on the SHOWN link's
+   * path, which was safe while media only meant `d.`, because d. is in the host and never touched the
+   * path. A guest host's `.mp4` is in the path. Keyed that way, ticking the box made the same post look
+   * like a new one: a /_card refetch on every toggle (the toggle promises a redraw from the payload in
+   * hand, pinned above), and a resolved share code falling back to the code itself until /_prep was
+   * asked again, the per-share-act token resolvedTo exists to keep off the screen.
+   *
+   * So `sentBase` holds the link on the chosen host WITHOUT media only, everything the page asks or
+   * files goes by it, and setResult is the one place media only is added.
+   */
+  assert.match(HTML, /function setResult\(base\) \{ sentBase = base; result\.textContent = sendLink\(base\); \}/)
+  assert.match(HTML, /cardTimer = setTimeout\(function \(\) \{ card\(sentBase \|\| r\.url\); \}, 900\);/,
+    'the card is asked about the base link')
+  const handler = HTML.slice(HTML.indexOf("mediaOnlyBox.addEventListener('change'"))
+  assert.match(handler.slice(0, 4000), /var url = sentBase \|\| '';/, 'the toggle compares the held card with the base link')
+  const picker = HTML.slice(HTML.indexOf("picker.addEventListener('click'"), HTML.indexOf('var forced = null;'))
+  assert.match(picker, /prep\(sentBase\);/, 'a forced reading is prepped by its base link')
+  assert.match(picker, /card\(sentBase\);/, 'and previewed by it')
+  assert.ok(!/prep\(result\.textContent\)|card\(result\.textContent/.test(HTML), 'nothing asks about the shown link')
+  // And the base path a guest host's media only would be keyed on really is the plain post's path.
+  const base = convert('https://x.com/jack/status/20', 'hotsinglesnear.you').url
+  assert.equal(new URL(base).pathname, '/jack/status/20')
+  assert.notEqual(new URL(mediaOnly(base)).pathname, '/jack/status/20', 'which is why the shown link cannot be the key')
+})
+
+test('ALL AS STILLS LEAVES A TIKTOK SHORT LINK ALONE, because the router reads no mode on one', () => {
+  /**
+   * Found 2026-10-11 by the sweep above. withGallery put `/p` on every path, and the router refuses a
+   * mode on a TikTok short link on purpose (peelSuffixes: otherwise `/t/{code}/p` would start meaning
+   * the short link). So with the box ticked before pasting, a share link came out `notfound` on EVERY
+   * host, mbedfx.app included, and on a guest host it opened the other site's page.
+   */
+  assert.notEqual(routed('/t/ZTSw2mYwR/p').kind, 'shortlink', 'the router does not read /t/{code}/p as the short link')
+  for (const host of ['mbedfx.app', ...GUEST_HOSTS]) {
+    const r = convert('https://www.tiktok.com/t/ZTSw2mYwR', host, 'stills')
+    assert.equal(r.path, '/t/ZTSw2mYwR', `${host}: no mode on the short link`)
+    assert.equal(route(new URL(r.url)).kind, 'shortlink', 'so it still resolves')
+  }
+  // Only the short link. A post path still takes the mode, and so do the other share codes.
+  assert.equal(convert('https://www.reddit.com/r/BatmanArkham/s/uucSZtDEbI', 'mbedfx.app', 'stills').path, '/r/BatmanArkham/s/uucSZtDEbI/p')
+  assert.equal(convert('https://x.com/t/status/20', 'mbedfx.app', 'stills').path, '/t/status/20/p')
+})
+
+test('ALL AS STILLS LEAVES A BLUESKY PROFILE ALONE TOO, and media only leaves it the profile card on a guest host', () => {
+  /**
+   * Found by review 2026-10-11, the short-link defect above one shape over. withGallery put `/p` on
+   * `/profile/{handle}`, and the router reads no mode on a profile (it has no gallery), so "all as
+   * stills" ticked before pasting a Bluesky profile handed out `notfound` on every host, mbedfx.app
+   * included, and on a guest host a link that opens the other site's page. Pinned here because the
+   * GUEST_PASTES sweep asserts NAMES_A_POST and so cannot hold a profile.
+   *
+   * Media only is the same failure on a guest host: `/profile/bsky.app.mp4` is `notfound`. A profile
+   * has no file, and the d. host answers a profile with the same card, so on a guest host the link is
+   * left as it is rather than given a `.mp4` that turns it into nothing.
+   */
+  assert.notEqual(routed('/profile/bsky.app/p').kind, 'profile', 'the router does not read /profile/{handle}/p as the profile')
+  assert.notEqual(routed('/profile/bsky.app.mp4').kind, 'profile', 'nor /profile/{handle}.mp4')
+  for (const host of ['mbedfx.app', ...GUEST_HOSTS]) {
+    for (const paste of ['https://bsky.app/profile/bsky.app', 'https://bsky.app/profile/did:plc:z72i7hdynmk6r22z27h6tvur',
+      'https://mbedfx.app/bs/profile/bsky.app']) {
+      const r = convert(paste, host, 'stills')
+      assert.ok(r.ok, `${paste} converts`)
+      assert.ok(!/\/p$/.test(r.path), `${host}: no mode on the profile (${r.path})`)
+      const got = route(new URL(r.url))
+      assert.equal(got.kind, 'profile', `${r.url} is still the profile`)
+      assert.ok(guestServes(got), `${r.url} is answered on a guest host`)
+      const file = mediaOnly(r.url)
+      if (isGuest(host)) assert.equal(file, r.url, `${host}: media only leaves the profile link as it is`)
+      assert.equal(route(new URL(file)).kind, 'profile', `${file} is still the profile with media only on`)
+    }
+  }
+})
+
+test('A LINK A GUEST HOST TURNS AWAY IS NAMED AS SUCH, from /_card\'s verdict rather than a copy of the rule', () => {
+  /**
+   * THE DECISION, 2026-10-11. The converter can emit paths a guest host declines: a profile pasted from
+   * x.com, TikTok or Instagram is a bare `/{handle}`, which the router answers with a chooser; a page
+   * like `/jack/likes` names nothing; our own front page is `site`. On mbedfx.app those draw the
+   * chooser or a "Not found" card. On a guest host they never reach mbedfx: you-stupid serves its own
+   * dating page, and that is what Discord unfurls.
+   *
+   * Those links are KEPT, not rewritten to another host or hidden. The reader picked the domain, the
+   * other site answering is exactly what that domain does with a path that is not an embed, and
+   * mbedfx.app has no better answer for the same path (a chooser, or "Not found"). What the page must
+   * not do is call it a link to a post. Before /_card answers, an ambiguous path is already swapped for
+   * the site picker by /_prep; after, the preview says "doesn't resolve to a post", and on a guest host
+   * now adds where it lands instead.
+   *
+   * The page does not decide which paths those are: /_card echoes guestServes (`guestDeclines`, pinned
+   * in test/guesthost.test.mjs), the way it echoes the router's `direct`.
+   */
+  for (const paste of ['https://x.com/jack', 'https://www.tiktok.com/@someone', 'https://www.instagram.com/someone/',
+    'https://x.com/jack/likes', 'https://mbedfx.app/']) {
+    const r = convert(paste, 'hotsinglesnear.you')
+    assert.ok(r.ok, `${paste} still converts`)
+    assert.equal(guestServes(route(new URL(r.url))), false, `${r.url} is a path a guest host declines`)
+  }
+  // And a Bluesky profile is NOT one of them: guestServes answers profiles.
+  assert.equal(guestServes(route(new URL(convert('https://bsky.app/profile/bsky.app', 'hotsinglesnear.you').url))), true)
+
+  assert.match(HTML, /function guestLine\(j\) \{\s*return j && j\.guestDeclines && mbedfxIsGuest\(host\)/,
+    'the line is driven by the worker\'s verdict, and only on a guest host')
+  assert.match(HTML, /"No preview\. This link doesn't resolve to a post\." \+ guestLine\(j\)/, 'the card drawing says it')
+  assert.match(HTML, /guestLine\(j\) \? "Nothing to attach\. This link doesn't resolve to a post\." \+ guestLine\(j\)/,
+    'and so does the media-only drawing, instead of "has no media" about a link that names no post')
+  assert.match(HTML, /' On ' \+ host \+ " it opens that site's own page instead\."/, 'in words that say where it lands')
+  // Switching domain redraws that one drawing from the payload in hand, so the line follows the button.
+  const seg = HTML.slice(HTML.indexOf("var segs = document.querySelectorAll('.seg button');"))
+  assert.match(seg.slice(0, 3000), /lastCard\.j\.guestDeclines/, 'the domain toggle redraws a declined answer')
+})
+
+/* ============ LINKS WHOSE ID IS IN THE QUERY, AND LINKS PASTED BACK (review, 2026-10-11) ============
+ *
+ * The converter keeps a query parameter only where the router reads a post id from it. Each test below
+ * is a place it used to drop one, or to misread our own link, and each is checked on every host either
+ * control can select, through the real router and the real guestServes: on mbedfx.app the dropped id
+ * gave the ['x','ig'] chooser, and on a guest host a link that opens the other site's page.
+ */
+
+/** Every host the domain buttons can select, plus forsen.sex, which is recognised and not offered. */
+const EVERY_HOST = [...publicHosts, 'forsen.sex']
+
+test('A FACEBOOK WATCH LINK KEEPS ITS ?v=, on every host and with every toggle', () => {
+  /**
+   * facebook.com/watch/?v={id} converted to a bare /watch, on HEAD and before it: the Facebook branch
+   * kept only ?fbid= and ?story_fbid=, and the YouTube branch, the only one that kept ?v=, does not see
+   * a Facebook link. The router has read /watch?v={numeric} as the Facebook video all along, so the id
+   * was the only thing missing. With media only on a guest host it came out /watch.mp4, also the chooser.
+   */
+  for (const paste of ['https://www.facebook.com/watch/?v=10153231379946729', 'https://www.facebook.com/watch?v=10153231379946729&ref=sharing']) {
+    for (const host of EVERY_HOST) {
+      for (const gallery of [undefined, 'stills']) {
+        for (const on of [false, true]) {
+          const r = convert(paste, host, gallery)
+          assert.ok(r.ok, `${paste} converts`)
+          assert.equal(r.platform, 'Facebook')
+          const link = on ? mediaOnly(r.url) : r.url
+          const got = route(new URL(link))
+          assert.equal(got.kind, 'post', `${link} names a post (got ${got.kind})`)
+          assert.deepEqual(got.ref, { p: 'fb', kind: 'watch', id: '10153231379946729' }, `${link} is the Facebook video`)
+          assert.ok(guestServes(got), `${link} is answered on a guest host`)
+          assert.equal(got.gallery, gallery, `${link} carries the mode it was given`)
+          if (on && isGuest(host)) assert.equal(got.direct, true, `${link} is the file`)
+        }
+      }
+    }
+  }
+  assert.equal(convert('https://www.facebook.com/watch?v=10153231379946729&ref=sharing', 'mbedfx.app').path,
+    '/watch?v=10153231379946729', 'and only the id is kept')
+})
+
+test('permalink.php AND A pfbid story.php CONVERT TO THE PERMALINK SHAPE, like a numeric story.php', () => {
+  /**
+   * route() reads /permalink.php as the other spelling of /story.php, and takes a pfbid post id and a
+   * vanity owner (FB_POST_ID, FB_OWNER). The converter matched /story.php only, with numeric ids only,
+   * so the rest fell through to a bare /story.php or /permalink.php: the chooser.
+   */
+  for (const [paste, id] of [
+    ['https://www.facebook.com/permalink.php?story_fbid=1596906778724399&id=100052152768666', '100052152768666_1596906778724399'],
+    ['https://www.facebook.com/story.php?story_fbid=pfbid02AbCdEfGhIjKlMnOpQrStUv&id=100052152768666', '100052152768666_pfbid02AbCdEfGhIjKlMnOpQrStUv'],
+    ['https://www.facebook.com/story.php?story_fbid=pfbid02AbCdEfGhIjKlMnOpQrStUv&id=some.page', 'some.page_pfbid02AbCdEfGhIjKlMnOpQrStUv'],
+  ]) {
+    for (const host of EVERY_HOST) {
+      const r = convert(paste, host)
+      const got = route(new URL(r.url))
+      assert.equal(got.kind, 'post', `${paste} -> ${r.url} names a post (got ${got.kind})`)
+      assert.deepEqual(got.ref, route(new URL(paste.replace('www.facebook.com', 'mbedfx.app'))).ref,
+        `${r.url} is the post the router reads off the original link`)
+      assert.equal(got.ref.id, id)
+      assert.ok(guestServes(got))
+    }
+  }
+})
+
+test("THE CONVERTER'S OWN QUERY-ID LINKS, PASTED BACK, NAME THE SAME POST on every host", () => {
+  /**
+   * The already-ours branch kept only ?v=, so re-pasting the page's own /photo/?fbid=… or
+   * /embed?clip=… link gave /photo or /embed, the chooser. It now keeps the parameters route() reads
+   * an id from (v, fbid, clip, and story_fbid with id as a pair) and drops the rest.
+   */
+  const QUERY_ID = [
+    'https://www.facebook.com/photo/?fbid=1596906755391068',
+    'https://www.facebook.com/photo.php?fbid=1596906755391068&set=a.774304400984645&type=3',
+    'https://www.facebook.com/watch/?v=10153231379946729',
+    'https://www.facebook.com/permalink.php?story_fbid=1596906778724399&id=100052152768666',
+    'https://www.youtube.com/watch?v=dQw4w9WgXcQ',
+    'https://www.twitch.tv/embed?clip=DeliciousDelightfulPicklesWOOP&parent=example.com',
+    'https://www.youtube.com/watch.mp4?v=dQw4w9WgXcQ',
+  ]
+  for (const paste of QUERY_ID) {
+    for (const from of EVERY_HOST) {
+      for (const gallery of [undefined, 'stills']) {
+        const first = convert(paste, from, gallery)
+        const a = route(new URL(first.url))
+        assert.equal(a.kind, 'post', `${first.url} names a post`)
+        for (const to of EVERY_HOST) {
+          const again = convert(first.url, to, gallery)
+          assert.equal(new URL(again.url).hostname, to)
+          const b = route(new URL(again.url))
+          assert.equal(b.kind, 'post', `${first.url} pasted back on ${to} -> ${again.url} (got ${b.kind})`)
+          assert.deepEqual(bare(b), bare(a), `${again.url} names the same post as ${first.url}`)
+          assert.equal(b.gallery, a.gallery, `${again.url} keeps the mode`)
+          assert.equal(b.direct, a.direct, `${again.url} keeps the file spelling it was pasted with`)
+          assert.ok(guestServes(b), `${again.url} is answered on a guest host`)
+        }
+      }
+    }
+  }
+  // A Facebook link with only its host swapped: the id survives, the tracking does not.
+  assert.equal(convert('https://mbedfx.app/permalink.php?story_fbid=1596906778724399&id=100052152768666&ref=embed_post', 'hotsinglesnear.you').url,
+    'https://hotsinglesnear.you/permalink.php?story_fbid=1596906778724399&id=100052152768666')
+  assert.equal(convert('https://mbedfx.app/photo/?fbid=1596906755391068&set=a.1&utm_source=x', 'mbedfx.app').url,
+    'https://mbedfx.app/photo?fbid=1596906755391068')
+  // Half of the story pair names nothing, so it is not carried as if it did.
+  assert.equal(convert('https://mbedfx.app/story.php?story_fbid=1596906778724399', 'mbedfx.app').url, 'https://mbedfx.app/story.php')
+})
+
+test('A d. LINK PASTED BACK IS OURS, re-pointed at the selected domain rather than read as a fediverse server', () => {
+  /**
+   * mbedfxIsOurs('d.mbedfx.app') is false (OUR_HOSTS holds bare names), so the page's own media-only
+   * link, pasted back, was treated as an unknown instance: /d.mbedfx.app/jack/status/20, `notfound` on
+   * every host. One d. in front of an OUR_HOSTS name is now ours, and the media-only box decides the
+   * spelling, as it does for a pasted /p or /v.
+   */
+  for (const ours of ourHosts) {
+    for (const host of EVERY_HOST) {
+      for (const gallery of [undefined, 'stills']) {
+        const r = convert(`https://d.${ours}/jack/status/20`, host, gallery)
+        assert.ok(r.ok)
+        assert.match(r.note, /^Already an mbedfx link\./, `d.${ours} is recognised as ours`)
+        assert.equal(r.url.split('/')[2], host, `re-pointed at ${host}`)
+        for (const link of [r.url, mediaOnly(r.url)]) {
+          const got = route(new URL(link))
+          assert.equal(got.kind, 'post', `${link} names the post (got ${got.kind})`)
+          assert.deepEqual(got.ref, { p: 'x', id: '20' })
+          assert.equal(got.gallery, gallery)
+          assert.ok(guestServes(got), `${link} is answered on a guest host`)
+        }
+      }
+    }
+  }
+  // Exactly one label: anything deeper is still not a name this worker answers on.
+  assert.equal(convert('https://d.d.mbedfx.app/jack/status/20', 'mbedfx.app').platform, 'Fediverse')
+})
+
+test('AN ANSWER THAT RESOLVED NOTHING IS NOT FILED, so a domain click cannot caption it "Share link resolved"', () => {
+  /**
+   * Found by review 2026-10-11, older than the guest hosts; the two new buttons only made it easy to hit.
+   * prep filed EVERY successful /_prep answer in resolvedTo, and render() captions any filed entry "Share
+   * link resolved to the real post". The worker echoes a link that was already right (pinned in
+   * test/prep.test.mjs, "/_prep LEAVES A LINK ALONE WHEN IT ALREADY NAMES THE SAME POST"), so after an
+   * ordinary post's answer, clicking any domain button put that line over a link nothing had resolved.
+   *
+   * The page half is a DOM closure this file cannot run, so the decision lives in the pure block
+   * (mbedfxPrepResolved) and is run here; the closure's use of it is pinned by its text.
+   */
+  // The page: the one write to resolvedTo is gated on it, and render's caption reads resolvedTo alone.
+  assert.match(HTML, /var resolved = mbedfxPrepResolved\(url, j\.url\);\s+if \(resolved\) resolvedTo\[path\] = j\.url;/)
+  assert.equal((HTML.match(/resolvedTo\[[^\]]+\] = /g) || []).length, 1, 'nothing else files an answer')
+  assert.match(HTML, /var known = resolvedTo\[r\.url\.slice\(r\.url\.indexOf\('\/', 8\)\)\];/)
+  assert.match(HTML, /note\.innerHTML = known\s+\? chip \+ '\. Share link resolved to the real post\.'\s+: chip \+ \(r\.note \? ' ' \+ esc\(r\.note\) : \(r\.platform \? '\. Ready to paste\.' : ''\)\);/,
+    'so with nothing filed the line reads "Ready to paste."')
+
+  // The flow, with the page's own functions. A plain post is pasted on mbedfx.app and /_prep echoes
+  // the path it was asked about, on the request's origin, as the worker does for an already-right link.
+  for (const [paste, gallery] of [['https://x.com/jack/status/20', undefined], ['https://x.com/jack/status/20', 'stills'],
+    ['https://www.youtube.com/watch?v=dQw4w9WgXcQ', undefined], ['https://youtu.be/dQw4w9WgXcQ', undefined]]) {
+    const resolvedTo = Object.create(null)
+    const asked = convert(paste, 'mbedfx.app', gallery).url
+    const path = asked.slice(asked.indexOf('/', 8))
+    const answer = 'https://mbedfx.app' + path
+    if (prepResolved(asked, answer)) resolvedTo[path] = answer
+    // Then each domain button: render() looks the new link up the way the page does.
+    for (const host of EVERY_HOST) {
+      const r = convert(paste, host, gallery)
+      assert.equal(resolvedTo[r.url.slice(r.url.indexOf('/', 8))], undefined,
+        `${paste} on ${host}: nothing was resolved, so the line still reads "Ready to paste."`)
+      // The same echo landing after the click (the race): asked on the old host, compared on no host.
+      assert.equal(prepResolved(asked, r.url), false, `an echo is not a resolution whichever host it is re-pointed to (${host})`)
+    }
+  }
+  // A real resolution still is one: a share code answered with its permalink, and a different query id.
+  assert.equal(prepResolved('https://hotsinglesnear.you/t/ZTSw2mYwR', 'https://mbedfx.app/@mysticaquarium/video/7660566211100511518'), true)
+  assert.equal(prepResolved('https://mbedfx.app/share/v/Fixture03X', 'https://mbedfx.app/reel/2209468366484962'), true)
+  assert.equal(prepResolved('https://mbedfx.app/watch?v=dQw4w9WgXcQ', 'https://mbedfx.app/watch?v=jNQXAC9IVRw'), true)
+  // Both sides are normalised by URL, so one spelling percent-encoded and one not is the same path.
+  assert.equal(prepResolved('https://mbedfx.app/a%20b', 'https://mbedfx.app/a b'), false)
+  assert.equal(prepResolved('not a url', 'https://mbedfx.app/x'), false, 'and an answer it cannot read resolves nothing')
 })

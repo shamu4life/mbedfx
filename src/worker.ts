@@ -6265,14 +6265,25 @@ async function serve(req: Request, env: Env, ctx: ExecutionContext, d: Deps): Pr
        */
       const target = (() => { try { return route(new URL(r.target, origin)) } catch { return null } })()
       const directOf = target && 'direct' in target && target.direct === true ? { direct: true as const } : {}
+      /**
+       * WHETHER A GUEST HOST WOULD TURN THIS PATH AWAY (src/guesthost.ts guestServes), echoed for the
+       * same reason `direct` is. Since 2026-10-11 the converter offers the guest hosts as domain buttons,
+       * and on those a path that is not an embed (a bare handle's chooser, a `notfound`) is passed to the
+       * other site's own page rather than drawn as mbedfx's "Not found" card. The page says so beside its
+       * "doesn't resolve to a post", and asks here rather than keeping a copy of guestServes' list that
+       * a new Route kind would silently fall out of. The router is host-blind, so the answer is the same
+       * whichever of our domains served the page. Present only when true, so an answer about a path a
+       * guest host serves (every post, profile and share link) is byte-identical to before.
+       */
+      const guestOf = target && !guestServes(target) ? { guestDeclines: true as const } : {}
       if (!described.ok) {
         // The page shows the same 🔞/🔒 wording Discord would, rather than inventing its own. `gate`
         // is undefined on every non-gate failure and JSON.stringify omits it, which is the shape this
         // endpoint has always returned — the candidates describeTarget also computes are deliberately
         // NOT emitted here, because the page has its own chooser and /_prep is what feeds it.
         return described.reason === 'fetch_fail'
-          ? Response.json({ ok: false, reason: 'fetch_fail', gate: described.gate, ...directOf })
-          : Response.json({ ok: false, reason: described.reason })
+          ? Response.json({ ok: false, reason: 'fetch_fail', gate: described.gate, ...directOf, ...guestOf })
+          : Response.json({ ok: false, reason: described.reason, ...guestOf })
       }
       const post = described.post
       // PAIRED WITH ITS UNFILTERED POSITION — see usableWithIndex for the off-by-one this replaced.

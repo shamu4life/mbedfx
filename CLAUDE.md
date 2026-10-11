@@ -36,7 +36,7 @@ plays inline.
 | `src/refkey.ts` | **the security boundary.** What crosses the wire and comes back; kind lists are allowlists |
 | `src/worker.ts` | dispatch, caching, deadlines, the container calls |
 | `src/platforms/<site>/` | `fetch.ts` (I/O) + `normalize.ts` (pure) |
-| `src/guesthost.ts` | **guest hosts**: two domains of the owner's `you-stupid` Worker that reach this one through its service binding. Only embed routes are answered there, marked `x-mbedfx-guest: served`; everything else is declined so that Worker keeps its own page |
+| `src/guesthost.ts` | **guest hosts**: two domains of the owner's `you-stupid` Worker that reach this one through its service binding. Only embed routes are answered there, marked `x-mbedfx-guest: served`; everything else is declined so that Worker keeps its own page. The converter offers both as domain buttons and keeps its own copy of the list (tested equal): no `d.` there, so media only emits `.mp4` |
 | `src/fetchretry.ts` | `askTwice`, the one extra ask every platform fetcher goes through. The four exempt call sites say `NO-RETRY` and why |
 | `src/render/` | the two heads, the Mastodon spoof, failure cards |
 | `src/render/embed.ts` | shared predicates: `usable`, `mediaOf`, `themeColor`, `byline` |
