@@ -111,6 +111,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   normal link served that card for up to 15 minutes in the same data center (measured in production).
   It is now re-asked under the post's real subreddit.
 
+- **A post on a Reddit user's profile is a card, not "couldn't load".** The router accepted
+  `/user/{name}/comments/{id}` and `/r/u_{name}/comments/{id}`, and Reddit renders them in full, but the
+  page's own address is the `/user/` form and the normalizer read only `/r/`, so every profile post was
+  the failure card (6 of 30 crossposts in an unbiased sample were posted to a profile, 2026-10-11). The
+  post's subreddit is now `u_{name}`, a username's `-` is allowed in it, and its caption is asked at
+  `/user/{name}/`, where Reddit answers with the description (`/r/u_{name}/` answers with none).
+  Measured residential only.
+
 - **"All as stills" no longer breaks a TikTok `/t/` share link or a Bluesky profile link.** Ticked
   before pasting one, it appended `/p`, which the router reads on neither, so the converter handed out
   a `notfound` link on every domain. The box now leaves `/t/{code}` and `/profile/{handle}` alone, and

@@ -1,6 +1,6 @@
 import type { PostRef } from '../../types.ts'
 import type { Env } from '../../analytics.ts'
-import { redditEmbedSub, redditGate, redditGifUrl, redditNeedsCaption } from './normalize.ts'
+import { REDDIT_SUB, redditEmbedSub, redditGate, redditGifUrl, redditNeedsCaption } from './normalize.ts'
 import { crawlerCaption, feedCaption } from './caption.ts'
 import { askTwice } from '../../fetchretry.ts'
 
@@ -21,8 +21,21 @@ const REDDIT_UA = 'web:mbedfx.app:v0.1 (by /u/shamu4life)'
 
 // The post id is base36; guard the path the same way the other fetchers guard theirs.
 const POST_ID = /^[0-9a-z]+$/i
-// A subreddit name as it may appear in a path we build. Anything else is asked as the `_` placeholder.
-const SUB = /^[A-Za-z0-9_]+$/
+// A subreddit name as it may appear in a path we build, a profile's `u_{name}` included (normalize.ts
+// REDDIT_SUB). Anything else is asked as the `_` placeholder.
+const SUB = REDDIT_SUB
+
+/**
+ * THE CRAWLER PAGE'S ADDRESS. A post on a user's profile lives at `/user/{name}/comments/{id}/`: asked as
+ * `/r/u_{name}/…` Reddit answers a 301 to that path with a 51-58 byte body and no meta, while the /user/ path
+ * answers its own 301 carrying the description and og tags like any subreddit post (residential, 2026-10-11:
+ * u_NekkidSnaku/1x1vfk8 and u_whatthechuck_99/1x00xeb; NOT measured from a Worker).
+ */
+function crawlerUrl(sub: string, id: string): string {
+  return sub.startsWith('u_')
+    ? `https://www.reddit.com/user/${sub.slice(2)}/comments/${id}/`
+    : `https://www.reddit.com/r/${sub}/comments/${id}/`
+}
 
 /**
  * `gifHead` rides on a success when the post is a Reddit gif (normalize.ts redditGifUrl): up to the first
@@ -208,7 +221,7 @@ async function withCaption(got: Extract<RedditFetch, { source: 'embed' }>, id: s
   const until = Date.now() + CAPTION_BUDGET_MS
   const left = (cap: number) => Math.min(cap, until - Date.now())
   const caption: RedditCaptionBytes = {}
-  caption.crawler = await readSource(`https://www.reddit.com/r/${sub}/comments/${id}/`,
+  caption.crawler = await readSource(crawlerUrl(sub, id),
     { 'user-agent': CRAWLER_UA, accept: 'text/html' }, left(CRAWLER_TIMEOUT_MS), 'manual')
   const said = caption.crawler === undefined ? { kind: 'unknown' as const } : crawlerCaption(caption.crawler, sub)
   const cut = said.kind === 'body' && said.cut

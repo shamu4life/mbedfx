@@ -60,7 +60,26 @@ function screenview(html: string): Any | null {
   try { return (JSON.parse(decodeEntities(m[1])) as Any)?.post ?? null } catch { return null }
 }
 
-const CANONICAL = /id="canonical-url-updater"\s+value="(https:\/\/www\.reddit\.com\/r\/([^/]+)\/comments\/([^/]+)[^"]*)"/
+/**
+ * THE PAGE'S OWN ADDRESS FOR THE POST: `/r/{sub}/comments/{id}`, or `/user/{name}/comments/{id}` for a post on a
+ * user's profile, whose subreddit is `u_{name}`. embed.reddit.com answers `/r/u_{name}/comments/{id}/` with a full
+ * render whose canonical is the /user/ form (residential, 2026-10-11: u_NekkidSnaku/1x1vfk8 and
+ * u_whatthechuck_99/1x00xeb). Until then only `/r/` was read, and every profile post was the failure card: 6 of
+ * 30 crossposts in an unbiased sample that day were posted to a profile.
+ */
+const CANONICAL = /id="canonical-url-updater"\s+value="(https:\/\/www\.reddit\.com\/(r|user)\/([^/"]+)\/comments\/([^/"]+)[^"]*)"/
+
+function canonicalOf(html: string): { url: string; sub: string; id: string } | null {
+  const c = CANONICAL.exec(html)
+  return c ? { url: c[1], sub: c[2] === 'user' ? `u_${c[3]}` : c[3], id: c[4] } : null
+}
+
+/**
+ * A SUBREDDIT NAME AS IT MAY APPEAR IN A PATH WE BUILD: letters, digits and `_`, or a profile's `u_` followed by a
+ * username, which may also hold `-` (u_Tough-Driver5143 was in the 2026-10-11 sample). fetch.ts asks anything else
+ * as the `_` placeholder.
+ */
+export const REDDIT_SUB = /^(?:[A-Za-z0-9_]+|u_[A-Za-z0-9_-]+)$/
 
 /**
  * THE BODY'S HTML: the inside of `t3_{id}-post-rtjson-content`, scanned to its BALANCED closing div. The
@@ -87,8 +106,8 @@ function rtjsonInner(html: string): string | null {
  * link) or a wrong one, and so the crawler page is asked under the right path.
  */
 export function redditEmbedSub(html: string): string | null {
-  const c = CANONICAL.exec(html)
-  return c && /^[A-Za-z0-9_]+$/.test(c[2]) ? c[2] : null
+  const c = canonicalOf(html)
+  return c && REDDIT_SUB.test(c.sub) ? c.sub : null
 }
 
 /**
@@ -403,14 +422,14 @@ export function redditCaptionSource(raw: unknown): ReturnType<typeof pickCaption
   const r = raw as Any
   if (r?.source !== 'embed' || typeof r.html !== 'string' || !r.caption) return null
   const sub = redditEmbedSub(r.html)
-  const id = (CANONICAL.exec(r.html) || [])[3]
+  const id = canonicalOf(r.html)?.id
   return sub && id ? captionOf(r.caption, sub, id)?.source ?? null : null
 }
 
 function buildFromEmbed(html: string, ref: Extract<PostRef, { p: 'rd' }>, gifHead?: unknown, caption?: CaptionBytes): Post | null {
   // NOT-FOUND / expired: no canonical, or a `/undefined` url. Reddit answers 200 for these, so this
   // is the content assertion, not a status check.
-  const canon = html.match(CANONICAL)
+  const canon = canonicalOf(html)
   if (!canon || /\/undefined"/.test(html)) return null
   // A user-deleted post keeps its canonical + timestamp but loses its title/score/type — the tombstone
   // is the discriminator. It, and a mod-removed shell with no title, render the generic "couldn't load".
@@ -425,7 +444,7 @@ function buildFromEmbed(html: string, ref: Extract<PostRef, { p: 'rd' }>, gifHea
   // so fall back to the url slug — lossy (no punctuation/case) but far better than a generic failure.
   const title = rawTitle
     ? decodeEntities(stripTags(rawTitle)).trim()
-    : slugToTitle((canon[1].match(/\/comments\/[^/]+\/([^/?#"]+)/) || [])[1])
+    : slugToTitle((canon.url.match(/\/comments\/[^/]+\/([^/?#"]+)/) || [])[1])
   if (!title) return null
 
   const post = screenview(html) ?? {}
@@ -441,7 +460,7 @@ function buildFromEmbed(html: string, ref: Extract<PostRef, { p: 'rd' }>, gifHea
    * again under the real sub, so a placeholder reaches here only when that re-ask failed, and then it is
    * the bare link's thinner card alone. A full render takes the canonical sub, as it always did.
    */
-  const sub = redditFullRender(html) ? canon[2] : (ref.sub ?? '')
+  const sub = redditFullRender(html) ? canon.sub : (ref.sub ?? '')
   const score = parseInt((html.match(/<faceplate-number number="(\d+)"/) || [])[1] || '', 10)
   const comments = parseInt(((html.match(/([\d,]+)\s+comments?/) || [])[1] || '').replace(/,/g, ''), 10)
 
@@ -467,7 +486,7 @@ function buildFromEmbed(html: string, ref: Extract<PostRef, { p: 'rd' }>, gifHea
 
   return {
     ref: { p: 'rd', sub, id: ref.id },
-    canonical: canon[1],
+    canonical: canon.url,
     author: { name: `u/${author}`, handle: author, url: `https://www.reddit.com/user/${author}` },
     // The title is the headline (bold, its own block); the body follows it. Keeping them separate is
     // what lets the renderer differentiate the two — the concatenated `title\n\nbody` this replaced
