@@ -94,6 +94,17 @@ test("THE ORDER: Reddit's whole text first, Reddit's own cut text over an archiv
   assert.deepEqual(pickCaption({ kind: 'unknown' }, null, arch(FULL)), { text: '', source: 'unknown' }, 'nor speaks when Reddit said nothing')
 })
 
+/**
+ * A source that never answers until fetch.ts's timeout aborts it, the way fetch does. The timeout is
+ * AbortSignal.timeout, whose timer Node 22 does not count as keeping the process alive (CI runs 22.18): a
+ * stub that only waits on it lets the event loop drain, and the runner cancels this test and every one after
+ * it in the file. The empty timer holds the loop open until the abort, and is cleared by it.
+ */
+const hangUntilAborted = (_url, init) => new Promise((_, reject) => {
+  const hold = setTimeout(() => {}, 10_000)
+  init.signal.addEventListener('abort', () => { clearTimeout(hold); reject(init.signal.reason) })
+})
+
 /** Global fetch answered per host; every request recorded. */
 async function withHosts(routes, fn) {
   const real = globalThis.fetch
@@ -198,7 +209,7 @@ test('A POST WHOSE PAGE CARRIES ITS BODY ASKS NOTHING ELSE', async () => {
 test('A SLOW SOURCE COSTS AT MOST ITS SHARE: the whole lookup stays inside its budget', async () => {
   // Each source is bounded by its own timeout and all of them by one budget, so a hanging Reddit cannot
   // hold the card past it. The stub honours the abort signal the way fetch does.
-  const hang = (_url, init) => new Promise((_, reject) => init.signal.addEventListener('abort', () => reject(init.signal.reason)))
+  const hang = hangUntilAborted
   await withHosts([
     ['https://embed.reddit.com/', html(IMAGE_PAGE)],
     ['https://www.reddit.com/', hang],
@@ -262,7 +273,7 @@ test('A BARE LINK WHOSE RE-ASK FAILS KEEPS THE FIRST ANSWER — a thinner card, 
 test('A CUT CAPTION WHOSE FEED AND ARCHIVE HANG STILL ENDS INSIDE THE CAPTION BUDGET', async () => {
   // Review, 2026-10-11: the first budget test hung the crawler, which never reaches the archive, so a
   // lookup with only per-source caps (1.5 + 0.8 + 1.5 s) would still have passed it.
-  const hang = (_url, init) => new Promise((_, reject) => init.signal.addEventListener('abort', () => reject(init.signal.reason)))
+  const hang = hangUntilAborted
   await withHosts([
     ['https://embed.reddit.com/', html(IMAGE_PAGE)],
     ['https://www.reddit.com/r/', html(CRAWLER, 301)],
