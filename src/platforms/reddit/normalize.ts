@@ -148,13 +148,43 @@ function spoilerTagged(html: string, post: Any | null): boolean {
  *
  * NEVER FOR A SPOILER-TAGGED POST: its body is replaced by `[spoiler]` whatever it says (buildFromEmbed), so
  * the three requests, one of them rationed to a request a minute, would fetch text nobody is shown.
+ *
+ * NOR FOR A PLACEHOLDER RENDER, which reaches here only when fetch.ts's re-ask under the real subreddit failed.
+ * It carries no spoiler overlay, so a spoiler-tagged post read through it took its crawler description, the
+ * spoiler's text, as its body and showed it in the clear on Discord (review, 2026-10-11). That render is not
+ * cached (redditIncomplete), so the next one asks again and gets the full page, tag and body together.
  */
 export function redditNeedsCaption(html: string): boolean {
   if (!CANONICAL.test(html) || /\/undefined"/.test(html) || html.includes('This post has been deleted')) return false
-  if (rtjsonInner(html) !== null) return false
+  if (!redditFullRender(html) || rtjsonInner(html) !== null) return false
   const post = screenview(html)
   if (typeof post?.type !== 'string' || spoilerTagged(html, post)) return false
-  return post.type !== 'text' || !redditFullRender(html)
+  // A full-render text post with no rtjson is a title-only post.
+  return post.type !== 'text'
+}
+
+/**
+ * THE POST LOADED, BUT PART OF IT MAY STILL ARRIVE, so it must not be cached (worker.ts FetchReport.incomplete):
+ *  - a placeholder render: the re-ask under the real subreddit failed, and the full page has the body, the
+ *    spoiler tag, the author and the counts that this one lacks;
+ *  - a video crosspost whose crawler page did not answer with an og:image at all (a timeout, a reset, a block
+ *    page), so its poster, and with it the video, is unknown. An og:image that is refused (Reddit's logo, a share
+ *    card) is an answer, and that card is cached as it is;
+ *  - a gallery crosspost whose parent's page was never read.
+ * One connection reset cached a media-less crosspost for POST_TTL before this (review, 2026-10-11). A deleted
+ * post never gets here: it normalizes to null, which is never cached either.
+ */
+export function redditIncomplete(raw: unknown): boolean {
+  const r = raw as Any
+  if (r?.source !== 'embed' || typeof r.html !== 'string') return false
+  if (!redditFullRender(r.html)) return true
+  const needs = redditCrosspostNeeds(r.html)
+  if (!needs) return false
+  if ('poster' in needs) {
+    const crawler = r.caption?.crawler
+    return typeof crawler !== 'string' || !/<meta property="og:image"/.test(crawler)
+  }
+  return typeof r.parent !== 'string'
 }
 
 /** Hosts whose urls are Reddit's own: a link to one is a Reddit post or Reddit media, never delegated. */
@@ -628,6 +658,14 @@ function redditOAuthMedia(d: Any, gifHead: unknown): Media[] {
    * there). A missing index answers 404; a still behind a promised video url is the sticky defect.
    */
   if (typeof d.url === 'string' && REDDIT_GIF.test(d.url)) return [gifEntry(d.url, gifHead)]
+  /**
+   * A REDDIT VIDEO GETS NO MEDIA HERE, a video post's or a video crosspost's (whose url is the parent's v.redd.it
+   * base). The embed renders put a remux VIDEO at index 0 for both, and this listing has no HLS to match it, so
+   * the preview still below would be a second kind behind the same /_media/ url: the sticky defect redditGifUrl
+   * describes. Found by the 2026-10-11 review, for plain video posts too, which had always had it; this path
+   * needs app credentials and does not run in production.
+   */
+  if ((typeof d.url === 'string' && REDDIT_VIDEO.test(d.url)) || d.is_video === true) return []
   const v = d.preview?.images?.[0]?.variants
   if ((typeof d.url === 'string' && /\.gif(?:\?|$)/i.test(d.url)) || v?.gif || v?.mp4) return []
   if (d.is_gallery && d.gallery_data?.items && d.media_metadata) {

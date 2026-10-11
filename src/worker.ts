@@ -40,7 +40,7 @@ import { fetchReddit, resolveRedditShareUrl } from './platforms/reddit/fetch.ts'
 import { modelInput, sourceLanguage, translateBest, withTranslation } from './translate.ts'
 import { displayName } from './render/chooser.ts'
 import { metaPlatformOf, resolveMetaShare, stripMetaTracking } from './platforms/metashare/fetch.ts'
-import { normalizeReddit, redditCaptionSource, redditEmbedLink } from './platforms/reddit/normalize.ts'
+import { normalizeReddit, redditCaptionSource, redditEmbedLink, redditIncomplete } from './platforms/reddit/normalize.ts'
 import { linkedRef } from './linkref.ts'
 import { fetchYouTube, ytPageUrl } from './platforms/youtube/fetch.ts'
 import { ytDescriptionOf } from './platforms/youtube/description.ts'
@@ -128,6 +128,14 @@ export interface CacheLike {
  */
 export interface FetchReport {
   reason?: GateReason
+  /**
+   * THE POST LOADED WITH A PART MISSING FOR A REASON THAT MAY PASS: a source that did not answer, not one that
+   * answered "nothing here". Such a Post is never cached (loadPost), its card is never response-cached, and the
+   * JSON surfaces say `pending`, the same terms as a linked post that missed its budget (linkedFor). Without it,
+   * one connection reset cached a crosspost with no media for POST_TTL after Reddit recovered (review,
+   * 2026-10-11). Set by the Reddit arm only (normalize.ts redditIncomplete).
+   */
+  incomplete?: true
 }
 
 export interface Deps {
@@ -718,7 +726,9 @@ export async function liveFetchPost(
       // Which source supplied the body when the page carried none — see the body_* outcomes in analytics.ts.
       const bodyFrom = redditCaptionSource(got)
       if (bodyFrom) count(env, 'rd', BODY_OUTCOME[bodyFrom], client)
-      return normalizeReddit(got, ref)
+      const post = normalizeReddit(got, ref)
+      if (post && report && redditIncomplete(got)) report.incomplete = true
+      return post
     }
     case 'yt': {
       // YouTube ALWAYS renders: the remux video and the thumbnail derive from the id alone, so oembed
@@ -1335,15 +1345,20 @@ export async function liveResolveRedditShare(
  */
 function getPost(
   ref: PostRef, d: Deps, env: Env, client: ClientClass, ctx: ExecutionContext, metaBudgetMs?: number,
-): Promise<{ post: Post | null; cached: boolean; failReason?: GateReason }> {
+): Promise<{ post: Post | null; cached: boolean; failReason?: GateReason; incomplete: boolean }> {
   const report: FetchReport = {}
   // `ctx` rides through to the fetchers whose upstream is the container (fb, dm/st/im), which need it
   // to keep a slow extract alive past the response — see cachedMeta. REQUIRED here, not optional: all
   // three call sites are in this file and every one of them has a ctx, so there is no reason to let a
   // future fourth one silently drop it. It stays optional at the Deps/liveFetchPost boundary, which is
   // the injected, .mjs-stubbed one.
-  return loadPost(postCacheKey(ref), () => d.fetchPost(ref, env, client, report, ctx, metaBudgetMs), d)
-    .then(r => ({ post: r.post ? withResolver(r.post, env) : null, cached: r.cached, failReason: report.reason }))
+  // An incomplete Post (FetchReport.incomplete) is served to this request and never written to the cache.
+  return loadPost(postCacheKey(ref), () => d.fetchPost(ref, env, client, report, ctx, metaBudgetMs), d,
+    () => report.incomplete !== true)
+    .then(r => ({
+      post: r.post ? withResolver(r.post, env) : null, cached: r.cached, failReason: report.reason,
+      incomplete: report.incomplete === true,
+    }))
 }
 
 /**
@@ -4197,6 +4212,8 @@ async function r2Range(cache: R2Bucket, key: string, size: number, range: string
  */
 async function loadPost(
   lookupKey: string, load: () => Promise<Post | null>, d: Deps,
+  /** Asked after the load: false keeps a Post out of the cache (getPost's FetchReport.incomplete). */
+  keep: () => boolean = () => true,
 ): Promise<{ post: Post | null; cached: boolean }> {
   const key = cacheUrl(lookupKey)
   const hit = await d.cache.match(key)
@@ -4216,7 +4233,7 @@ async function loadPost(
   } catch {
     return { post: null, cached: false }
   }
-  if (post) {
+  if (post && keep()) {
     const headers = { 'cache-control': `max-age=${POST_TTL}`, 'content-type': 'application/json' }
     // Serialized ONCE and re-wrapped, because a Response body is single-use: handing the same
     // Response to two cache.put calls stores an already-consumed body under the second key.
@@ -4804,9 +4821,10 @@ async function describeTarget(
     }
   }
   return {
-    // `pending` also when a Reddit link post's linked media did not load in time: the answer is missing
-    // something still arriving, and the converter's one re-ask a moment later finds it warm.
-    ok: true, post, muxing: settled.degraded === true, pending: xlate.pending === true || link.pending,
+    // `pending` also when a Reddit link post's linked media did not load in time, or the post itself loaded
+    // with a part that may still arrive (FetchReport.incomplete): the answer is missing something still
+    // arriving, and the converter's one re-ask a moment later finds it.
+    ok: true, post, muxing: settled.degraded === true, pending: xlate.pending === true || link.pending || got.incomplete,
     platform: post.ref.p, canonical: post.canonical,
   }
 }
@@ -5174,7 +5192,7 @@ async function renderPostRoute(
     )
   }
 
-  const { post, failReason } = await getPost(ref, d, env, client, ctx)
+  const { post, failReason, incomplete } = await getPost(ref, d, env, client, ctx)
   if (!post) {
     count(env, ref.p, 'fetch_fail', client)
     return render(
@@ -5260,7 +5278,8 @@ async function renderPostRoute(
   // `promised` too: inert on this seam today (the head never promises), and the line that would
   // otherwise pin a promised card for RESP_TTL the day the scope widens.
   // `link.pending` likewise: the linked post did not load in time, and the next render will have it.
-  if (!settled.degraded && !settled.promised && !xlate.pending && !link.pending) {
+  // `incomplete` too: the post itself loaded with a part that may still arrive (FetchReport.incomplete).
+  if (!settled.degraded && !settled.promised && !xlate.pending && !link.pending && !incomplete) {
     // clone() tees the body, so `res` stays readable after we cache a copy.
     const toCache = new Response(res.clone().body, res)
     toCache.headers.set('cache-control', `max-age=${RESP_TTL}`)

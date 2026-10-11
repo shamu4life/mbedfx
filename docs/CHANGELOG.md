@@ -40,9 +40,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   crawler page names. That page is already read for the caption; Reddit's logo and generated share
   cards are refused, and with no poster the video stays out (1 of 10 sampled). A gallery's slides
   come from its parent's page, asked as `_` and then under the subreddit that page names, read
-  beside the caption lookup. Crossposts of text posts are unchanged. Not measured from a Worker:
-  the crawler page's og:image and the gallery parent's two fetches (both are requests the Worker
-  already makes elsewhere).
+  beside the caption lookup. Crossposts of text posts are unchanged. A poster or parent read that
+  did not answer (a timeout, a reset, a block page) leaves that render without the media, uncached
+  and `pending` on the JSON surfaces, so the next render asks again; a read that answered "none"
+  (Reddit's logo) is kept. Not measured from a Worker: the crawler page's og:image and the gallery
+  parent's two fetches (both are requests the Worker already makes elsewhere).
+
+- **A Reddit gif's size is read beside its caption, not before it**, so a cold gif post waits at most
+  2 s after the embed page rather than 3 s.
 
 - **A spoiler-tagged Reddit post keeps its spoiler.** Reddit draws a whole post tagged as a spoiler
   blurred under "This post may contain spoilers."; the card showed its picture, and with the caption
@@ -120,7 +125,9 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - **A bare `reddit.com/comments/{id}` link no longer degrades the ordinary link's card.** It got
   Reddit's stripped render (no author, counts or body) and cached it under the post's own key, so the
   normal link served that card for up to 15 minutes in the same data center (measured in production).
-  It is now re-asked under the post's real subreddit.
+  It is now re-asked under the post's real subreddit. When that second ask fails, the stripped card
+  is served uncached and asks no caption source: it carries no spoiler overlay, so a body read for it
+  could have been a spoiler-tagged post's text in the clear (review).
 
 - **A post on a Reddit user's profile is a card, not "couldn't load".** The router accepted
   `/user/{name}/comments/{id}` and `/r/u_{name}/comments/{id}`, and Reddit renders them in full, but the

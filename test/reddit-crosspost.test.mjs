@@ -1,9 +1,11 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
-import { normalizeReddit, redditCrosspostNeeds, redditGifUrl, crawlerPoster, redditCaptionSource } from '../src/platforms/reddit/normalize.ts'
+import {
+  normalizeReddit, redditCrosspostNeeds, redditGifUrl, crawlerPoster, redditCaptionSource, redditIncomplete, redditNeedsCaption,
+} from '../src/platforms/reddit/normalize.ts'
 import { fetchReddit } from '../src/platforms/reddit/fetch.ts'
-import { handle } from '../src/worker.ts'
+import { handle, liveFetchPost } from '../src/worker.ts'
 import { refKey } from '../src/refkey.ts'
 import { encodeStatusId } from '../src/statusid.ts'
 
@@ -165,6 +167,136 @@ test('A GALLERY PARENT THAT DOES NOT ANSWER COSTS THE SLIDES, NEVER THE POST', a
     assert.deepEqual(post.media, [])
     assert.ok(!asked.some(u => u.includes('/r/AskElectricians/')), 'no subreddit learned, so no second ask')
   })
+})
+
+/* ===================== FROM THE REVIEW, 2026-10-11 ===================== */
+
+test('A READ THAT DID NOT ANSWER MAKES THE POST INCOMPLETE; A READ THAT ANSWERED "NOTHING" DOES NOT', () => {
+  const embed = (html, extra = {}) => ({ source: 'embed', html, ...extra })
+  // Incomplete: may still arrive, so never cached.
+  assert.equal(redditIncomplete(embed(XP_VIDEO)), true, 'the crawler page did not answer')
+  assert.equal(redditIncomplete(embed(XP_VIDEO, { caption: { crawler: '<html>blocked by network security</html>' } })), true,
+    'a block page names no og:image at all')
+  assert.equal(redditIncomplete(embed(XP_GALLERY)), true, 'the parent\'s page was never read')
+  assert.equal(redditIncomplete(embed(PARENT_PLACEHOLDER)), true, 'a placeholder render: the re-ask under the real sub failed')
+  // Complete: an answer, kept as it is.
+  assert.equal(redditIncomplete(embed(XP_VIDEO, { caption: { crawler: CRAWLER_VIDEO } })), false)
+  assert.equal(redditIncomplete(embed(XP_VIDEO, { caption: { crawler: CRAWLER_LOGO } })), false, 'Reddit\'s logo is an answer: no poster')
+  assert.equal(redditIncomplete(embed(XP_GALLERY, { parent: PARENT_GALLERY })), false)
+  assert.equal(redditIncomplete(embed(XP_IMAGE)), false, 'a picture crosspost reads nothing more')
+  assert.equal(redditIncomplete({ source: 'json', data: [] }), false)
+})
+
+test('A PLACEHOLDER RENDER ASKS NO CAPTION SOURCE: it cannot see a spoiler tag, so a body read for it could be one', () => {
+  // The review's reproduction: a spoiler-tagged text post reached through its placeholder (a bare link whose
+  // re-ask failed) took its crawler description as its body and showed it in the clear.
+  assert.equal(redditNeedsCaption(PARENT_PLACEHOLDER), false)
+  assert.ok(!PARENT_PLACEHOLDER.includes('<shreddit-embed-spoiler-button'), 'precondition: the placeholder carries no overlay')
+})
+
+test('THE OAUTH RENDER GIVES A REDDIT VIDEO NO MEDIA, so index 0 is never a still where the embed render has a video', () => {
+  const listing = (over) => [{ data: { children: [{ data: {
+    title: 't', author: 'a', created_utc: 1760000000, subreddit: 'accelerate', permalink: '/r/accelerate/comments/1x1w6rq/t/',
+    selftext: '', is_self: false, score: 5, num_comments: 1,
+    preview: { images: [{ source: { url: 'https://external-preview.redd.it/x.png?s=1', width: 405, height: 720 }, variants: {} }] },
+    ...over,
+  } }] } }]
+  const ref = { p: 'rd', sub: 'accelerate', id: '1x1w6rq' }
+  assert.deepEqual(normalizeReddit({ source: 'json', data: listing({ url: 'https://v.redd.it/gndqe7i7abuh1' }) }, ref).media, [], 'a video crosspost')
+  assert.deepEqual(normalizeReddit({ source: 'json', data: listing({ url: 'https://v.redd.it/gndqe7i7abuh1', is_video: true }) }, ref).media, [], 'a video post')
+  assert.equal(normalizeReddit({ source: 'json', data: listing({ url: 'https://i.redd.it/abc.png', post_hint: 'image' }) }, ref).media[0]?.kind, 'image',
+    'a picture keeps its still')
+})
+
+test('THE GIF\'S SIZE IS READ BESIDE THE CAPTION, NOT BEFORE IT', async () => {
+  // Review: in turn they cost GIF_HEAD_TIMEOUT_MS + CAPTION_BUDGET_MS, 3.0 s at worst after the embed fetch.
+  const ref = { p: 'rd', sub: 'reactions', id: '1woblnl' }
+  const gif = Uint8Array.from([0x47, 0x49, 0x46, 0x38, 0x39, 0x61, 0x40, 0x01, 0xf0, 0x00])
+  await withHosts([
+    ['https://embed.reddit.com/', page(XP_GIF)],
+    ['https://i.redd.it/43dvfo4tvarh1.gif', async () => { await new Promise(r => setTimeout(r, 500)); return new Response(gif, { status: 206 }) }],
+    ['https://www.reddit.com/r/reactions/comments/1woblnl/', page('<meta name="description" content="5 votes, 1 comment. 9 members in the reactions community.">', 301, 500)],
+  ], async () => {
+    const t0 = Date.now()
+    const got = await fetchReddit(ref, {})
+    const ms = Date.now() - t0
+    assert.deepEqual(normalizeReddit(got, ref).media, [{ kind: 'gif', url: 'https://i.redd.it/43dvfo4tvarh1.gif', w: 320, h: 240 }])
+    assert.ok(ms < 900, `side by side: ${ms}ms, where in turn it is over 1000`)
+  })
+})
+
+/**
+ * The worker with the REAL Reddit fetcher behind it: a document render and an /_api/v1 answer while the url named
+ * resets (it is asked once by each, never retried), then a second document render after it recovered.
+ */
+async function twoRenders(ref, flaky, routes) {
+  const real = globalThis.fetch
+  let resets = 2
+  const asked = []
+  globalThis.fetch = async (u, init = {}) => {
+    const url = String(u)
+    asked.push(url)
+    if (resets > 0 && url.startsWith(flaky)) { resets -= 1; throw new TypeError('connection reset') }
+    for (const [prefix, answer] of routes) if (url.startsWith(prefix)) return answer(url, init)
+    return new Response('', { status: 429 })
+  }
+  const store = new Map()
+  const deps = {
+    cache: { async match(k) { const v = store.get(k); return v ? v.clone() : undefined }, async put(k, v) { store.set(k, v.clone()) } },
+    fetchPost: liveFetchPost, resolveShortlink: async () => ({ kind: 'unresolved' }), resolveRedditShare: async () => null,
+  }
+  const env = {
+    AE: { writeDataPoint() {} }, ASSETS: { async fetch() { return new Response('a') } }, TRANSLATE_GOOGLE: 'off',
+    MEDIA_CACHE: { async head() { return null }, async get() { return null }, async put() {} },
+    MEDIA_RESOLVER: { getByName: () => ({ fetch: () => new Promise(() => {}) }) },
+  }
+  const waits = []
+  const ctx = { waitUntil(p) { waits.push(Promise.resolve(p).catch(() => {})) } }
+  const doc = async () => {
+    const req = new Request(`https://mbedfx.app/users/x/statuses/${encodeStatusId(refKey(ref))}`,
+      { headers: { 'user-agent': 'Mozilla/5.0 (compatible; Discordbot/2.0; +https://discordapp.com)' } })
+    const j = await (await handle(req, env, ctx, deps)).json()
+    while (waits.length) await waits.shift()
+    return j.media_attachments.length
+  }
+  const api = async () => {
+    const target = encodeURIComponent(`https://www.reddit.com/r/${ref.sub}/comments/${ref.id}/x/`)
+    const res = await handle(new Request(`https://mbedfx.app/_api/v1?url=${target}`), env, ctx, deps)
+    while (waits.length) await waits.shift()
+    return { pending: (await res.json()).pending, cacheControl: res.headers.get('cache-control') }
+  }
+  try {
+    return { first: await doc(), firstApi: await api(), second: await doc(), asked }
+  } finally { globalThis.fetch = real }
+}
+
+test('A CONNECTION RESET COSTS THE RENDERS IT HITS THEIR VIDEO, NEVER FIFTEEN MINUTES OF THEM', async () => {
+  // The review's reproduction, as a test: before, the media-less crosspost was cached for POST_TTL and the
+  // next render never asked again. Now such a render is not cached, the API says pending, and the next one asks.
+  const ref = { p: 'rd', sub: 'accelerate', id: '1x1w6rq' }
+  const crawler = 'https://www.reddit.com/r/accelerate/comments/1x1w6rq/'
+  const r = await twoRenders(ref, crawler, [
+    ['https://embed.reddit.com/r/accelerate/comments/1x1w6rq/', page(XP_VIDEO)],
+    [crawler, page(CRAWLER_VIDEO, 301)],
+  ])
+  assert.equal(r.first, 0, 'the render the reset hit has no video')
+  assert.equal(r.firstApi.pending, true, 'the API says the answer is incomplete')
+  assert.match(r.firstApi.cacheControl, /no-store/, 'and lets nobody keep it')
+  assert.equal(r.second, 1, 'the next render asked again and has it')
+  assert.equal(r.asked.filter(u => u === crawler).length, 3, 'asked by every render: no media-less Post was cached')
+})
+
+test('A GALLERY PARENT THAT RESETS IS ASKED AGAIN ON THE NEXT RENDER', async () => {
+  const ref = { p: 'rd', sub: 'electrical', id: '1x2eq29' }
+  const r = await twoRenders(ref, 'https://embed.reddit.com/r/_/comments/1x2epoi/', [
+    ['https://embed.reddit.com/r/electrical/comments/1x2eq29/', page(XP_GALLERY)],
+    ['https://embed.reddit.com/r/_/comments/1x2epoi/', page(PARENT_PLACEHOLDER)],
+    ['https://embed.reddit.com/r/AskElectricians/comments/1x2epoi/', page(PARENT_GALLERY)],
+    ['https://www.reddit.com/r/electrical/comments/1x2eq29/', page('<meta name="description" content="I&#x27;m looking to have an EV charger installed.">', 301)],
+  ])
+  assert.equal(r.first, 0)
+  assert.equal(r.firstApi.pending, true)
+  assert.equal(r.second, 2, 'both slides, once the parent answered')
 })
 
 /* ===================== THE CARD ===================== */

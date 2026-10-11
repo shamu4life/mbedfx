@@ -134,11 +134,15 @@ async function readGifHead(url: string): Promise<Uint8Array | undefined> {
   }
 }
 
+/** The first bytes of the post's gif when it is one (a gif post or a crosspost of one), else undefined. Never throws. */
+async function gifHeadOf(got: Extract<RedditFetch, { ok: true }>): Promise<Uint8Array | undefined> {
+  const url = redditGifUrl(got)
+  return url ? readGifHead(url) : undefined
+}
+
 /** A successful fetch, plus its gif's header when the post is one. Never turns a success into a failure. */
 async function withGifHead<T extends Extract<RedditFetch, { ok: true }>>(got: T): Promise<T> {
-  const url = redditGifUrl(got)
-  if (!url) return got
-  const gifHead = await readGifHead(url)
+  const gifHead = await gifHeadOf(got)
   return gifHead ? { ...got, gifHead } : got
 }
 
@@ -414,13 +418,17 @@ export async function fetchReddit(
   }
   if (embed.ok && embed.source === 'embed') {
     try { onPage?.(embed.html) } catch { /* a hook may not cost the post */ }
-    // A crosspost may need its video's poster (read with the caption) or its gallery parent's page (read beside it).
+    // The gif's size, the caption (with a crosspost video's poster, which rides on the same crawler page) and a
+    // gallery crosspost's parent are independent reads, so they run side by side and a cold card waits for the
+    // slowest of them, not their sum: a gif post took GIF_HEAD_TIMEOUT_MS + CAPTION_BUDGET_MS, 3.0 s, at worst
+    // when the two ran in turn (review, 2026-10-11).
     const needs = redditCrosspostNeeds(embed.html)
-    const [got, parent] = await Promise.all([
-      withGifHead(embed).then(g => withCaption(g, ref.id, needs !== null && 'poster' in needs)),
+    const [gifHead, got, parent] = await Promise.all([
+      gifHeadOf(embed),
+      withCaption(embed, ref.id, needs !== null && 'poster' in needs),
       needs && 'gallery' in needs ? galleryParent(needs.gallery) : Promise.resolve(undefined),
     ])
-    return parent ? { ...got, parent } : got
+    return { ...got, ...(gifHead ? { gifHead } : {}), ...(parent ? { parent } : {}) }
   }
   if (env.REDDIT_CLIENT_ID && env.REDDIT_CLIENT_SECRET) {
     const oauth = await fetchRedditOAuth(ref, env)

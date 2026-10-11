@@ -589,7 +589,11 @@ half-answer out of any cache in between.
   [Media urls](#media-urls)) did not load in time, or came back empty without a private or
   age-restricted wall, and `media` is empty for now; a re-request asks for it again. That case is the
   one exception to the next paragraph: a linked post that is gone for good cannot be told from one that
-  failed once, so it keeps `pending` set. Ask again once, not in a loop.
+  failed once, so it keeps `pending` set. Ask again once, not in a loop. Also set when a Reddit post
+  loaded with a part Reddit did not answer for: a crosspost's video poster or gallery slides (`media`
+  is empty for now), or Reddit's stripped render (no body, author or counts), which a link without
+  the post's own subreddit gets when the second ask, under that subreddit, failed. Nothing of that
+  answer is cached, so a re-request asks again.
 
 Neither is an error. Both clear on their own and an answer that ignores them is still correct. The
 work behind them runs in two different places, which is what sets the horizons above: a translation
