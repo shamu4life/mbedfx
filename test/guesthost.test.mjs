@@ -98,6 +98,37 @@ test('a person who opens a guest-host post link is sent to the original post, as
   assert.equal(res.headers.get(GUEST_MARK), 'served')
 })
 
+test('the d. prefix works on a guest host: the post\'s file, marked, with its own hop kept on that d. host', async () => {
+  /**
+   * Since 2026-10-11 d.sorryifuckedyour.mom and d.hotsinglesnear.you are custom domains of you-stupid
+   * (shamu4life/you-stupid#22), whose host checks take any subdomain of either, so a d. request reaches
+   * this Worker through the same binding with its hostname intact. The worker reads `d.` off the hostname
+   * on every domain (worker.ts DIRECT_MEDIA_HOST) and the guest gate matches subdomains (isGuestHost), so
+   * the two compose with nothing new: a post link answers with the file instead of a card, marked, and the
+   * file's /_media/ hop stays on the d. host, marked too. Before that the d. names had no DNS, and the
+   * converter put a `.mp4` on the path instead; that spelling still answers the same file.
+   */
+  for (const g of GUEST_HOSTS) {
+    const d = deps()
+    for (const headers of [BOT, PERSON]) {
+      const res = await handle(new Request(`https://d.${g}/jack/status/20`, { headers }), env(), ctx, d)
+      assert.equal(res.status, 302)
+      assert.equal(res.headers.get('location'), `https://d.${g}/_media/x%3A20/0`, `${g}: to the file, on the same d. host`)
+      assert.equal(res.headers.get(GUEST_MARK), 'served', 'marked, or you-stupid would serve its own page instead')
+    }
+    const bytes = await handle(new Request(`https://d.${g}/_media/x%3A20/0`, { headers: BOT }), env(), ctx, d)
+    assert.equal(bytes.headers.get(GUEST_MARK), 'served')
+    assert.equal(bytes.headers.get('location'), 'https://example.invalid/one.jpg')
+    const mp4 = await handle(new Request(`https://${g}/jack/status/20.mp4`, { headers: BOT }), env(), ctx, d)
+    assert.equal(mp4.headers.get('location'), `https://${g}/_media/x%3A20/0`, 'the .mp4 spelling still answers the file')
+    assert.equal(mp4.headers.get(GUEST_MARK), 'served')
+    // The d. host's front page is still the other site's: declined, unmarked.
+    const root = await handle(new Request(`https://d.${g}/`, { headers: PERSON }), env(), ctx, d)
+    assert.equal(root.status, 404)
+    assert.equal(root.headers.get(GUEST_MARK), null)
+  }
+})
+
 test('a guest host declines everything that is not an embed, unmarked, before spending a fetch', async () => {
   /**
    * THE OTHER HALF, and the one that keeps the owner's site working. you-stupid serves its own page for

@@ -312,7 +312,8 @@ which routing does not trim.
 
 `d.` in front of any of the three official hosts serves the file itself, video or image, at its own
 url: `https://d.mbedfx.app/jack/status/20`, `https://d.megapenispoopenfarten.sex/jack/status/20`,
-`https://d.forsen.sex/jack/status/20`. Those
+`https://d.forsen.sex/jack/status/20`. It does the same on the two guest domains, which serve post
+links only (`https://d.hotsinglesnear.you/jack/status/20`, `https://d.sorryifuckedyour.mom/…`). Those
 bytes answer range requests, and a client seeks and resumes properly. A `d.` url renders no card,
 and it serves crawlers and people the same bytes.
 

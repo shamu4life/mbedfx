@@ -18,16 +18,18 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   Everything else, `/`, `robots.txt`, a bare `/{word}`, the JSON API, the converter's endpoints and the
   diagnostics, is a plain unmarked 404, and `you-stupid` serves its own page instead, so a typo on
   those domains still lands where it did. A failure here also comes back unmarked, so it can never
-  replace that page. Both hosts are refused by the fediverse SSRF guard. `d.` does not work on them
-  (no DNS for it); `.mp4` does. New in `src/guesthost.ts`, tested offline in `test/guesthost.test.mjs`.
-  Not yet measured from a Worker: it needs `you-stupid`'s binding deployed.
+  replace that page. Both hosts are refused by the fediverse SSRF guard. `d.` works on them too
+  (`d.hotsinglesnear.you/jack/status/20` is the file): `d.sorryifuckedyour.mom` and
+  `d.hotsinglesnear.you` are custom domains of `you-stupid` as well (shamu4life/you-stupid#22), and the
+  worker reads the `d.` off the hostname there as anywhere. A trailing `.mp4` also works. New in
+  `src/guesthost.ts`, tested offline in `test/guesthost.test.mjs`. Not yet measured from a Worker: it
+  needs `you-stupid`'s binding deployed.
 
 - **The converter offers `sorryifuckedyour.mom` and `hotsinglesnear.you` as domain buttons**, beside
   `mbedfx.app` and `megapenispoopenfarten.sex` (owner's call; `forsen.sex` stays recognised and not
-  offered). With one of them selected, **media only** puts `.mp4` on the path instead of `d.` on the
-  host, since they have no `d.`: `/jack/status/20.mp4`, `/jack/status/20.mp4/p` with all as stills,
-  `/watch.mp4?v=…`, and never a second `.mp4` on a link that already has one. A share link the page
-  resolves gets the same spelling. A link the converter emits that a guest host does not answer (a
+  offered). With one of them selected, **media only** puts `d.` on the host as on the official domains
+  (`d.hotsinglesnear.you/…`). For a day before the `d.` names existed it put `.mp4` on the path instead.
+  A link the converter emits that a guest host does not answer (a
   bare `/{handle}`, a path that names neither a post nor a Bluesky profile) is still handed out, and
   the preview now says it opens the other site's page there; `/_card` echoes the guest rule as
   `guestDeclines` so the page has no copy of it. Tested by feeding every link kind, with each toggle,

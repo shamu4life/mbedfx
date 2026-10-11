@@ -48,16 +48,20 @@ import type { Route } from './types.ts'
  * you-stupid, which hands the leftover path straight back here: a loop through two Workers instead
  * of the one self-fetch that guard was written for.
  *
- * `d.` DOES NOT WORK ON THESE, because you-stupid has no wildcard DNS or route for it. The `.mp4`
- * path suffix is a post route and does.
+ * `d.` WORKS ON THESE TOO, since 2026-10-11 (owner's ask). d.sorryifuckedyour.mom and
+ * d.hotsinglesnear.you are custom domains of the same you-stupid Worker (shamu4life/you-stupid#22), whose
+ * host checks take any subdomain, so a d. request arrives through the same binding with its hostname. Here
+ * isGuestHost matches it (subdomains count) and handle() reads the `d.` off the hostname as on any domain
+ * (worker.ts DIRECT_MEDIA_HOST), so it is the file, marked, with nothing added for it (pinned in
+ * test/guesthost.test.mjs). For a day before that the names had no DNS and the `.mp4` path suffix was the
+ * only file spelling here; it is a post route on every host and still works.
  *
  * THE CONVERTER OFFERS BOTH AS DOMAIN BUTTONS since 2026-10-11 (owner's call; forsen.sex stays
- * recognised and not offered), and both differences above reach it. public/index.html keeps its own
- * copy of this list (GUEST_HOSTS; it has no build step, and test/landing-convert.test.mjs holds the
- * two equal), and on a guest host its media-only box emits the `.mp4` spelling instead of `d.`. And it
- * can hand out a path that guestServes declines, a bare `/{handle}` above all, which here is the other
- * site's page; /_card echoes guestServes as `guestDeclines` so the preview can say so without a second
- * copy of the switch below.
+ * recognised and not offered). public/index.html keeps its own copy of this list (GUEST_HOSTS; it has no
+ * build step, and test/landing-convert.test.mjs holds the two equal), and its media-only box emits `d.`
+ * on them as on every domain. It can hand out a path that guestServes declines, a bare `/{handle}` above
+ * all, which here is the other site's page; /_card echoes guestServes as `guestDeclines` so the preview
+ * can say so without a second copy of the switch below.
  */
 export const GUEST_HOSTS = ['sorryifuckedyour.mom', 'hotsinglesnear.you']
 
