@@ -1,5 +1,6 @@
 import { FEDI_HOST } from '../refkey.ts'
 import { blockedHost, blockedResolvedHost, type HostResolver } from '../netguard.ts'
+import { GUEST_HOSTS } from '../guesthost.ts'
 
 /**
  * THE SSRF BOUNDARY SHARED BY EVERY FEDIVERSE CLIENT, and every clause is load-bearing. The host
@@ -68,12 +69,17 @@ export const MAX_BODY = 512 * 1024
  *
  * mbedfx.app was added 2026-07-30 alongside the original domain, which is retained: links already
  * pasted in Discord keep resolving, so both are genuinely serving and both must be refused here.
+ *
+ * GUEST_HOSTS are spread in because this Worker serves embeds on them too, through another Worker's
+ * service binding rather than a route of its own. Fetching one would reach that Worker, which hands
+ * the path back here; src/guesthost.ts has the rest.
  */
-const OWN_HOSTS = ['mbedfx.app', 'megapenispoopenfarten.sex', 'forsen.sex', 'workers.dev']
+const OWN_HOSTS = ['mbedfx.app', 'megapenispoopenfarten.sex', 'forsen.sex', 'workers.dev', ...GUEST_HOSTS]
 
 /**
  * The two settings a fediverse fetch reads off the environment. Structural rather than `Env` so this
- * file keeps importing nothing but refkey.ts and netguard.ts, and so a test can pass `{}`.
+ * file keeps importing nothing but refkey.ts, netguard.ts and guesthost.ts's host list, and so a test
+ * can pass `{}`.
  */
 export interface FediEnv {
   /**

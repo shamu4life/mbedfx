@@ -333,8 +333,12 @@ The fediverse routes take an instance hostname straight from the URL path and ma
 a fetch. `fetchableInstance` (`src/platforms/fedihost.ts`) refuses mbedfx's own zones:
 
 ```ts
-const OWN_HOSTS = ['mbedfx.app', 'megapenispoopenfarten.sex', 'forsen.sex', 'workers.dev']
+const OWN_HOSTS = ['mbedfx.app', 'megapenispoopenfarten.sex', 'forsen.sex', 'workers.dev', ...GUEST_HOSTS]
 ```
+
+`GUEST_HOSTS` (`src/guesthost.ts`) are two domains of another Worker that hands mbedfx its post links
+through a service binding. They are refused for the same reason, and a self-hosted instance never sees
+a request on them.
 
 Serve on `embed.example.com` without declaring it, and `/…/embed.example.com/post/1` makes the
 service fetch itself. On Cloudflare that re-enters through the edge and bypasses the zone's own WAF;

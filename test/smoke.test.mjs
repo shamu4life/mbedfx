@@ -2,6 +2,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync, existsSync } from 'node:fs'
 import { fetchableInstance } from '../src/platforms/fedihost.ts'
+import { GUEST_HOSTS } from '../src/guesthost.ts'
 
 /**
  * The zones this project owns and serves. All three are live; see wrangler.jsonc's routes comment.
@@ -155,9 +156,18 @@ test('EVERY DOMAIN THE PAGE OFFERS IS ONE THE WORKER SERVES — a subset, delibe
    * test/landing-convert.test.mjs, which exists because emitting links to a host that may not be ours
    * is the one outcome worth ruling out, and which is why the page does not simply trust whatever
    * host served it.
+   *
+   * EXTENDED 2026-10-11 WITH GUEST_HOSTS, when the owner asked for sorryifuckedyour.mom and
+   * hotsinglesnear.you to be offered as buttons. They are served, but not through wrangler.jsonc: they
+   * are custom domains of the owner's you-stupid Worker, which hands this one its embed paths over a
+   * service binding (src/guesthost.ts), and listing them in routes would try to take the domains off
+   * that Worker (test/guesthost.test.mjs forbids it). Reading routes alone therefore called two working
+   * domains unserved. The served set is routes plus GUEST_HOSTS, the same union the two tests below
+   * already use, and the subset rule is otherwise unchanged: a button must still name a domain that
+   * reaches this Worker one way or the other.
    */
   const cfg = JSON.parse(readFileSync('wrangler.jsonc', 'utf8').replace(/^\s*\/\/.*$/gm, ''))
-  const served = new Set((cfg.routes ?? []).map(r => r.pattern.split('/')[0]))
+  const served = new Set([...(cfg.routes ?? []).map(r => r.pattern.split('/')[0]), ...GUEST_HOSTS])
   const page = readFileSync('public/index.html', 'utf8')
 
   const m = page.match(/var PUBLIC_HOSTS = \[([^\]]*)\]/)
@@ -165,7 +175,7 @@ test('EVERY DOMAIN THE PAGE OFFERS IS ONE THE WORKER SERVES — a subset, delibe
   const offered = m[1].split(',').map(x => x.trim().replace(/^'|'$/g, '')).filter(Boolean)
   assert.ok(offered.length > 0, 'and it offers at least one domain')
   for (const host of offered) {
-    assert.ok(served.has(host), `the page offers ${host}, which wrangler.jsonc does not serve`)
+    assert.ok(served.has(host), `the page offers ${host}, which neither wrangler.jsonc nor GUEST_HOSTS serves`)
   }
 
   // Every offered domain needs a button, or the toggle cannot reach it. The reverse is checked too:
@@ -204,7 +214,9 @@ test('EVERY DOMAIN THE WORKER SERVES IS ONE THE PAGE RECOGNISES AS OURS — the 
    * domain's own links.
    */
   const cfg = JSON.parse(readFileSync('wrangler.jsonc', 'utf8').replace(/^\s*\/\/.*$/gm, ''))
-  const served = [...new Set((cfg.routes ?? []).map(r => r.pattern.split('/')[0]))]
+  // GUEST_HOSTS too (src/guesthost.ts): they serve cards through another Worker's binding rather than
+  // a route here, and a link pasted from one is just as much ours as a link from forsen.sex.
+  const served = [...new Set([...(cfg.routes ?? []).map(r => r.pattern.split('/')[0]), ...GUEST_HOSTS])]
   const page = readFileSync('public/index.html', 'utf8')
 
   // Lifted the same way test/landing-convert.test.mjs does — see its header for why `new Function`
@@ -254,8 +266,10 @@ test('EVERY SERVING ZONE IS REFUSED BY THE SSRF GUARD — the coupling wrangler.
    * (including the subdomain rule) rather than the spelling of a private array.
    */
   const cfg = JSON.parse(readFileSync('wrangler.jsonc', 'utf8').replace(/^\s*\/\/.*$/gm, ''))
-  for (const { pattern } of cfg.routes ?? []) {
-    const host = pattern.split('/')[0]
+  // GUEST_HOSTS reach this Worker through you-stupid's service binding, not a route, and fetching one
+  // would loop through that Worker and back here. They are serving zones for this rule.
+  const hosts = [...(cfg.routes ?? []).map(r => r.pattern.split('/')[0]), ...GUEST_HOSTS]
+  for (const host of hosts) {
     assert.equal(fetchableInstance(host), false, `${host} serves this Worker and must never be fetchable`)
     assert.equal(fetchableInstance(`sub.${host}`), false, 'and neither may a subdomain of it')
   }
