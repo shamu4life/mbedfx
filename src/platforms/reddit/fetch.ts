@@ -320,7 +320,14 @@ async function fetchRedditOAuth(ref: Extract<PostRef, { p: 'rd' }>, env: Env): P
  * success that is a Reddit gif also carries its header (withGifHead), whichever path produced it, so
  * both renders size the gif the same way.
  */
-export async function fetchReddit(ref: Extract<PostRef, { p: 'rd' }>, env: Env): Promise<RedditFetch> {
+/**
+ * `onPage` is told the embed page the moment it is in hand, before the gif read and the caption lookup,
+ * which can take two more seconds. The worker uses it to start a link post's video mux that early
+ * (liveFetchPost's rd arm); it is optional, synchronous, and a throw from it never reaches the fetch.
+ */
+export async function fetchReddit(
+  ref: Extract<PostRef, { p: 'rd' }>, env: Env, onPage?: (html: string) => void,
+): Promise<RedditFetch> {
   if (!POST_ID.test(ref.id)) return { ok: false, reason: 'assert_fail' }
   const asked = ref.sub && SUB.test(ref.sub) ? ref.sub : '_'
   let embed = await fetchRedditEmbed(ref, asked)
@@ -335,11 +342,18 @@ export async function fetchReddit(ref: Extract<PostRef, { p: 'rd' }>, env: Env):
   if (embed.ok && embed.source === 'embed') {
     const real = redditEmbedSub(embed.html)
     if (real && real.toLowerCase() !== asked.toLowerCase()) {
-      const full = await fetchRedditEmbed(ref, real)
-      if (full.ok) embed = full
+      // A re-ask that throws keeps the first answer: a thinner card, never the failure card a transport
+      // error would otherwise become here (askTwice rethrows), which Discord would freeze.
+      try {
+        const full = await fetchRedditEmbed(ref, real)
+        if (full.ok) embed = full
+      } catch { /* keep the placeholder render */ }
     }
   }
-  if (embed.ok && embed.source === 'embed') return withCaption(await withGifHead(embed), ref.id)
+  if (embed.ok && embed.source === 'embed') {
+    try { onPage?.(embed.html) } catch { /* a hook may not cost the post */ }
+    return withCaption(await withGifHead(embed), ref.id)
+  }
   if (env.REDDIT_CLIENT_ID && env.REDDIT_CLIENT_SECRET) {
     const oauth = await fetchRedditOAuth(ref, env)
     if (oauth.ok) return withGifHead(oauth)

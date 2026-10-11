@@ -1,4 +1,4 @@
-import { decodeEntities, redditHtmlToText, redditMarkdownToText } from './body.ts'
+import { decodeEntities, maskSpoilers, redditHtmlToText, redditMarkdownToText } from './body.ts'
 
 /**
  * Pure: the BODY of a Reddit post that embed.reddit.com does not carry. No I/O; fetch.ts fetches the
@@ -31,6 +31,15 @@ import { decodeEntities, redditHtmlToText, redditMarkdownToText } from './body.t
  * www.reddit.com's `.json` is not on the list: it answers 403 to Worker egress (2026-07-21) and to a
  * residential IP (2026-10-11). Neither is old.reddit.com, which redirects a browser to a login and gives
  * a crawler the same ~140-character meta as source 1.
+ *
+ * SPOILERS, ON THE ONE SOURCE THAT DOES NOT MARK THEM. Reddit flattens its description from the rendered
+ * post and drops a spoiler's markers while keeping what it hid: r/Jujutsufolk/comments/1x2vdbg's body opens
+ * with `>!&#x200B;!<` and its description opens with the bare zero-width space (measured 2026-10-11, the
+ * only spoiler-led caption in a sample of ~1,600 posts). So a caption read from the description ALONE shows
+ * a spoiler as Reddit's own Discord preview of the same link shows it, which is in the clear. Wherever a
+ * second source answers, its markers win: the feed's body replaces the description, and the archive's text
+ * is compared with its spoilers unwrapped and shown with them masked. Raw `>!…!<` in a description, should
+ * Reddit ever leave one, is masked too.
  */
 
 /** What the crawler page said about the body. `cut` means Reddit shortened it and ended it with `…`. */
@@ -76,8 +85,11 @@ export function crawlerCaption(html: string, sub: string): CrawlerCaption {
     return { kind: 'none' }
   }
   if (rest === '[removed]' || rest === '[deleted]') return { kind: 'none' }
-  const cut = rest.endsWith('…')
-  return { kind: 'body', text: rest, cut }
+  const cut = rest.endsWith('\u2026')
+  // A cut that lands inside a spoiler swallows the `…` into the mask, so it is put back: the body is
+  // still cut, and the archive is still the way to complete it.
+  const text = maskSpoilers(rest)
+  return { kind: 'body', text: cut && !text.endsWith('\u2026') ? `${text}\u2026` : text, cut }
 }
 
 /** The feed entry's body, read only from the entry whose id is this post's. */
@@ -98,8 +110,14 @@ export function feedCaption(xml: string, id: string): FeedCaption {
   return text && text !== '[removed]' && text !== '[deleted]' ? { kind: 'body', text } : { kind: 'none' }
 }
 
-/** The archive's body for post `id`, or null. Its counts are never read: they freeze at ingest. */
-export function archiveCaption(json: string, id: string): string | null {
+/**
+ * The archive's body for post `id`, twice: `masked` is what a card may show, `plain` keeps each spoiler's
+ * text without its markers, which is how Reddit's description renders it and so what to compare it with.
+ * Null when there is no usable body. Its counts are never read: they freeze at ingest.
+ */
+export type ArchiveCaption = { masked: string; plain: string }
+
+export function archiveCaption(json: string, id: string): ArchiveCaption | null {
   let data: unknown
   try { data = JSON.parse(json) } catch { return null }
   const rows = (data as { data?: unknown })?.data
@@ -107,8 +125,8 @@ export function archiveCaption(json: string, id: string): string | null {
   const row = rows.find(r => r && typeof r === 'object' && (r as { id?: unknown }).id === id) as { selftext?: unknown } | undefined
   const st = row?.selftext
   if (typeof st !== 'string' || !st.trim() || st === '[removed]' || st === '[deleted]') return null
-  const text = redditMarkdownToText(st)
-  return text || null
+  const masked = redditMarkdownToText(st)
+  return masked ? { masked, plain: redditMarkdownToText(st, { spoilers: 'unwrap' }) } : null
 }
 
 const flat = (s: string) => s.replace(/\s+/g, ' ').trim()
@@ -118,20 +136,27 @@ const flat = (s: string) => s.replace(/\s+/g, ' ').trim()
  *
  *  - the feed's body wins: it is Reddit's own, whole and current;
  *  - else the crawler's text when Reddit did not cut it;
- *  - else, when Reddit cut it, the archive's text if Reddit's cut text is a prefix of it (so an edited
- *    or later-removed body is never shown), and otherwise Reddit's cut text with its `…`;
+ *  - else, when Reddit cut it, the archive's text if Reddit's cut text is a prefix of it, and otherwise
+ *    Reddit's cut text with its `…`. The prefix is all that can be checked: an edit inside the part
+ *    Reddit shows is caught (the archive is refused), and one made AFTER it, once the archive had
+ *    ingested the post, is not, so the card then shows the archived tail. That is the trade the owner
+ *    accepted with the archive (2026-10-11); it is bounded by the card's 500 characters;
  *  - "no body" from either Reddit source is final; the archive is never asked to overrule Reddit.
  *
  * `source` is for the counters only.
  */
 export function pickCaption(
-  crawler: CrawlerCaption | null, feed: FeedCaption, archive: string | null,
+  crawler: CrawlerCaption | null, feed: FeedCaption, archive: ArchiveCaption | null,
 ): { text: string; source: 'feed' | 'crawler' | 'archive' | 'cut' | 'none' | 'unknown' } {
   if (feed?.kind === 'body') return { text: feed.text, source: 'feed' }
   if (crawler?.kind === 'body') {
     if (!crawler.cut) return { text: crawler.text, source: 'crawler' }
     const head = flat(crawler.text.slice(0, -1))
-    if (archive && head && flat(archive).startsWith(head)) return { text: archive, source: 'archive' }
+    // Against the archive's text with spoilers unwrapped (how Reddit's description renders them) or
+    // masked (how a raw marker in the description was masked above); shown masked either way.
+    if (archive && head && (flat(archive.plain).startsWith(head) || flat(archive.masked).startsWith(head))) {
+      return { text: archive.masked, source: 'archive' }
+    }
     return { text: crawler.text, source: 'cut' }
   }
   if (feed?.kind === 'none' || crawler?.kind === 'none') return { text: '', source: 'none' }

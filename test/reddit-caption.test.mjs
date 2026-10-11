@@ -74,7 +74,7 @@ test('THE FEED IS READ ONLY FROM THE ENTRY THAT NAMES THIS POST', () => {
 })
 
 test('THE ARCHIVE RECORD COUNTS ONLY FOR ITS OWN ID, and a removed body is no body', () => {
-  assert.equal(archiveCaption(ARCHIVE, '1x1xajw'), FULL)
+  assert.deepEqual(archiveCaption(ARCHIVE, '1x1xajw'), { masked: FULL, plain: FULL })
   assert.equal(archiveCaption(ARCHIVE, 'zzzzzzz'), null)
   assert.equal(archiveCaption('{"data":[]}', '1x1xajw'), null, 'not archived yet (a post under ~30 s old)')
   assert.equal(archiveCaption('{"data":[{"id":"1x1xajw","selftext":"[removed]"}]}', '1x1xajw'), null)
@@ -83,14 +83,15 @@ test('THE ARCHIVE RECORD COUNTS ONLY FOR ITS OWN ID, and a removed body is no bo
 
 test("THE ORDER: Reddit's whole text first, Reddit's own cut text over an archive that disagrees with it", () => {
   const crawler = crawlerCaption(CRAWLER, 'DeadlockTheGame')
-  assert.deepEqual(pickCaption(crawler, feedCaption(FEED, '1x1xajw'), FULL), { text: FULL, source: 'feed' }, 'the feed wins')
-  assert.deepEqual(pickCaption(crawler, null, FULL), { text: FULL, source: 'archive' }, 'the archive completes a cut it agrees with')
+  const arch = (t) => ({ masked: t, plain: t })
+  assert.deepEqual(pickCaption(crawler, feedCaption(FEED, '1x1xajw'), arch(FULL)), { text: FULL, source: 'feed' }, 'the feed wins')
+  assert.deepEqual(pickCaption(crawler, null, arch(FULL)), { text: FULL, source: 'archive' }, 'the archive completes a cut it agrees with')
   const edited = 'If you reload with max ammo you lose. EDIT: never mind'
-  assert.deepEqual(pickCaption(crawler, null, edited), { text: CUT, source: 'cut' }, 'an archive that disagrees is never shown')
+  assert.deepEqual(pickCaption(crawler, null, arch(edited)), { text: CUT, source: 'cut' }, 'an archive that disagrees is never shown')
   assert.deepEqual(pickCaption(crawler, null, null), { text: CUT, source: 'cut' }, 'with nothing else, Reddit\'s cut text')
-  assert.deepEqual(pickCaption({ kind: 'body', text: 'short and whole', cut: false }, null, 'other'), { text: 'short and whole', source: 'crawler' })
-  assert.deepEqual(pickCaption({ kind: 'none' }, null, FULL), { text: '', source: 'none' }, 'the archive never overrules "no body"')
-  assert.deepEqual(pickCaption({ kind: 'unknown' }, null, FULL), { text: '', source: 'unknown' }, 'nor speaks when Reddit said nothing')
+  assert.deepEqual(pickCaption({ kind: 'body', text: 'short and whole', cut: false }, null, arch('other')), { text: 'short and whole', source: 'crawler' })
+  assert.deepEqual(pickCaption({ kind: 'none' }, null, arch(FULL)), { text: '', source: 'none' }, 'the archive never overrules "no body"')
+  assert.deepEqual(pickCaption({ kind: 'unknown' }, null, arch(FULL)), { text: '', source: 'unknown' }, 'nor speaks when Reddit said nothing')
 })
 
 /** Global fetch answered per host; every request recorded. */
@@ -239,4 +240,66 @@ test('THE SUB ALREADY ASKED IS NOT ASKED AGAIN, whatever its case', async () => 
     await fetchReddit({ p: 'rd', sub: 'youshouldknow', id: '8xq8ac' }, {})
     assert.equal(asked.length, 1)
   })
+})
+
+test('A BARE LINK WHOSE RE-ASK FAILS KEEPS THE FIRST ANSWER — a thinner card, never "couldn\'t load"', async () => {
+  // Review, 2026-10-11: askTwice rethrows a transport failure, and the re-ask used to turn a renderable
+  // placeholder answer into the failure card, which Discord then freezes.
+  const stripped = '<html><body><div id="canonical-url-updater" value="https://www.reddit.com/r/YouShouldKnow/comments/8xq8ac/ysk_pyrex/"></div>'
+    + '<h1 class="line-clamp-3">YSK: PYREX</h1>'
+    + '<shreddit-screenview-data data="{&quot;post&quot;:{&quot;type&quot;:&quot;text&quot;,&quot;created_timestamp&quot;:1531236634453}}"></body></html>'
+  await withHosts([
+    ['https://embed.reddit.com/r/_/', html(stripped)],
+    ['https://embed.reddit.com/r/YouShouldKnow/', () => { throw new TypeError('connection reset') }],
+  ], async () => {
+    const ref = { p: 'rd', sub: '', id: '8xq8ac' }
+    const got = await fetchReddit(ref, {})
+    assert.equal(got.ok, true)
+    assert.equal(normalizeReddit(got, ref).title, 'YSK: PYREX')
+  })
+})
+
+test('A CUT CAPTION WHOSE FEED AND ARCHIVE HANG STILL ENDS INSIDE THE CAPTION BUDGET', async () => {
+  // Review, 2026-10-11: the first budget test hung the crawler, which never reaches the archive, so a
+  // lookup with only per-source caps (1.5 + 0.8 + 1.5 s) would still have passed it.
+  const hang = (_url, init) => new Promise((_, reject) => init.signal.addEventListener('abort', () => reject(init.signal.reason)))
+  await withHosts([
+    ['https://embed.reddit.com/', html(IMAGE_PAGE)],
+    ['https://www.reddit.com/r/', html(CRAWLER, 301)],
+    ['https://www.reddit.com/by_id/', hang],
+    ['https://arctic-shift.photon-reddit.com/', hang],
+  ], async () => {
+    const t0 = Date.now()
+    const got = await fetchReddit(REF, {})
+    const ms = Date.now() - t0
+    assert.ok(ms < 2200, `one budget for every source, took ${ms}ms`)
+    assert.equal(normalizeReddit(got, REF).text, CUT, "Reddit's cut text, which was already in hand")
+  })
+})
+
+/* ===================== SPOILERS ON THE DESCRIPTION PATH =====================
+ * Reddit flattens its description from the rendered post and drops a spoiler's markers while keeping what
+ * it hid (measured 2026-10-11 on r/Jujutsufolk/comments/1x2vdbg: `>!&#x200B;!<` became a bare zero-width
+ * space). The description alone therefore cannot mask a spoiler, exactly as Reddit's own Discord preview of
+ * the same link does not. These pin what CAN be done: raw markers are masked, and any second source's
+ * markers win.
+ */
+
+const meta = (s) => `<meta name="description" content="${s.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;')}">`
+
+test('RAW SPOILER MARKUP IN A DESCRIPTION IS MASKED, and a cut inside one keeps its cut', () => {
+  assert.deepEqual(crawlerCaption(meta('Ep 12: >!Solomon dies!< GG'), 's'), { kind: 'body', text: 'Ep 12: [spoiler] GG', cut: false })
+  assert.deepEqual(crawlerCaption(meta('Ep 12: >!Solomon dies in the final round…'), 's'),
+    { kind: 'body', text: 'Ep 12: [spoiler]…', cut: true }, 'still cut, so the archive may still complete it')
+})
+
+test('A DESCRIPTION THAT SHOWS A SPOILER IN THE CLEAR IS COMPLETED FROM THE ARCHIVE WITH IT MASKED', () => {
+  // The description reads the hidden text plainly; the archive has the markers. Compared with its spoiler
+  // unwrapped, it agrees, and what is shown is the archive's masked text.
+  const crawler = crawlerCaption(meta('The twist: Solomon was the narrator all along, and honestly the board was his memory of the whole match, which nobody saw coming at all…'), 's')
+  const archived = archiveCaption(JSON.stringify({ data: [{ id: 'abc', selftext: 'The twist: >!Solomon was the narrator all along!<, and honestly the board was his memory of the whole match, which nobody saw coming at all. More here.' }] }), 'abc')
+  const picked = pickCaption(crawler, null, archived)
+  assert.equal(picked.source, 'archive')
+  assert.ok(picked.text.startsWith('The twist: [spoiler], and honestly'), picked.text)
+  assert.ok(!picked.text.includes('narrator'))
 })

@@ -202,7 +202,10 @@ whichever comes first, on every platform (`clampText`, `src/render/text.ts`; the
 2026-10-11, replacing 253 characters). A Reddit body is stored up to 4000 characters. A Reddit post
 whose page carries no body (a picture, gallery, video, link or crosspost post) takes it from Reddit's
 crawler page, Reddit's feed, or the Arctic Shift archive, in that order (`src/platforms/reddit/caption.ts`),
-and a body Reddit cut short ends in `…`. A Reddit spoiler is `[spoiler]`, never its text.
+and a body Reddit cut short ends in `…`. A spoiler is `[spoiler]` wherever the source marks it (the
+post page, Reddit's feed, the archive); a short caption read from Reddit's crawler description alone
+shows one as Reddit's own link preview does, in the clear, because Reddit drops the markers there
+(measured on r/Jujutsufolk/comments/1x2vdbg, 2026-10-11).
 
 `deserializePost` validates the ref, the canonical and the date, nothing else. `text` goes out
 through `str()` (`src/render/embed.ts`, applied in `toApiPost`): a cached value of the wrong type is
@@ -573,8 +576,8 @@ half-answer out of any cache in between.
   wall, 360 s on a page mux. So the honest horizon for a cold long video is minutes, not seconds.
 - `pending: true`: a translation lost its race and `text` is the original. The translation is still
   being written; a re-request carries it. Also set when a Reddit link post's linked post (below,
-  [Media urls](#media-urls)) did not load in time and `media` is empty for now; it is still being
-  fetched, and a re-request carries it.
+  [Media urls](#media-urls)) did not load in time, or came back empty without a private or
+  age-restricted wall, and `media` is empty for now; a re-request asks for it again.
 
 Neither is an error. Both clear on their own and an answer that ignores them is still correct. The
 work behind them runs in two different places, which is what sets the horizons above: a translation

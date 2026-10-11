@@ -46,9 +46,22 @@ const HOSTS: Record<string, Platform> = {
 /** The presentation sub-domains the converter strips; `clips.` and `i.` are meaningful and stay. */
 const PRESENTATION = /^(?:www|m|mobile|music|web)\./
 
+/**
+ * PINTEREST'S OWN DOMAINS, spelled out: it runs one per country, and a pattern like `pinterest.*` also
+ * matched pinterest.evil.example, which would let a look-alike link borrow a real pin's picture and vouch for
+ * a destination it does not go to (review, 2026-10-11). Country sub-domains of pinterest.com (br., uk.) are
+ * Pinterest's too. A domain missing here only means a link there gets no picture.
+ */
+const PINTEREST = new Set([
+  'pinterest.com', 'pinterest.co.uk', 'pinterest.ca', 'pinterest.com.au', 'pinterest.de', 'pinterest.fr', 'pinterest.es',
+  'pinterest.it', 'pinterest.pt', 'pinterest.nl', 'pinterest.se', 'pinterest.dk', 'pinterest.at', 'pinterest.ch',
+  'pinterest.ie', 'pinterest.nz', 'pinterest.jp', 'pinterest.co.kr', 'pinterest.com.mx', 'pinterest.cl', 'pinterest.ph',
+  'pinterest.ru',
+])
+
 function platformOf(host: string): Platform | null {
   if (Object.hasOwn(HOSTS, host)) return HOSTS[host]
-  return /(?:^|\.)pinterest\.[a-z.]{2,}$/.test(host) ? 'pn' : null
+  return PINTEREST.has(host) || /^[a-z]{2}\.pinterest\.com$/.test(host) ? 'pn' : null
 }
 
 /**

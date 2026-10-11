@@ -126,6 +126,12 @@ const REDDIT_HOST = /(?:^|\.)(?:reddit\.com|redd\.it|redditmedia\.com|redditstat
  * `crosspost` too: a crosspost's url is its parent's destination (3 of 3 measured), so a crosspost of a
  * YouTube link carries the YouTube url. http(s) only; nothing else is a link a card can name.
  */
+/** The link a page's post points at (linkOf), read straight off the embed page, for the worker's early prewarm. */
+export function redditEmbedLink(html: string): string | undefined {
+  const post = screenview(html)
+  return post ? linkOf(post.type, post.url) : undefined
+}
+
 function linkOf(type: unknown, url: unknown): string | undefined {
   if ((type !== 'link' && type !== 'crosspost') || typeof url !== 'string') return undefined
   let u: URL
@@ -344,13 +350,23 @@ function redditEmbedMedia(html: string, post: Any, gifHead: unknown): Media[] {
  */
 type CaptionBytes = { crawler?: unknown; feed?: unknown; archive?: unknown }
 
-/** The body the caption sources agree on, and which one supplied it (for the counters). */
+/**
+ * The body the caption sources agree on, and which one supplied it (for the counters). Read ONCE per fetch:
+ * liveFetchPost asks for the source and normalizeReddit for the text, from the same bytes, and parsing them
+ * twice doubled the cost of the slowest thing a stranger's post can make this file do.
+ */
+const captionMemo = new WeakMap<object, ReturnType<typeof pickCaption>>()
+
 function captionOf(raw: CaptionBytes | undefined, sub: string, id: string): ReturnType<typeof pickCaption> | null {
   if (!raw || typeof raw !== 'object') return null
+  const known = captionMemo.get(raw)
+  if (known) return known
   const crawler = typeof raw.crawler === 'string' ? crawlerCaption(raw.crawler, sub) : null
   const feed = typeof raw.feed === 'string' ? feedCaption(raw.feed, id) : null
   const archive = typeof raw.archive === 'string' ? archiveCaption(raw.archive, id) : null
-  return pickCaption(crawler, feed, archive)
+  const picked = pickCaption(crawler, feed, archive)
+  captionMemo.set(raw, picked)
+  return picked
 }
 
 /**

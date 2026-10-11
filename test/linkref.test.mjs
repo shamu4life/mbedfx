@@ -58,6 +58,12 @@ test('THE HOST DECIDES THE PLATFORM: a stranger host with a post-shaped path is 
   ]) assert.equal(linkedRef(url), null, url)
 })
 
+test('PINTEREST IS ITS OWN DOMAINS ONLY — a look-alike never borrows a real pin', () => {
+  assert.deepEqual(linkedRef('https://br.pinterest.com/pin/123456789/'), { p: 'pn', id: '123456789' })
+  for (const url of ['https://pinterest.evil.example/pin/123456789/', 'https://pinterest.com.evil.example/pin/123456789/',
+    'https://foo.pinterest.phish/pin/123456789/', 'https://notpinterest.com/pin/123456789/']) assert.equal(linkedRef(url), null, url)
+})
+
 test('A URL THAT DISAGREES WITH ITS HOST IS NOTHING — the router must name the host\'s platform', () => {
   assert.equal(linkedRef('https://www.youtube.com/jack/status/20'), null, 'a tweet path on youtube.com')
   assert.equal(linkedRef('https://x.com/watch?v=6j7bugx2hvk'), null, 'a watch path on x.com')

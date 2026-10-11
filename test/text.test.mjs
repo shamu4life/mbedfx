@@ -458,6 +458,22 @@ test('A CUT NEVER SPLITS AN EMOJI — no lone surrogate reaches the card', () =>
   assert.equal(body, 'a'.repeat(496), 'the half emoji is dropped, not shipped')
 })
 
+test('A CUT NEVER SPLITS A FLAG OR AN EMOJI SEQUENCE — it backs off to a whole grapheme', () => {
+  // Review, 2026-10-11: a surrogate check alone left one regional-indicator letter of a flag, or part of a
+  // ZWJ family, at the end of the card.
+  for (const [pad, tail] of [[495, '\u{1F1FA}\u{1F1F8}'.repeat(5)], [490, '\u{1F468}\u200d\u{1F469}\u200d\u{1F467}\u200d\u{1F466}'.repeat(3)]]) {
+    const plain = buildPlainText({ ...cap, text: 'a'.repeat(pad) + tail })
+    assert.equal(plain.slice(0, -3), 'a'.repeat(pad), `no partial grapheme after ${pad} letters: ${JSON.stringify(plain.slice(pad))}`)
+  }
+})
+
+test('TRAILING BLANK LINES ARE NOT BODY — a complete post is never marked as cut', () => {
+  // Lemmy stores a body with a final newline. Counted as a line, it tipped an exactly-ten-line post over.
+  const text = Array.from({ length: 10 }, (_, i) => `line ${i + 1}`).join('\n') + '\n\n'
+  assert.ok(!buildPlainText({ ...cap, text }).includes('...'), 'ten lines and a trailing newline pass through')
+  assert.ok(!buildPlainText({ ...cap, text: 'q'.repeat(499) + '\n\n' }).includes('...'), 'so do 499 characters and one')
+})
+
 test('A CAPPED TRANSLATION KEEPS THE ENGLISH, because translation puts it first', () => {
   /**
    * The consequence of capping AFTER translation, stated as a test so it is a decision rather than

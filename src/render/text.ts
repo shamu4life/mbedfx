@@ -41,16 +41,39 @@ import { byline, str } from './embed.ts'
  * link dumps and timestamp lists rather than bounding length. At 300 it binds before this one again
  * since the cap moved to 500, so a long YouTube description is shortened by paragraph there first.
  *
- * NEVER HALF A CHARACTER: a cut that lands between the two halves of a surrogate pair (an emoji, most
- * CJK extension characters) drops the orphaned high half rather than shipping a lone surrogate, which
- * JSON carries as an escape and a client draws as a replacement box.
+ * NEVER HALF A CHARACTER: a cut backs off to the last whole grapheme (Intl.Segmenter, which the Workers
+ * runtime has), so a flag is never left as one regional-indicator letter, a ZWJ family as part of one,
+ * or a surrogate pair as its high half, which JSON carries as an escape and a client draws as a box.
+ *
+ * TRAILING WHITESPACE IS NOT BODY: a body that ends in blank lines (Lemmy stores one with a final newline)
+ * is measured without them, so a complete body is never marked as cut, and is returned exactly as it came
+ * when it fits.
  */
 export const DESC_MAX = 500
 export const DESC_MAX_LINES = 10
 const ELLIPSIS = '...'
+const GRAPHEMES = typeof Intl !== 'undefined' && typeof Intl.Segmenter === 'function'
+  ? new Intl.Segmenter('en', { granularity: 'grapheme' })
+  : null
+
+/** `s` cut to at most `limit` UTF-16 units, at a grapheme boundary. */
+function cutAt(s: string, limit: number): string {
+  if (GRAPHEMES) {
+    let end = 0
+    for (const { index, segment } of GRAPHEMES.segment(s)) {
+      if (index + segment.length > limit) break
+      end = index + segment.length
+    }
+    return s.slice(0, end)
+  }
+  const out = s.slice(0, limit)
+  const last = out.charCodeAt(out.length - 1)
+  return last >= 0xd800 && last <= 0xdbff ? out.slice(0, -1) : out
+}
 
 export function clampText(s: string): string {
-  let out = normalizeBreaks(s)
+  const whole = normalizeBreaks(s)
+  let out = whole.trimEnd()
   let cut = false
   const lines = out.split('\n')
   if (lines.length > DESC_MAX_LINES) {
@@ -60,13 +83,10 @@ export function clampText(s: string): string {
     cut = true
   }
   if (out.length > (cut ? DESC_MAX - ELLIPSIS.length : DESC_MAX)) {
-    out = out.slice(0, DESC_MAX - ELLIPSIS.length)
-    const last = out.charCodeAt(out.length - 1)
-    if (last >= 0xd800 && last <= 0xdbff) out = out.slice(0, -1)
-    out = out.trimEnd()
+    out = cutAt(out, DESC_MAX - ELLIPSIS.length).trimEnd()
     cut = true
   }
-  return cut ? out + ELLIPSIS : out
+  return cut ? out + ELLIPSIS : whole
 }
 
 /**

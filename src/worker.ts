@@ -40,7 +40,7 @@ import { fetchReddit, resolveRedditShareUrl } from './platforms/reddit/fetch.ts'
 import { modelInput, sourceLanguage, translateBest, withTranslation } from './translate.ts'
 import { displayName } from './render/chooser.ts'
 import { metaPlatformOf, resolveMetaShare, stripMetaTracking } from './platforms/metashare/fetch.ts'
-import { normalizeReddit, redditCaptionSource } from './platforms/reddit/normalize.ts'
+import { normalizeReddit, redditCaptionSource, redditEmbedLink } from './platforms/reddit/normalize.ts'
 import { linkedRef } from './linkref.ts'
 import { fetchYouTube, ytPageUrl } from './platforms/youtube/fetch.ts'
 import { ytDescriptionOf } from './platforms/youtube/description.ts'
@@ -286,6 +286,28 @@ export async function liveFetchProfile(
       return raw ? normalizeBlueskyProfile(raw, ref) : null
     }
   }
+}
+
+/**
+ * A REDDIT LINK POST'S YOUTUBE MUX, STARTED THE MOMENT THE EMBED PAGE NAMES THE LINK — before the caption
+ * lookup and the linked load, which together can take three more seconds. A promised video has to finish
+ * muxing inside Discord's one ~10 s window from the head fetch, so every second of head start counts (4 of
+ * 139 yt muxes finish within 5 s, 23 within 9 s). Review, 2026-10-11, after the first version prewarmed
+ * from the render instead: late, and on seams a direct paste never prewarms from.
+ *
+ * Runs once per Reddit post-cache miss, which bounds it the way the head's T0 prewarm is bounded. yt only,
+ * under the same rule renderPostRoute's prewarm gives yt (no post-cache gate: the id is a real link from a
+ * Reddit post that just loaded, and normalizeYouTube vouches for any id) and the same SPECULATIVE_MUX_CAP.
+ * Never throws: fetch.ts swallows a throw, but this cannot produce one to begin with on a bad page.
+ */
+function prewarmLinked(html: string, env: Env, ctx: ExecutionContext | undefined): void {
+  if (!ctx || !env.MEDIA_RESOLVER || !env.MEDIA_CACHE || muxInflight.size >= SPECULATIVE_MUX_CAP) return
+  const ref = linkedRef(redditEmbedLink(html))
+  const pre = ref?.p === 'yt' ? prewarmable(ref) : null
+  if (!ref || !pre) return
+  const key = `mux/${refKey(ref)}/${pre.index}`
+  ctx.waitUntil(scheduleMux(env, key, refKey(ref), pre.source))
+  ctx.waitUntil(muxOnce(env, key, pre.source, refKey(ref), jarPlatform(ref)).catch(() => null))
 }
 
 /** caption.ts's source names, as the analytics outcomes that count them (analytics.ts body_*). */
@@ -685,7 +707,7 @@ export async function liveFetchPost(
       // app creds happen to be set. The embed surface can't tell a private sub from a missing post
       // (both are the not-found shell), so a removed/private/deleted post is a null Post -> the generic
       // "couldn't load"; the 'private' -> 🔒 gate only fires on the OAuth fallback.
-      const got = await fetchReddit(ref, env)
+      const got = await fetchReddit(ref, env, html => prewarmLinked(html, env, ctx))
       if (!got.ok) {
         count(env, 'rd', got.reason, client)
         if (got.reason === 'private' && report) report.reason = 'private'
@@ -2319,6 +2341,14 @@ async function settleMux(
    * the safety valve, and `promised` in the return for the cache rule.
    */
   mode: 'wait' | 'promise' = 'wait',
+  /**
+   * THE PLATFORM WHOSE CARD THIS IS, when that is not the post being settled: a Reddit card settling the
+   * YouTube post it links to. Only `card_degraded` reads it, because that row is half of a per-platform
+   * ratio whose other half (`ok`) the route counts under the card's own platform; filed under the linked
+   * one, Reddit traffic inflated that platform's first-paste failure rate (review, 2026-10-11).
+   * `card_promised` stays with the video, where its funnel partner `video_ok` is counted.
+   */
+  countAs?: Platform,
 ): Promise<{ post: Post; degraded: boolean; promised: boolean }> {
   if (!env.MEDIA_RESOLVER || !env.MEDIA_CACHE) return { post, degraded: false, promised: false }
   const own = Array.isArray(post.media) ? post.media : []
@@ -2513,7 +2543,7 @@ async function settleMux(
       promised = true
       return m
     }
-    count(env, post.ref.p, 'card_degraded', client)
+    count(env, countAs ?? post.ref.p, 'card_degraded', client)
     degraded = true
     const still = stillOf(m)
     // The HEAD's still carries the mark the spoof head reads to stand the stock player down and keep
@@ -4720,7 +4750,8 @@ async function describeTarget(
   const link = await linkedFor(got.post, d, env, client, ctx, META_TIMEOUT_API_MS - (Date.now() - started))
   const media = link.linked ? tagLinked(link.linked) : got.post
   const [settled, xlate] = await Promise.all([
-    settleMux(media, env, ctx, Math.max(MUX_WAIT_FLOOR_MS, CARD_DEADLINE_MS - (Date.now() - started)), client),
+    settleMux(media, env, ctx, Math.max(MUX_WAIT_FLOOR_MS, CARD_DEADLINE_MS - (Date.now() - started)), client,
+      'wait', link.linked ? got.post.ref.p : undefined),
     // The ORIGINAL post, not the settled one: the mux replaces media urls and never touches `text`,
     // so there is nothing to wait for. Same ordering the activity arm uses.
     withTranslated(
@@ -5003,35 +5034,42 @@ function toApiPost(post: Post, origin: string) {
  * matching his rejection of that player as an end state. The stock gate stays keyed on a YouTube REF,
  * and this card's ref is Reddit's, so it never fires here.
  */
-const NO_LINK = { linked: null, pending: false } as const
+const NO_LINK = { linked: null, pending: false, attempted: false } as const
 
+/**
+ * `pending` means THE CARD IS MISSING LINKED MEDIA THAT MAY STILL ARRIVE, and every caller treats it the way
+ * it treats a degraded card: not response-cached, and `pending` on the JSON surfaces. Two causes, both
+ * reviewed 2026-10-11: the linked load missed this render's budget, or it came back empty without a wall.
+ * A direct paste never caches a failure (loadPost does not cache a null, the failure card is not cached),
+ * and a null here is the same unknown — a decoy, a refused guest token, our own meta deadline — so caching
+ * the media-less Reddit card would pin it for RESP_TTL after the upstream recovered. Only a wall
+ * (`failReason`, private or age) is final. `attempted` is whether a link was followed at all, for budgets.
+ *
+ * NO PREWARM HERE, deliberately (review, 2026-10-11): this runs on the activity document, /_card, /_api/v1
+ * and the d. link too, none of which a direct paste prewarms from, and a prewarm before the entry is known
+ * dispatched a doomed mux (a live, age-gated or over-long video) on every one of their requests. The
+ * linked mux is prewarmed once per Reddit post-cache miss instead, as soon as the embed page names the
+ * link (liveFetchPost's rd arm), which is also earlier than anything here could start it.
+ */
 async function linkedFor(
   post: Post, d: Deps, env: Env, client: ClientClass, ctx: ExecutionContext, budgetMs: number,
-): Promise<{ linked: Post | null; pending: boolean }> {
+): Promise<{ linked: Post | null; pending: boolean; attempted: boolean }> {
   if (post.ref.p !== 'rd') return NO_LINK
   const ref = linkedRef(post.link)
   if (!ref) return NO_LINK
-  /**
-   * THE T0 PREWARM, for the linked ref, under renderPostRoute's own gates (read the comments there): a
-   * yt page is dispatched at once, anything else only once the post cache has vouched for it, and never
-   * past SPECULATIVE_MUX_CAP. It overlaps the linked fetch below, which is the whole point of it.
-   */
-  const pre = env.MEDIA_RESOLVER && env.MEDIA_CACHE ? prewarmable(ref) : null
-  if (pre && muxInflight.size < SPECULATIVE_MUX_CAP && (ref.p === 'yt' || await d.cache.match(cacheUrl(postCacheKey(ref))))) {
-    const preKey = `mux/${refKey(ref)}/${pre.index}`
-    ctx.waitUntil(scheduleMux(env, preKey, refKey(ref), pre.source))
-    ctx.waitUntil(muxOnce(env, preKey, pre.source, refKey(ref), jarPlatform(ref)).catch(() => null))
-  }
+  // ONE budget for the race and for the load's own meta deadline: given less than the race, the meta
+  // deadline fired first and our own timeout came back as a null, which read as a final link_fail.
+  const budget = Math.max(MUX_WAIT_FLOOR_MS, budgetMs)
   // Kept alive past a lost deadline so the post cache is warm for the next render, which is then whole.
-  const work = getPost(ref, d, env, client, ctx, budgetMs)
+  const work = getPost(ref, d, env, client, ctx, budget)
   ctx.waitUntil(work.then(() => undefined, () => undefined))
-  const got = await deadline(work, Math.max(MUX_WAIT_FLOOR_MS, budgetMs))
+  const got = await deadline(work, budget)
   if (!got) {
     count(env, 'rd', 'link_pending', client)
-    return { linked: null, pending: true }
+    return { linked: null, pending: true, attempted: true }
   }
   count(env, 'rd', got.post ? 'link_ok' : 'link_fail', client)
-  return { linked: got.post, pending: false }
+  return { linked: got.post, pending: !got.post && !got.failReason, attempted: true }
 }
 
 /** The linked post with each entry tagged with where it lives (Media.via), ready for settleMux. */
@@ -5180,11 +5218,17 @@ async function renderPostRoute(
     // spent on the video fetch the document is about to promise. The floor still catches a warm mux
     // (one R2 head). Every other yt state keeps the wait it had, so the stock and gated cards are
     // byte-for-byte what they were. `media.ref`, not `ref`: on a Reddit link post the video is YouTube's.
+    //
+    // A REDDIT CARD'S BORROWED VIDEO TAKES THE FLOOR TOO, whatever its promisability (review, 2026-10-11):
+    // the wait could only make the head later, never better. The stock-head reason above cannot apply (the
+    // stock gate is keyed on a yt REF, and this card's ref is Reddit's), a cold mux started at the embed
+    // fetch cannot land inside the head (0 of 139 inside 1500 ms), and Discord draws this card from the
+    // activity document anyway. Measured on a stubbed harness: heads of 5.0 s fell to 3.0-4.6 s.
     settleMux(media, env, ctx,
-      media.ref.p === 'yt' && Array.isArray(media.media) && media.media.some(m => m?.remux?.page && promisable(m))
+      link.linked || (media.ref.p === 'yt' && Array.isArray(media.media) && media.media.some(m => m?.remux?.page && promisable(m)))
         ? MUX_WAIT_FLOOR_MS
         : Math.max(MUX_WAIT_FLOOR_MS, Math.min(MUX_WAIT_BOT_MS, HTML_DEADLINE_MS - (Date.now() - started))),
-      client),
+      client, 'wait', link.linked ? post.ref.p : undefined),
     // The pre-mux post: the mux rewrites media urls and never touches `text`.
     withTranslated(
       post, env, ctx,
@@ -5978,6 +6022,9 @@ async function serve(req: Request, env: Env, ctx: ExecutionContext, d: Deps): Pr
       // route's `client === 'human'` redirect here would 302 Discord's own callback the day
       // its UA stopped matching, and these endpoints have no human-facing page to redirect
       // to anyway — the ref is the whole route, there is no canonical in it.
+      // Taken before the post is loaded, so a composed Reddit card's budgets below are a deadline on the
+      // whole document: a cold Reddit fetch here shrinks them instead of stacking on them.
+      const armStarted = Date.now()
       const { post, cached } = await getPost(r.ref, d, env, client, ctx)
       // Counted before the null check, like media: this measures whether the request cost an
       // upstream fetch, not whether it succeeded. Keying it on success would hide the very
@@ -6084,21 +6131,25 @@ async function serve(req: Request, env: Env, ctx: ExecutionContext, d: Deps): Pr
        * A REDDIT LINK POST BORROWS ITS LINKED POST'S MEDIA HERE TOO (linkedFor), because this is the
        * document Discord draws a media card from: composed on the head alone, the player would be
        * advertised there and missing here. The linked post is normally warm by now (the head loaded it a
-       * moment ago); cold, it gets YT_META_BOT_MS. Then every arm below is cut to what is left of
-       * YT_MUX_BOT_MS from the start of this arm, so a composed document ends no later than a direct
-       * YouTube one does. A post with no link pays nothing: `left` is Infinity and every budget is as it was.
+       * moment ago). Both its load and every arm below are cut to what is left of a budget measured from
+       * the top of this arm, the Reddit post's own load included (review, 2026-10-11: a cold colo stacked
+       * a ~2 s Reddit fetch, a ~1.75 s linked load and a fresh 4 s mux wait into a 6 s document). Its load
+       * gets what is left of YT_META_BOT_MS, the arms what is left of YT_MUX_BOT_MS, so a composed document
+       * ends about when a direct YouTube one would. `left` applies whenever a link was followed, whatever
+       * came of it. A post with no link pays nothing: `left` is Infinity and every budget is as it was.
        * oEmbed reads the author and the canonical only, so it does not compose.
        */
-      const armStarted = Date.now()
-      const link = r.kind === 'activity' ? await linkedFor(post, d, env, client, ctx, YT_META_BOT_MS) : NO_LINK
+      const link = r.kind === 'activity'
+        ? await linkedFor(post, d, env, client, ctx, YT_META_BOT_MS - (Date.now() - armStarted))
+        : NO_LINK
       const media = link.linked ? tagLinked(link.linked) : post
-      const left = link.linked || link.pending ? Math.max(MUX_WAIT_FLOOR_MS, YT_MUX_BOT_MS - (Date.now() - armStarted)) : Infinity
+      const left = link.attempted ? Math.max(MUX_WAIT_FLOOR_MS, YT_MUX_BOT_MS - (Date.now() - armStarted)) : Infinity
       const promising = YT_PROMISE && r.kind === 'activity' && media.ref.p === 'yt'
         && Array.isArray(media.media) && media.media.some(m => m?.remux?.page && promisable(m))
       const muxBudget = Math.min(left,
         promising ? MUX_WAIT_FLOOR_MS : r.kind === 'activity' && media.ref.p === 'yt' ? YT_MUX_BOT_MS : botBudget)
       const [settledApi, meta, xlate] = await Promise.all([
-        settleMux(media, env, ctx, muxBudget, client, promising ? 'promise' : 'wait'),
+        settleMux(media, env, ctx, muxBudget, client, promising ? 'promise' : 'wait', link.linked ? post.ref.p : undefined),
         r.kind === 'activity' ? deadline(youtubeMeta(r.ref, post, env, ctx), Math.min(left, promising ? MUX_WAIT_FLOOR_MS : YT_META_BOT_MS)) : null,
         r.kind === 'activity' ? translationFor(post, env, ctx, Math.min(left, promising ? MUX_WAIT_FLOOR_MS : botBudget)) : null,
       ])

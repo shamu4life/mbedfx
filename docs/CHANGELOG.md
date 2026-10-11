@@ -76,8 +76,11 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 - **Reddit bodies read the way Reddit shows them.** Paragraphs, line breaks, numbered and bulleted
   lists and table rows keep their shape, Reddit's template indentation is gone, and a spoiler is
-  `[spoiler]`, never its text. Markdown from the OAuth fallback and the archive is converted the same
-  way. The Reddit normalizer stores up to 4000 characters; the card's cut is the one above.
+  `[spoiler]` wherever Reddit marks it, a spoiler across a line break included. Reddit's crawler
+  description does not mark spoilers (measured), so a short caption read from it alone shows one as
+  Reddit's own preview does. Markdown from the OAuth fallback and the archive is converted the same
+  way. Both converters are linear and bounded, so a stranger's 40,000-character post costs
+  milliseconds. The Reddit normalizer stores up to 4000 characters; the card's cut is the one above.
 
 - **`/_api/v1` and `/_card` publish a GIF as `"image"`, not `"video"`.** An entry whose bytes are an
   animated `.gif` (Reddit GIF posts, Reddit `image` posts with a `.gif`, Misskey GIFs) was published as

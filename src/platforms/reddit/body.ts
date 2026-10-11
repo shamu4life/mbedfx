@@ -12,7 +12,19 @@
  * Reddit's template whitespace survived as four newlines plus indentation per paragraph (production
  * /_api/v1 showed `\n    \n\n\n      ` inside a body), a `<br>` vanished and glued two sentences
  * together, list items ran into one line, and a spoiler's text was shown in the clear.
+ *
+ * LINEAR, AND BOUNDED, BECAUSE THE INPUT IS A STRANGER'S. A first version trimmed trailing spaces with
+ * `buf.replace(/[ \t]+$/, '')` over the whole growing buffer at every block, which V8 backtracks through
+ * quadratically: a 7.6K-character body with a long space run inside a code block took 29.7 s of CPU in
+ * workerd (adversarial review, 2026-10-11), where the extraction it replaced took 2 ms. Every trim here is
+ * now a loop over the tail, and each converter stops once it has more text than anything downstream keeps.
  */
+
+/**
+ * THE MOST TEXT EITHER CONVERTER PRODUCES: above the normalizer's 4000-character storage bound, so a body
+ * that long is still seen as cut there and marked, and far above the card's 500. Work past it is discarded.
+ */
+export const BODY_CONVERT_MAX = 6000
 
 /**
  * THE NAMED ENTITIES REDDIT'S PAGES AND FEEDS USE, plus the punctuation ones a body can carry. Numeric
@@ -21,9 +33,10 @@
  */
 const NAMED: Record<string, string> = {
   amp: '&', lt: '<', gt: '>', quot: '"', apos: "'", nbsp: ' ', hellip: '…', mdash: '—', ndash: '–',
-  lsquo: '‘', rsquo: '’', ldquo: '“', rdquo: '”', bull: '•', middot: '·', laquo: '«', raquo: '»',
-  copy: '©', reg: '®', trade: '™', deg: '°', times: '×', divide: '÷', euro: '€', pound: '£', cent: '¢',
-  yen: '¥', sect: '§', para: '¶', shy: '', zwj: '‍', zwnj: '‌',
+  lsquo: '‘', rsquo: '’', ldquo: '“', rdquo: '”', bull: '•', middot: '·', laquo: '«',
+  raquo: '»', copy: '©', reg: '®', trade: '™', deg: '°', times: '×', divide: '÷',
+  euro: '€', pound: '£', cent: '¢', yen: '¥', sect: '§', para: '¶', shy: '',
+  zwj: '\u200d', zwnj: '\u200c',
 }
 
 export function decodeEntities(s: string): string {
@@ -40,13 +53,14 @@ export function decodeEntities(s: string): string {
  * Characters a body must not carry into a card: zero-width spaces (Reddit's `&#x200B;` paragraph filler),
  * the BOM, and the C0 controls other than newline and tab. ZWJ is kept; it is part of emoji sequences.
  */
-const INVISIBLE = /[​﻿\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g
+const INVISIBLE = /[\u200b\ufeff\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g
 
 /**
- * A SPOILER IS REPLACED, NEVER SHOWN. Reddit hides `>!text!<` behind a click; a card has no click, so
- * the honest rendering is a marker that says something is hidden. rtjson spells it `<shreddit-spoiler>`
- * (measured on r/anime/comments/1x2om7u, 2026-10-11) and the feed's old renderer `<span
- * class="md-spoiler-text">`.
+ * A SPOILER IS REPLACED, NEVER SHOWN, wherever the source marks it. Reddit hides `>!text!<` behind a click;
+ * a card has no click, so the honest rendering is a marker that says something is hidden. rtjson spells it
+ * `<shreddit-spoiler>` (measured on r/anime/comments/1x2om7u, 2026-10-11), the feed's old renderer `<span
+ * class="md-spoiler-text">`, and markdown `>!…!<`. caption.ts says what happens on the one source that does
+ * not mark spoilers at all.
  */
 export const SPOILER_MARK = '[spoiler]'
 
@@ -60,7 +74,18 @@ const BLOCK = new Set(['h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'blockquote', 'table'
  */
 const TOKEN = /<!--[\s\S]*?-->|<(\/?)([a-zA-Z][a-zA-Z0-9-]*)((?:[^>"']|"[^"]*"|'[^']*')*)>|([^<]+)|</g
 
-export function redditHtmlToText(html: string): string {
+/** `s` without its trailing spaces and tabs, by walking back from the end: linear, unlike `/[ \t]+$/`. */
+function trimTail(s: string): string {
+  let e = s.length
+  while (e > 0) {
+    const c = s.charCodeAt(e - 1)
+    if (c !== 32 && c !== 9) break
+    e--
+  }
+  return e === s.length ? s : s.slice(0, e)
+}
+
+export function redditHtmlToText(html: string, max = BODY_CONVERT_MAX): string {
   let buf = ''
   // The break owed before the next text: 0 none, 1 a line break, 2 a blank line. Owed rather than
   // written so a closing tag followed by an opening one cannot stack two separators.
@@ -72,12 +97,14 @@ export function redditHtmlToText(html: string): string {
   let cell = 0
 
   const owe = (n: number) => { if (buf) pend = Math.max(pend, n) }
+  /** Pay the owed break, if any. */
+  const flush = () => {
+    if (pend && buf) buf = trimTail(buf) + (pend === 2 ? '\n\n' : '\n')
+    pend = 0
+  }
   const write = (s: string, raw = false) => {
     if (!s) return
-    if (pend && buf) {
-      buf = buf.replace(/[ \t]+$/, '') + (pend === 2 ? '\n\n' : '\n')
-    }
-    pend = 0
+    flush()
     // No leading space at the start of a line, and none after a space already written (a list marker,
     // a table separator, the space between two inline elements): Reddit pads every <p> with its template
     // indentation, which would otherwise read "1.  ASRock" and "99203  | 99204".
@@ -88,6 +115,7 @@ export function redditHtmlToText(html: string): string {
   }
 
   for (const t of html.matchAll(TOKEN)) {
+    if (buf.length > max) break
     const [, close, rawName, attrs, text] = t
     if (text !== undefined || t[0] === '<') {
       if (skip) continue
@@ -135,7 +163,7 @@ export function redditHtmlToText(html: string): string {
       case 'ul':
       case 'ol':
         if (!closing) {
-          owe(lists.length ? 1 : 2)
+          if (!liOpen) owe(lists.length ? 1 : 2)
           const start = Number((/\bstart="?(\d+)/.exec(attrs) || [])[1])
           lists.push({ ordered: name === 'ol', n: Number.isFinite(start) && start > 0 ? start : 1 })
         } else {
@@ -153,7 +181,10 @@ export function redditHtmlToText(html: string): string {
         }
         break
       case 'pre':
-        owe(2)
+        // Right after a list marker, a block is the item's own text: no break, or the marker would sit
+        // alone on its line ("•\n\nquoted"). Inside a list, a block ends with a line break, not a blank
+        // line, so the next item follows on the next line.
+        if (!liOpen) owe(lists.length ? 1 : 2)
         pre += closing ? -1 : 1
         if (pre < 0) pre = 0
         break
@@ -163,14 +194,18 @@ export function redditHtmlToText(html: string): string {
       case 'td':
       case 'th':
         if (!closing) {
-          if (cell > 0 && !pend) { buf = buf.replace(/[ \t]+$/, ''); write(' | ', true) }
+          // Every cell after the first is preceded by a bar, empty cells included, so a row whose first
+          // cell is blank keeps its columns: the measured r/excel table's header row starts with one.
+          if (cell > 0) {
+            if (pend) { flush(); buf += '| ' } else { buf = trimTail(buf) + ' | ' }
+          }
           cell++
         }
         break
       case 'img':
         break
       default:
-        if (BLOCK.has(name)) owe(2)
+        if (BLOCK.has(name) && !(liOpen && !closing)) owe(lists.length ? 1 : 2)
     }
   }
   return tidy(buf)
@@ -179,9 +214,37 @@ export function redditHtmlToText(html: string): string {
 /** Trailing spaces off every line, at most one blank line in a row, and no blank lines at either end. */
 function tidy(s: string): string {
   return s
-    .split('\n').map(l => l.replace(/[ \t]+$/, '')).join('\n')
+    .split('\n').map(l => l.trimEnd()).join('\n')
     .replace(/\n{3,}/g, '\n\n')
     .trim()
+}
+
+/**
+ * EVERY SPOILER IN A MARKDOWN BODY, as one pass over the whole text and BEFORE it is split into lines: a
+ * spoiler may span a line break (`>!Solomon was the narrator\nall along!<`), and a per-line pattern saw
+ * neither line as holding one (adversarial review, 2026-10-11). A spoiler never crosses a blank line, as in
+ * Reddit's renderer; one left open (a typo, or a body cut short) is masked to the end of its paragraph,
+ * because masking too much is the safe direction. Linear: each opener is consumed with what it hides.
+ *
+ * `unwrap` keeps the hidden text and drops only the markers, for caption.ts's comparison with Reddit's
+ * description, which shows a spoiler's text without its markers (measured, r/Jujutsufolk/comments/1x2vdbg).
+ */
+export function maskSpoilers(md: string, unwrap = false): string {
+  let out = ''
+  let at = 0
+  for (;;) {
+    const open = md.indexOf('>!', at)
+    if (open < 0) return out + md.slice(at)
+    const close = md.indexOf('!<', open + 2)
+    const para = /\n[ \t]*\n/g
+    para.lastIndex = open + 2
+    const blank = para.exec(md)
+    const paraEnd = blank ? blank.index : md.length
+    const end = close >= 0 && close < paraEnd ? close : -1
+    const hidden = md.slice(open + 2, end >= 0 ? end : paraEnd)
+    out += md.slice(at, open) + (unwrap ? hidden : SPOILER_MARK)
+    at = end >= 0 ? end + 2 : paraEnd
+  }
 }
 
 /**
@@ -193,16 +256,22 @@ function tidy(s: string): string {
  *
  * A single newline is a line break, as new Reddit renders it (`<br>` in the rtjson of r/tifu/1x2pjzx),
  * and a blank line a paragraph break.
+ *
+ * BOUNDED: only the first BODY_CONVERT_MAX characters are converted, and a body that was longer ends in
+ * `…` so it can never be presented as whole. Several inline patterns rescan a line once per unclosed
+ * opener, which the bound keeps to milliseconds; on a 40,000-character line it was seconds.
  */
-export function redditMarkdownToText(md: string): string {
-  const lines = decodeEntities(md.replace(/\r\n?/g, '\n')).replace(INVISIBLE, '').split('\n')
+export function redditMarkdownToText(md: string, opts: { spoilers?: 'mask' | 'unwrap' } = {}): string {
+  const cut = md.length > BODY_CONVERT_MAX
+  const src = maskSpoilers(decodeEntities((cut ? md.slice(0, BODY_CONVERT_MAX) : md).replace(/\r\n?/g, '\n')).replace(INVISIBLE, ''),
+    opts.spoilers === 'unwrap')
   const out: string[] = []
   let fence = false
-  for (const raw of lines) {
+  for (const raw of src.split('\n')) {
     if (/^\s*(```|~~~)/.test(raw)) { fence = !fence; continue }
-    if (fence) { out.push(raw.replace(/\s+$/, '')); continue }
+    if (fence) { out.push(raw.trimEnd()); continue }
     // Escaped characters are set aside first, so `\*` can never open emphasis, and restored last.
-    let l = raw.replace(/\\([\\`*_{}[\]()#+\-.!>~^|])/g, (_, c: string) => String.fromCharCode(0xe000 + c.charCodeAt(0)))
+    let l = raw.replace(/\\([\\`*_{}[\]()#+\-.!>~^|])/g, (_, c: string) => String.fromCharCode(PARKED + c.charCodeAt(0)))
     // A table's alignment row (`|---|:--:|`) carries nothing; its cells become " | "-joined text.
     if (/^[\s|:-]+$/.test(l) && l.includes('|') && (l.match(/-/g) || []).length >= 3) continue
     if (/^\s*([-*_])(\s*\1){2,}\s*$/.test(l)) { out.push(''); continue }
@@ -211,18 +280,22 @@ export function redditMarkdownToText(md: string): string {
     l = l.replace(/^(\s*)[-*+]\s+/, (_, sp: string) => `${indent(sp)}• `)
     l = l.replace(/^(\s*)(\d{1,9})[.)]\s+/, (_, sp: string, n: string) => `${indent(sp)}${n}. `)
     if (/^\s*\|.*\|\s*$/.test(l)) l = l.trim().replace(/^\||\|$/g, '').split('|').map(c => c.trim()).join(' | ')
-    out.push(inline(l).replace(/[-]/g, c => String.fromCharCode(c.charCodeAt(0) - 0xe000)))
+    out.push(inline(l).replace(PARKED_RE, c => String.fromCharCode(c.charCodeAt(0) - PARKED)))
   }
-  return tidy(out
+  const text = tidy(out
     .map(l => l.replace(/^(\s*)>+\s?/, '$1'))
     .map(l => (/^\s*(?:•|\d+\. )/.test(l) ? l : l.replace(/^\s+/, '')))
     .join('\n'))
+  return cut && text ? `${text}…` : text
 }
 
-/** Inline markdown to text: spoilers masked, links to their text, emphasis dropped. */
+/** Where an escaped ASCII character waits out the inline pass: the Private Use Area, U+E000 + its code. */
+const PARKED = 0xe000
+const PARKED_RE = /[\ue000-\ue07f]/g
+
+/** Inline markdown to text: links to their text, emphasis dropped. Spoilers are already masked. */
 function inline(l: string): string {
   return l
-    .replace(/>!([\s\S]*?)!</g, SPOILER_MARK)
     .replace(/!\[[^\]]*\]\([^)]*\)/g, '')
     .replace(/\[([^\]]*)\]\([^)\s]*(?:\s+"[^"]*")?\)/g, '$1')
     .replace(/<((?:https?:\/\/|www\.)[^>\s]+)>/g, '$1')
