@@ -471,6 +471,21 @@ export type Media = {
    * activity link (src/render/discord.ts). Transient like `posterOnly`: never persisted.
    */
   pendingMux?: true
+  /**
+   * "THIS ENTRY IS ANOTHER POST'S MEDIA, AND ITS BYTES ARE AT THAT POST'S /_media/ URL."
+   *
+   * Set by exactly one function, worker.ts tagLinked, at RENDER time, on the entries a Reddit link post
+   * borrows from the post it links to (Post.link). render/embed.ts mediaUrl reads it, so every url any
+   * head, the API or the converter mints for the entry names `ref`'s key and `index`, and the /_media/
+   * route, the mux, its R2 object and the cookie pool all see the linked post exactly as a direct paste
+   * of its url would. The borrowing post's own key is never used for it, so no url under that key ever
+   * changes kind.
+   *
+   * Never persisted: composition runs after the post cache is written, on a copy. A cached entry that
+   * somehow carries it is still only read through mediaUrl, which mints a url the /_media/ route parses
+   * through the same refKey allowlist as any other.
+   */
+  via?: { ref: PostRef; index: number }
 }
 
 /**
@@ -544,6 +559,14 @@ export type Post = {
    */
   title?: string
   text: string
+  /**
+   * THE URL A LINK POST POINTS AT — a Reddit post whose content is a YouTube video, a tweet, a clip.
+   * Set by the Reddit normalizer only, from what the poster submitted, and never by anything a renderer
+   * draws: the worker reads it at render time (src/linkref.ts linkedRef, worker.ts composeLinked) to give
+   * the card the LINKED post's own media under the linked post's own /_media/ key. Untrusted: it comes
+   * from whoever posted, so it reaches a fetcher only as a ref route() minted for a fixed-origin platform.
+   */
+  link?: string
   createdAt: Date
   media: Media[]
   counts: { likes?: number; reposts?: number; replies?: number; views?: number }

@@ -571,14 +571,14 @@ test('A WALL OF TEXT WITH NO BLANK LINE IS STILL BOUNDED', async () => {
   const run = (content.match(/x+/) || [''])[0]
   /**
    * REWRITTEN 2026-08-03. This asserted a 300-character bound and a '…', which were YT_DESC_MAX's.
-   * A cap now applies to EVERY platform's body at render (DESC_MAX = 253, render/text.ts), and it is
-   * tighter — so YouTube's own clamp no longer decides what reaches a card, and its marker never
-   * surfaces. YT_DESC_MAX still exists and still matters: it bounds what is STORED IN R2 for 30 days.
+   * A cap now applies to EVERY platform's body at render (DESC_MAX, render/text.ts). It was 253 and
+   * tighter than YouTube's own clamp; since 2026-10-11 it is 500, so YT_DESC_MAX's 300 decides again,
+   * which is why the bound below is 300. YT_DESC_MAX also bounds what is STORED IN R2 for 30 days.
    *
    * The rule this test exists for is unchanged — a 5000-character wall must not reach a card whole,
    * and must say it was cut rather than stopping mid-word in silence. Only the numbers moved.
    */
-  assert.ok(run.length <= 253, `capped by DESC_MAX, was ${run.length}`)
+  assert.ok(run.length <= 300, `capped by YT_DESC_MAX now that DESC_MAX is looser, was ${run.length}`)
   assert.match(content, /\.\.\./, 'and says it was cut rather than ending mid-word silently')
 })
 

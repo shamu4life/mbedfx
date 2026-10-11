@@ -197,6 +197,13 @@ What the card shows, the card's overlays composed in. v1 gives none of them a fi
 
 No v1 field carries the author's untouched words; splitting them out is additive and on the list.
 
+It is the whole stored body, not the card's cut of it. The card stops at 500 characters or 10 lines,
+whichever comes first, on every platform (`clampText`, `src/render/text.ts`; the owner's numbers since
+2026-10-11, replacing 253 characters). A Reddit body is stored up to 4000 characters. A Reddit post
+whose page carries no body (a picture, gallery, video, link or crosspost post) takes it from Reddit's
+crawler page, Reddit's feed, or the Arctic Shift archive, in that order (`src/platforms/reddit/caption.ts`),
+and a body Reddit cut short ends in `…`. A Reddit spoiler is `[spoiler]`, never its text.
+
 `deserializePost` validates the ref, the canonical and the date, nothing else. `text` goes out
 through `str()` (`src/render/embed.ts`, applied in `toApiPost`): a cached value of the wrong type is
 published as `""`, never verbatim (`test/api.test.mjs:497`).
@@ -224,7 +231,7 @@ Entries with no servable url are dropped. The rest keep their position in the un
 (`usableWithIndex`, `src/worker.ts`), which is the index `/_media/` resolves against. Taking the
 position after the filter publishes entry N at entry N+1's bytes, or a 404 past the end;
 `test/api.test.mjs:372` pins that off-by-one. A degraded still is addressed through its poster slot,
-never that bare number (`bytesIndex`, `src/render/embed.ts:52`), which goes on naming the video
+never that bare number (`bytesIndex`, `src/render/embed.ts:74`), which goes on naming the video
 entry and answers `503`. `kind` collapses `Media.kind`'s three values (`src/types.ts`) to two,
 publishing a `gif` as `"image"` (`toApiPost`, `src/worker.ts`): the bytes at `url` are an animated .gif
 file, which an `<img>` animates and a `<video>` cannot play, and it carries no `poster`. Until
@@ -267,6 +274,13 @@ the platform.
 | remuxed video | R2 bytes, answering range requests, so a player can seek |
 | images, avatars, posters, already-progressive video | `302` to the CDN under `cache-control: public, max-age=300` (`MEDIA_MAX_AGE`, `src/cache.ts:8`) |
 | Instagram, Twitch and Threads video | proxied rather than redirected (the `media` arm of `src/worker.ts`; the three platforms are scoped in `proxyableVideoUrl`, `src/mediaproxy.ts`) |
+
+A Reddit link post (a post whose content is a link to a YouTube video, a tweet, a clip) carries the
+LINKED post's media, and its urls name the linked post's key, not the Reddit post's:
+`/_media/yt%3A{id}/0` for a Reddit post linking a YouTube video. They are that post's urls exactly, with
+its mux, its poster slot and its range serving, so a consumer that already has them from a direct read of
+the linked url holds the same ones. `platform` and `canonical` stay Reddit's. Only links to a fixed set
+of hosts are followed (`linkedRef`, `src/linkref.ts`); a link to anything else carries no media, as before.
 
 The payload's urls carry no extension. The card's `og:video` adds `.mp4` to the same url, and a
 GIF's Mastodon attachment adds `.gif`, and either spelling is a promise: a media url ending in a video
@@ -558,7 +572,9 @@ half-answer out of any cache in between.
   (`MUX_RETRY_MS`, `src/muxpolicy.ts`). Each attempt is itself allowed to run to the container's
   wall, 360 s on a page mux. So the honest horizon for a cold long video is minutes, not seconds.
 - `pending: true`: a translation lost its race and `text` is the original. The translation is still
-  being written; a re-request carries it.
+  being written; a re-request carries it. Also set when a Reddit link post's linked post (below,
+  [Media urls](#media-urls)) did not load in time and `media` is empty for now; it is still being
+  fetched, and a re-request carries it.
 
 Neither is an error. Both clear on their own and an answer that ignores them is still correct. The
 work behind them runs in two different places, which is what sets the horizons above: a translation

@@ -1,4 +1,6 @@
 import type { Media, Post, PostRef } from '../../types.ts'
+import { decodeEntities, redditHtmlToText, redditMarkdownToText } from './body.ts'
+import { archiveCaption, crawlerCaption, feedCaption, pickCaption } from './caption.ts'
 
 type Any = Record<string, any>
 
@@ -15,27 +17,18 @@ type Any = Record<string, any>
  * No I/O — testable against captured HTML/JSON with no network and no credentials.
  */
 
-/** The HTML entities that appear in embed text/urls/attributes; `&amp;` LAST so it does not re-decode. */
-function decodeEntities(s: string): string {
-  return s
-    .replace(/&#(\d+);/g, (_, d) => { try { return String.fromCodePoint(Number(d)) } catch { return _ } })
-    .replace(/&#x([0-9a-fA-F]+);/g, (_, h) => { try { return String.fromCodePoint(parseInt(h, 16)) } catch { return _ } })
-    .replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&apos;/g, "'")
-    .replace(/&lt;/g, '<').replace(/&gt;/g, '>')
-    .replace(/&amp;/g, '&')
-}
-
 const stripTags = (s: string): string => s.replace(/<[^>]+>/g, '')
 
 /**
- * Reddit selftext is the ONE post body that runs to thousands of chars (Twitter/Bluesky cap far
- * shorter, and Reddit's OWN embed line-clamps it). The renderer appends the engagement counts as the
- * LAST block of the Mastodon `content`, so a long body pushes `❤️ 💬` past Discord's content preview
- * and a text post shows no counts (reported 2026-07-22) — while short posts keep the footer near the
- * top. Cap the body to a preview (word-boundary, ellipsized) so the counts stay visible and the embed
- * is not a wall of text. Length is tunable; the title is never capped (it leads the card).
+ * A STORAGE BOUND, NOT THE CARD'S CUT. Reddit selftext runs to tens of thousands of characters, and this
+ * value is cached and published by /_api/v1, so it is bounded here; what a CARD shows is render/text.ts's
+ * clampText (500 characters and 10 lines on every platform since 2026-10-11).
+ *
+ * It used to be 500 and was the card's cut too: a long body pushed `❤️ 💬` past Discord's content preview
+ * and a text post showed no counts (reported 2026-07-22). clampText's line cap is what protects the counts
+ * row now, for every platform at once, so this no longer has to.
  */
-const BODY_PREVIEW = 500
+const BODY_PREVIEW = 4000
 function capBody(body: string): string {
   if (body.length <= BODY_PREVIEW) return body
   const slice = body.slice(0, BODY_PREVIEW)
@@ -65,6 +58,80 @@ function screenview(html: string): Any | null {
   const m = html.match(/<shreddit-screenview-data data="([^"]*)"/)
   if (!m) return null
   try { return (JSON.parse(decodeEntities(m[1])) as Any)?.post ?? null } catch { return null }
+}
+
+const CANONICAL = /id="canonical-url-updater"\s+value="(https:\/\/www\.reddit\.com\/r\/([^/]+)\/comments\/([^/]+)[^"]*)"/
+
+/**
+ * THE BODY'S HTML: the inside of `t3_{id}-post-rtjson-content`, scanned to its BALANCED closing div. The
+ * lazy match that preceded this stops at the first `</div>`; no measured body nests one (inline images
+ * are `<figure>`, tables and lists carry no div; 2026-10-11, residential and Worker), but a scan costs
+ * nothing and a nested div would otherwise end a body mid-sentence without a sign.
+ */
+function rtjsonInner(html: string): string | null {
+  const open = /<div id="t3_[a-z0-9]+-post-rtjson-content"[^>]*>/.exec(html)
+  if (!open) return null
+  const re = /<div\b|<\/div>/gi
+  re.lastIndex = open.index + open[0].length
+  let depth = 1
+  for (let m = re.exec(html); m; m = re.exec(html)) {
+    depth += m[0].toLowerCase() === '</div>' ? -1 : 1
+    if (depth === 0) return html.slice(open.index + open[0].length, m.index)
+  }
+  return null
+}
+
+/**
+ * THE SUBREDDIT THIS PAGE SAYS THE POST IS IN, from its canonical url. Read before a second fetch, so
+ * fetch.ts can re-ask with the REAL sub when it asked with the `_` placeholder (a bare /comments/{id}
+ * link) or a wrong one, and so the crawler page is asked under the right path.
+ */
+export function redditEmbedSub(html: string): string | null {
+  const c = CANONICAL.exec(html)
+  return c && /^[A-Za-z0-9_]+$/.test(c[2]) ? c[2] : null
+}
+
+/**
+ * THE PAGE HOLDS A FULL RENDER: the post's title element. A placeholder render (requested as /r/_/) has
+ * none, and neither its author, its counts nor its body (measured from a Worker, 2026-10-11:
+ * /r/_/comments/8xq8ac/ kept the screenview type and dropped the rtjson body, title and author).
+ */
+export function redditFullRender(html: string): boolean {
+  return /<h1[^>]*\bline-clamp-3\b/.test(html) || /<shreddit-embed-title[^>]*>/.test(html)
+}
+
+/**
+ * WHETHER THE BODY HAS TO BE ASKED FOR ELSEWHERE (caption.ts): a live post whose page carries no rtjson
+ * body. That is every picture, gallery, video, gif, link and crosspost post (0 of 72 with a body carried
+ * it on embed.reddit.com, 2026-10-11), and a text post only when the render is a placeholder. A text post
+ * in a full render with no rtjson is a title-only post and is not asked about.
+ */
+export function redditNeedsCaption(html: string): boolean {
+  if (!CANONICAL.test(html) || /\/undefined"/.test(html) || html.includes('This post has been deleted')) return false
+  if (rtjsonInner(html) !== null) return false
+  const type = screenview(html)?.type
+  if (typeof type !== 'string') return false
+  return type !== 'text' || !redditFullRender(html)
+}
+
+/** Hosts whose urls are Reddit's own: a link to one is a Reddit post or Reddit media, never delegated. */
+const REDDIT_HOST = /(?:^|\.)(?:reddit\.com|redd\.it|redditmedia\.com|redditstatic\.com)$/i
+
+/**
+ * THE URL A LINK POST POINTS AT, or undefined. Read from the screenview's `url`, which is byte-identical
+ * to the url the poster submitted on 37 of 42 measured link posts (youtu.be, `si=`, `t=`, http: all kept;
+ * 2026-10-11). The other five were moderator removals, whose url Reddit rewrites to the post's own
+ * permalink + `/removed_by_moderator/`: refused here by host, so a removed link post delegates nothing.
+ *
+ * `crosspost` too: a crosspost's url is its parent's destination (3 of 3 measured), so a crosspost of a
+ * YouTube link carries the YouTube url. http(s) only; nothing else is a link a card can name.
+ */
+function linkOf(type: unknown, url: unknown): string | undefined {
+  if ((type !== 'link' && type !== 'crosspost') || typeof url !== 'string') return undefined
+  let u: URL
+  try { u = new URL(url) } catch { return undefined }
+  if ((u.protocol !== 'https:' && u.protocol !== 'http:') || REDDIT_HOST.test(u.hostname)) return undefined
+  return url
 }
 
 /**
@@ -230,6 +297,25 @@ function redditEmbedMedia(html: string, post: Any, gifHead: unknown): Media[] {
       return ids.map(x => ({ kind: 'image' as const, url: `https://i.redd.it/${x}`, w: 0, h: 0 }))
     }
   }
+  /**
+   * A MULTI_MEDIA POST'S PICTURES ARE INSIDE ITS BODY, as `<figure class="rte-media"><a><img src=
+   * "https://preview.redd.it/{slug}-v0-{mediaid}.{ext}?…">` (r/DeadlockTheGame/comments/1x2wg7e, measured
+   * from a Worker 2026-10-11). Rebuilt into the same clean, unsigned i.redd.it url the gallery branch
+   * makes, which answered 206 image/png for one of them (i.redd.it/46ya6ushyquh1.png, residential). Only
+   * still formats: an inline gif's preview url has not been seen, so it is left out rather than guessed.
+   *
+   * THE SAME ENTRY IN EVERY RENDER THAT HAS ONE. The placeholder render carries no rtjson, so it carries
+   * no images either: index 0 is absent there (a 404), which is not a second KIND and poisons nothing.
+   */
+  if (type === 'multi_media') {
+    const inner = rtjsonInner(html) ?? ''
+    const figures = [...inner.matchAll(/<figure class="rte-media"[\s\S]*?<\/figure>/g)].map(f => f[0])
+    const ids = [...new Set(figures.flatMap(f => {
+      const m = /<img[^>]+src="https:\/\/preview\.redd\.it\/[^"]*?-v0-([a-z0-9]+)\.(png|jpe?g|webp)\?/i.exec(f)
+      return m ? [`${m[1]}.${m[2].toLowerCase()}`] : []
+    }))]
+    return ids.map(x => ({ kind: 'image' as const, url: `https://i.redd.it/${x}`, w: 0, h: 0 }))
+  }
   // 'gif' on a v.redd.it url: Reddit DOES label some of its videos 'gif'. Measured 2026-10-05 from the
   // dev sandbox, 1 of 36 type:'gif' posts (r/HighQualityGifs/comments/1wpy40m), whose player plays from
   // v.redd.it. It is a video, so it takes the video branch in every render, the same kind each time.
@@ -252,10 +338,38 @@ function redditEmbedMedia(html: string, post: Any, gifHead: unknown): Media[] {
   return []
 }
 
-function buildFromEmbed(html: string, ref: Extract<PostRef, { p: 'rd' }>, gifHead?: unknown): Post | null {
+/**
+ * The raw bytes fetch.ts read from the three body sources (caption.ts), when the embed page had no body.
+ * Absent fields are sources that were not asked or did not answer.
+ */
+type CaptionBytes = { crawler?: unknown; feed?: unknown; archive?: unknown }
+
+/** The body the caption sources agree on, and which one supplied it (for the counters). */
+function captionOf(raw: CaptionBytes | undefined, sub: string, id: string): ReturnType<typeof pickCaption> | null {
+  if (!raw || typeof raw !== 'object') return null
+  const crawler = typeof raw.crawler === 'string' ? crawlerCaption(raw.crawler, sub) : null
+  const feed = typeof raw.feed === 'string' ? feedCaption(raw.feed, id) : null
+  const archive = typeof raw.archive === 'string' ? archiveCaption(raw.archive, id) : null
+  return pickCaption(crawler, feed, archive)
+}
+
+/**
+ * WHERE THIS POST'S BODY CAME FROM, for liveFetchPost's counters: null when the embed page carried the
+ * body itself or no other source was asked. The same reading buildFromEmbed makes, so the count and the
+ * card cannot disagree about which source won.
+ */
+export function redditCaptionSource(raw: unknown): ReturnType<typeof pickCaption>['source'] | null {
+  const r = raw as Any
+  if (r?.source !== 'embed' || typeof r.html !== 'string' || !r.caption) return null
+  const sub = redditEmbedSub(r.html)
+  const id = (CANONICAL.exec(r.html) || [])[3]
+  return sub && id ? captionOf(r.caption, sub, id)?.source ?? null : null
+}
+
+function buildFromEmbed(html: string, ref: Extract<PostRef, { p: 'rd' }>, gifHead?: unknown, caption?: CaptionBytes): Post | null {
   // NOT-FOUND / expired: no canonical, or a `/undefined` url. Reddit answers 200 for these, so this
   // is the content assertion, not a status check.
-  const canon = html.match(/id="canonical-url-updater"\s+value="(https:\/\/www\.reddit\.com\/r\/([^/]+)\/comments\/([^/]+)[^"]*)"/)
+  const canon = html.match(CANONICAL)
   if (!canon || /\/undefined"/.test(html)) return null
   // A user-deleted post keeps its canonical + timestamp but loses its title/score/type — the tombstone
   // is the discriminator. It, and a mod-removed shell with no title, render the generic "couldn't load".
@@ -282,20 +396,27 @@ function buildFromEmbed(html: string, ref: Extract<PostRef, { p: 'rd' }>, gifHea
   const score = parseInt((html.match(/<faceplate-number number="(\d+)"/) || [])[1] || '', 10)
   const comments = parseInt(((html.match(/([\d,]+)\s+comments?/) || [])[1] || '').replace(/,/g, ''), 10)
 
-  // selftext body (text posts only); the container id is stable, and the whole body is present
-  // despite the CSS truncation. Title leads, body follows — Reddit's headline is the title.
-  const bodyM = html.match(/<div id="t3_[a-z0-9]+-post-rtjson-content"[^>]*>([\s\S]*?)<\/div>/)
-  const body = capBody(bodyM ? decodeEntities(stripTags(bodyM[1].replace(/<\/p>\s*<p[^>]*>/gi, '\n\n'))).trim() : '')
+  /**
+   * THE BODY, FOR EVERY POST TYPE THAT HAS ONE. It was kept for type 'text' alone, and Reddit calls a
+   * text post with an inline picture `multi_media` — reported on r/YouShouldKnow/comments/8xq8ac (2018,
+   * no picture at all, still `multi_media`), whose 785-character body the page carried and the card
+   * threw away. Read from the page when the page has it (rtjson, any type), and otherwise from the
+   * sources caption.ts names, which fetch.ts asks only when redditNeedsCaption says the page has none.
+   */
+  const inner = rtjsonInner(html)
+  const body = capBody(inner !== null ? redditHtmlToText(inner) : captionOf(caption, sub, ref.id)?.text ?? '')
+  const link = linkOf(post.type, post.url)
 
   return {
     ref: { p: 'rd', sub, id: ref.id },
     canonical: canon[1],
     author: { name: `u/${author}`, handle: author, url: `https://www.reddit.com/user/${author}` },
-    // The title is the headline (bold, its own block); the body is the selftext (text posts only).
-    // Keeping them separate is what lets the renderer differentiate the two — the concatenated
-    // `title\n\nbody` this replaced rendered as one undifferentiated run.
+    // The title is the headline (bold, its own block); the body follows it. Keeping them separate is
+    // what lets the renderer differentiate the two — the concatenated `title\n\nbody` this replaced
+    // rendered as one undifferentiated run.
     title,
-    text: post.type === 'text' ? body : '',
+    text: body,
+    ...(link ? { link } : {}),
     createdAt: created,
     media: redditEmbedMedia(html, post, gifHead),
     counts: {
@@ -370,9 +491,11 @@ function buildFromOAuth(raw: unknown, ref: Extract<PostRef, { p: 'rd' }>, gifHea
       ? `https://www.reddit.com${d.permalink}`
       : `https://www.reddit.com/r/${sub}/comments/${ref.id}`,
     author: { name: `u/${d.author}`, handle: d.author, url: `https://www.reddit.com/user/${d.author}` },
-    // Title/body split so the renderer can bold the headline (same as the embed path); selftext capped.
+    // Title/body split so the renderer can bold the headline (same as the embed path). selftext is
+    // MARKDOWN here, which the cards showed raw (asterisks, `[text](url)`) until 2026-10-11.
     title: d.title,
-    text: capBody(typeof d.selftext === 'string' ? d.selftext : ''),
+    text: capBody(typeof d.selftext === 'string' ? redditMarkdownToText(d.selftext) : ''),
+    ...(d.is_self !== true ? (l => (l ? { link: l } : {}))(linkOf('link', d.url)) : {}),
     createdAt: created,
     media: redditOAuthMedia(d, gifHead),
     counts: { likes: Number(d.score) || 0, replies: Number(d.num_comments) || 0 },
@@ -399,7 +522,7 @@ export function redditGate(raw: unknown): 'private' | undefined {
 export function normalizeReddit(raw: unknown, ref: PostRef): Post | null {
   if (ref.p !== 'rd') return null
   const r = raw as Any
-  if (r?.source === 'embed') return buildFromEmbed(typeof r.html === 'string' ? r.html : '', ref, r.gifHead)
+  if (r?.source === 'embed') return buildFromEmbed(typeof r.html === 'string' ? r.html : '', ref, r.gifHead, r.caption)
   if (r?.source === 'json') return buildFromOAuth(r.data, ref, r.gifHead)
   return buildFromOAuth(raw, ref)
 }

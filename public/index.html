@@ -1758,7 +1758,9 @@ function mbedfxPrepResolved(asked, answer) {
               ? '<div class="preplbl"><span>Still preparing after six minutes. This preview has stopped '
                 + 'checking. The link works now and shows the video once it is ready.</span></div>'
               : ''));
-    var body = (j.title ? '<b>' + esc2(j.title) + '</b>\n' : '') + esc2(j.text || '');
+    // A blank line between the title and the body, as the card draws it (text.ts GAP): one newline
+    // previewed the two as a single block that the real card never shows.
+    var body = (j.title ? '<b>' + esc2(j.title) + '</b>' + (j.text ? '\n\n' : '') : '') + esc2(j.text || '');
     // The card carries the link now, so the standalone result row stands down — see .out.hasCard.
     cardUp = true; outClass(true);
     preview.innerHTML = '<div class="sentrow"><span class="sent" id="sentline"></span>'

@@ -3,7 +3,8 @@ import { esc } from './fail.ts'
 import { byline, str } from './embed.ts'
 
 /**
- * THE CAP ON A POST'S BODY, applied to BOTH heads from one place.
+ * THE CAP ON A POST'S BODY, applied to BOTH heads from one place: DESC_MAX characters AND
+ * DESC_MAX_LINES lines, whichever binds first.
  *
  * WHY A CAP AT ALL, since most posts do not need one. Measured across the captured fixtures: the
  * median caption is 81 characters and two thirds are under 200 — a tweet, a reel caption or a Bluesky
@@ -11,9 +12,20 @@ import { byline, str } from './embed.ts'
  * platforms, where a "caption" is an article: Lemmy's median fixture is 3,239 characters and PieFed's
  * 1,228. Those render as a wall in a card meant to be glanced at.
  *
- * 253 IS THE OWNER'S NUMBER, not a derived one, and it is the WHOLE string including the marker — 250
- * characters of post plus three dots. Recorded as a decision rather than a calculation so nobody
- * "corrects" it to a rounder one later.
+ * 500 AND 10 ARE THE OWNER'S NUMBERS, not derived ones, and the character count is the WHOLE string
+ * including the marker — 497 characters of post plus three dots. They replaced his 2026-08-03 number
+ * (253) on 2026-10-11, when Reddit posts started carrying their bodies and he asked for "as much of the
+ * text body as possible", for every platform at once. Recorded as a decision rather than a calculation
+ * so nobody "corrects" either number to a rounder one later.
+ *
+ * WHY A LINE CAP AS WELL. The counts row is the LAST block of the Mastodon `content`, and the one
+ * report of a body hiding it (2026-07-22, a multi-KB Reddit text post) is about height, not length.
+ * Discord documented on 2026-10-06 (discord-api-docs PR #8606) that it trims og:description at 350
+ * bytes or 20 lines; the activity document is undocumented, but FxEmbed issue #1224 (2025-03-28) shows a
+ * 26-line post drawn as an activity card cut at 20 lines with its trailing counts gone. A body of at
+ * most 10 lines leaves the title, the gaps and the counts inside 20. A "line" is a newline-separated
+ * line, blank ones included, because that is what a client can count; how the text wraps on a phone is
+ * not knowable here, and nobody has measured whether Discord's cut counts wrapped lines.
  *
  * BOTH HEADS OR NEITHER. buildContentHtml (the Mastodon spoof) and the plain-text builder below are
  * the two documents Discord reads, and this file's oldest lesson is that fixing one and not the other
@@ -22,19 +34,40 @@ import { byline, str } from './embed.ts'
  * APPLIED AFTER TRANSLATION, WHICH IS DELIBERATE AND HAS A CONSEQUENCE WORTH KNOWING. withTranslation
  * composes English first, then the marker, then the original. A translated post long enough to hit
  * this cap therefore keeps the ENGLISH — the half a reader of the card most needs — and loses the
- * original, rather than the other way round. That ordering is why the cap is safe to apply late.
+ * original first, rather than the other way round. That ordering is why the cap is safe to apply late.
  *
  * PLAIN DOTS, NOT AN ELLIPSIS CHARACTER, because that is what was asked for. Note YouTube has its own
  * earlier clamp (YT_DESC_MAX, first paragraph only, using '…') whose purpose is different: it strips
- * link dumps and timestamp lists rather than bounding length. At 300 it no longer binds — this cap is
- * tighter — so a YouTube description reaching the card is shortened by paragraph there and by length
- * here.
+ * link dumps and timestamp lists rather than bounding length. At 300 it binds before this one again
+ * since the cap moved to 500, so a long YouTube description is shortened by paragraph there first.
+ *
+ * NEVER HALF A CHARACTER: a cut that lands between the two halves of a surrogate pair (an emoji, most
+ * CJK extension characters) drops the orphaned high half rather than shipping a lone surrogate, which
+ * JSON carries as an escape and a client draws as a replacement box.
  */
-export const DESC_MAX = 253
+export const DESC_MAX = 500
+export const DESC_MAX_LINES = 10
 const ELLIPSIS = '...'
 
-export const clampText = (s: string): string =>
-  s.length <= DESC_MAX ? s : s.slice(0, DESC_MAX - ELLIPSIS.length).trimEnd() + ELLIPSIS
+export function clampText(s: string): string {
+  let out = normalizeBreaks(s)
+  let cut = false
+  const lines = out.split('\n')
+  if (lines.length > DESC_MAX_LINES) {
+    out = lines.slice(0, DESC_MAX_LINES).join('\n').trimEnd()
+    // Ten blank lines is not a body; three dots after nothing would claim one was cut.
+    if (!out) return ''
+    cut = true
+  }
+  if (out.length > (cut ? DESC_MAX - ELLIPSIS.length : DESC_MAX)) {
+    out = out.slice(0, DESC_MAX - ELLIPSIS.length)
+    const last = out.charCodeAt(out.length - 1)
+    if (last >= 0xd800 && last <= 0xdbff) out = out.slice(0, -1)
+    out = out.trimEnd()
+    cut = true
+  }
+  return cut ? out + ELLIPSIS : out
+}
 
 /**
  * The two rich-text builders for the Mastodon spoof. Both are pure: no I/O, no clock,

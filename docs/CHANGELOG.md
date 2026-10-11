@@ -9,6 +9,30 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- **A Reddit link post plays the video it links to.** A post that is just a YouTube video
+  (r/theydidthemath/comments/1mizdfz, reported) drew a title and nothing else. The card now carries the
+  linked post's own media: YouTube, Twitter, TikTok, Instagram, Threads, Bluesky, Facebook, Dailymotion,
+  Streamable, Twitch clips, Imgur and Pinterest, a crosspost of such a link included. Reddit's title,
+  author, subreddit and counts stay on the card. The media is addressed under the linked post's own key
+  (`/_media/yt%3A{id}/0`), so the mux, its R2 object, the cookie pool and the YouTube promise run exactly
+  as for a direct paste of the linked url, and the two share one muxed file. A YouTube video that cannot
+  be promised on a first paste (over 240 s, or no duration verdict) shows its thumbnail, not YouTube's own
+  player (owner's call). Only a fixed host table is followed (`src/linkref.ts`); Reddit, fediverse and
+  mbedfx hosts never are, so a link post cannot name another Reddit post or an origin of its own. New
+  counters `link_ok` / `link_fail` / `link_pending`.
+
+- **Reddit picture, gallery, video and link posts carry their caption.** embed.reddit.com renders no
+  body for those (0 of 72 sampled posts that have one), so a caption that explains the picture
+  (r/DeadlockTheGame/comments/1x1xajw, reported) never reached the card. It is now read from Reddit's
+  crawler page (current, cut at about 150 characters), completed from Reddit's own feed when that
+  answers, and otherwise from the Arctic Shift archive, only when Reddit's cut text is a prefix of the
+  archived one (owner's call, made knowing it is a third party with no terms). A subreddit's tagline,
+  which Reddit shows in place of a missing body, is recognised and refused. All three sources were
+  measured from a Cloudflare Worker on 2026-10-11. New counters `body_*`.
+
+- **A Reddit `multi_media` post's inline pictures are its media**, rebuilt as clean `i.redd.it` urls the
+  way gallery slides are.
+
 - **Post links work on `sorryifuckedyour.mom` and `hotsinglesnear.you`.** Both domains belong to the
   owner's `you-stupid` Worker, which keeps its own page at `/` and its own files, and hands every other
   path to this Worker through a service binding. So `hotsinglesnear.you/jack/status/20` draws the same
@@ -45,6 +69,16 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Changed
 
+- **A card shows up to 500 characters or 10 lines of a post's body, on every platform** (owner's
+  numbers, replacing 253 characters). The line cap keeps the counts row inside Discord's ~20-line cut
+  of an activity card. A cut never splits an emoji. The converter's preview cuts at the same place and
+  leaves the same blank line after a title.
+
+- **Reddit bodies read the way Reddit shows them.** Paragraphs, line breaks, numbered and bulleted
+  lists and table rows keep their shape, Reddit's template indentation is gone, and a spoiler is
+  `[spoiler]`, never its text. Markdown from the OAuth fallback and the archive is converted the same
+  way. The Reddit normalizer stores up to 4000 characters; the card's cut is the one above.
+
 - **`/_api/v1` and `/_card` publish a GIF as `"image"`, not `"video"`.** An entry whose bytes are an
   animated `.gif` (Reddit GIF posts, Reddit `image` posts with a `.gif`, Misskey GIFs) was published as
   a posterless video, which no browser's `<video>` can play and the converter preview drew as nothing.
@@ -52,6 +86,15 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   Mastodon `image`. `docs/API.md` and `public/openapi.json` say so.
 
 ### Fixed
+
+- **A Reddit text post that Reddit calls `multi_media` shows its body.** The body was kept for type
+  `text` alone, and Reddit gives that type to many text posts, including ones with no picture at all
+  (r/YouShouldKnow/comments/8xq8ac, reported).
+
+- **A bare `reddit.com/comments/{id}` link no longer degrades the ordinary link's card.** It got
+  Reddit's stripped render (no author, counts or body) and cached it under the post's own key, so the
+  normal link served that card for up to 15 minutes in the same data center (measured in production).
+  It is now re-asked under the post's real subreddit.
 
 - **"All as stills" no longer breaks a TikTok `/t/` share link or a Bluesky profile link.** Ticked
   before pasting one, it appended `/p`, which the router reads on neither, so the converter handed out

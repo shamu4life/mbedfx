@@ -1,6 +1,7 @@
 import type { PostRef } from '../../types.ts'
 import type { Env } from '../../analytics.ts'
-import { redditGate, redditGifUrl } from './normalize.ts'
+import { redditEmbedSub, redditGate, redditGifUrl, redditNeedsCaption } from './normalize.ts'
+import { crawlerCaption, feedCaption } from './caption.ts'
 import { askTwice } from '../../fetchretry.ts'
 
 /**
@@ -20,6 +21,8 @@ const REDDIT_UA = 'web:mbedfx.app:v0.1 (by /u/shamu4life)'
 
 // The post id is base36; guard the path the same way the other fetchers guard theirs.
 const POST_ID = /^[0-9a-z]+$/i
+// A subreddit name as it may appear in a path we build. Anything else is asked as the `_` placeholder.
+const SUB = /^[A-Za-z0-9_]+$/
 
 /**
  * `gifHead` rides on a success when the post is a Reddit gif (normalize.ts redditGifUrl): up to the first
@@ -30,9 +33,17 @@ const POST_ID = /^[0-9a-z]+$/i
  * signature check, and nothing else may treat this field as a verdict.
  */
 export type RedditFetch =
-  | { ok: true; source: 'embed'; html: string; gifHead?: Uint8Array }
+  | { ok: true; source: 'embed'; html: string; gifHead?: Uint8Array; caption?: RedditCaptionBytes }
   | { ok: true; source: 'json'; data: unknown; gifHead?: Uint8Array }
   | { ok: false; reason: 'assert_fail' | 'private' }
+
+/**
+ * THE BODY SOURCES' RAW ANSWERS, when the embed page carried no body (caption.ts names the three and
+ * what was measured about each). Bytes as received, for caption.ts to judge: a 429, a block page or a
+ * decoy is still attached, and only the parsers there decide whether it says anything about the post.
+ * An absent field is a source that was not asked or did not answer before its deadline.
+ */
+export type RedditCaptionBytes = { crawler?: string; feed?: string; archive?: string }
 
 /**
  * How long the gif's size may take. Sized on what was measured, not on a guess at Worker latency: 40
@@ -117,17 +128,112 @@ async function withGifHead<T extends Extract<RedditFetch, { ok: true }>>(got: T)
 }
 
 /**
- * PRIMARY. `embed.reddit.com/r/{sub}/comments/{id}/`. Resolution is by id, so a placeholder sub still
- * resolves the post — BUT (measured from Workers egress 2026-07-22) a placeholder gets a STRIPPED
- * ~280KB render with NO title/author/score element, while the REAL sub gets the full ~308KB page. So
- * pass the real subreddit when the ref carries it (every /r/{sub}/comments/ link — the common case);
- * only a bare /comments/{id} link falls back to the `_` placeholder, and normalizeReddit derives a
- * title from the url slug for that degraded case. ASSERT ON CONTENT: every id, including bad/deleted,
- * returns HTTP 200, so liveness is the canonical url present and no `/undefined` marker, never status.
- * A thrown fetch is NOT caught (a transport failure is the worker's null, not a Reddit signal).
+ * THE CAPTION LOOKUP'S WHOLE BUDGET, and each source's own ceiling inside it. Measured from a Cloudflare
+ * Worker (colo LHR) on 2026-10-11: the crawler page 419 ms, the feed 136 ms, the archive 940 ms, so all
+ * three in a row fit with room to spare. It is spent INSIDE getPost, which every head awaits in full
+ * before its own HTML_DEADLINE_MS (5000) races begin, on top of the embed fetch (about 500 ms from
+ * the same Worker) — so it is kept well under half of that, and a source that would overrun it is not
+ * asked at all. Only a post whose page carries no body pays any of it, once per post-cache miss.
  */
-async function fetchRedditEmbed(ref: Extract<PostRef, { p: 'rd' }>): Promise<RedditFetch> {
-  const sub = ref.sub && /^[A-Za-z0-9_]+$/.test(ref.sub) ? ref.sub : '_'
+const CAPTION_BUDGET_MS = 2000
+const CRAWLER_TIMEOUT_MS = 1500
+const FEED_TIMEOUT_MS = 800
+const ARCHIVE_TIMEOUT_MS = 1500
+/** Below this there is no time for a round trip, so the source is not asked. */
+const CAPTION_MIN_MS = 100
+
+/**
+ * Discord's own crawler identity, because that is who Reddit serves the description to, and who this
+ * request is made on behalf of: it only ever runs while a card for Discord is being built or previewed.
+ * Twitterbot/1.0 got the identical meta from a Worker the same day; a browser UA gets an 8.4 KB JS
+ * challenge and a fake Googlebot a 403 (residential, 2026-10-11).
+ */
+const CRAWLER_UA = 'Mozilla/5.0 (compatible; Discordbot/2.0; +https://discordapp.com)'
+/** Arctic Shift asks its users to be considerate; a name and a way to reach the project is the minimum. */
+const ARCHIVE_UA = 'mbedfx.app (embed fixer; +https://github.com/shamu4life/mbedfx)'
+
+/** The response body as text, up to 512 KB (Reddit's block page is ~190 KB; nothing needed is larger). */
+async function readTextCapped(res: Response): Promise<string> {
+  const reader = res.body?.getReader()
+  if (!reader) return ''
+  const chunks: Uint8Array[] = []
+  let n = 0
+  while (n < 524_288) {
+    const { done, value } = await reader.read()
+    if (done || !value) break
+    chunks.push(value)
+    n += value.length
+  }
+  reader.cancel().catch(() => {})
+  const all = new Uint8Array(n)
+  let at = 0
+  for (const c of chunks) { all.set(c.subarray(0, n - at), at); at += c.length }
+  return new TextDecoder().decode(all.subarray(0, n))
+}
+
+/** One caption source's body, or undefined on a throw, a timeout or no time left. Never throws. */
+async function readSource(url: string, headers: Record<string, string>, ms: number, redirect: 'manual' | 'follow'): Promise<string | undefined> {
+  if (ms < CAPTION_MIN_MS) return undefined
+  try {
+    // NO-RETRY: deliberate. A body source is optional: the post loads without it, a failure only shortens
+    // or drops the body, and a second ask would double the failure path inside the caption budget, which
+    // getPost spends before the head's own deadline races begin. Bounded by `ms`. See withCaption.
+    const res = await fetch(url, { headers, redirect, signal: AbortSignal.timeout(ms) })
+    return await readTextCapped(res)
+  } catch {
+    return undefined
+  }
+}
+
+/**
+ * THE BODY OF A POST WHOSE EMBED PAGE CARRIES NONE, from the sources caption.ts names, asked in its
+ * order and only as far as needed: the crawler page always; the feed only when the crawler's text was cut
+ * short or the crawler said nothing usable; the archive only when the crawler's text was cut short and the
+ * feed did not answer. The bytes ride on the fetch for normalize.ts to judge, the same split gifHead uses.
+ *
+ * NO-RETRY on all three, deliberately: the post loads either way, a failure only shortens or drops its
+ * body, and a second ask would double the failure path's cost inside a head budget that is already the
+ * tightest thing about a cold Reddit card. See src/fetchretry.ts.
+ *
+ * THE ARCHIVE IS A THIRD PARTY, and that was the owner's call (2026-10-11), made knowing the trade: it
+ * is a free, single-maintainer service with no terms, no uptime promise and a day-and-a-half outage on
+ * 2026-10-09; every post id asked about is sent to it; and its own ingest depends on Reddit's Data API,
+ * which Reddit says ends in March 2027. It is asked only when Reddit's own text was cut, and its text is
+ * shown only when Reddit's cut text is a prefix of it.
+ */
+async function withCaption(got: Extract<RedditFetch, { source: 'embed' }>, id: string): Promise<RedditFetch> {
+  if (!redditNeedsCaption(got.html)) return got
+  const sub = redditEmbedSub(got.html)
+  if (!sub) return got
+  const until = Date.now() + CAPTION_BUDGET_MS
+  const left = (cap: number) => Math.min(cap, until - Date.now())
+  const caption: RedditCaptionBytes = {}
+  caption.crawler = await readSource(`https://www.reddit.com/r/${sub}/comments/${id}/`,
+    { 'user-agent': CRAWLER_UA, accept: 'text/html' }, left(CRAWLER_TIMEOUT_MS), 'manual')
+  const said = caption.crawler === undefined ? { kind: 'unknown' as const } : crawlerCaption(caption.crawler, sub)
+  const cut = said.kind === 'body' && said.cut
+  if (said.kind === 'unknown' || cut) {
+    caption.feed = await readSource(`https://www.reddit.com/by_id/t3_${id}/.rss`,
+      { 'user-agent': BROWSER_UA, accept: 'application/atom+xml,application/xml;q=0.9,*/*;q=0.8' },
+      left(FEED_TIMEOUT_MS), 'manual')
+    if (cut && feedCaption(caption.feed ?? '', id) === null) {
+      caption.archive = await readSource(`https://arctic-shift.photon-reddit.com/api/posts/ids?ids=${id}&fields=id,selftext`,
+        { 'user-agent': ARCHIVE_UA, accept: 'application/json' }, left(ARCHIVE_TIMEOUT_MS), 'follow')
+    }
+  }
+  return { ...got, caption }
+}
+
+/**
+ * PRIMARY. `embed.reddit.com/r/{sub}/comments/{id}/`. Resolution is by id, so a placeholder sub still
+ * resolves the post — BUT (measured from Workers egress 2026-07-22, and again 2026-10-11) a placeholder
+ * gets a STRIPPED render with NO title, author, score or body, while the REAL sub gets the full page.
+ * fetchReddit passes the sub the ref carries, `_` when it carries none, and asks again under the page's
+ * own canonical sub when that differs. ASSERT ON CONTENT: every id, including bad/deleted, returns HTTP
+ * 200, so liveness is the canonical url present and no `/undefined` marker, never status. A thrown fetch
+ * is NOT caught (a transport failure is the worker's null, not a Reddit signal).
+ */
+async function fetchRedditEmbed(ref: Extract<PostRef, { p: 'rd' }>, sub: string): Promise<RedditFetch> {
   const res = await askTwice(`https://embed.reddit.com/r/${sub}/comments/${encodeURIComponent(ref.id)}/`, {
     headers: { 'user-agent': BROWSER_UA, accept: 'text/html' },
     redirect: 'follow',
@@ -216,8 +322,24 @@ async function fetchRedditOAuth(ref: Extract<PostRef, { p: 'rd' }>, env: Env): P
  */
 export async function fetchReddit(ref: Extract<PostRef, { p: 'rd' }>, env: Env): Promise<RedditFetch> {
   if (!POST_ID.test(ref.id)) return { ok: false, reason: 'assert_fail' }
-  const embed = await fetchRedditEmbed(ref)
-  if (embed.ok) return withGifHead(embed)
+  const asked = ref.sub && SUB.test(ref.sub) ? ref.sub : '_'
+  let embed = await fetchRedditEmbed(ref, asked)
+  /**
+   * ASK AGAIN UNDER THE REAL SUBREDDIT when the page says the post lives elsewhere: a bare /comments/{id}
+   * link (asked as `_`), or a wrong sub. The first answer is a stripped render — no title, author, counts
+   * or body — and it was being cached under the post's CANONICAL key, because normalize takes the sub
+   * from the page: measured in production on 2026-10-11, the ordinary link for r/DeadlockTheGame/
+   * comments/1x2xbtq served that degraded card for up to 900 s after anyone in the same colo pasted the
+   * bare form. One more embed fetch on bare links only, and the card is the full one either way.
+   */
+  if (embed.ok && embed.source === 'embed') {
+    const real = redditEmbedSub(embed.html)
+    if (real && real.toLowerCase() !== asked.toLowerCase()) {
+      const full = await fetchRedditEmbed(ref, real)
+      if (full.ok) embed = full
+    }
+  }
+  if (embed.ok && embed.source === 'embed') return withCaption(await withGifHead(embed), ref.id)
   if (env.REDDIT_CLIENT_ID && env.REDDIT_CLIENT_SECRET) {
     const oauth = await fetchRedditOAuth(ref, env)
     if (oauth.ok) return withGifHead(oauth)

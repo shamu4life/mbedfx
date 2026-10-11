@@ -360,6 +360,9 @@ test('a deeper-than-guaranteed quote chain does not throw and does not recurse',
 /* ===================== THE BODY CAP =====================
  *
  * Requested 2026-08-03: "cap descriptions at 253 characters with the last three being ...".
+ * Changed 2026-10-11 to 500 characters and 10 lines, for every platform, on the owner's call ("Flip
+ * everything to allow the 500 chars/10 lines") when Reddit posts started carrying their bodies. The
+ * tests below were rewritten from 253 to the new numbers; what each one guards did not change.
  *
  * Measured first, because the instinct needed checking: across the captured fixtures the median
  * caption is 81 characters and two thirds are under 200 — Twitter, Instagram and Bluesky were never
@@ -371,7 +374,7 @@ const cap = { ref: { p: 'x', kind: 'status', id: '1' }, canonical: 'https://x.co
   author: { name: 'A', handle: 'a', url: 'https://x.com/a' },
   createdAt: new Date('2026-01-01T00:00:00Z'), counts: {}, sensitive: false, media: [] }
 
-test('A BODY OVER THE CAP IS CUT TO 253 ENDING IN THREE DOTS, on BOTH heads', () => {
+test('A BODY OVER THE CAP IS CUT TO 500 ENDING IN THREE DOTS, on BOTH heads', () => {
   /**
    * Both, or the cap does not exist. A post WITH media is drawn from the Mastodon spoof and one
    * WITHOUT from the plain OpenGraph head, so capping one and not the other caps neither from a
@@ -381,17 +384,17 @@ test('A BODY OVER THE CAP IS CUT TO 253 ENDING IN THREE DOTS, on BOTH heads', ()
 
   const html = buildContentHtml(post)
   const htmlRun = (html.match(/y+/) || [''])[0]
-  assert.ok(htmlRun.length <= 250, `spoof body capped, was ${htmlRun.length}`)
+  assert.ok(htmlRun.length <= 497, `spoof body capped, was ${htmlRun.length}`)
   assert.match(html, /y\.\.\./, 'and marked as cut')
 
   const plain = buildPlainText(post)
   const plainRun = (plain.match(/y+/) || [''])[0]
-  assert.ok(plainRun.length <= 250, `plain body capped, was ${plainRun.length}`)
+  assert.ok(plainRun.length <= 497, `plain body capped, was ${plainRun.length}`)
   assert.match(plain, /y\.\.\./, 'and marked as cut')
 
-  // The whole string is 253: 250 of post plus three dots. Asserted exactly, because "about 250" is
+  // The whole string is 500: 497 of post plus three dots. Asserted exactly, because "about 500" is
   // how a cap drifts.
-  assert.equal(plainRun.length + 3, 253, 'exactly the requested length')
+  assert.equal(plainRun.length + 3, 500, 'exactly the requested length')
 })
 
 test('A BODY UNDER THE CAP IS UNTOUCHED — no dots on a post that fits', () => {
@@ -404,11 +407,55 @@ test('A BODY UNDER THE CAP IS UNTOUCHED — no dots on a post that fits', () => 
 })
 
 test('A BODY EXACTLY AT THE CAP IS UNTOUCHED — the boundary is inclusive', () => {
-  // 253 is a cap, not a threshold to exceed. An off-by-one here would put "..." on a post that fits
+  // 500 is a cap, not a threshold to exceed. An off-by-one here would put "..." on a post that fits
   // exactly, which is the same lie as the case above and much harder to notice.
-  const text = 'q'.repeat(253)
-  assert.ok(buildPlainText({ ...cap, text }).includes(text), 'exactly 253 passes through whole')
-  assert.ok(!buildPlainText({ ...cap, text: 'q'.repeat(253) }).includes('...'))
+  const text = 'q'.repeat(500)
+  assert.ok(buildPlainText({ ...cap, text }).includes(text), 'exactly 500 passes through whole')
+  assert.ok(!buildPlainText({ ...cap, text: 'q'.repeat(500) }).includes('...'))
+  assert.ok(buildPlainText({ ...cap, text: 'q'.repeat(501) }).endsWith('...'), 'and one more is cut')
+})
+
+test('A BODY OVER TEN LINES KEEPS THE FIRST TEN AND SAYS IT WAS CUT, on BOTH heads', () => {
+  /**
+   * The line half of the owner's cap. A short line per row is the shape that hides the counts row
+   * without ever reaching 500 characters: a list, a poem, a numbered build. Discord's documented
+   * og:description trim is 20 lines, and FxEmbed issue #1224 shows an activity card cut at 20 with
+   * its counts gone, so the body stops at 10 and leaves the title, gaps and counts inside 20.
+   */
+  const rows = Array.from({ length: 14 }, (_, i) => `row ${i + 1}`)
+  const post = { ...cap, text: rows.join('\n') }
+  const plain = buildPlainText(post)
+  assert.ok(plain.includes('row 10...'), `the tenth line carries the marker, got ${JSON.stringify(plain)}`)
+  assert.ok(!plain.includes('row 11'), 'and nothing after it survives')
+  assert.equal(plain.split('\n').length, 10, 'ten lines exactly')
+  const html = buildContentHtml(post)
+  assert.ok(html.includes('row 10...') && !html.includes('row 11'), 'the spoof cuts at the same line')
+})
+
+test('BLANK LINES COUNT AS LINES, and a cut never ends on one', () => {
+  // Paragraphs are separated by a blank line, which takes the same height as a line of text in the
+  // card, so it counts. Cutting with a blank line last would leave the dots on an empty row.
+  const text = ['one', '', 'two', '', 'three', '', 'four', '', 'five', '', 'six', '', 'seven'].join('\n')
+  const plain = buildPlainText({ ...cap, text })
+  assert.ok(plain.endsWith('five...'), `cut after the fifth paragraph, got ${JSON.stringify(plain)}`)
+  assert.ok(!plain.includes('six'))
+})
+
+test('EXACTLY TEN LINES IS UNTOUCHED — the line boundary is inclusive too', () => {
+  const text = Array.from({ length: 10 }, (_, i) => `line ${i + 1}`).join('\n')
+  const plain = buildPlainText({ ...cap, text })
+  assert.ok(plain.includes(text) && !plain.includes('...'), 'ten lines pass through whole')
+})
+
+test('A CUT NEVER SPLITS AN EMOJI — no lone surrogate reaches the card', () => {
+  // 496 ASCII characters put the cut (at 497) between the two halves of the emoji. Shipping the high
+  // half alone puts an unpaired surrogate in the JSON, which a client draws as a replacement box.
+  const text = 'a'.repeat(496) + '😀'.repeat(10)
+  const plain = buildPlainText({ ...cap, text })
+  assert.ok(plain.endsWith('...'))
+  const body = plain.slice(0, -3)
+  assert.ok(!/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/.test(body), 'no orphaned high surrogate')
+  assert.equal(body, 'a'.repeat(496), 'the half emoji is dropped, not shipped')
 })
 
 test('A CAPPED TRANSLATION KEEPS THE ENGLISH, because translation puts it first', () => {
@@ -418,8 +465,11 @@ test('A CAPPED TRANSLATION KEEPS THE ENGLISH, because translation puts it first'
    * translated post long enough to hit the cap loses the ORIGINAL and keeps the English, which is
    * the half a reader of an English-language card actually needs. Reversed, the cap would throw away
    * the only part they can read.
+   *
+   * The English is longer than the cap since 2026-10-11: at 500 characters a 288-character English
+   * body now fits with part of the original after it, which is the cap working, not this rule failing.
    */
-  const english = 'The weather is far too hot today and the barber has opinions about it. '.repeat(4)
+  const english = 'The weather is far too hot today and the barber has opinions about it. '.repeat(8)
   const post = { ...cap, text: `${english}\n\n🌐 Translated from Chinese\n${'中'.repeat(500)}` }
   const plain = buildPlainText(post)
   assert.ok(plain.startsWith('The weather is far too hot'), 'the English survives')
