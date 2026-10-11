@@ -33,6 +33,17 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - **A Reddit `multi_media` post's inline pictures are its media**, rebuilt as clean `i.redd.it` urls the
   way gallery slides are.
 
+- **A crosspost of a Reddit picture, gif, video or gallery carries the parent's media.** It was
+  title-only: a crosspost's page has no media of its own and names no parent id, only the parent's url
+  (28 of 28 live crossposts, residential, 2026-10-11). A picture or gif is that url, with nothing
+  fetched. A video plays from its HLS master, as a video post does, under the poster the crosspost's
+  crawler page names. That page is already read for the caption; Reddit's logo and generated share
+  cards are refused, and with no poster the video stays out (1 of 10 sampled). A gallery's slides
+  come from its parent's page, asked as `_` and then under the subreddit that page names, read
+  beside the caption lookup. Crossposts of text posts are unchanged. Not measured from a Worker:
+  the crawler page's og:image and the gallery parent's two fetches (both are requests the Worker
+  already makes elsewhere).
+
 - **A spoiler-tagged Reddit post keeps its spoiler.** Reddit draws a whole post tagged as a spoiler
   blurred under "This post may contain spoilers."; the card showed its picture, and with the caption
   sources above it would have shown its caption too. Its body is now `[spoiler]` whatever it says, its

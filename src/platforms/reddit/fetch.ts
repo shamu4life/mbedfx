@@ -1,6 +1,8 @@
 import type { PostRef } from '../../types.ts'
 import type { Env } from '../../analytics.ts'
-import { REDDIT_SUB, redditEmbedSub, redditGate, redditGifUrl, redditNeedsCaption } from './normalize.ts'
+import {
+  REDDIT_SUB, redditCrosspostNeeds, redditEmbedSub, redditFullRender, redditGate, redditGifUrl, redditNeedsCaption,
+} from './normalize.ts'
 import { crawlerCaption, feedCaption } from './caption.ts'
 import { askTwice } from '../../fetchretry.ts'
 
@@ -46,7 +48,7 @@ function crawlerUrl(sub: string, id: string): string {
  * signature check, and nothing else may treat this field as a verdict.
  */
 export type RedditFetch =
-  | { ok: true; source: 'embed'; html: string; gifHead?: Uint8Array; caption?: RedditCaptionBytes }
+  | { ok: true; source: 'embed'; html: string; gifHead?: Uint8Array; caption?: RedditCaptionBytes; parent?: string }
   | { ok: true; source: 'json'; data: unknown; gifHead?: Uint8Array }
   | { ok: false; reason: 'assert_fail' | 'private' }
 
@@ -213,9 +215,15 @@ async function readSource(url: string, headers: Record<string, string>, ms: numb
  * 2026-10-09; every post id asked about is sent to it; and its own ingest depends on Reddit's Data API,
  * which Reddit says ends in March 2027. It is asked only when Reddit's own text was cut, and its text is
  * shown only when Reddit's cut text is a prefix of it.
+ *
+ * `wantPoster`: the post is a crosspost of a Reddit video, whose poster is the crawler page's og:image
+ * (normalize.ts crosspostMedia). That page is then read even when no body is wanted, and nothing else is.
  */
-async function withCaption(got: Extract<RedditFetch, { source: 'embed' }>, id: string): Promise<RedditFetch> {
-  if (!redditNeedsCaption(got.html)) return got
+async function withCaption(
+  got: Extract<RedditFetch, { source: 'embed' }>, id: string, wantPoster = false,
+): Promise<Extract<RedditFetch, { source: 'embed' }>> {
+  const needed = redditNeedsCaption(got.html)
+  if (!needed && !wantPoster) return got
   const sub = redditEmbedSub(got.html)
   if (!sub) return got
   const until = Date.now() + CAPTION_BUDGET_MS
@@ -223,6 +231,7 @@ async function withCaption(got: Extract<RedditFetch, { source: 'embed' }>, id: s
   const caption: RedditCaptionBytes = {}
   caption.crawler = await readSource(crawlerUrl(sub, id),
     { 'user-agent': CRAWLER_UA, accept: 'text/html' }, left(CRAWLER_TIMEOUT_MS), 'manual')
+  if (!needed) return { ...got, caption }
   const said = caption.crawler === undefined ? { kind: 'unknown' as const } : crawlerCaption(caption.crawler, sub)
   const cut = said.kind === 'body' && said.cut
   if (said.kind === 'unknown' || cut) {
@@ -235,6 +244,46 @@ async function withCaption(got: Extract<RedditFetch, { source: 'embed' }>, id: s
     }
   }
   return { ...got, caption }
+}
+
+/**
+ * A GALLERY CROSSPOST'S SLIDES LIVE ON ITS PARENT'S PAGE, which this reads (normalize.ts crosspostMedia). The
+ * crosspost names its parent only as `/gallery/{id}`, with no subreddit, so the parent is asked as the `_`
+ * placeholder first, whose canonical names the subreddit, and then under it, because the placeholder carries no
+ * carousel (residential, 2026-10-11: r/_/comments/1x2epoi named AskElectricians, whose page held 2 slides; 6 of 6
+ * gallery crossposts named their parent this way). Run beside the gif and caption reads, so a cold card waits for
+ * the slower of the two rather than for both. NOT measured from a Worker, though both are the requests fetchReddit
+ * already makes for a bare /comments/{id} link.
+ *
+ * NO-RETRY, like the caption sources: the crosspost loads without its slides, and a second ask would double the
+ * failure path inside the same head budget. Bounded by PARENT_BUDGET_MS; never throws.
+ */
+const PARENT_BUDGET_MS = 2000
+
+async function galleryParent(id: string): Promise<string | undefined> {
+  if (!POST_ID.test(id)) return undefined
+  const until = Date.now() + PARENT_BUDGET_MS
+  const page = async (sub: string): Promise<string | undefined> => {
+    const ms = until - Date.now()
+    if (ms < CAPTION_MIN_MS) return undefined
+    try {
+      // NO-RETRY: deliberate. The slides are optional (the crosspost loads without them), and a second ask
+      // would double the failure path inside the head budget the caption lookup spends beside it.
+      const res = await fetch(`https://embed.reddit.com/r/${sub}/comments/${id}/`, {
+        headers: { 'user-agent': BROWSER_UA, accept: 'text/html' }, redirect: 'follow', signal: AbortSignal.timeout(ms),
+      })
+      return await readTextCapped(res)
+    } catch {
+      return undefined
+    }
+  }
+  const first = await page('_')
+  if (!first) return undefined
+  if (redditFullRender(first)) return first
+  const sub = redditEmbedSub(first)
+  if (!sub) return undefined
+  const full = await page(sub)
+  return full && redditFullRender(full) ? full : undefined
 }
 
 /**
@@ -365,7 +414,13 @@ export async function fetchReddit(
   }
   if (embed.ok && embed.source === 'embed') {
     try { onPage?.(embed.html) } catch { /* a hook may not cost the post */ }
-    return withCaption(await withGifHead(embed), ref.id)
+    // A crosspost may need its video's poster (read with the caption) or its gallery parent's page (read beside it).
+    const needs = redditCrosspostNeeds(embed.html)
+    const [got, parent] = await Promise.all([
+      withGifHead(embed).then(g => withCaption(g, ref.id, needs !== null && 'poster' in needs)),
+      needs && 'gallery' in needs ? galleryParent(needs.gallery) : Promise.resolve(undefined),
+    ])
+    return parent ? { ...got, parent } : got
   }
   if (env.REDDIT_CLIENT_ID && env.REDDIT_CLIENT_SECRET) {
     const oauth = await fetchRedditOAuth(ref, env)

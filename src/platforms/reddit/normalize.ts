@@ -262,7 +262,9 @@ export function redditGifUrl(raw: unknown): string | null {
   if (r?.source === 'embed') {
     const post = screenview(typeof r.html === 'string' ? r.html : '')
     const url = typeof post?.url === 'string' ? post.url : ''
-    return (post?.type === 'gif' || post?.type === 'image') && REDDIT_GIF.test(url) ? url : null
+    // A crosspost's url is its parent's (crosspostMedia), so a crosspost of a gif is the same gif and is sized
+    // the same way.
+    return (post?.type === 'gif' || post?.type === 'image' || post?.type === 'crosspost') && REDDIT_GIF.test(url) ? url : null
   }
   const listing = r?.source === 'json' ? r.data : r
   const d = (Array.isArray(listing) ? listing[0] : listing)?.data?.children?.[0]?.data
@@ -272,6 +274,95 @@ export function redditGifUrl(raw: unknown): string | null {
 /** The gif entry itself, built ONCE so the embed and OAuth renders cannot spell it differently. */
 function gifEntry(url: string, head: unknown): Media {
   return { kind: 'gif', url, ...gifSize(head) }
+}
+
+/** A Reddit-hosted video's base, the form a video post's `url` takes: the HLS master hangs off it. */
+const REDDIT_VIDEO = /^https:\/\/v\.redd\.it\/[a-z0-9]+$/i
+/** A gallery post's `url`, naming the post by id and not its subreddit. */
+const REDDIT_GALLERY = /^https:\/\/www\.reddit\.com\/gallery\/([a-z0-9]+)\/?$/
+
+/**
+ * A GALLERY'S SLIDES, from the `<gallery-carousel>` of its own page (a full render; the placeholder has none).
+ * Each slide's CLEAN, unsigned, permanent full-res i.redd.it url is rebuilt from the `-v0-{mediaid}.{ext}` in its
+ * preview src, rather than passing the signed/expiring preview.redd.it urls through. Null when there is no carousel.
+ */
+function galleryItems(html: string): Media[] | null {
+  const car = html.match(/<gallery-carousel[^>]*>([\s\S]*?)<\/gallery-carousel>/)
+  if (!car) return null
+  const ids = [...new Set([...car[1].matchAll(/-v0-([a-z0-9]+)\.(\w+)(?:\?|")/g)].map(x => `${x[1]}.${x[2]}`))]
+  return ids.map(x => ({ kind: 'image' as const, url: `https://i.redd.it/${x}`, w: 0, h: 0 }))
+}
+
+/**
+ * A VIDEO'S POSTER, AS THE CRAWLER PAGE NAMES IT: its og:image, with its size. Only an external-preview url is a
+ * poster. On 10 video crossposts (residential, 2026-10-11) 9 named the video's external-preview cover and 1
+ * named Reddit's logo (i.redd.it/o0h58lzmax6a1.png, 1200x630); a /user/ page can name a generated share card
+ * (share.redd.it/preview/post/{id}). Either would be drawn as the video's picture, so they are refused by
+ * where they live rather than by their alt text, which is English prose.
+ */
+const POSTER_HOST = /^https:\/\/external-preview\.redd\.it\//
+
+export function crawlerPoster(html: string): { url: string; w: number; h: number } | null {
+  const meta = (prop: string): string | null => {
+    const m = new RegExp(`<meta property="${prop}" content="([^"]*)"`).exec(html)
+    return m ? decodeEntities(m[1]) : null
+  }
+  const url = meta('og:image')
+  if (!url || !POSTER_HOST.test(url)) return null
+  const w = parseInt(meta('og:image:width') ?? '', 10)
+  const h = parseInt(meta('og:image:height') ?? '', 10)
+  return { url, w: w > 0 ? w : 0, h: h > 0 ? h : 0 }
+}
+
+/** What fetch.ts read for a crosspost beyond its own page: the crawler page, and a gallery parent's page. */
+type CrosspostBytes = { crawler?: unknown; parent?: unknown }
+
+/**
+ * A CROSSPOST CARRIES ITS PARENT'S MEDIA, read off the one thing its page says about the parent: `url`, which on
+ * 28 of 28 live crossposts (residential, 2026-10-11) was the parent's own url, byte for byte. The page carries no
+ * media of its own (no carousel, player, poster or body markup) and names no parent id. It was title-only until
+ * then; the owner asked for pictures and videos together.
+ *
+ *  - an i.redd.it picture or .gif IS the url: the image and gif branches' own entries, nothing fetched.
+ *  - a v.redd.it base is the video: its HLS master, as a video post's. Its POSTER is the crawler page's og:image
+ *    (crawlerPoster), which fetch.ts reads for every crosspost anyway (its caption). Without a poster the video
+ *    is left out, as the video branch leaves out a video it could never degrade to a still.
+ *  - `www.reddit.com/gallery/{id}` names the parent, whose own page fetch.ts reads (it holds the carousel). It
+ *    counts only if that page is the post the url names.
+ *
+ * EVERY RENDER READS THE SAME KIND. The placeholder render of a crosspost keeps its `type` and `url` (1x1w6rq and
+ * 1x2eq29, residential), so the kind at index 0 is decided by the url alone, and a poster or parent that did not
+ * answer leaves index 0 absent (a 404), never a second kind. Not measured from a Worker: the crawler page's
+ * og:image (its description, from the same 301 body, was) and the gallery parent's two fetches.
+ */
+function crosspostMedia(url: string, gifHead: unknown, xp: CrosspostBytes): Media[] {
+  if (REDDIT_GIF.test(url)) return [gifEntry(url, gifHead)]
+  if (/^https:\/\/i\.redd\.it\//.test(url)) return [{ kind: /\.gif(?:\?|$)/i.test(url) ? 'gif' : 'image', url, w: 0, h: 0 }]
+  if (REDDIT_VIDEO.test(url)) {
+    const poster = typeof xp.crawler === 'string' ? crawlerPoster(xp.crawler) : null
+    if (!poster) return []
+    const hls = `${url}/HLSPlaylist.m3u8`
+    return [{
+      kind: 'video', url: hls, w: 0, h: 0, poster: poster.url,
+      ...(poster.w && poster.h ? { posterW: poster.w, posterH: poster.h } : {}),
+      remux: { video: hls },
+    }]
+  }
+  const gallery = REDDIT_GALLERY.exec(url)
+  if (gallery && typeof xp.parent === 'string' && canonicalOf(xp.parent)?.id === gallery[1]) return galleryItems(xp.parent) ?? []
+  return []
+}
+
+/**
+ * WHAT ELSE A CROSSPOST'S CARD NEEDS READ, for fetch.ts: the crawler page for a video's poster, or the parent's
+ * own page for a gallery. Null for every other post, a crosspost of a picture included (its url is enough).
+ */
+export function redditCrosspostNeeds(html: string): { poster: true } | { gallery: string } | null {
+  const post = screenview(html)
+  if (post?.type !== 'crosspost' || typeof post.url !== 'string') return null
+  if (REDDIT_VIDEO.test(post.url)) return { poster: true }
+  const gallery = REDDIT_GALLERY.exec(post.url)
+  return gallery ? { gallery: gallery[1] } : null
 }
 
 /**
@@ -297,7 +388,7 @@ function gifEntry(url: string, head: unknown): Media {
  * Nothing in this url or the playlist text tells those posts apart, so the fix is in the container
  * (container/server.py, REDDIT_HLS_HOST), not here.
  */
-function redditEmbedMedia(html: string, post: Any, gifHead: unknown): Media[] {
+function redditEmbedMedia(html: string, post: Any, gifHead: unknown, xp: CrosspostBytes = {}): Media[] {
   const type = post?.type
   const url = typeof post?.url === 'string' ? post.url : ''
 
@@ -339,14 +430,10 @@ function redditEmbedMedia(html: string, post: Any, gifHead: unknown): Media[] {
     return [{ kind: /\.gif(?:\?|$)/i.test(url) ? 'gif' : 'image', url, w: 0, h: 0 }]
   }
   if (type === 'gallery') {
-    const car = html.match(/<gallery-carousel[^>]*>([\s\S]*?)<\/gallery-carousel>/)
-    if (car) {
-      // Reconstruct the CLEAN, unsigned, permanent full-res i.redd.it url from the `-v0-{mediaid}.{ext}`
-      // in each preview src, rather than passing the signed/expiring preview.redd.it urls through.
-      const ids = [...new Set([...car[1].matchAll(/-v0-([a-z0-9]+)\.(\w+)(?:\?|")/g)].map(x => `${x[1]}.${x[2]}`))]
-      return ids.map(x => ({ kind: 'image' as const, url: `https://i.redd.it/${x}`, w: 0, h: 0 }))
-    }
+    const items = galleryItems(html)
+    if (items) return items
   }
+  if (type === 'crosspost') return crosspostMedia(url, gifHead, xp)
   /**
    * A MULTI_MEDIA POST'S PICTURES ARE INSIDE ITS BODY, as `<figure class="rte-media"><a><img src=
    * "https://preview.redd.it/{slug}-v0-{mediaid}.{ext}?…">` (r/DeadlockTheGame/comments/1x2wg7e, measured
@@ -374,7 +461,7 @@ function redditEmbedMedia(html: string, post: Any, gifHead: unknown): Media[] {
     const poster = cover ? decodeEntities(cover[0]) : undefined
     // The HLS lives at {v.redd.it base}/HLSPlaylist.m3u8. Emit a remux video only with BOTH a v.redd.it
     // base and a poster (so it can always degrade to a still); otherwise fall back to the cover image.
-    if (/^https:\/\/v\.redd\.it\/[a-z0-9]+$/i.test(url) && poster) {
+    if (REDDIT_VIDEO.test(url) && poster) {
       const hls = `${url}/HLSPlaylist.m3u8`
       return [{ kind: 'video', url: hls, w: 0, h: 0, poster, remux: { video: hls } }]
     }
@@ -390,7 +477,9 @@ function redditEmbedMedia(html: string, post: Any, gifHead: unknown): Media[] {
 
 /**
  * The raw bytes fetch.ts read from the three body sources (caption.ts), when the embed page had no body.
- * Absent fields are sources that were not asked or did not answer.
+ * Absent fields are sources that were not asked or did not answer. The crawler page is also read, alone,
+ * for a crosspost's video poster when no body is wanted (a spoiler-tagged one), so its presence alone is
+ * not a caption lookup (redditCaptionSource).
  */
 type CaptionBytes = { crawler?: unknown; feed?: unknown; archive?: unknown }
 
@@ -420,13 +509,15 @@ function captionOf(raw: CaptionBytes | undefined, sub: string, id: string): Retu
  */
 export function redditCaptionSource(raw: unknown): ReturnType<typeof pickCaption>['source'] | null {
   const r = raw as Any
-  if (r?.source !== 'embed' || typeof r.html !== 'string' || !r.caption) return null
+  if (r?.source !== 'embed' || typeof r.html !== 'string' || !r.caption || !redditNeedsCaption(r.html)) return null
   const sub = redditEmbedSub(r.html)
   const id = canonicalOf(r.html)?.id
   return sub && id ? captionOf(r.caption, sub, id)?.source ?? null : null
 }
 
-function buildFromEmbed(html: string, ref: Extract<PostRef, { p: 'rd' }>, gifHead?: unknown, caption?: CaptionBytes): Post | null {
+function buildFromEmbed(
+  html: string, ref: Extract<PostRef, { p: 'rd' }>, gifHead?: unknown, caption?: CaptionBytes, parent?: unknown,
+): Post | null {
   // NOT-FOUND / expired: no canonical, or a `/undefined` url. Reddit answers 200 for these, so this
   // is the content assertion, not a status check.
   const canon = canonicalOf(html)
@@ -496,7 +587,9 @@ function buildFromEmbed(html: string, ref: Extract<PostRef, { p: 'rd' }>, gifHea
     ...(link ? { link } : {}),
     ...(spoiler ? { spoiler: true as const } : {}),
     createdAt: created,
-    media: redditEmbedMedia(html, post, gifHead),
+    // A crosspost's video poster comes from the crawler page the caption lookup read; a gallery's slides from
+    // its parent's page (crosspostMedia).
+    media: redditEmbedMedia(html, post, gifHead, { crawler: caption?.crawler, parent }),
     counts: {
       likes: Number.isFinite(score) ? score : undefined,
       replies: Number.isFinite(comments) ? comments : undefined,
@@ -605,7 +698,7 @@ export function redditGate(raw: unknown): 'private' | undefined {
 export function normalizeReddit(raw: unknown, ref: PostRef): Post | null {
   if (ref.p !== 'rd') return null
   const r = raw as Any
-  if (r?.source === 'embed') return buildFromEmbed(typeof r.html === 'string' ? r.html : '', ref, r.gifHead, r.caption)
+  if (r?.source === 'embed') return buildFromEmbed(typeof r.html === 'string' ? r.html : '', ref, r.gifHead, r.caption, r.parent)
   if (r?.source === 'json') return buildFromOAuth(r.data, ref, r.gifHead)
   return buildFromOAuth(raw, ref)
 }
