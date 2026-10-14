@@ -1,0 +1,32 @@
+{
+ "data": null,
+ "errors": [
+  {
+   "message": "A server error field_exception occured. Check server logs for details.",
+   "severity": "CRITICAL",
+   "code": 1675030,
+   "summary": "Query Error",
+   "description": "Error performing query.",
+   "path": [
+    "xdt_api__v1__media__shortcode__web_info"
+   ]
+  },
+  {
+   "message": "A server error field_exception occured. Check server logs for details.",
+   "severity": "CRITICAL",
+   "code": 1675030,
+   "summary": "Query Error",
+   "description": "Error performing query.",
+   "path": [
+    "xdt_api__v1__media__shortcode__web_info"
+   ]
+  }
+ ],
+ "extensions": {
+  "server_metadata": {
+   "request_start_time_ms": 1791984356845,
+   "time_at_flush_ms": 1791984356889
+  },
+  "is_final": true
+ }
+}

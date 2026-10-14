@@ -28,7 +28,7 @@ import {
   fetchInstagram, fetchInstagramFullPage, fetchInstagramGraphQLMedia, fetchInstagramUserFeed,
 } from './platforms/instagram/fetch.ts'
 import {
-  instagramAgeGate, instagramCopyrightBlocked, instagramFullPageCard, instagramPrivateGate,
+  instagramAgeGate, instagramCopyrightBlocked, instagramFullPageCard, instagramGraphQLCard, instagramPrivateGate,
   normalizeInstagram,
   recoveredMediaFrom, withCopyrightRemux, withRecoveredVideo,
 } from './platforms/instagram/normalize.ts'
@@ -374,6 +374,29 @@ export async function liveFetchPost(
          */
         count(env, 'ig', got.reason, client)
         /**
+         * THE SHORTCODE GRAPHQL QUERY FIRST, and the whole card from its answer when it has one.
+         *
+         * Until 2026-10-14 this arm asked for the full /p/{code}/ page first and used the query only to
+         * add the video to a card the page had produced. Instagram intermittently refuses that page to
+         * Cloudflare's egress (302, 302, 429, 429, empty bodies; always from BOM, by day from KIX, in
+         * bursts from ATL), and a refused page produced no card, so the query was never asked and a
+         * live public post drew the generic failure card. Real Discord pastes failed 26% of the time in
+         * the week to 10-13, mostly this way. See instagramGraphQLCard for the measurement and for what
+         * the item carries that the page never did (counts, the date, the display name, the avatar).
+         *
+         * ~22 KB in one request against ~950 KB for the page. When the query has no item (an age-gated
+         * or nonexistent post answers `data: null`; a rotated doc_id answers nothing usable) the full
+         * page runs exactly as before, so the gate cards are unchanged, and the answer already in hand
+         * is reused for the page's card rather than asked for twice.
+         */
+        const code = ref.kind === 'story' ? '' : ref.code
+        const gql = code ? await fetchInstagramGraphQLMedia(code, env.IG_GRAPHQL_DOC_ID) : null
+        const whole = instagramGraphQLCard(gql, ref)
+        if (whole) {
+          count(env, 'ig', 'graphql_recovered', client)
+          return whole
+        }
+        /**
          * BEFORE the generic failure, check the FULL /p/{code}/ page for a private-account signal.
          * The embed surface just failed cannot carry it — a private post is byte-identical to a
          * deleted one there — but the full page names the account (username present, no media).
@@ -411,9 +434,6 @@ export async function liveFetchPost(
            * replaces. A reel's page ships og:image and no og:video, so without this the card is
            * always a still.
            */
-          // `card` is non-null, and instagramFullPageCard refuses a story ref outright — so this arm
-          // is unreachable for one. The narrow is for the TYPE, which cannot know that.
-          const code = ref.kind === 'story' ? '' : ref.code
           /**
            * BY SHORTCODE FIRST, BY ACCOUNT SECOND — and the order is the whole point.
            *
@@ -438,9 +458,12 @@ export async function liveFetchPost(
            * identifier — IG_GRAPHQL_DOC_ID exists so a rotation is a config change — and the day it
            * rotates this returns null and the account feed is what keeps recent posts working. Two
            * independent surfaces failing the same day is a worse outage than either alone.
+           *
+           * THE ANSWER IS THE ONE ASKED FOR AT THE TOP OF THIS ARM, not a second request. It reaches
+           * here when it had media but no card could be built from it (no usable handle), which is
+           * why it can still repair the page's still.
            */
-          const viaCode = recoveredMediaFrom(
-            await fetchInstagramGraphQLMedia(code, env.IG_GRAPHQL_DOC_ID), code)
+          const viaCode = recoveredMediaFrom(gql, code)
           if (viaCode) {
             count(env, 'ig', 'copyright_gql', client)
             return withRecoveredVideo(card, viaCode)

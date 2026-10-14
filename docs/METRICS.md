@@ -453,7 +453,8 @@ Most mean nothing as an absolute number, and several mislead alone.
 | `ambiguous` | A chooser card was served. `blob1='none'` is the free router-level chooser, `blob1='tt'` one that cost an upstream fetch. The split separates a wave of Threads links from TikTok blocking mbedfx. | nothing |
 | `notfound` | `blob1='none'` is a domain-wide 404 (noise). `ms`/`mk`/`pt` is an upstream 404/410, counted here so a deleted post does not inflate `assert_fail`. | nothing |
 | `copyright_gql` / `copyright_recovered` / `copyright_remux` | The three Instagram copyright recoveries, cheapest first. The signal is the ratio across all three. | each other, and `ig`/`ok` |
-| `fullpage_recovered` | The primary surface failed but the full page carried the whole post. On `ig`, every count is a post that would previously have shown a false 🔒. | `private` |
+| `fullpage_recovered` | The primary surface failed but the full page carried the whole post. On `ig`, every count is a post that would previously have shown a false 🔒. Since 2026-10-14 it counts only the Instagram posts `graphql_recovered` could not answer. | `private` |
+| `graphql_recovered` | An Instagram post whose embed failed, drawn whole from the shortcode GraphQL query before the full page was asked for. Added because the full page is refused to Cloudflare's egress in bursts (302 then 429), and nothing measured whether the query is refused in the same windows. | `fullpage_recovered` and `ig` `fetch_fail`, which should fall as it rises |
 | `plugin_recovered` / `caption_recovered` | The second and third Facebook post surfaces. `plugin_recovered` is Meta's embed fragment, which measured 33 of 35 sampled post urls on 2026-08-12 and carries every `/photo/?fbid=` url the page surface answers with a login wall. `caption_recovered` is the narrow last resort (a page with a byline and a caption and no `og:image`), answers 2 of those 35 and fires on 1 of them, because the plugin reaches the other first and returns before this read runs. Expect it small. | each other, and `fb`/`ok` |
 | `translated` / `translate_fallback` | Which engine served a translation, Google or Workers AI as the fallback. Only the ratio means anything. | each other |
 | `smoke_ok` / `smoke_fail` | The scheduled self-check: did a known post on this platform still render a real card — and, on `yt` and `th`, one with a player in it? Read per platform. | each other |
@@ -815,6 +816,8 @@ SELECT SUM(_sample_interval * (blob2 = 'copyright_gql')) AS gql,
        SUM(_sample_interval * (blob2 = 'copyright_recovered')) AS feed,
        SUM(_sample_interval * (blob2 = 'copyright_remux')) AS container,
        SUM(_sample_interval * (blob2 = 'fullpage_recovered')) AS fullpage,
+       SUM(_sample_interval * (blob2 = 'graphql_recovered')) AS graphql,
+       SUM(_sample_interval * (blob2 = 'fetch_fail')) AS fetch_fail,
        SUM(_sample_interval * (blob2 = 'ok')) AS ok
 FROM mbedfx_counters
 WHERE timestamp > NOW() - INTERVAL '7' DAY AND blob1 = 'ig'
@@ -822,6 +825,12 @@ WHERE timestamp > NOW() - INTERVAL '7' DAY AND blob1 = 'ig'
 
 All three at zero while `ok` keeps climbing means Instagram closed the recovery and every blocked
 reel is a photo again. The cards render either way.
+
+`graphql` against `fullpage` and `fetch_fail` says whether asking the shortcode query first (since
+2026-10-14) is working. Before it, the week to 10-13 had real pastes failing about one time in four,
+mostly on a full page Instagram refused. If `graphql` stays near zero while `fetch_fail` does not fall,
+the query is being refused in the same windows as the page, which was the one thing not measured when
+it shipped.
 
 ### Is Google refusing the Worker's egress
 

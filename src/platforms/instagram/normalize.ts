@@ -978,6 +978,24 @@ function mediaFromFeedNode(node: Any): Media | null {
 }
 
 export function recoveredMediaFrom(body: unknown, code: string): Media[] | null {
+  const item = v1Item(body, code)
+  return item ? mediaOfItem(item) : null
+}
+
+/**
+ * THE v1 ITEM FOR `code`, out of either envelope, or null.
+ *
+ * TWO ENVELOPES, ONE ITEM SHAPE. The user feed answers `{items:[…]}`; the shortcode-scoped GraphQL
+ * surface answers `{data:{xdt_api__v1__media__shortcode__web_info:{items:[…]}}}`. The items inside
+ * are the SAME v1 objects — same image_versions2 candidate ladder, same video_versions, same
+ * carousel_media — which is the whole reason the GraphQL path is worth having: it is a different
+ * ADDRESS onto the serializer this function already knows how to read, not a new format.
+ *
+ * Read here rather than unwrapped at each call site so both surfaces are guaranteed to go through
+ * one candidate-selection rule. The aspect-first crop rejection above took a reported bug to get
+ * right, and a second copy of it reached by a different door is how that bug comes back.
+ */
+function v1Item(body: unknown, code: string): Any | null {
   if (typeof body !== 'string' || !code) return null
   let parsed: unknown
   try {
@@ -985,27 +1003,93 @@ export function recoveredMediaFrom(body: unknown, code: string): Media[] | null 
   } catch {
     return null
   }
-  /**
-   * TWO ENVELOPES, ONE ITEM SHAPE. The user feed answers `{items:[…]}`; the shortcode-scoped GraphQL
-   * surface answers `{data:{xdt_api__v1__media__shortcode__web_info:{items:[…]}}}`. The items inside
-   * are the SAME v1 objects — same image_versions2 candidate ladder, same video_versions, same
-   * carousel_media — which is the whole reason the GraphQL path is worth having: it is a different
-   * ADDRESS onto the serializer this function already knows how to read, not a new format.
-   *
-   * Read here rather than unwrapped at each call site so both surfaces are guaranteed to go through
-   * one candidate-selection rule. The aspect-first crop rejection above took a reported bug to get
-   * right, and a second copy of it reached by a different door is how that bug comes back.
-   */
   const envelope = parsed as Any
   const items: unknown = Array.isArray(envelope?.items)
     ? envelope.items
     : envelope?.data?.xdt_api__v1__media__shortcode__web_info?.items
   if (!Array.isArray(items)) return null
   const item = items.find(it => it !== null && typeof it === 'object' && (it as Any).code === code) as Any
-  if (!item) return null
+  return item ?? null
+}
 
+/** Every piece of media one v1 item carries, by the one candidate rule above. */
+function mediaOfItem(item: Any): Media[] | null {
   const kids = item.carousel_media
   const nodes: Any[] = Array.isArray(kids) && kids.length ? kids.slice(0, 20) : [item]
   const out = nodes.map(mediaFromFeedNode).filter(Boolean) as Media[]
   return out.length ? out : null
+}
+
+/**
+ * `taken_at` (unix SECONDS) as a Date, or null. The v1 item has the timestamp the embed lacks, so it is
+ * read rather than derived; the same 2010..2100 window createdAtFromId applies keeps a drifted unit
+ * (milliseconds would land in the year 58,000) from being published as a date.
+ */
+function takenAt(v: unknown): Date | null {
+  const s = count(v)
+  if (s === undefined || s === 0) return null
+  const d = new Date(s * 1000)
+  const y = d.getUTCFullYear()
+  return y >= 2010 && y <= 2100 ? d : null
+}
+
+/**
+ * A WHOLE POST FROM THE SHORTCODE GRAPHQL ANSWER, for a post whose embed came back empty. Pure; null
+ * means "not a card", and the caller falls back to the full page exactly as before this existed.
+ *
+ * THE DEFECT IT CLOSES, measured 2026-10-14 from the subrequest analytics and from production. Any post
+ * the embed cannot serve (embedding disabled by its owner, age-gated, private, deleted) used to depend
+ * entirely on the full /p/{code}/ page, and Instagram intermittently refuses that page to Cloudflare's
+ * egress: 302 twice, then 429 twice, empty bodies. Always from BOM, from KIX in Japanese daytime, in
+ * bursts from ATL and BOS, flipping within minutes on one colo. A refused page leaves no card and no
+ * gate, so a live public post drew the generic failure card. Real Discord pastes of Instagram failed
+ * 26% of the time in the week to 10-13, mostly this way. The GraphQL query was already asked on that
+ * path, but only AFTER a full page had produced a card, so a refused page meant it was never asked.
+ *
+ * THE ITEM HAS EVERYTHING THE CARD NEEDS, which the full page never did: the handle and display name,
+ * the avatar, the caption, `taken_at`, the like and comment counts, and the renditions. Measured from a
+ * residential connection 2026-10-14 with the shipped request shape: National Geographic's reel
+ * DXwiAJ4lMtM (27,737 bytes) and NASA's DcCH2ZygIiP (21,508) both carried all of them. The same query
+ * answered from Cloudflare egress on 2026-08-10 (fetchInstagramGraphQLMedia's note, three posts).
+ *
+ * WHAT IT DOES NOT ANSWER, and why the full page stays behind it: an age-gated post and a nonexistent
+ * one both come back `data: null` with a `field_exception` error (measured on DZFDtEhoNPy, a 25+ reel,
+ * and a made-up code, same day). No item means null here, and the full page's gate readers still run, so
+ * the 🔞 and 🔒 cards are unchanged.
+ *
+ * VIEWS ARE NOT EMITTED, as in fromBlob: `view_count` was null on both reels measured, and a confident
+ * count read off a field that is present but unpopulated is the lie fromBlob's comment describes. Likes
+ * are left out when the owner hid them (`like_and_view_counts_disabled`), because the item still carries
+ * a number there and printing it would publish what the owner chose not to show.
+ */
+export function instagramGraphQLCard(body: unknown, ref: PostRef): Post | null {
+  if (ref.p !== 'ig' || ref.kind === 'story') return null
+  if (typeof ref.code !== 'string' || !CODE.test(ref.code)) return null
+  const item = v1Item(body, ref.code)
+  if (!item) return null
+  const author = authorOf(item.user)
+  if (!author) return null
+  const createdAt = takenAt(item.taken_at) ?? createdAtFromId(mediaIdFromShortcode(ref.code))
+  if (!createdAt) return null
+  // The same host rule withRecoveredVideo applies: these urls are handed to fetch() by /_media/.
+  const media = (mediaOfItem(item) ?? []).filter(m => allowedHost(m.url))
+  if (!media.length) return null
+
+  const counts: Post['counts'] = {}
+  const likes = count(item.like_count)
+  if (likes !== undefined && item.like_and_view_counts_disabled !== true) counts.likes = likes
+  const replies = count(item.comment_count)
+  if (replies !== undefined) counts.replies = replies
+
+  const caption = item.caption?.text
+  return {
+    ref,
+    canonical: canonicalFor(ref.code, item.product_type === 'clips'),
+    author,
+    text: typeof caption === 'string' ? caption : '',
+    createdAt,
+    media,
+    counts,
+    sensitive: false,
+  }
 }
