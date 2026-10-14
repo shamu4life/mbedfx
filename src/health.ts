@@ -46,7 +46,16 @@ export type HealthRecord = {
   last: Record<string, { at: string; verdict: SmokeVerdict; streak: number; colo: string | null }>
 }
 
-const VERDICTS: readonly SmokeVerdict[] = ['ok', 'failure-card', 'no-card', 'no-video', 'threw', 'timeout']
+/**
+ * EVERY SmokeVerdict, and a type error when smoke.ts gains one that is not listed here. readRecord drops
+ * a `last` entry whose verdict it does not know, so a missing one would pin that check's streak at 1 on
+ * every read and silently disable its streak alarm (review of PR #105, 2026-10-14). The same shape as
+ * the parseRefKey allowlist in CLAUDE.md, closed by the compiler this time instead of by memory.
+ */
+const VERDICT_SET = {
+  ok: true, 'failure-card': true, 'no-card': true, 'no-video': true, threw: true, timeout: true,
+} satisfies Record<SmokeVerdict, true>
+const VERDICTS = Object.keys(VERDICT_SET) as SmokeVerdict[]
 const isObj = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v)
 const count = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) && v >= 0 ? Math.floor(v) : 0)
 const COLO = /^[A-Z]{3}$/
@@ -179,14 +188,25 @@ export async function cronColo(fetchImpl: typeof fetch = fetch): Promise<string 
   }
 }
 
-/** Read, fold and write. Never throws: a lost record costs one run of history, never the check. */
+/**
+ * Read, fold and write. Never throws.
+ *
+ * A READ THAT FAILS SKIPS THIS TICK; it never starts the week over. Writing after a failed read would
+ * replace up to eight days and every streak with this one run, and for the hours until MIN_RUNS and
+ * STREAK are reached again nothing could fire (review of PR #105, 2026-10-14). Only an absent object, or
+ * one whose bytes are not JSON, starts a fresh week: the first is the first run ever, the second cannot
+ * be recovered by waiting.
+ */
 export async function recordSmoke(bucket: R2Bucket, results: readonly SmokeResult[], at: Date, colo: string | null): Promise<void> {
   let prev: unknown = null
   try {
     const obj = await bucket.get(HEALTH_KEY)
-    prev = obj ? await obj.json() : null
+    if (obj) {
+      const text = await obj.text()
+      try { prev = JSON.parse(text) } catch { prev = null }
+    }
   } catch {
-    prev = null
+    return
   }
   try {
     await bucket.put(HEALTH_KEY, JSON.stringify(foldSmoke(prev, results, at, colo)), {
@@ -197,11 +217,15 @@ export async function recordSmoke(bucket: R2Bucket, results: readonly SmokeResul
   }
 }
 
-/** The stored record for `/_health`, or null when there is none yet or it cannot be read. */
-export async function readHealth(bucket: R2Bucket): Promise<unknown> {
+/**
+ * The stored record for `/_health`: `{ raw }` (null raw when no run has been recorded yet), or null when
+ * the week COULD NOT BE READ. The two must not look alike: an unread week summarised as zeros reads as a
+ * clean one, and the twice-weekly report would close every open check issue as passed.
+ */
+export async function readHealth(bucket: R2Bucket): Promise<{ raw: unknown } | null> {
   try {
     const obj = await bucket.get(HEALTH_KEY)
-    return obj ? await obj.json() : null
+    return { raw: obj ? JSON.parse(await obj.text()) : null }
   } catch {
     return null
   }

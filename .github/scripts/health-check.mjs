@@ -14,7 +14,7 @@ import { execFileSync } from 'node:child_process'
 import { appendFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { evaluate, judged, planIssues, renderSummary, smokeFailures, LABEL } from './health-lib.mjs'
+import { containerServing, evaluate, judged, planIssues, renderSummary, smokeFailures, LABEL } from './health-lib.mjs'
 
 const BASE = (process.env.HEALTH_BASE || 'https://mbedfx.app').replace(/\/+$/, '')
 const GUESTS = ['sorryifuckedyour.mom', 'hotsinglesnear.you']
@@ -66,13 +66,25 @@ async function liveRuns() {
   return { ran: true, failed }
 }
 
+/**
+ * `/_clients` asked again a minute later when the first answer is not serving, for the reason the live
+ * smoke runs twice: YouTube refuses Cloudflare's egress intermittently, and one refused sample would open
+ * an issue the next run closes.
+ */
+async function clientsTwice() {
+  const first = await getJson(`${BASE}/_clients`, 240_000)
+  if (containerServing(first)) return first
+  await sleep(60_000)
+  return getJson(`${BASE}/_clients`, 240_000)
+}
+
 function gh(args) {
   return execFileSync('gh', args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'inherit'] })
 }
 
 const health = await getJson(`${BASE}/_health`, 30_000)
 const live = await liveRuns()
-const clients = await getJson(`${BASE}/_clients`, 240_000)
+const clients = await clientsTwice()
 const guests = []
 for (const host of GUESTS) {
   guests.push({

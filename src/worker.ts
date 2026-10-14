@@ -5708,7 +5708,13 @@ async function serve(req: Request, env: Env, ctx: ExecutionContext, d: Deps): Pr
       return Response.json({ ok: false, error: 'no MEDIA_CACHE binding on this deployment' },
         { status: 503, headers: { 'cache-control': 'no-store' } })
     }
-    return Response.json(healthSummary(await readHealth(bucket), new Date()), { headers: { 'cache-control': 'no-store' } })
+    // An unread week is a 503, never a summary of zeros: zeros read as a clean week to the report.
+    const read = await readHealth(bucket)
+    if (!read) {
+      return Response.json({ ok: false, error: 'the week could not be read' },
+        { status: 503, headers: { 'cache-control': 'no-store' } })
+    }
+    return Response.json(healthSummary(read.raw, new Date()), { headers: { 'cache-control': 'no-store' } })
   }
 
   if (url.pathname === '/_smoke') {

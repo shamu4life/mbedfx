@@ -77,7 +77,7 @@ export function smokeFailures(json) {
 }
 
 /** `/_clients` answers 200 with `ok: false` when the container replies but serves nothing (src/worker.ts). */
-const containerServing = c => c?.json?.ok === true && Array.isArray(c.json.serving) && c.json.serving.length > 0
+export const containerServing = c => c?.json?.ok === true && Array.isArray(c.json.serving) && c.json.serving.length > 0
 
 /** A guest domain shows the you-stupid site at `/`: a 200 HTML page that mbedfx did not mark as its own. */
 const guestRootOk = g => g.root?.status === 200 && /text\/html/.test(g.root?.contentType ?? '') && !g.root?.marked
@@ -86,13 +86,25 @@ const guestDOk = g => g.d?.status === 302 && !!g.d?.marked && (g.d?.location ?? 
 
 /**
  * WHETHER THIS RUN CHECKED A PROBLEM, so that its issue may be closed when the problem is absent. `site`
- * and `clients` are asked every run. The week's problems need the week. A check's issue also needs the
- * live run, because some are opened by it alone. A key this file no longer raises is never closed by it.
+ * and `clients` are asked every run. The week's problems need the week. A key this file no longer raises
+ * is never closed by it.
+ *
+ * A CHECK'S ISSUE NEEDS EVIDENCE THAT IT PASSED, not an absence of failures: the live run (some issues
+ * are opened by it alone), a week recorded within STALE_MINUTES, and at least MIN_RUNS runs of that check
+ * in it. Zeros measured nothing. Without this, a week that was never written, one that stopped being
+ * written, or a check renamed out of the list all closed their issues as "passed again" (review of PR
+ * #105, 2026-10-14) — the false all-clear this file's header says cannot happen.
  */
 export function judged(key, { health, live, guests } = {}) {
   if (key === 'site' || key === 'clients') return true
   if (key === 'cron') return readableWeek(health)
-  if (key.startsWith('check:')) return readableWeek(health) && !!live?.ran
+  if (key.startsWith('check:')) {
+    if (!readableWeek(health) || !live?.ran) return false
+    const h = health.json
+    if (h.ageMinutes === null || h.ageMinutes > STALE_MINUTES) return false
+    const row = h.checks.find(c => `check:${c.name}` === key)
+    return !!row && row.runs >= MIN_RUNS
+  }
   if (key.startsWith('guest:')) return (guests ?? []).some(g => key === `guest:${g.host}`)
   return false
 }

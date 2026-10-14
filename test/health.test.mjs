@@ -84,10 +84,47 @@ const fakeR2 = () => {
   const store = new Map()
   return {
     store,
-    async get(k) { const v = store.get(k); return v === undefined ? null : { async json() { return JSON.parse(v) } } },
+    async get(k) {
+      const v = store.get(k)
+      return v === undefined ? null : { async text() { return v }, async json() { return JSON.parse(v) } }
+    },
     async put(k, v) { store.set(k, v) },
   }
 }
+
+/** A bucket whose reads fail and whose writes succeed: the partial outage that used to wipe the week. */
+const failingReads = () => {
+  const r2 = fakeR2()
+  return { ...r2, store: r2.store, async get() { throw new Error('R2 read failed') } }
+}
+
+test('A FAILED READ SKIPS THE TICK, so one transient R2 error cannot replace eight days with one run', async () => {
+  // Review of PR #105: the read error set the previous record to null and the write went ahead, erasing
+  // the week and every streak, and for hours afterwards no rate or streak could fire.
+  const r2 = failingReads()
+  r2.store.set(HEALTH_KEY, JSON.stringify(foldSmoke(null, run({ tt: 'failure-card' }), at('2026-10-13T12:00:00Z'), 'IAD')))
+  const before = r2.store.get(HEALTH_KEY)
+  await recordSmoke(r2, run({ tt: 'ok' }), at('2026-10-14T12:00:00Z'), 'IAD')
+  assert.equal(r2.store.get(HEALTH_KEY), before, 'untouched: this tick is lost, the week is not')
+})
+
+test('A STORED OBJECT THAT IS NOT JSON STARTS THE WEEK OVER, because waiting cannot repair it', async () => {
+  const r2 = fakeR2()
+  r2.store.set(HEALTH_KEY, 'not json at all')
+  await recordSmoke(r2, run({ x: 'ok' }), at('2026-10-14T12:00:00Z'), 'IAD')
+  const rec = JSON.parse(r2.store.get(HEALTH_KEY))
+  assert.equal(rec.days['2026-10-14'].x.ok, 1)
+})
+
+test('/_health ANSWERS 503 WHEN THE WEEK CANNOT BE READ, never a summary of zeros that reads as a clean week', async () => {
+  const deps = { cache: { async match() {}, async put() {} }, fetchPost: async () => null, resolveShortlink: async () => ({}), resolveRedditShare: async () => null }
+  const res = await handle(new Request('https://mbedfx.app/_health'), { AE: { writeDataPoint() {} }, MEDIA_CACHE: failingReads() }, { waitUntil() {} }, deps)
+  assert.equal(res.status, 503)
+  assert.equal((await res.json()).ok, false)
+  const empty = await handle(new Request('https://mbedfx.app/_health'), { AE: { writeDataPoint() {} }, MEDIA_CACHE: fakeR2() }, { waitUntil() {} }, deps)
+  assert.equal(empty.status, 200, 'no record yet is still a summary: that is the first deploy, and it says so')
+  assert.equal((await empty.json()).updated, null)
+})
 
 test('THE SCHEDULED RUN\'S RECORD ROUND-TRIPS THROUGH R2 and /_health publishes it', async () => {
   const r2 = fakeR2()

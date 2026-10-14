@@ -130,6 +130,20 @@ test('AN ISSUE IS CLOSED ONLY BY A RUN THAT CHECKED IT, so the day the site is d
   assert.deepEqual(planIssues([], [{ number: 1, title: 't', body: marker('site') }], null).map(a => a.type), ['skip'])
 })
 
+test('ZEROS MEASURED NOTHING: a week never written, a stale one, a thin one or a renamed check closes no check issue', () => {
+  // Review of PR #105: /_health summarised an unread week as zeros, every check then looked judged, and an
+  // open TikTok issue (a failure only the scheduled run sees) was closed as "passed again" by a run whose
+  // live check passed. The 503 for an unread week is in src/health.ts; this is the reader's half.
+  const open = [{ number: 41, title: 't', body: `${marker('check:tt')}\nold` }]
+  const verdict = (health) => planIssues([], open, null, k => judged(k, { health, live: liveOk, guests: guestsOk }))[0].type
+  const never = { ok: true, status: 200, json: { updated: null, ageMinutes: null, checks: [check('tt', 'tt', 0, 0)] } }
+  assert.equal(verdict(never), 'skip', 'no run ever recorded')
+  assert.equal(verdict(healthy([check('tt', 'tt', 0, 300)], 600)), 'skip', 'the record stopped being written ten hours ago')
+  assert.equal(verdict(healthy([check('tt', 'tt', 0, 4)])), 'skip', 'four runs is not a week')
+  assert.equal(verdict(healthy([check('x', 'x', 0, 380)])), 'skip', 'a check no longer in the list was never looked at')
+  assert.equal(verdict(healthy([check('tt', 'tt', 0, 300)])), 'resolve', 'and a fresh week of passes still closes it')
+})
+
 test('ISSUES: OPEN A NEW ONE, COMMENT ON THE OPEN ONE, CLOSE THE ONE THAT PASSED, matched by marker not title', () => {
   const problems = [{ key: 'check:tt', title: 'TikTok is failing', body: 'b' }, { key: 'check:ig', title: 'Instagram is failing', body: 'b' }]
   const open = [
@@ -137,7 +151,9 @@ test('ISSUES: OPEN A NEW ONE, COMMENT ON THE OPEN ONE, CLOSE THE ONE THAT PASSED
     { number: 9, title: '[health-check] YouTube is failing', body: `${marker('check:yt')}\nold` },
     { number: 11, title: 'an unrelated issue with the label', body: 'no marker' },
   ]
-  const checked = { health: healthy(quiet), live: liveOk, guests: guestsOk }
+  // A yt row with a full week of passes: since the review of PR #105 a check issue closes only on evidence
+  // that the check passed, and the `quiet` week alone has no yt row at all.
+  const checked = { health: healthy([...quiet, check('yt', 'yt', 0, 300)]), live: liveOk, guests: guestsOk }
   const actions = planIssues(problems, open, 'https://example.invalid/run/1', k => judged(k, checked))
   assert.deepEqual(actions.map(a => [a.type, a.number ?? a.title]), [
     ['comment', 7], ['create', '[health-check] Instagram is failing'], ['resolve', 9],

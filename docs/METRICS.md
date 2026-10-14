@@ -684,7 +684,10 @@ check running inside the Worker cannot see), asks `/_clients` for the container,
 domains and their `d.` names. Anything broken becomes an issue labelled `health-check`, commented on
 every run while it stays broken and closed when it passes again. Only a run that could check a problem
 closes its issue: when `/_health` does not answer, no scheduled check can fail, so the open check
-issues are left as they are and the run page lists them. Each answer is judged on what it says rather
+issues are left as they are and the run page lists them. A check's issue also needs evidence that it
+passed: a week recorded within two hours with at least ten runs of that check, and the live run.
+`/_health` answers 503 when the week cannot be read rather than a summary of zeros, and a scheduled run
+whose read of the record fails skips its write rather than starting the week over. Each answer is judged on what it says rather
 than its status, since `/_clients` answers 200 with `ok: false` when the container serves nothing.
 What counts as broken lives in
 `.github/scripts/health-lib.mjs`: more than 20% of a check's runs over the week (Dailymotion's
