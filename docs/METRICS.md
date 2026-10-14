@@ -665,7 +665,8 @@ it would go uncounted, which looks exactly like the "cron is not running" case a
 The counters above told nobody. On 2026-10-14 they showed TikTok failing on almost every tick since
 2026-10-06 and Instagram on about half, unread for a week, while a `/_smoke` run from a residential
 connection that morning passed all seventeen checks. A single run at report time can be green in the
-middle of a red week.
+middle of a red week. (TikTok's week then turned out to be the cron's location rather than a break; see
+"Where it runs" below.)
 
 So each SCHEDULED run is also folded into one R2 object, `health/smoke.json` in the media bucket
 (`src/health.ts`): per UTC day and per check, the ok/fail counts, the verdicts and the Cloudflare
@@ -692,9 +693,29 @@ cron not having recorded a run for two hours, `/_clients` not serving, or a gues
 wrong. Run it by hand from the Actions tab (`workflow_dispatch`), or locally without filing anything:
 `node .github/scripts/health-check.mjs`.
 
-The `colos` field is there for one question in particular: whether a check fails only from where
-Cloudflare runs the cron. When the issue says the scheduled run failed and the live run from GitHub
-passed, the location list says where the scheduled one ran.
+#### Where it runs
+
+A Cron Trigger runs wherever Cloudflare puts it, and the upstreams answer by location. Measured
+2026-10-14 from the subrequest analytics (`workersSubrequestsAdaptiveGroups`, which carries the colo,
+host, status and body size of every request the Worker makes): the cron ran from LHR, FRA and SIN,
+then from Mumbai (BOM) from 2026-10-05 20:30, Osaka (KIX) from 10-06 18:00, BOM again from 10-11
+12:00, and LAX for one tick on 10-14. TikTok's row went red on the first BOM tick: from Mumbai TikTok
+answers a 76 KB page with no video in it, from Osaka the post reads as unavailable. Real Discord pastes
+of TikTok, which mostly leave from ATL, failed zero times in the same weeks. Instagram refuses the full
+post page from BOM on every request, from KIX in Japanese daytime, and in bursts from ATL.
+
+So the scheduled check runs inside a Durable Object (`SMOKE_RUNNER`, `src/smokerunner.ts`) created with
+`locationHint: "enam"`, and its requests leave from eastern North America, where Discord's crawler
+meets the same upstreams. A hint is best effort and only the first `get()` places the object, so the
+record keeps each run's colo anyway: after a deploy, `colo` in `/_health` should be an eastern US code
+(IAD, EWR, ATL and the like). If it is not, the object landed somewhere else; changing
+`SMOKE_RUNNER_NAME` creates a new one with the hint applied again. When the runner cannot be reached,
+the tick is not recorded at all rather than run from the cron's own location, and a runner that stays
+unreachable shows up as the check having stopped. `/_smoke`, run by hand, still runs in the caller's
+colo, which is why it passed from a residential connection while the cron was red.
+
+The `colos` field answers whether a check fails only from one place. When an issue says the scheduled
+run failed and the live run from GitHub passed, the location list says where the scheduled one ran.
 
 
 ## Diagnosing "the card never appeared"

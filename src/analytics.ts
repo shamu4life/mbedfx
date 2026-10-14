@@ -1,5 +1,6 @@
 import type { ClientClass, MuxJob, Platform } from './types.ts'
 import type { HostResolver } from './netguard.ts'
+import type { SmokeResult } from './smoke.ts'
 
 /**
  * `api_hit`/`api_miss` are the Mastodon-spoof routes and are deliberately NOT folded into
@@ -355,6 +356,15 @@ export interface Env {
    */
   // claim/release are optional so a stand-in from before 1.15.1 still dispatches (see muxClaimed).
   MUX_RUNNER?: { getByName(name: string): { schedule(job: MuxJob): Promise<void>; claim?(): Promise<boolean>; release?(): Promise<void> } }
+  /**
+   * WHERE THE SCHEDULED CHECK RUNS (src/smokerunner.ts, `smokeWhereReadersAre` in worker.ts). Typed
+   * structurally for the reason MUX_RUNNER is. OPTIONAL in the same way: without it the cron runs the
+   * check in place, wherever Cloudflare put the invocation, which is what it did until 2026-10-14.
+   */
+  SMOKE_RUNNER?: {
+    idFromName(name: string): DurableObjectId
+    get(id: DurableObjectId, options?: { locationHint?: string }): { run(): Promise<{ results: SmokeResult[]; colo: string | null }> }
+  }
   /**
    * Workers AI, for translating a foreign-script post. OPTIONAL exactly as MEDIA_RESOLVER is:
    * absent means every card renders as it did before translation existed, so the binding can be

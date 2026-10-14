@@ -2,7 +2,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { foldSmoke, healthSummary, cronColo, recordSmoke, HEALTH_KEY, HEALTH_DAYS } from '../src/health.ts'
 import { SMOKE_CHECKS } from '../src/smoke.ts'
-import { handle } from '../src/worker.ts'
+import worker, { handle, smokeWhereReadersAre, SMOKE_RUNNER_NAME } from '../src/worker.ts'
 
 /**
  * THE SCHEDULED CHECK'S MEMORY (src/health.ts) and `/_health`, which publishes it. Added 2026-10-14 when the
@@ -103,6 +103,69 @@ test('THE SCHEDULED RUN\'S RECORD ROUND-TRIPS THROUGH R2 and /_health publishes 
   assert.equal(tt.fail, 2)
   assert.equal(tt.streak, 2)
   assert.equal(j.colo, 'LHR')
+})
+
+/** Runs the cron handler with a stand-in runner, and keeps what it counted, kept and printed. */
+async function tick(runner) {
+  const points = []
+  const errors = []
+  const pending = []
+  const r2 = fakeR2()
+  const env = { AE: { writeDataPoint(p) { points.push(p) } }, MEDIA_CACHE: r2, SMOKE_RUNNER: runner }
+  const error = console.error
+  console.error = (line) => { errors.push(line) }
+  try {
+    await worker.scheduled({ scheduledTime: Date.parse('2026-10-14T12:00:00Z') }, env, { waitUntil(p) { pending.push(p) } })
+    await Promise.all(pending)
+  } finally {
+    console.error = error
+  }
+  return { points, errors, r2 }
+}
+
+test('THE SCHEDULED CHECK RUNS FROM EASTERN NORTH AMERICA, where Discord\'s crawler is, and what it found there is what is kept', async () => {
+  // From 2026-10-05 the cron ran mostly in Mumbai and Osaka, where TikTok and Instagram answer what they
+  // do not answer Discord's crawler, and TikTok's row went red for a week with readers unaffected.
+  const calls = []
+  const results = run({ tt: 'ok', ig: 'failure-card' })
+  const runner = {
+    idFromName(name) { calls.push(['idFromName', name]); return `id:${name}` },
+    get(id, options) { calls.push(['get', id, options]); return { async run() { return { results, colo: 'IAD' } } } },
+  }
+  const { points, errors, r2 } = await tick(runner)
+  assert.deepEqual(calls, [['idFromName', SMOKE_RUNNER_NAME], ['get', `id:${SMOKE_RUNNER_NAME}`, { locationHint: 'enam' }]])
+  assert.equal(points.length, results.length, 'one counter per check the runner reported')
+  const rec = JSON.parse(r2.store.get(HEALTH_KEY))
+  assert.equal(rec.colo, 'IAD', 'the location kept is where the runner ran, not where the cron landed')
+  assert.equal(rec.last.ig.verdict, 'failure-card')
+  assert.ok(errors.includes('smoke ig failure-card'))
+})
+
+test('A RUNNER THAT CANNOT BE REACHED RECORDS NOTHING, rather than measuring from wherever the cron landed', async () => {
+  // Running the check in place instead would put the Mumbai measurement back into the week. A tick
+  // that is missing costs nothing; one that stays missing is reported as the check having stopped.
+  const runner = { idFromName: name => name, get: () => ({ async run() { throw new Error('overloaded') } }) }
+  const { points, errors, r2 } = await tick(runner)
+  assert.equal(points.length, 0)
+  assert.equal(r2.store.size, 0)
+  assert.deepEqual(errors, ['smoke runner unreachable'])
+})
+
+test('WITHOUT THE BINDING THE CHECK RUNS IN PLACE, as a self-hosted deploy needs, through the same body', async () => {
+  const fetch = globalThis.fetch
+  globalThis.fetch = async (u) => (String(u).endsWith('/cdn-cgi/trace') ? new Response('colo=LAX\n') : new Response('gone', { status: 404 }))
+  try {
+    const deps = {
+      cache: { async match() {}, async put() {} }, fetchPost: async () => null, fetchProfile: async () => null,
+      resolveShortlink: async () => ({}), resolveRedditShare: async () => null, resolveMetaShare: async () => null,
+    }
+    const ran = await smokeWhereReadersAre({ AE: { writeDataPoint() {} } }, { waitUntil() {} }, () => deps)
+    assert.equal(ran.colo, 'LAX')
+    assert.deepEqual(ran.results.map(r => r.name), SMOKE_CHECKS.map(c => c.name), 'every check, in order')
+    assert.ok(ran.results.every(r => r.verdict !== 'ok'), 'with every upstream gone, nothing passes')
+  } finally {
+    globalThis.fetch = fetch
+  }
 })
 
 test('/_health WITH NO BUCKET SAYS SO, and a guest domain declines it like every other diagnostic', async () => {

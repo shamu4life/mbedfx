@@ -12,7 +12,7 @@ import { proxyableVideoUrl, serveDirectVideo } from './mediaproxy.ts'
 import { parseRefKey, refKey } from './refkey.ts'
 import { count, countWait, countMux, type Env, type GateReason, type MuxOutcome } from './analytics.ts'
 import { YT_PROMISE, promisable } from './muxpolicy.ts'
-import { runSmoke, smokeOutcome, SMOKE_CHECKS, SMOKE_CLIENT } from './smoke.ts'
+import { runSmoke, smokeOutcome, SMOKE_CHECKS, SMOKE_CLIENT, type SmokeResult } from './smoke.ts'
 import { cronColo, healthSummary, readHealth, recordSmoke } from './health.ts'
 import { cookiesFor, jarAvailable, poolSetButUnused, twitterAccounts, type CredentialPlatform } from './credentials.ts'
 import {
@@ -6901,14 +6901,83 @@ async function serve(req: Request, env: Env, ctx: ExecutionContext, d: Deps): Pr
   }
 }
 
-const liveDeps = (): Deps => ({
-  cache: caches.default as unknown as CacheLike,
+// The cache is a parameter for one caller, the scheduled check inside SmokeRunner (COLD_CACHE below).
+// A default parameter is evaluated only when it is omitted, so that caller never touches `caches`.
+const liveDeps = (cache: CacheLike = caches.default as unknown as CacheLike): Deps => ({
+  cache,
   fetchPost: liveFetchPost,
   fetchProfile: liveFetchProfile,
   resolveShortlink: liveResolveShortlink,
   resolveRedditShare: liveResolveRedditShare,
   resolveMetaShare,
 })
+
+/**
+ * A CACHE THAT NEVER HITS, for the scheduled check when it runs inside SmokeRunner.
+ *
+ * It changes nothing the check measures: every Cache API entry this Worker writes lives at most 900 s
+ * (POST_TTL, RESP_TTL; PROFILE_TTL is 180 s) and the cron ticks every 1800 s, so a scheduled run has
+ * always met a cold cache. What it removes is a dependency the docs do not settle: whether the Cache
+ * API does anything inside a Durable Object, which belongs to no zone. Dailymotion's row is warm on
+ * most ticks from its R2 meta record, which this does not touch.
+ */
+const COLD_CACHE: CacheLike = { async match() { return undefined }, async put() {} }
+export const scheduledDeps = (): Deps => liveDeps(COLD_CACHE)
+
+export type ScheduledSmoke = { results: SmokeResult[]; colo: string | null }
+
+/** ONE SCHEDULED RUN, rendered through this Worker's own front door, and where it ran. */
+export async function scheduledSmoke(env: Env, ctx: ExecutionContext, d: Deps): Promise<ScheduledSmoke> {
+  // Asked beside the checks rather than after them, so the colo costs this run no time of its own.
+  const colo = cronColo()
+  const results = await runSmoke('https://mbedfx.app', u => handle(new Request(u, {
+    headers: { 'user-agent': 'Mozilla/5.0 (compatible; Discordbot/2.0; +https://discordapp.com)' },
+  }), env, ctx, d))
+  return { results, colo: await colo }
+}
+
+/**
+ * WHERE THE SCHEDULED CHECK RUNS: in eastern North America, where Discord's crawler reaches this Worker
+ * from, rather than wherever Cloudflare puts the cron.
+ *
+ * MEASURED 2026-10-14 from the subrequest analytics (workersSubrequestsAdaptiveGroups, by colo): the cron
+ * ran from LHR, then FRA, SIN, then Mumbai (BOM) from 2026-10-05 20:30, Osaka (KIX) from 10-06 18:00,
+ * BOM again from 10-11 12:00, and LAX for the 12:00 tick on 10-14. Discord's unfurls leave mostly from
+ * ATL. TikTok's row turned red on the first BOM tick and stayed red in BOM and KIX: from Mumbai TikTok
+ * answers a 76 KB page with no video in it (inferred to be India's block, not read), from Osaka the post
+ * reads as unavailable. Real Discord pastes of TikTok failed zero times from 09-09 to 10-14, about 290
+ * renders. Instagram refuses the full post page from BOM on every request, which made that row measure
+ * Mumbai rather than readers. A health check that measures from Mumbai reports India's network.
+ *
+ * A Durable Object is placed by its FIRST `get()`, with a location hint, and never moves after that
+ * (Durable Objects docs, data location). Its subrequests leave from where it runs. The hint is best
+ * effort, so the run's own colo is still recorded (src/health.ts) and `/_health` shows where it landed.
+ * To move it, change the NAME: the same name keeps the placement it was first given.
+ *
+ * IF THE RUNNER CANNOT BE REACHED, THIS TICK IS NOT RECORDED, and nothing runs in its place. Falling
+ * back to the cron's own location would put the very measurement this exists to remove back into the
+ * week. A missing tick costs nothing; a runner that stays unreachable stops the record, and the
+ * twice-weekly report says so as "the half-hourly check has stopped running".
+ *
+ * WITHOUT THE BINDING (a self-hosted deploy, or a Worker deployed before it) the check runs in place,
+ * as it did until 2026-10-14.
+ */
+export const SMOKE_RUNNER_NAME = 'scheduled-smoke-enam'
+export const SMOKE_LOCATION = 'enam'
+
+export async function smokeWhereReadersAre(
+  env: Env, ctx: ExecutionContext, inPlace: () => Deps = liveDeps,
+): Promise<ScheduledSmoke | null> {
+  const ns = env.SMOKE_RUNNER
+  if (!ns) return scheduledSmoke(env, ctx, inPlace())
+  try {
+    return await ns.get(ns.idFromName(SMOKE_RUNNER_NAME), { locationHint: SMOKE_LOCATION }).run()
+  } catch {
+    // A name and nothing else, as every console line in this file: no url, no reader.
+    console.error('smoke runner unreachable')
+    return null
+  }
+}
 
 export default {
   async fetch(req: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
@@ -6928,19 +6997,19 @@ export default {
    *
    * THE ORIGIN IS A CONSTANT because a scheduled invocation has no request to take one from. It is
    * the apex, which is the host readers actually paste.
+   *
+   * IT RUNS FROM EASTERN NORTH AMERICA, not from wherever this invocation landed: see
+   * smokeWhereReadersAre for the week the cron spent in Mumbai and Osaka.
    */
   async scheduled(event: ScheduledController, env: Env, ctx: ExecutionContext): Promise<void> {
-    const d = liveDeps()
-    // Asked beside the checks rather than after them, so the colo costs this run no time of its own.
-    const colo = cronColo()
-    const results = await runSmoke('https://mbedfx.app', u => handle(new Request(u, {
-      headers: { 'user-agent': 'Mozilla/5.0 (compatible; Discordbot/2.0; +https://discordapp.com)' },
-    }), env, ctx, d))
+    const ran = await smokeWhereReadersAre(env, ctx)
+    if (!ran) return
+    const { results, colo } = ran
     for (const r of results) count(env, r.platform, smokeOutcome(r.verdict), SMOKE_CLIENT)
     // THE WEEK `/_health` PUBLISHES (src/health.ts), for the twice-weekly report. Only this run records:
     // `/_smoke` is public, and a public writer could skew the week.
     const bucket = env.MEDIA_CACHE
-    if (bucket) ctx.waitUntil(colo.then(c => recordSmoke(bucket, results, new Date(event.scheduledTime), c)))
+    if (bucket) ctx.waitUntil(recordSmoke(bucket, results, new Date(event.scheduledTime), colo))
     // One console line per FAILING check and nothing else. It carries the check's name and a
     // verdict — no url, no reader, nothing that identifies anybody — so it stays inside the boundary
     // wrangler.jsonc draws, and it is visible to `wrangler tail` when somebody is watching. The NAME

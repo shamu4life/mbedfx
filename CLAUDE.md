@@ -110,6 +110,14 @@ plays inline.
   `no-video` on a YouTube card that came back with no player, which is the state a cut crawler
   budget leaves it in. That does not close this gap, because a warm mux in R2 answers the check
   whether or not the container is running.
+- A red cron can be the cron's location, not a break. Cloudflare runs a Cron Trigger wherever it
+  likes, and from 2026-10-05 that was mostly Mumbai and Osaka: TikTok's row failed every tick for a
+  week (India serves no video) while real pastes, which leave from ATL, failed zero times. Before
+  blaming a platform for a scheduled-only failure, read the run's colo: `/_health` keeps it, and
+  `workersSubrequestsAdaptiveGroups` (GraphQL Analytics) has the colo, host, status and size of every
+  request the Worker makes. The scheduled check now runs from a Durable Object hinted to eastern North
+  America (`SMOKE_RUNNER`). A hint places an object only on its first `get()`, so if `/_health` shows
+  it somewhere else, change `SMOKE_RUNNER_NAME` rather than the hint.
 - A post's age can look like a platform change when it is really a packaging generation. Reddit
   videos with audio uploaded 2024-05..2025-11 answered 503 because the image's ffmpeg (a 7.1 release
   no older than 7.1.1, via the unpinned `python:3.12-slim`) refuses their MPEG-TS-in-`.aac` audio

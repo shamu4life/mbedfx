@@ -25,6 +25,15 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   `github-actions[bot]`, the owner's call, recorded in the workflow header and CLAUDE.md. How to read it
   is in `docs/METRICS.md` under "The week it keeps, and who is told".
 
+- **The scheduled check runs from eastern North America.** A Cron Trigger runs wherever Cloudflare
+  puts it, and from 2026-10-05 that was mostly Mumbai and Osaka. From there TikTok serves no video and
+  Instagram refuses the full post page, so TikTok's row failed every tick for a week while real Discord
+  pastes, which mostly leave from ATL, failed zero times. The run now happens inside a Durable Object
+  created with `locationHint: "enam"` (`SMOKE_RUNNER`, `src/smokerunner.ts`, migration `v3`), and its
+  requests leave from there. The record keeps each run's colo, so `/_health` shows where it landed.
+  When the object cannot be reached the tick is not recorded, rather than measured from the cron's own
+  location. Without the binding (self-hosting) the check runs in place as before.
+
 - **Post links work on `sorryifuckedyour.mom` and `hotsinglesnear.you`.** Both domains belong to the
   owner's `you-stupid` Worker, which keeps its own page at `/` and its own files, and hands every other
   path to this Worker through a service binding. So `hotsinglesnear.you/jack/status/20` draws the same

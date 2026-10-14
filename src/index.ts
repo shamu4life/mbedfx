@@ -9,4 +9,7 @@ export { MediaResolver } from './container.ts'
 // exactly the reason MediaResolver is: it imports `cloudflare:workers`, which does not exist under
 // `node --test`, and worker.ts is the test-imported half. See src/muxrunner.ts for the measurement.
 export { MuxRunner } from './muxrunner.ts'
+// The scheduled check, run from eastern North America. Exported here for the same reason; see
+// src/smokerunner.ts and smokeWhereReadersAre in worker.ts.
+export { SmokeRunner } from './smokerunner.ts'
 export default worker
