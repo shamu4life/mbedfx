@@ -9,6 +9,40 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- **Post links work on `sorryifuckedyour.mom` and `hotsinglesnear.you`.** Both domains belong to the
+  owner's `you-stupid` Worker, which keeps its own page at `/` and its own files, and hands every other
+  path to this Worker through a service binding. So `hotsinglesnear.you/jack/status/20` draws the same
+  card as `mbedfx.app/jack/status/20`, every callback the card names stays on that host, and a person
+  who clicks it is sent to the post. Only embed routes are answered there (posts, profiles, share codes,
+  short links, `/_media/`, the activity document and oEmbed), each marked `x-mbedfx-guest: served`.
+  Everything else, `/`, `robots.txt`, a bare `/{word}`, the JSON API, the converter's endpoints and the
+  diagnostics, is a plain unmarked 404, and `you-stupid` serves its own page instead, so a typo on
+  those domains still lands where it did. A failure here also comes back unmarked, so it can never
+  replace that page. Both hosts are refused by the fediverse SSRF guard. `d.` does not work on them
+  (no DNS for it); `.mp4` does. New in `src/guesthost.ts`, tested offline in `test/guesthost.test.mjs`.
+  Not yet measured from a Worker: it needs `you-stupid`'s binding deployed.
+
+- **The converter offers `sorryifuckedyour.mom` and `hotsinglesnear.you` as domain buttons**, beside
+  `mbedfx.app` and `megapenispoopenfarten.sex` (owner's call; `forsen.sex` stays recognised and not
+  offered). With one of them selected, **media only** puts `.mp4` on the path instead of `d.` on the
+  host, since they have no `d.`: `/jack/status/20.mp4`, `/jack/status/20.mp4/p` with all as stills,
+  `/watch.mp4?v=…`, and never a second `.mp4` on a link that already has one. A share link the page
+  resolves gets the same spelling. A link the converter emits that a guest host does not answer (a
+  bare `/{handle}`, a path that names neither a post nor a Bluesky profile) is still handed out, and
+  the preview now says it opens the other site's page there; `/_card` echoes the guest rule as
+  `guestDeclines` so the page has no copy of it. Tested by feeding every link kind, with each toggle,
+  through the real router and `guestServes`.
+
+- **A trailing `.mp4` on any post link serves the file, the way fxtwitter does.**
+  `megapenispoopenfarten.sex/X/status/{id}.mp4` used to answer "Couldn't load this Twitter post",
+  because the id swallowed the suffix. It is now the path spelling of the `d.` host and takes the same
+  code path to the same bytes: every platform, share codes and short links included, no
+  crawler/person split, a plain-text 404 when there is nothing to serve. It goes on the path, so a link
+  whose id is in the query takes it before the `?` (`/watch.mp4?v=…`); typed onto the query value it is
+  not read. The router reads it
+  (`DIRECT_SUFFIX`), so the router stays host-blind, and `/_card` echoes the router's verdict so the
+  converter previews a `.mp4` link as the file without a second copy of the rule.
+
 - **A Reddit link post plays the video it links to.** A post that is just a YouTube video
   (r/theydidthemath/comments/1mizdfz, reported) drew a title and nothing else. The card now carries the
   linked post's own media: YouTube, Twitter, TikTok, Instagram, Threads, Bluesky, Facebook, Dailymotion,
@@ -60,40 +94,6 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   3 of 3 NSFW pages, 0 of 13 others, residential, 2026-10-11). A spoiler-tagged post asks no caption
   source, which saves three requests. **Not measured: what Discord draws for a `sensitive` status.**
 
-- **Post links work on `sorryifuckedyour.mom` and `hotsinglesnear.you`.** Both domains belong to the
-  owner's `you-stupid` Worker, which keeps its own page at `/` and its own files, and hands every other
-  path to this Worker through a service binding. So `hotsinglesnear.you/jack/status/20` draws the same
-  card as `mbedfx.app/jack/status/20`, every callback the card names stays on that host, and a person
-  who clicks it is sent to the post. Only embed routes are answered there (posts, profiles, share codes,
-  short links, `/_media/`, the activity document and oEmbed), each marked `x-mbedfx-guest: served`.
-  Everything else, `/`, `robots.txt`, a bare `/{word}`, the JSON API, the converter's endpoints and the
-  diagnostics, is a plain unmarked 404, and `you-stupid` serves its own page instead, so a typo on
-  those domains still lands where it did. A failure here also comes back unmarked, so it can never
-  replace that page. Both hosts are refused by the fediverse SSRF guard. `d.` does not work on them
-  (no DNS for it); `.mp4` does. New in `src/guesthost.ts`, tested offline in `test/guesthost.test.mjs`.
-  Not yet measured from a Worker: it needs `you-stupid`'s binding deployed.
-
-- **The converter offers `sorryifuckedyour.mom` and `hotsinglesnear.you` as domain buttons**, beside
-  `mbedfx.app` and `megapenispoopenfarten.sex` (owner's call; `forsen.sex` stays recognised and not
-  offered). With one of them selected, **media only** puts `.mp4` on the path instead of `d.` on the
-  host, since they have no `d.`: `/jack/status/20.mp4`, `/jack/status/20.mp4/p` with all as stills,
-  `/watch.mp4?v=…`, and never a second `.mp4` on a link that already has one. A share link the page
-  resolves gets the same spelling. A link the converter emits that a guest host does not answer (a
-  bare `/{handle}`, a path that names neither a post nor a Bluesky profile) is still handed out, and
-  the preview now says it opens the other site's page there; `/_card` echoes the guest rule as
-  `guestDeclines` so the page has no copy of it. Tested by feeding every link kind, with each toggle,
-  through the real router and `guestServes`.
-
-- **A trailing `.mp4` on any post link serves the file, the way fxtwitter does.**
-  `megapenispoopenfarten.sex/X/status/{id}.mp4` used to answer "Couldn't load this Twitter post",
-  because the id swallowed the suffix. It is now the path spelling of the `d.` host and takes the same
-  code path to the same bytes: every platform, share codes and short links included, no
-  crawler/person split, a plain-text 404 when there is nothing to serve. It goes on the path, so a link
-  whose id is in the query takes it before the `?` (`/watch.mp4?v=…`); typed onto the query value it is
-  not read. The router reads it
-  (`DIRECT_SUFFIX`), so the router stays host-blind, and `/_card` echoes the router's verdict so the
-  converter previews a `.mp4` link as the file without a second copy of the rule.
-
 ### Changed
 
 - **A card shows up to 500 characters or 10 lines of a post's body, on every platform** (owner's
@@ -117,25 +117,6 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   Mastodon `image`. `docs/API.md` and `public/openapi.json` say so.
 
 ### Fixed
-
-- **A Reddit text post that Reddit calls `multi_media` shows its body.** The body was kept for type
-  `text` alone, and Reddit gives that type to many text posts, including ones with no picture at all
-  (r/YouShouldKnow/comments/8xq8ac, reported).
-
-- **A bare `reddit.com/comments/{id}` link no longer degrades the ordinary link's card.** It got
-  Reddit's stripped render (no author, counts or body) and cached it under the post's own key, so the
-  normal link served that card for up to 15 minutes in the same data center (measured in production).
-  It is now re-asked under the post's real subreddit. When that second ask fails, the stripped card
-  is served uncached and asks no caption source: it carries no spoiler overlay, so a body read for it
-  could have been a spoiler-tagged post's text in the clear (review).
-
-- **A post on a Reddit user's profile is a card, not "couldn't load".** The router accepted
-  `/user/{name}/comments/{id}` and `/r/u_{name}/comments/{id}`, and Reddit renders them in full, but the
-  page's own address is the `/user/` form and the normalizer read only `/r/`, so every profile post was
-  the failure card (6 of 30 crossposts in an unbiased sample were posted to a profile, 2026-10-11). The
-  post's subreddit is now `u_{name}`, a username's `-` is allowed in it, and its caption is asked at
-  `/user/{name}/`, where Reddit answers with the description (`/r/u_{name}/` answers with none).
-  Measured residential only.
 
 - **"All as stills" no longer breaks a TikTok `/t/` share link or a Bluesky profile link.** Ticked
   before pasting one, it appended `/p`, which the router reads on neither, so the converter handed out
@@ -288,6 +269,25 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   `test/social-preview.test.mjs` pins the invariant that was violated — everything centred shares
   one axis, derived from the canvas width in the file rather than a number typed into a test — plus
   no raster in an SVG, no hardcoded font metric, and the two variants geometrically identical.
+
+- **A Reddit text post that Reddit calls `multi_media` shows its body.** The body was kept for type
+  `text` alone, and Reddit gives that type to many text posts, including ones with no picture at all
+  (r/YouShouldKnow/comments/8xq8ac, reported).
+
+- **A bare `reddit.com/comments/{id}` link no longer degrades the ordinary link's card.** It got
+  Reddit's stripped render (no author, counts or body) and cached it under the post's own key, so the
+  normal link served that card for up to 15 minutes in the same data center (measured in production).
+  It is now re-asked under the post's real subreddit. When that second ask fails, the stripped card
+  is served uncached and asks no caption source: it carries no spoiler overlay, so a body read for it
+  could have been a spoiler-tagged post's text in the clear (review).
+
+- **A post on a Reddit user's profile is a card, not "couldn't load".** The router accepted
+  `/user/{name}/comments/{id}` and `/r/u_{name}/comments/{id}`, and Reddit renders them in full, but the
+  page's own address is the `/user/` form and the normalizer read only `/r/`, so every profile post was
+  the failure card (6 of 30 crossposts in an unbiased sample were posted to a profile, 2026-10-11). The
+  post's subreddit is now `u_{name}`, a username's `-` is allowed in it, and its caption is asked at
+  `/user/{name}/`, where Reddit answers with the description (`/r/u_{name}/` answers with none).
+  Measured residential only.
 
 ---
 
