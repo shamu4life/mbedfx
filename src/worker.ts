@@ -13,6 +13,7 @@ import { parseRefKey, refKey } from './refkey.ts'
 import { count, countWait, countMux, type Env, type GateReason, type MuxOutcome } from './analytics.ts'
 import { YT_PROMISE, promisable } from './muxpolicy.ts'
 import { runSmoke, smokeOutcome, SMOKE_CHECKS, SMOKE_CLIENT } from './smoke.ts'
+import { cronColo, healthSummary, readHealth, recordSmoke } from './health.ts'
 import { cookiesFor, jarAvailable, poolSetButUnused, twitterAccounts, type CredentialPlatform } from './credentials.ts'
 import {
   cacheUrl, deserializePost, postCacheKey, respCacheKey, shortPostCacheKey, shortRespCacheKey,
@@ -5694,6 +5695,22 @@ async function serve(req: Request, env: Env, ctx: ExecutionContext, d: Deps): Pr
     }
   }
 
+  /**
+   * `/_health` — THE SCHEDULED CHECK'S LAST SEVEN DAYS, per check (src/health.ts). It is what the
+   * twice-weekly report reads (.github/workflows/health-check.yml), because a single run at report time
+   * can be green in the middle of a red week: on 2026-10-14 the record said TikTok had failed on almost
+   * every tick for a week while `/_smoke` passed. Like `/_smoke` it takes no input, answers JSON and is
+   * not cached; unlike it, it does no work at all beyond one R2 read, and it writes nothing.
+   */
+  if (url.pathname === '/_health') {
+    const bucket = env.MEDIA_CACHE
+    if (!bucket) {
+      return Response.json({ ok: false, error: 'no MEDIA_CACHE binding on this deployment' },
+        { status: 503, headers: { 'cache-control': 'no-store' } })
+    }
+    return Response.json(healthSummary(await readHealth(bucket), new Date()), { headers: { 'cache-control': 'no-store' } })
+  }
+
   if (url.pathname === '/_smoke') {
     const started = Date.now()
     const results = await runSmoke(url.origin, u => handle(new Request(u, {
@@ -6912,12 +6929,18 @@ export default {
    * THE ORIGIN IS A CONSTANT because a scheduled invocation has no request to take one from. It is
    * the apex, which is the host readers actually paste.
    */
-  async scheduled(_event: ScheduledController, env: Env, ctx: ExecutionContext): Promise<void> {
+  async scheduled(event: ScheduledController, env: Env, ctx: ExecutionContext): Promise<void> {
     const d = liveDeps()
+    // Asked beside the checks rather than after them, so the colo costs this run no time of its own.
+    const colo = cronColo()
     const results = await runSmoke('https://mbedfx.app', u => handle(new Request(u, {
       headers: { 'user-agent': 'Mozilla/5.0 (compatible; Discordbot/2.0; +https://discordapp.com)' },
     }), env, ctx, d))
     for (const r of results) count(env, r.platform, smokeOutcome(r.verdict), SMOKE_CLIENT)
+    // THE WEEK `/_health` PUBLISHES (src/health.ts), for the twice-weekly report. Only this run records:
+    // `/_smoke` is public, and a public writer could skew the week.
+    const bucket = env.MEDIA_CACHE
+    if (bucket) ctx.waitUntil(colo.then(c => recordSmoke(bucket, results, new Date(event.scheduledTime), c)))
     // One console line per FAILING check and nothing else. It carries the check's name and a
     // verdict — no url, no reader, nothing that identifies anybody — so it stays inside the boundary
     // wrangler.jsonc draws, and it is visible to `wrangler tail` when somebody is watching. The NAME

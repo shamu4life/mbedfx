@@ -660,6 +660,42 @@ ceiling on a scheduled invocation. That bound is not decoration: an individual s
 limit of its own, so without it one hung upstream could consume the invocation and every check behind
 it would go uncounted, which looks exactly like the "cron is not running" case above.
 
+### The week it keeps, and who is told
+
+The counters above told nobody. On 2026-10-14 they showed TikTok failing on almost every tick since
+2026-10-06 and Instagram on about half, unread for a week, while a `/_smoke` run from a residential
+connection that morning passed all seventeen checks. A single run at report time can be green in the
+middle of a red week.
+
+So each SCHEDULED run is also folded into one R2 object, `health/smoke.json` in the media bucket
+(`src/health.ts`): per UTC day and per check, the ok/fail counts, the verdicts and the Cloudflare
+location (colo) the run executed in, plus each check's last verdict and how many runs in a row have
+failed. Eight days are kept. `/_smoke` never writes it, since it is public; only the cron does. It holds
+no url a reader sent, no ip and no user agent, the same boundary as the counters.
+
+`/_health` publishes the last seven days of it, per check (`runs`, `fail`, `failRate`, `streak`,
+`lastVerdict`, `colos`, `perDay`). It takes no input, answers JSON, is not cached, and is declined on
+the guest domains like every other diagnostic.
+
+`.github/workflows/health-check.yml` reads it every Monday and Thursday at 13:23 UTC, runs `/_smoke`
+twice a minute apart from GitHub's network (which also catches DNS, routes and a failed deploy, which a
+check running inside the Worker cannot see), asks `/_clients` for the container, and checks both guest
+domains and their `d.` names. Anything broken becomes an issue labelled `health-check`, commented on
+every run while it stays broken and closed when it passes again. Only a run that could check a problem
+closes its issue: when `/_health` does not answer, no scheduled check can fail, so the open check
+issues are left as they are and the run page lists them. Each answer is judged on what it says rather
+than its status, since `/_clients` answers 200 with `ok: false` when the container serves nothing.
+What counts as broken lives in
+`.github/scripts/health-lib.mjs`: more than 20% of a check's runs over the week (Dailymotion's
+expected cold tick is about 2%), six failures in a row, a failure that held across both live runs, the
+cron not having recorded a run for two hours, `/_clients` not serving, or a guest domain answering
+wrong. Run it by hand from the Actions tab (`workflow_dispatch`), or locally without filing anything:
+`node .github/scripts/health-check.mjs`.
+
+The `colos` field is there for one question in particular: whether a check fails only from where
+Cloudflare runs the cron. When the issue says the scheduled run failed and the live run from GitHub
+passed, the location list says where the scheduled one ran.
+
 
 ## Diagnosing "the card never appeared"
 
