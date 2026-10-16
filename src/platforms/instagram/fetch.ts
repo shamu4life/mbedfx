@@ -560,6 +560,8 @@ export async function fetchInstagramFullPage(ref: Extract<PostRef, { p: 'ig' }>)
  * rather than the downside.
  */
 const IG_GRAPHQL_DOC_ID = '27128499623469141'
+/** The documented root as a key holding an object. See the content check at the end of the fetcher. */
+const GQL_ROOT_OBJECT = /"xdt_api__v1__media__shortcode__web_info"\s*:\s*\{/
 
 export async function fetchInstagramGraphQLMedia(
   code: unknown, docId?: string,
@@ -595,8 +597,15 @@ export async function fetchInstagramGraphQLMedia(
      * sibling endpoint's "SecFetch Policy violation." at 200 is the standing example — so a 200 is
      * not evidence of anything. The only acceptable answer carries the documented root; anything
      * else is a refusal, a decoy or a rotated doc_id, and all three mean "no recovery".
+     *
+     * THE ROOT AS A KEY WITH AN OBJECT, not the bare name. An age-gated or nonexistent post answers
+     * HTTP 200 with `"data":null` and a `field_exception` error whose `"path"` array names the root
+     * (measured 2026-10-14 on a 25+ reel and on a made-up code), so the bare string matched a refusal.
+     * The parsers downstream found no items and nothing broke, but a check that passes on the refusal
+     * it exists to reject is not the check this comment describes. Whitespace-tolerant, because a
+     * key-then-object test that depends on the serializer's spacing would break on a reformat.
      */
-    return text.includes('xdt_api__v1__media__shortcode__web_info') ? text : null
+    return GQL_ROOT_OBJECT.test(text) ? text : null
   } catch {
     return null
   }

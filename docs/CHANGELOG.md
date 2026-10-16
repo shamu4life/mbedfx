@@ -55,6 +55,18 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- **An Instagram post the embed cannot serve is drawn from Instagram's per-post query before its full
+  page.** Posts whose owner disabled embedding (and age-gated, private or deleted ones) fall back past
+  the embed, and the fallback asked for the full `/p/{code}/` page first, which Instagram intermittently
+  refuses to Cloudflare's egress (302, then 429, empty; always from Mumbai, by day from Osaka, in bursts
+  from Atlanta). A refused page meant no card, so a live public post drew the failure card: real
+  pastes failed 26% of the time in the week to 2026-10-13. The shortcode GraphQL query is now asked
+  first, and its item carries the whole card (author, display name, avatar, caption, the real date,
+  likes and comments, the video), about 22 KB against about 950 KB for the page
+  (`instagramGraphQLCard`). An age-gated or missing post answers that query with no item, so the full
+  page and its 🔞 and 🔒 cards run exactly as before. New counter `graphql_recovered`; the query's
+  content check no longer accepts the error answer whose `path` names its root.
+
 - **"All as stills" no longer breaks a TikTok `/t/` share link or a Bluesky profile link.** Ticked
   before pasting one, it appended `/p`, which the router reads on neither, so the converter handed out
   a `notfound` link on every domain. The box now leaves `/t/{code}` and `/profile/{handle}` alone, and

@@ -99,6 +99,13 @@ export type Outcome2 =
   // zero while ig/ok keeps climbing means Instagram closed the recovery entirely and every blocked
   // reel is quietly a photo again — which no card will ever tell anyone, since they all still render.
   | 'copyright_gql' | 'copyright_recovered' | 'copyright_remux' | 'fullpage_recovered'
+  // `graphql_recovered` is an Instagram post whose embed failed, drawn whole from the shortcode
+  // GraphQL query before the full page was asked for (since 2026-10-14, instagramGraphQLCard). Read it
+  // against `fullpage_recovered`, which now counts only the posts the query could not answer, and
+  // against ig `fetch_fail`. It going to ZERO while those climb is the query being refused, or its
+  // doc_id rotating; it was added precisely because nothing measured whether the query is refused in
+  // the same windows as the page.
+  | 'graphql_recovered'
   // `plugin_recovered` is a Facebook post read off Meta's EMBED-PLUGIN fragment because every
   // ordinary post surface answered our egress with a login wall (measured 2026-08-08 from
   // Cloudflare; see facebookPluginCard). Read it against `fb`/`ok`: while the wall stands this
