@@ -9,6 +9,31 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- **A twice-weekly health check that opens an issue when something breaks.** The half-hourly smoke
+  cron (`src/smoke.ts`) has counted its verdicts since 2026-08-12 and told nobody: when the counters
+  were finally read on 2026-10-14, TikTok had failed on almost every tick since 2026-10-06 and
+  Instagram on about half, while a `/_smoke` run that morning passed all seventeen checks. Each
+  scheduled run is now also folded into one small R2 object (`health/smoke.json`, eight days, per check
+  and per day, with the Cloudflare location it ran from and how many runs in a row have failed), and
+  `/_health` publishes the last seven days of it (`src/health.ts`; JSON, no input, not cached, declined
+  on the guest domains). `.github/workflows/health-check.yml` reads it every Monday and Thursday, runs
+  `/_smoke` twice a minute apart from GitHub's network, asks `/_clients` for the container, checks both
+  guest domains and their `d.` names, and opens one issue labelled `health-check` per problem, comments
+  while it stays broken and closes it when it passes. The thresholds (20% of a week's runs, six failures
+  in a row, two hours with no recorded run) are in `.github/scripts/health-lib.mjs` and pinned by
+  `test/health-check.test.mjs`; the record by `test/health.test.mjs`. The issues are opened by
+  `github-actions[bot]`, the owner's call, recorded in the workflow header and CLAUDE.md. How to read it
+  is in `docs/METRICS.md` under "The week it keeps, and who is told".
+
+- **The scheduled check runs from eastern North America.** A Cron Trigger runs wherever Cloudflare
+  puts it, and from 2026-10-05 that was mostly Mumbai and Osaka. From there TikTok serves no video and
+  Instagram refuses the full post page, so TikTok's row failed every tick for a week while real Discord
+  pastes, which mostly leave from ATL, failed zero times. The run now happens inside a Durable Object
+  created with `locationHint: "enam"` (`SMOKE_RUNNER`, `src/smokerunner.ts`, migration `v3`), and its
+  requests leave from there. The record keeps each run's colo, so `/_health` shows where it landed.
+  When the object cannot be reached the tick is not recorded, rather than measured from the cron's own
+  location. Without the binding (self-hosting) the check runs in place as before.
+
 - **Post links work on `sorryifuckedyour.mom` and `hotsinglesnear.you`.** Both domains belong to the
   owner's `you-stupid` Worker, which keeps its own page at `/` and its own files, and hands every other
   path to this Worker through a service binding. So `hotsinglesnear.you/jack/status/20` draws the same

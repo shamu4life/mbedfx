@@ -110,6 +110,14 @@ plays inline.
   `no-video` on a YouTube card that came back with no player, which is the state a cut crawler
   budget leaves it in. That does not close this gap, because a warm mux in R2 answers the check
   whether or not the container is running.
+- A red cron can be the cron's location, not a break. Cloudflare runs a Cron Trigger wherever it
+  likes, and from 2026-10-05 that was mostly Mumbai and Osaka: TikTok's row failed every tick for a
+  week (India serves no video) while real pastes, which leave from ATL, failed zero times. Before
+  blaming a platform for a scheduled-only failure, read the run's colo: `/_health` keeps it, and
+  `workersSubrequestsAdaptiveGroups` (GraphQL Analytics) has the colo, host, status and size of every
+  request the Worker makes. The scheduled check now runs from a Durable Object hinted to eastern North
+  America (`SMOKE_RUNNER`). A hint places an object only on its first `get()`, so if `/_health` shows
+  it somewhere else, change `SMOKE_RUNNER_NAME` rather than the hint.
 - A post's age can look like a platform change when it is really a packaging generation. Reddit
   videos with audio uploaded 2024-05..2025-11 answered 503 because the image's ffmpeg (a 7.1 release
   no older than 7.1.1, via the unpinned `python:3.12-slim`) refuses their MPEG-TS-in-`.aac` audio
@@ -177,7 +185,7 @@ here than in a single-platform fixer.
 | No public JSON API | Closed. `/_api/v1?url=…` is documented in `docs/API.md` and shares `describeTarget` with `/_card`, so it cannot drift from the other three surfaces. Two rivals publish an API and FxEmbed ships OpenAPI specs; `public/openapi.json` (OpenAPI 3.1) is served at `/openapi.json` since 2026-08-12, and a derive-and-compare test fails when it drifts from the code that answers. Writing it is what found a live wrong answer: a walled TikTok share code was published as `not_a_post` about a post that exists. |
 | No realistic self-hosting | Open, with no known blocker, and the SAFETY half is now closed. The suite runs in stock Node against `src/worker.ts`, `handle()` is already an adapter entry point, six of the eight Cloudflare surfaces it touches need only an object literal, and `container/` has no Cloudflare surface at all. Since 2026-08-12 the corrections that stood between "it would run" and "it would be safe to expose" have landed: the private-address guard the Worker half never had (`src/netguard.ts`, ported from `container/server.py`, with a `RESOLVE_HOST` seam for the DNS half a Worker cannot do), a configurable and additive `OWN_HOSTS`, a Twitter guest-token cache that works where the `cf` fetch option is ignored, a bound on the mux buffering fallback, and the `CacheLike` contract written down. Three rivals hand over a container and this repo documents `wrangler dev`. What's missing is an adapter and somebody to run it. The unknown is egress IP. Plan in `docs/SELF-HOSTING.md`. |
 | No profile embeds | Closed where it was real, and measured closed where it was not. `/profile/{handle}` renders a Bluesky account (bio, avatar, three counts, join month) because bsky.app hands a crawler `og:title` and nothing else. Measured 2026-08-11 from Cloudflare egress, x.com, tiktok.com and instagram.com all already answer a crawler with a complete profile card, so a route for them would duplicate what Discord draws; Instagram's profile surfaces are additionally walled from this egress (HTTP 429, zero bytes, with a post-page control at 254 KB). Bare `/{handle}` and `/@{handle}` stay choosers: each names an account on two sites at once, so claiming one serves a card from a site nobody pasted. vxTwitter can claim bare handles because it serves one platform. |
-| No operator metrics | Half closed. `docs/METRICS.md` documents the Analytics Engine SQL read path, and since 2026-08-12 a half-hourly cron renders one known post per platform through this worker's own handler and counts whether a real card came back (`src/smoke.ts`, `/_smoke`), added because Facebook was broken for up to a week and the detector was the owner pasting a link. That is a breakage detector, not an uptime monitor: it runs inside the worker it checks. There is deliberately no scrape endpoint: an in-Worker one would need an account-scoped API token at the edge, and `pool_unused` publishes whether the account pools are loaded. `/_clients` joined it on 2026-08-28, a sibling probe that runs inside the container on production egress and reports which YouTube player clients actually serve bytes; it takes no input and rides the existing authenticated `/resolve`, so it opens no new surface, and it degrades to 503 or 502 rather than 500 because a diagnostic that crashes tells an operator less than one that says it could not reach the container. It exists because `/_smoke` stayed green through a total container outage the same week. fxTikTok has a `/metrics`; this Worker doesn't. |
+| No operator metrics | Half closed. `docs/METRICS.md` documents the Analytics Engine SQL read path, and since 2026-08-12 a half-hourly cron renders one known post per platform through this worker's own handler and counts whether a real card came back (`src/smoke.ts`, `/_smoke`), added because Facebook was broken for up to a week and the detector was the owner pasting a link. That is a breakage detector, not an uptime monitor: it runs inside the worker it checks. It also told nobody: on 2026-10-14 its counters showed TikTok failing on almost every tick for a week, unread. Since then the cron keeps its own week in R2 (`src/health.ts`, published at `/_health`, with the Cloudflare location of each run), and `.github/workflows/health-check.yml` reads it twice a week, runs the checks again from GitHub's network (which also sees DNS, routes and a failed deploy), tests the container and the guest domains, and files `health-check` issues. There is deliberately no scrape endpoint: an in-Worker one would need an account-scoped API token at the edge, and `pool_unused` publishes whether the account pools are loaded. `/_clients` joined it on 2026-08-28, a sibling probe that runs inside the container on production egress and reports which YouTube player clients actually serve bytes; it takes no input and rides the existing authenticated `/resolve`, so it opens no new surface, and it degrades to 503 or 502 rather than 500 because a diagnostic that crashes tells an operator less than one that says it could not reach the container. It exists because `/_smoke` stayed green through a total container outage the same week. fxTikTok has a `/metrics`; this Worker doesn't. |
 | No card screenshots in the README | Four of the five show the card their project produces. The README shows a designed banner. |
 
 Do not assume the converter page is unique. InstaFix Revived ships one. This one adds cross-site
@@ -190,15 +198,21 @@ This repo sits under a folder pinned to the `shamu4life` GitHub identity. Use `g
 PRs. Do not switch accounts or override the token env. If the identity guard blocks something,
 surface it. Do not route around it.
 
-**One sanctioned exception, and it is not a violation to be tidied away.**
-`.github/workflows/ytdlp-freshness.yml` commits and opens its weekly bump PR as
-`github-actions[bot]`. The owner chose that on 2026-08-17, over an issue-only variant and over
-adding a PAT, and it is recorded in the workflow's own header. The exception is narrow by
-construction: the job only rewrites a version string in `container/Dockerfile` on a side branch, and
-it cannot merge, cannot deploy, and touches nothing else. Leave it alone, or ask before changing it.
-Do not restore it to the owner's account unasked, and do not widen it to any other job.
+**Two sanctioned exceptions, and neither is a violation to be tidied away.** Both act as
+`github-actions[bot]`, both were the owner's explicit choice, and each is recorded in its workflow's own
+header:
 
-Editing that file from a shell trips the identity guard, which pattern-matches the git
+- `.github/workflows/ytdlp-freshness.yml` commits and opens its weekly bump PR. Chosen 2026-08-17,
+  over an issue-only variant and over adding a PAT. The job only rewrites a version string in
+  `container/Dockerfile` on a side branch; it cannot merge, cannot deploy, and touches nothing else.
+- `.github/workflows/health-check.yml` opens, comments on and closes issues labelled `health-check`,
+  twice a week. Chosen 2026-10-14, over an email-only variant and a Discord webhook, knowing it widened
+  the first exception. It touches no code, branch, PR or deploy.
+
+Leave both alone, or ask before changing them. Do not restore them to the owner's account unasked, and
+do not widen either to any other job.
+
+Editing the yt-dlp workflow from a shell trips the identity guard, which pattern-matches the git
 author-configuration lines it CONTAINS without being able to tell a workflow's contents from a
 command being run. That is the guard working as designed rather than a bug to evade: surface it, as
 above, and edit the file with a file-editing tool instead of a shell heredoc. Rewording prose to

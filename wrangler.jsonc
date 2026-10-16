@@ -168,19 +168,31 @@
   //
   // ONE OBJECT PER VIDEO, addressed by the mux key — which incidentally gives this path its first
   // GLOBAL dedupe. muxInflight is isolate-local and says so; two isolates could always double-mux.
+  //
+  // SMOKE_RUNNER is the scheduled check's location and nothing else (src/smokerunner.ts). The cron
+  // runs wherever Cloudflare puts it, which for most of 2026-10-05..10-14 was Mumbai and Osaka, where
+  // TikTok and Instagram answer differently than they do for Discord's crawler. One object, created
+  // with locationHint "enam", makes the check's requests leave from eastern North America instead.
+  // See smokeWhereReadersAre in src/worker.ts for the measurement.
   "durable_objects": {
     "bindings": [
       { "name": "MEDIA_RESOLVER", "class_name": "MediaResolver" },
-      { "name": "MUX_RUNNER", "class_name": "MuxRunner" }
+      { "name": "MUX_RUNNER", "class_name": "MuxRunner" },
+      { "name": "SMOKE_RUNNER", "class_name": "SmokeRunner" }
     ]
   },
   // A NEW TAG, NEVER AN EDIT TO v1. Migrations are an append-only ledger: Cloudflare applies the tags
   // it has not seen, so rewriting an applied one is either ignored or an error, and never the thing
   // the editor meant. `new_sqlite_classes` matches MediaResolver's — the DO must have storage for
   // setAlarm to exist at all, and SQLite-backed is the current default for new classes.
+  //
+  // v3 adds SmokeRunner. It stores nothing, but SQLite-backed is what Cloudflare recommends for every
+  // new class. A branch build cannot apply a migration (`versions upload` fails with 10211, so the PR
+  // shows a red X); the build from main runs `wrangler deploy`, which applies it, as it did for v2.
   "migrations": [
     { "tag": "v1", "new_sqlite_classes": ["MediaResolver"] },
-    { "tag": "v2", "new_sqlite_classes": ["MuxRunner"] }
+    { "tag": "v2", "new_sqlite_classes": ["MuxRunner"] },
+    { "tag": "v3", "new_sqlite_classes": ["SmokeRunner"] }
   ],
   // THE APEX CUTOVER (2026-07-25). fxeverything now serves megapenispoopenfarten.sex itself, not just
   // its staging subdomain — the Phase 3 step this file used to describe as pending.
