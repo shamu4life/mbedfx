@@ -550,16 +550,25 @@ test('liveFetchPost dispatches on ref.p and returns null for platforms with no f
   // keep passing while quietly putting the network into a suite whose whole contract is that it has
   // none. A stub that keeps passing for the wrong reason is the failure mode.
   //
-  // `rd` STAYS, and does so soundly: fetchReddit needs an OAuth token, and fakeEnv() sets no
-  // REDDIT_CLIENT_ID, so appToken() returns null BEFORE any request and rd degrades to null with
-  // zero network. `x` is the dispatch control; its own end-to-end block runs the real fixtures with
-  // the network stubbed.
-  for (const ref of [
-    { p: 'x', id: '1' },
-    { p: 'rd', sub: 'aww', id: 'a' },
-  ]) {
-    assert.equal(await liveFetchPost(ref, fakeEnv(), 'other-bot'), null, ref.p)
+  // `rd` STAYS, with the network STUBBED since 2026-10-11. This said fetchReddit needed an OAuth token and
+  // so made zero requests; that stopped being true when embed.reddit.com became the primary read, and the
+  // test had been asking the live site ever since (found by the review of the Reddit caption change, which
+  // added more requests behind it). Reddit's not-found shape answers here: HTTP 200, no canonical.
+  // `x` is the dispatch control; its own end-to-end block runs the real fixtures with the network stubbed.
+  const real = globalThis.fetch
+  globalThis.fetch = async (u) => {
+    if (String(u).startsWith('https://embed.reddit.com/')) return new Response('<html><body>no post here</body></html>', { status: 200 })
+    // Every other host (x's syndication endpoint was reaching the live site too) gets a plain 404.
+    return new Response('', { status: 404 })
   }
+  try {
+    for (const ref of [
+      { p: 'x', id: '1' },
+      { p: 'rd', sub: 'aww', id: 'a' },
+    ]) {
+      assert.equal(await liveFetchPost(ref, fakeEnv(), 'other-bot'), null, ref.p)
+    }
+  } finally { globalThis.fetch = real }
 })
 
 test('counters attribute the platform, so tt traffic is visible separately', async () => {
@@ -3413,11 +3422,20 @@ test('an age-restricted tweet is an HONEST failure — crawler embed, human 302,
 
 test('liveFetchPost dispatches x, and still returns null for platforms with no fetcher', async () => {
   // Adding the 'x' case must not swallow the honest default: rd must still degrade to null (a
-  // fetch_fail like any other), never a throw. rd HAS a fetcher now, but fakeEnv() sets no Reddit
-  // creds, so appToken() returns null before any request — null with zero network. (th left this
-  // list when its dispatch landed — it reaches the live site, which a no-network test must not do.)
-  for (const ref of [{ p: 'rd', sub: 'aww', id: 'a' }])
-    assert.equal(await liveFetchPost(ref, fakeEnv(), 'other-bot'), null, ref.p)
+  // fetch_fail like any other), never a throw. The embed read is stubbed with Reddit's not-found shape
+  // since 2026-10-11; before that this test reached the live site (see the dispatch test above). (th
+  // left this list when its dispatch landed — it reaches the live site, which a no-network test must
+  // not do.)
+  const real = globalThis.fetch
+  globalThis.fetch = async (u) => {
+    if (String(u).startsWith('https://embed.reddit.com/')) return new Response('<html><body>no post here</body></html>', { status: 200 })
+    // Every other host (x's syndication endpoint was reaching the live site too) gets a plain 404.
+    return new Response('', { status: 404 })
+  }
+  try {
+    for (const ref of [{ p: 'rd', sub: 'aww', id: 'a' }])
+      assert.equal(await liveFetchPost(ref, fakeEnv(), 'other-bot'), null, ref.p)
+  } finally { globalThis.fetch = real }
 })
 
 // ---------------------------------------------------------------------------

@@ -20,7 +20,17 @@ const GIF_HEAD = Uint8Array.from([0x47, 0x49, 0x46, 0x38, 0x39, 0x61, 0x40, 0x01
 const REF = { p: 'rd', sub: 'forsen', id: '1wuh1g1' }
 const ENV = {}
 
-/** Run `fn` with global fetch answering the embed page and handing every other url to `gif`. */
+/**
+ * What Reddit's crawler page says about a post with NO body: its subreddit's tagline (the shape measured on
+ * r/theydidthemath/comments/1mizdfz from a Worker, 2026-10-11). The gif post in the fixture has no body, so
+ * since the caption lookup landed (caption.ts) its fetch asks this page once and stops there.
+ */
+const TAGLINE_PAGE = '<html><head><meta name="description" content="12 votes, 3 comments. 61K subscribers in the forsen community. forsen"></head></html>'
+
+/**
+ * Run `fn` with global fetch answering the embed page, answering Reddit's crawler page with TAGLINE_PAGE,
+ * and handing every other url to `gif`.
+ */
 async function withFetch(gif, fn, page = GIF_PAGE) {
   const real = globalThis.fetch
   const asked = []
@@ -28,6 +38,7 @@ async function withFetch(gif, fn, page = GIF_PAGE) {
     const url = String(u)
     asked.push({ url, init })
     if (url.startsWith('https://embed.reddit.com/')) return new Response(page, { status: 200, headers: { 'content-type': 'text/html' } })
+    if (url.startsWith('https://www.reddit.com/r/')) return new Response(TAGLINE_PAGE, { status: 301, headers: { 'content-type': 'text/html' } })
     return gif(url, init)
   }
   try { return await fn(asked) } finally { globalThis.fetch = real }
@@ -43,7 +54,9 @@ test('a Reddit gif\'s size costs ONE ten-byte ranged GET of the original, asking
     const got = await fetchReddit(REF, ENV)
     assert.equal(got.ok, true)
     assert.deepEqual([...got.gifHead], [...GIF_HEAD])
-    const probes = asked.filter(a => !a.url.startsWith('https://embed.reddit.com/'))
+    // i.redd.it only: the post has no body, so its fetch also asks Reddit's crawler page once (caption.ts),
+    // which is a different request with its own test below and not part of the gif's cost.
+    const probes = asked.filter(a => a.url.startsWith('https://i.redd.it/'))
     assert.equal(probes.length, 1, 'exactly one read of the gif')
     const [{ url, init }] = probes
     const h = new Headers(init.headers)
@@ -103,7 +116,10 @@ test('a server that ignores the Range header still costs ten bytes of reading, t
   })
 })
 
-test('a post that is not a Reddit gif costs no extra request', async () => {
+test('a post that is not a Reddit gif costs no gif read', async () => {
+  // RENAMED 2026-10-11 from "costs no extra request": a post with no body now also asks Reddit's crawler
+  // page for one (caption.ts), once, and that page answering with the subreddit tagline ends the lookup.
+  // What this guards is unchanged: no i.redd.it read for a post that is not a gif.
   const image = GIF_PAGE.replace(/&quot;url&quot;:&quot;https:\/\/i\.redd\.it\/4gg2f32z3qsh1\.gif&quot;/, '&quot;url&quot;:&quot;https://i.redd.it/4gg2f32z3qsh1.jpg&quot;')
     .replace(/&quot;type&quot;:&quot;gif&quot;/g, '&quot;type&quot;:&quot;image&quot;')
   assert.notEqual(image, GIF_PAGE, 'precondition: the screenview was rewritten')
@@ -111,7 +127,7 @@ test('a post that is not a Reddit gif costs no extra request', async () => {
     const got = await fetchReddit(REF, ENV)
     assert.equal(got.ok, true)
     assert.equal(got.gifHead, undefined)
-    assert.deepEqual(asked.map(a => new URL(a.url).host), ['embed.reddit.com'])
+    assert.deepEqual(asked.map(a => new URL(a.url).host), ['embed.reddit.com', 'www.reddit.com'])
   }, image)
 })
 

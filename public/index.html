@@ -407,6 +407,11 @@ pre s { color: var(--faint); }
 .pv .shot img { display: block; width: 100%; height: auto; max-height: 350px; object-fit: cover; background: var(--line); }
 .pv .shots.n1 .shot { max-width: 350px; }
 .pv .shots.n1 .shot img { max-height: 500px; object-fit: contain; background: none; }
+/* A SPOILER-TAGGED POST'S MEDIA, blurred because the card asks Discord to blur it (render/mastodon.ts).
+   This draws the request, not a measured result: whether Discord honours it is the owner's paste test.
+   Scaled so the blur does not show a hard edge inside the rounded box. The media-only preview is not
+   blurred, because a file link is the file itself and Discord attaches it as it is. */
+.pv .shots.spoiler .shot img { filter: blur(28px); transform: scale(1.1); }
 .pv .play {
   position: absolute; inset: 0; margin: auto; width: 48px; height: 48px; border-radius: 50%;
   background: rgba(0,0,0,.6); display: grid; place-items: center; pointer-events: none;
@@ -1686,7 +1691,7 @@ function mbedfxPrepResolved(asked, answer) {
       return { still: m.kind === 'video' ? m.poster : (m.poster || m.url), video: m.kind === 'video' };
     }).filter(function (m) { return !!m.still; });
     var media = shots.length
-      ? '<div class="shots n' + shots.length + '">' + shots.map(function (m) {
+      ? '<div class="shots n' + shots.length + (j.spoiler ? ' spoiler' : '') + '">' + shots.map(function (m) {
           return '<span class="shot">'
             + '<img src="' + esc2(m.still) + '" alt="" loading="lazy">'
             /**
@@ -1730,7 +1735,9 @@ function mbedfxPrepResolved(asked, answer) {
               ? '<div class="preplbl"><span>Still preparing after six minutes. This preview has stopped '
                 + 'checking. The link works now and shows the video once it is ready.</span></div>'
               : ''));
-    var body = (j.title ? '<b>' + esc2(j.title) + '</b>\n' : '') + esc2(j.text || '');
+    // A blank line between the title and the body, as the card draws it (text.ts GAP): one newline
+    // previewed the two as a single block that the real card never shows.
+    var body = (j.title ? '<b>' + esc2(j.title) + '</b>' + (j.text ? '\n\n' : '') : '') + esc2(j.text || '');
     // The card carries the link now, so the standalone result row stands down — see .out.hasCard.
     cardUp = true; outClass(true);
     preview.innerHTML = '<div class="sentrow"><span class="sent" id="sentline"></span>'

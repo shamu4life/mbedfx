@@ -15,8 +15,30 @@ import { refKey } from '../refkey.ts'
 // contains a bare colon in the first place, so there is nothing left for an edge
 // to normalize — the router reverses this with a single decodeURIComponent
 // before handing the key to parseRefKey (see the `_media` branch in router.ts).
-export const mediaUrl = (origin: string, p: Post, i: MediaIndex) =>
-  `${origin}/_media/${encodeURIComponent(refKey(p.ref))}/${indexSegment(i)}`
+/**
+ * OWNER-AWARE since 2026-10-11: an entry carrying `via` (Media.via, a Reddit link post's borrowed media)
+ * is minted under the post it was borrowed from, at its index there. ONE place for that, so the dozen
+ * sites that mint an entry's url from (post, index) cannot disagree about whose url it is. The avatar is
+ * always the post's own, and an index past the post's own media (a hoisted quote's) has no entry here
+ * and so keeps the post's key, exactly as before.
+ */
+export const mediaUrl = (origin: string, p: Post, i: MediaIndex) => {
+  const n = typeof i === 'number' ? i : typeof i === 'object' ? i.poster : -1
+  const via = n >= 0 ? viaOf(mediaOf(p)[n]) : null
+  const at: MediaIndex = !via ? i : typeof i === 'object' ? { poster: via.index } : via.index
+  return `${origin}/_media/${encodeURIComponent(refKey(via ? via.ref : p.ref))}/${indexSegment(at)}`
+}
+
+/**
+ * A `via` that can be minted, or null. Read defensively, like every media field: a cached record is
+ * validated for its ref, canonical and date only, so a malformed `via` must fall back to the post's own
+ * key rather than throw out of refKey or mint `/undefined`.
+ */
+function viaOf(m: Media | undefined): Media['via'] | null {
+  const v = m && typeof m === 'object' ? m.via : undefined
+  if (!v || typeof v !== 'object' || !v.ref || typeof v.ref !== 'object' || typeof v.ref.p !== 'string') return null
+  return Number.isInteger(v.index) && v.index >= 0 ? v : null
+}
 
 /**
  * The index SEGMENT of a /_media/ url — the serializing half of the wire format router.ts parses.
@@ -230,6 +252,13 @@ export const mediaOf = (post: Post | undefined): Media[] => {
  */
 export const isSensitive = (post: Post): boolean =>
   !!post.sensitive || (!!post.quote?.sensitive && mediaOf(post.quote).some(usable))
+
+/**
+ * "Keep this post's media out of sight": a whole post tagged as a spoiler (types.ts Post.spoiler). Its text is
+ * already `[spoiler]` from the normalizer, so this decides only the media: the activity document asks Discord
+ * to blur it and the Discord head names none. `=== true` because a cache record is not a normalizer's output.
+ */
+export const isSpoiler = (post: Post): boolean => post?.spoiler === true
 
 /**
  * "This post has a video Discord can actually play." ONE definition, because BOTH heads in

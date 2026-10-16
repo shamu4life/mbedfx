@@ -70,7 +70,72 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   (`DIRECT_SUFFIX`), so the router stays host-blind, and `/_card` echoes the router's verdict so the
   converter previews a `.mp4` link as the file without a second copy of the rule.
 
+- **A Reddit link post plays the video it links to.** A post that is just a YouTube video
+  (r/theydidthemath/comments/1mizdfz, reported) drew a title and nothing else. The card now carries the
+  linked post's own media: YouTube, Twitter, TikTok, Instagram, Threads, Bluesky, Facebook, Dailymotion,
+  Streamable, Twitch clips, Imgur and Pinterest, a crosspost of such a link included. Reddit's title,
+  author, subreddit and counts stay on the card. The media is addressed under the linked post's own key
+  (`/_media/yt%3A{id}/0`), so the mux, its R2 object, the cookie pool and the YouTube promise run exactly
+  as for a direct paste of the linked url, and the two share one muxed file. A YouTube video that cannot
+  be promised on a first paste (over 240 s, or no duration verdict) shows its thumbnail, not YouTube's own
+  player (owner's call). Only a fixed host table is followed (`src/linkref.ts`); Reddit, fediverse and
+  mbedfx hosts never are, so a link post cannot name another Reddit post or an origin of its own. New
+  counters `link_ok` / `link_fail` / `link_pending`.
+
+- **Reddit picture, gallery, video and link posts carry their caption.** embed.reddit.com renders no
+  body for those (0 of 72 sampled posts that have one), so a caption that explains the picture
+  (r/DeadlockTheGame/comments/1x1xajw, reported) never reached the card. It is now read from Reddit's
+  crawler page (current, cut at about 150 characters), completed from Reddit's own feed when that
+  answers, and otherwise from the Arctic Shift archive, only when Reddit's cut text is a prefix of the
+  archived one (owner's call, made knowing it is a third party with no terms). A subreddit's tagline,
+  which Reddit shows in place of a missing body, is recognised and refused. All three sources were
+  measured from a Cloudflare Worker on 2026-10-11. New counters `body_*`.
+
+- **A Reddit `multi_media` post's inline pictures are its media**, rebuilt as clean `i.redd.it` urls the
+  way gallery slides are.
+
+- **A crosspost of a Reddit picture, gif, video or gallery carries the parent's media.** It was
+  title-only: a crosspost's page has no media of its own and names no parent id, only the parent's url
+  (28 of 28 live crossposts, residential, 2026-10-11). A picture or gif is that url, with nothing
+  fetched. A video plays from its HLS master, as a video post does, under the poster the crosspost's
+  crawler page names. That page is already read for the caption; Reddit's logo and generated share
+  cards are refused, and with no poster the video stays out (1 of 10 sampled). A gallery's slides
+  come from its parent's page, asked as `_` and then under the subreddit that page names, read
+  beside the caption lookup. Crossposts of text posts are unchanged. A poster or parent read that
+  did not answer (a timeout, a reset, a block page) leaves that render without the media, uncached
+  and `pending` on the JSON surfaces, so the next render asks again; a read that answered "none"
+  (Reddit's logo) is kept. Not measured from a Worker: the crawler page's og:image and the gallery
+  parent's two fetches (both are requests the Worker already makes elsewhere).
+
+- **A Reddit gif's size is read beside its caption, not before it**, so a cold gif post waits at most
+  2 s after the embed page rather than 3 s.
+
+- **A spoiler-tagged Reddit post keeps its spoiler.** Reddit draws a whole post tagged as a spoiler
+  blurred under "This post may contain spoilers."; the card showed its picture, and with the caption
+  sources above it would have shown its caption too. Its body is now `[spoiler]` whatever it says, its
+  media stays, and the activity document marks the status `sensitive`, Mastodon's blur, which Discord is
+  being tried on (owner's call: blur over hiding the picture). The Discord head names no picture or video
+  of its own for such a post, the converter preview blurs it, and `/_api/v1` and `/_card` publish
+  `spoiler: true`, separate from `sensitive`. The tag is read off the page: Reddit draws the same reveal
+  button over NSFW posts, and the page's own `nsfw` flag tells the two apart (14 of 14 spoiler pages,
+  3 of 3 NSFW pages, 0 of 13 others, residential, 2026-10-11). A spoiler-tagged post asks no caption
+  source, which saves three requests. **Not measured: what Discord draws for a `sensitive` status.**
+
 ### Changed
+
+- **A card shows up to 500 characters or 10 lines of a post's body, on every platform** (owner's
+  numbers, replacing 253 characters). The line cap keeps the counts row inside Discord's ~20-line cut
+  of an activity card. A cut never splits an emoji or a flag, and trailing blank lines are dropped
+  rather than counted. The converter's preview cuts at the same place and leaves the same blank line
+  after a title.
+
+- **Reddit bodies read the way Reddit shows them.** Paragraphs, line breaks, numbered and bulleted
+  lists and table rows keep their shape, Reddit's template indentation is gone, and a spoiler is
+  `[spoiler]` wherever Reddit marks it, a spoiler across a line break included. Reddit's crawler
+  description does not mark spoilers (measured), so a short caption read from it alone shows one as
+  Reddit's own preview does. Markdown from the OAuth fallback and the archive is converted the same
+  way. Both converters are linear and bounded, so a stranger's 40,000-character post costs
+  milliseconds. The Reddit normalizer stores up to 4000 characters; the card's cut is the one above.
 
 - **`/_api/v1` and `/_card` publish a GIF as `"image"`, not `"video"`.** An entry whose bytes are an
   animated `.gif` (Reddit GIF posts, Reddit `image` posts with a `.gif`, Misskey GIFs) was published as
@@ -243,6 +308,25 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   `test/social-preview.test.mjs` pins the invariant that was violated — everything centred shares
   one axis, derived from the canvas width in the file rather than a number typed into a test — plus
   no raster in an SVG, no hardcoded font metric, and the two variants geometrically identical.
+
+- **A Reddit text post that Reddit calls `multi_media` shows its body.** The body was kept for type
+  `text` alone, and Reddit gives that type to many text posts, including ones with no picture at all
+  (r/YouShouldKnow/comments/8xq8ac, reported).
+
+- **A bare `reddit.com/comments/{id}` link no longer degrades the ordinary link's card.** It got
+  Reddit's stripped render (no author, counts or body) and cached it under the post's own key, so the
+  normal link served that card for up to 15 minutes in the same data center (measured in production).
+  It is now re-asked under the post's real subreddit. When that second ask fails, the stripped card
+  is served uncached and asks no caption source: it carries no spoiler overlay, so a body read for it
+  could have been a spoiler-tagged post's text in the clear (review).
+
+- **A post on a Reddit user's profile is a card, not "couldn't load".** The router accepted
+  `/user/{name}/comments/{id}` and `/r/u_{name}/comments/{id}`, and Reddit renders them in full, but the
+  page's own address is the `/user/` form and the normalizer read only `/r/`, so every profile post was
+  the failure card (6 of 30 crossposts in an unbiased sample were posted to a profile, 2026-10-11). The
+  post's subreddit is now `u_{name}`, a username's `-` is allowed in it, and its caption is asked at
+  `/user/{name}/`, where Reddit answers with the description (`/r/u_{name}/` answers with none).
+  Measured residential only.
 
 ---
 

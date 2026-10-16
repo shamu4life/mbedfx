@@ -1,6 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { normalizeReddit, redditGate, gifSize, redditGifUrl } from '../src/platforms/reddit/normalize.ts'
+import { buildContentHtml } from '../src/render/text.ts'
 import { readFileSync } from 'node:fs'
 
 // The shape /comments/{id} returns over OAuth: [postListing, commentListing]. Only the post's
@@ -140,7 +141,7 @@ test('embed: an image post -> title, author, subreddit (from canonical), score, 
   assert.equal(post.ref.sub, 'pics', 'the real subreddit is recovered from canonical even though ref.sub was empty')
   assert.equal(post.canonical, 'https://www.reddit.com/r/pics/comments/haucpf/a_slug/')
   assert.equal(post.title, 'A pic', 'an image post carries its headline as the title')
-  assert.equal(post.text, '', 'and no body (the image is the content)')
+  assert.equal(post.text, '', 'and no body: the page carries none for an image post, and no caption source was read (caption.ts)')
   assert.deepEqual(post.media, [{ kind: 'image', url: 'https://i.redd.it/abc.jpg', w: 0, h: 0 }])
   assert.deepEqual(post.counts, { likes: 42, replies: 5 })
   assert.equal(post.createdAt.toISOString(), new Date(1700000000000).toISOString())
@@ -162,20 +163,29 @@ test('embed: a text post reads shreddit-embed-title + the rtjson body; title lea
   assert.equal(post.text, 'first para\n\nsecond para', 'the rtjson body, title-free')
 })
 
-test('embed: a LONG selftext body is capped to a preview (…) so the counts footer stays visible', () => {
-  // The renderer appends counts as the LAST block of the Mastodon content, so an uncapped multi-KB
-  // selftext pushed the counts past Discord's preview and a text post showed none (reported 2026-07-22).
-  const longBody = Array.from({ length: 120 }, (_, i) => `word${i}`).join(' ') // ~700+ chars, one para
+test('embed: a LONG selftext body is stored to 4000 and the CARD cuts it, so the counts row stays visible', () => {
+  /**
+   * The renderer appends counts as the LAST block of the Mastodon content, so an uncapped multi-KB
+   * selftext pushed the counts past Discord's preview and a text post showed none (reported 2026-07-22).
+   *
+   * REWRITTEN 2026-10-11. This asserted the normalizer cut the body near 500 with a '…', because the
+   * normalizer's cap WAS the card's. The card's cut moved to render/text.ts's clampText (500 characters
+   * and 10 lines, every platform), so the normalizer now only bounds what is stored and published, and
+   * the counts row is checked on the card itself, which is where it was ever lost.
+   */
+  const longBody = Array.from({ length: 900 }, (_, i) => `word${i}`).join(' ') // ~6000 chars, one para
   const html = '<html><body>' + canon('massachusetts', 'lng') +
     sv({ id: 't3_lng', url: 'https://www.reddit.com/r/massachusetts/comments/lng/q/', type: 'text', created_timestamp: 1700000000000, nsfw: false }, 'massachusetts') +
     '<shreddit-embed-title>A long one</shreddit-embed-title>' + author('sam') + score(163) + 'View 44 comments' +
     `<div id="t3_lng-post-rtjson-content" class="md"><p>${longBody}</p></div></body></html>`
   const post = normalizeReddit({ source: 'embed', html }, { p: 'rd', sub: '', id: 'lng' })
   assert.equal(post.title, 'A long one', 'the title is its own field, never capped')
-  assert.ok(post.text.endsWith('…'), 'the body is ellipsized when it exceeds the preview cap')
-  assert.ok(post.text.length < 502, `body capped near 500, got ${post.text.length}`)
-  assert.ok(post.text.length > 200, 'but still a substantial preview')
+  assert.ok(post.text.endsWith('…'), 'the stored body is ellipsized past its storage bound')
+  assert.ok(post.text.length <= 4001 && post.text.length > 3000, `stored near 4000, got ${post.text.length}`)
   assert.deepEqual(post.counts, { likes: 163, replies: 44 }, 'counts are unaffected by the body cap')
+  const content = buildContentHtml(post)
+  assert.ok(/❤️ 163/.test(content) && content.includes('💬 44'), 'the card keeps its counts row')
+  assert.ok(content.includes('...'), 'and says its body was cut')
 })
 
 test('embed: a SHORT selftext body is NOT capped — no ellipsis added', () => {
@@ -473,7 +483,7 @@ test('embed: a stripped render (no title element) derives a title from the url s
     sv({ id: 't3_haucpf', url: 'https://i.redd.it/x.jpg', type: 'image', created_timestamp: 1700000000000, nsfw: false }, 'pics')
   const post = normalizeReddit({ source: 'embed', html }, eRef())
   assert.equal(post.title, 'Ive found a few funny memories', 'the slug-derived headline lands in title')
-  assert.equal(post.text, '', 'an image post has no body')
+  assert.equal(post.text, '', 'no body: the embed page carries none for this type, and no caption source was read')
   assert.equal(post.media.length, 1)
 })
 

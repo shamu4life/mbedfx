@@ -79,6 +79,7 @@
                         "title": null,
                         "text": "just setting up my twttr",
                         "sensitive": false,
+                        "spoiler": false,
                         "author": {
                           "name": "jack",
                           "handle": "jack",
@@ -251,7 +252,7 @@
           },
           "pending": {
             "type": "boolean",
-            "description": "A translation lost its race and `text` is the original. The translation is still being written; a re-request carries it."
+            "description": "A translation lost its race and `text` is the original; the translation is still being written, and a re-request carries it. Or a Reddit link post's linked post did not load in time, or came back empty without a private or age-restricted wall, and `media` is empty for now; a re-request asks for it again. A linked post that is gone for good keeps this set: ask again once, not in a loop. Also set when a Reddit post loaded with a part Reddit did not answer for (a crosspost's video poster or gallery slides, or the stripped render a link without the post's own subreddit gets when the second ask under it failed); nothing of that answer is cached, and a re-request asks again."
           },
           "post": { "$ref": "#/components/schemas/Post" }
         },
@@ -346,6 +347,10 @@
             "type": "boolean",
             "description": "The post's own flag. The cards apply a wider rule that also fires for a sensitive quoted post that contributed a picture to the gallery; v1 publishes neither that rule nor the quote's media."
           },
+          "spoiler": {
+            "type": "boolean",
+            "description": "The whole post is tagged a spoiler, which only Reddit's tag sets today. `text` is then exactly `[spoiler]`, and `media` is unchanged: the cards ask Discord to blur it. Separate from `sensitive`, which says the content is adult; a Reddit post that is both is published as `sensitive` only."
+          },
           "author": { "$ref": "#/components/schemas/Author" },
           "counts": { "$ref": "#/components/schemas/Counts" },
           "media": {
@@ -358,7 +363,7 @@
             "oneOf": [{ "$ref": "#/components/schemas/Quote" }, { "type": "null" }]
           }
         },
-        "required": ["platform", "canonical", "createdAt", "title", "text", "sensitive", "author", "counts", "media", "quote"],
+        "required": ["platform", "canonical", "createdAt", "title", "text", "sensitive", "spoiler", "author", "counts", "media", "quote"],
         "additionalProperties": false
       },
       "Author": {

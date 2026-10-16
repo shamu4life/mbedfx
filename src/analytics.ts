@@ -125,6 +125,37 @@ export type Outcome2 =
   // ever overtakes `plugin_recovered`, Meta has narrowed the plugin and most Facebook cards have
   // quietly become captions with no picture — which no card will announce, since they all render.
   | 'caption_recovered'
+  /**
+   * WHERE A REDDIT POST'S BODY CAME FROM when its embed page carried none (src/platforms/reddit/caption.ts),
+   * one count per post-cache miss on `rd`. Added 2026-10-11 with the lookup itself, because every one of
+   * these outcomes renders a card and none of them says which source it used.
+   *
+   *   body_feed     Reddit's Atom feed answered: the whole, current body.
+   *   body_crawler  Reddit's crawler page held the whole body (a short one, not cut).
+   *   body_archive  Reddit cut it, the feed did not answer, and the Arctic Shift archive agreed with
+   *                 Reddit's cut text and completed it. The ONE outcome that sent a post id to a third party.
+   *   body_cut      Reddit cut it and nothing completed it: the card carries Reddit's text ending in `…`.
+   *   body_none     Reddit says the post has no body. The common case for picture posts in big subreddits.
+   *   body_unknown  No Reddit source answered usably: the card carries no body whether or not one exists.
+   *
+   * READ body_unknown AGAINST THE REST. A rise means Reddit started refusing Worker egress on its crawler
+   * page, which is the way the whole lookup goes dark while every card still renders. body_archive rising
+   * while body_feed falls is the feed's one-request-per-minute ration being spent by other tenants.
+   */
+  | 'body_feed' | 'body_crawler' | 'body_archive' | 'body_cut' | 'body_none' | 'body_unknown'
+  /**
+   * A REDDIT LINK POST'S LINKED POST, per render (worker.ts linkedFor), counted on `rd`. Added 2026-10-11
+   * with the composition itself.
+   *
+   *   link_ok       the linked post loaded and its media went on the Reddit card.
+   *   link_fail     it did not load (deleted, private, the platform refused us): the card has no media.
+   *   link_pending  it did not load inside the render's budget: the card goes out without media and is
+   *                 not response-cached, and the fetch finishes in the background for the next render.
+   *
+   * Only link posts whose url names a supported platform reach these; an article link counts nothing.
+   * link_pending against link_ok is the share of first pastes that lose the video to the extra serial fetch.
+   */
+  | 'link_ok' | 'link_fail' | 'link_pending'
   | 'translated' | 'translate_fallback'
   /**
    * `translate_pending` is the THIRD member of that pair, and it exists because the state it names
