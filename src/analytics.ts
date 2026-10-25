@@ -144,6 +144,14 @@ export type Outcome2 =
    */
   | 'body_feed' | 'body_crawler' | 'body_archive' | 'body_cut' | 'body_none' | 'body_unknown'
   /**
+   * EMBED.REDDIT.COM REFUSED THE REQUEST (a block page, or a 403/429/5xx with no post in it), counted on `rd`
+   * once per post-cache miss, and the card went to the archive path (src/platforms/reddit/normalize.ts).
+   * Added 2026-10-25, three days into a block that began on 2026-10-22 and that only the scheduled check
+   * noticed. Falling to zero means Reddit lifted the block and the full render is back by itself. The
+   * `assert_fail` on `rd` counted beside it (the same miss) is a refusal the archive could not carry either.
+   */
+  | 'embed_refused'
+  /**
    * A REDDIT LINK POST'S LINKED POST, per render (worker.ts linkedFor), counted on `rd`. Added 2026-10-11
    * with the composition itself.
    *
