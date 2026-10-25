@@ -1,7 +1,8 @@
 import type { PostRef } from '../../types.ts'
 import type { Env } from '../../analytics.ts'
 import {
-  REDDIT_SUB, redditCrosspostNeeds, redditEmbedSub, redditFullRender, redditGate, redditGifUrl, redditNeedsCaption,
+  REDDIT_SUB, redditArchiveLink, redditArchiveSub, redditCrosspostNeeds, redditEmbedLink, redditEmbedRefused, redditEmbedSub,
+  redditFullRender, redditGate, redditGifUrl, redditNeedsCaption,
 } from './normalize.ts'
 import { crawlerCaption, feedCaption } from './caption.ts'
 import { askTwice } from '../../fetchretry.ts'
@@ -13,6 +14,11 @@ import { askTwice } from '../../fetchretry.ts'
  * IP-blocked from our egress (verified). That is the PRIMARY, credential-free path. An OAuth app-only
  * token (oauth.reddit.com) stays as a FALLBACK for when the Reddit app creds are set, but Reddit gates
  * app creation behind the Responsible Builder Policy so that path rarely runs.
+ *
+ * SINCE 2026-10-22 embed.reddit.com REFUSES OUR EGRESS TOO (403, "You've been blocked by network
+ * security.", measured from a Worker 2026-10-25), and every Reddit card was the failure card until the
+ * archive path (fetchRedditArchive below; normalize.ts says what it reads and why it is safe). The
+ * embed page is still asked first, so the full render comes back by itself if Reddit lifts the block.
  */
 
 const BROWSER_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36'
@@ -49,8 +55,10 @@ function crawlerUrl(sub: string, id: string): string {
  */
 export type RedditFetch =
   | { ok: true; source: 'embed'; html: string; gifHead?: Uint8Array; caption?: RedditCaptionBytes; parent?: string }
+  | { ok: true; source: 'archive'; id: string; archive: string; crawler: string; gifHead?: Uint8Array }
   | { ok: true; source: 'json'; data: unknown; gifHead?: Uint8Array }
-  | { ok: false; reason: 'assert_fail' | 'private' }
+  // `refused`: embed.reddit.com refused the request rather than answering about the post (the worker counts it).
+  | { ok: false; reason: 'assert_fail' | 'private'; refused?: true }
 
 /**
  * THE BODY SOURCES' RAW ANSWERS, when the embed page carried no body (caption.ts names the three and
@@ -171,13 +179,16 @@ const CRAWLER_UA = 'Mozilla/5.0 (compatible; Discordbot/2.0; +https://discordapp
 /** Arctic Shift asks its users to be considerate; a name and a way to reach the project is the minimum. */
 const ARCHIVE_UA = 'mbedfx.app (embed fixer; +https://github.com/shamu4life/mbedfx)'
 
-/** The response body as text, up to 512 KB (Reddit's block page is ~190 KB; nothing needed is larger). */
-async function readTextCapped(res: Response): Promise<string> {
+/**
+ * The response body as text, up to `cap` bytes: 512 KB by default (Reddit's block page is ~190 KB), more for an
+ * archive record, which runs to 260 KB on a heavily awarded post and whose JSON is worthless cut short.
+ */
+async function readTextCapped(res: Response, cap = 524_288): Promise<string> {
   const reader = res.body?.getReader()
   if (!reader) return ''
   const chunks: Uint8Array[] = []
   let n = 0
-  while (n < 524_288) {
+  while (n < cap) {
     const { done, value } = await reader.read()
     if (done || !value) break
     chunks.push(value)
@@ -188,6 +199,68 @@ async function readTextCapped(res: Response): Promise<string> {
   let at = 0
   for (const c of chunks) { all.set(c.subarray(0, n - at), at); at += c.length }
   return new TextDecoder().decode(all.subarray(0, n))
+}
+
+/**
+ * THE ARCHIVE PATH'S WHOLE BUDGET, and each request's ceiling inside it. Measured from a Worker (colo IAD,
+ * 2026-10-25): the archive 866 ms, the crawler page 107 ms (and 419 ms from LHR on 2026-10-11, caption.ts).
+ * Spent inside getPost, before the head's own HTML_DEADLINE_MS (5000) races begin, like the caption budget it
+ * replaces on this path (the feed it would ask is blocked too), so the ceilings sit at about three times
+ * what was measured and no more. A bare link pays the two in turn, so the budget covers both.
+ */
+const ARCHIVE_PATH_BUDGET_MS = 3000
+const ARCHIVE_POST_TIMEOUT_MS = 2500
+const CRAWLER_POST_TIMEOUT_MS = 1500
+const ARCHIVE_MAX_BYTES = 4 * 1024 * 1024
+
+/**
+ * One required read of the archive path, or undefined on a throw, a timeout or no time left. askTwice: unlike the
+ * caption sources, the card does not exist without this answer, so a refused first ask gets the one more ask
+ * every platform fetcher gets (src/fetchretry.ts).
+ */
+async function readRequired(
+  url: string, headers: Record<string, string>, ms: number, redirect: 'manual' | 'follow', cap?: number,
+): Promise<string | undefined> {
+  if (ms < CAPTION_MIN_MS) return undefined
+  try {
+    const res = await askTwice(url, { headers, redirect, signal: AbortSignal.timeout(ms) })
+    return await readTextCapped(res, cap)
+  } catch {
+    return undefined
+  }
+}
+
+/**
+ * WHEN EMBED.REDDIT.COM REFUSED US: the Arctic Shift archive's record and Reddit's crawler page, which
+ * normalize.ts combines (its "Archive path" section says what each carries, and why a post renders only when
+ * Reddit's live title is the archived one). The archive is asked for the whole record because its `fields=`
+ * filter refuses every media field (preview, media_metadata, gallery_data, is_video and others answered 400,
+ * 2026-10-25). It is the endpoint caption.ts already asks for a body (there with `fields=id,selftext`), so it
+ * names the same third party and sends it the same id. Measured that day from the Claude Code dev sandbox,
+ * not a Worker: one id per request, 4 to 260 KB, 0.46 to 1.43 s. The Worker read in ARCHIVE_PATH_BUDGET_MS's
+ * note answered 200 with the same record shape.
+ *
+ * Asked side by side when the link names its subreddit, which a pasted link almost always does. A bare
+ * /comments/{id}/ link waits for the archive to name it, because the crawler page of a bare link is not the
+ * post's (a 380 KB generic page, measured from the Worker). A wrong subreddit needs no second ask: Reddit
+ * still answers the post's own page under it, and only the title's suffix names the wrong one.
+ *
+ * Never throws: a transport failure here is no evidence about the post, and the card is the failure card
+ * either way.
+ */
+async function fetchRedditArchive(ref: Extract<PostRef, { p: 'rd' }>, asked: string): Promise<RedditFetch> {
+  const until = Date.now() + ARCHIVE_PATH_BUDGET_MS
+  const left = (cap: number) => Math.min(cap, until - Date.now())
+  const crawl = (sub: string) => readRequired(crawlerUrl(sub, ref.id),
+    { 'user-agent': CRAWLER_UA, accept: 'text/html' }, left(CRAWLER_POST_TIMEOUT_MS), 'manual')
+  const early = asked !== '_' ? crawl(asked) : null
+  const archive = await readRequired(`https://arctic-shift.photon-reddit.com/api/posts/ids?ids=${ref.id}`,
+    { 'user-agent': ARCHIVE_UA, accept: 'application/json' }, left(ARCHIVE_POST_TIMEOUT_MS), 'follow', ARCHIVE_MAX_BYTES)
+  const sub = archive === undefined ? null : redditArchiveSub(archive, ref.id)
+  if (archive === undefined || !sub) return { ok: false, reason: 'assert_fail', refused: true }
+  const crawler = await (early ?? crawl(sub))
+  if (crawler === undefined) return { ok: false, reason: 'assert_fail', refused: true }
+  return { ok: true, source: 'archive', id: ref.id, archive, crawler }
 }
 
 /** One caption source's body, or undefined on a throw, a timeout or no time left. Never throws. */
@@ -308,7 +381,7 @@ async function fetchRedditEmbed(ref: Extract<PostRef, { p: 'rd' }>, sub: string)
   if (/id="canonical-url-updater"/.test(html) && !/\/undefined"/.test(html)) {
     return { ok: true, source: 'embed', html }
   }
-  return { ok: false, reason: 'assert_fail' }
+  return { ok: false, reason: 'assert_fail', ...(redditEmbedRefused(res.status, html) ? { refused: true as const } : {}) }
 }
 
 /**
@@ -381,19 +454,22 @@ async function fetchRedditOAuth(ref: Extract<PostRef, { p: 'rd' }>, env: Env): P
 }
 
 /**
- * embed first (credential-free, egress-safe, rich); OAuth only if the app creds are set, which they
- * usually are not. A thrown fetch is NOT caught — worker.ts treats a thrown live fetch as null. A
- * success that is a Reddit gif also carries its header (withGifHead), whichever path produced it, so
- * both renders size the gif the same way.
+ * embed first (credential-free and rich, when Reddit answers it); OAuth only if the app creds are set,
+ * which they usually are not; the archive path when the embed page was refused. A thrown embed fetch is
+ * NOT caught — worker.ts treats a thrown live fetch as null. A success that is a Reddit gif also carries
+ * its header (withGifHead), whichever path produced it, so every render sizes the gif the same way.
  */
 /**
- * `onPage` is told the embed page the moment it is in hand, before the gif read and the caption lookup,
- * which can take two more seconds. The worker uses it to start a link post's video mux that early
- * (liveFetchPost's rd arm); it is optional, synchronous, and a throw from it never reaches the fetch.
+ * `onLink` is told a link post's link the moment the post's page names it, before the gif read and the
+ * caption lookup, which can take two more seconds. The worker uses it to start the linked video's mux that
+ * early (liveFetchPost's rd arm); it is optional, synchronous, and a throw from it never reaches the fetch.
  */
 export async function fetchReddit(
-  ref: Extract<PostRef, { p: 'rd' }>, env: Env, onPage?: (html: string) => void,
+  ref: Extract<PostRef, { p: 'rd' }>, env: Env, onLink?: (link: string) => void,
 ): Promise<RedditFetch> {
+  const tell = (link: string | undefined) => {
+    try { if (link) onLink?.(link) } catch { /* a hook may not cost the post */ }
+  }
   if (!POST_ID.test(ref.id)) return { ok: false, reason: 'assert_fail' }
   const asked = ref.sub && SUB.test(ref.sub) ? ref.sub : '_'
   let embed = await fetchRedditEmbed(ref, asked)
@@ -417,7 +493,7 @@ export async function fetchReddit(
     }
   }
   if (embed.ok && embed.source === 'embed') {
-    try { onPage?.(embed.html) } catch { /* a hook may not cost the post */ }
+    tell(redditEmbedLink(embed.html))
     // The gif's size, the caption (with a crosspost video's poster, which rides on the same crawler page) and a
     // gallery crosspost's parent are independent reads, so they run side by side and a cold card waits for the
     // slowest of them, not their sum: a gif post took GIF_HEAD_TIMEOUT_MS + CAPTION_BUDGET_MS, 3.0 s, at worst
@@ -434,6 +510,14 @@ export async function fetchReddit(
     const oauth = await fetchRedditOAuth(ref, env)
     if (oauth.ok) return withGifHead(oauth)
     if (oauth.reason === 'private') return oauth
+  }
+  // Only a REFUSAL reaches the archive. A page that says the post is not there is Reddit's answer
+  // (normalize.ts redditEmbedRefused), and the archive is never asked to overrule it.
+  if (!embed.ok && embed.refused) {
+    const arch = await fetchRedditArchive(ref, asked)
+    if (!arch.ok) return arch
+    tell(redditArchiveLink(arch))
+    return withGifHead(arch)
   }
   return embed
 }

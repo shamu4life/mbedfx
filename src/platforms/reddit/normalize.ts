@@ -1,15 +1,18 @@
 import type { Media, Post, PostRef } from '../../types.ts'
-import { decodeEntities, redditHtmlToText, redditMarkdownToText, SPOILER_MARK } from './body.ts'
-import { archiveCaption, crawlerCaption, feedCaption, pickCaption } from './caption.ts'
+import { decodeEntities, redditHtmlToText, redditMarkdownToText, SPOILER_MARK, stripInvisible } from './body.ts'
+import { archiveCaption, blocked as blockPage, crawlerCaption, feedCaption, pickCaption } from './caption.ts'
 
 type Any = Record<string, any>
 
 /**
- * Pure: Reddit post data -> Post. Two sources, dispatched by `source`:
+ * Pure: Reddit post data -> Post. Three sources, dispatched by `source`:
  *
  *  - 'embed' (PRIMARY): the `embed.reddit.com/r/{sub}/comments/{id}/` HTML, which is credential-free
- *    and — unlike www.reddit.com/.json — NOT IP-blocked from Workers egress. Rich: title, author,
- *    subreddit, score, timestamp, nsfw, image/gif/gallery/video-cover/selftext.
+ *    and was NOT IP-blocked from Workers egress until 2026-10-22. Rich: title, author, subreddit, score,
+ *    timestamp, nsfw, image/gif/gallery/video-cover/selftext.
+ *  - 'archive' (when embed.reddit.com refuses us, as it has refused Cloudflare's egress since
+ *    2026-10-22): the Arctic Shift archive's record, vouched for by Reddit's live crawler page. See the
+ *    section of that name below.
  *  - 'json' (FALLBACK): the OAuth listing from oauth.reddit.com, used only if the Reddit app creds are
  *    set. Reddit gates app creation behind the Responsible Builder Policy, so this rarely runs; it
  *    stays as a richer path for if that ever opens up.
@@ -296,6 +299,12 @@ export function redditGifUrl(raw: unknown): string | null {
     // the same way.
     return (post?.type === 'gif' || post?.type === 'image' || post?.type === 'crosspost') && REDDIT_GIF.test(url) ? url : null
   }
+  // The archive's `url` is the same field the screenview's is (Reddit's own post object), a crosspost's
+  // being its parent's, so it names the same file and archiveMedia makes the same gif entry of it.
+  if (r?.source === 'archive') {
+    const url = archiveRecord(r.archive, r.id)?.url
+    return typeof url === 'string' && REDDIT_GIF.test(url) ? url : null
+  }
   const listing = r?.source === 'json' ? r.data : r
   const d = (Array.isArray(listing) ? listing[0] : listing)?.data?.children?.[0]?.data
   return typeof d?.url === 'string' && REDDIT_GIF.test(d.url) ? d.url : null
@@ -539,6 +548,12 @@ function captionOf(raw: CaptionBytes | undefined, sub: string, id: string): Retu
  */
 export function redditCaptionSource(raw: unknown): ReturnType<typeof pickCaption>['source'] | null {
   const r = raw as Any
+  if (r?.source === 'archive') {
+    // Every archive card's body comes from the two sources it read, so each one counts, unless its body is
+    // `[spoiler]` regardless (the embed path's rule, redditNeedsCaption).
+    const facts = archiveFacts(r)
+    return facts && !facts.spoiler ? captionOf(r, facts.live.pageSub, r.id)?.source ?? null : null
+  }
   if (r?.source !== 'embed' || typeof r.html !== 'string' || !r.caption || !redditNeedsCaption(r.html)) return null
   const sub = redditEmbedSub(r.html)
   const id = canonicalOf(r.html)?.id
@@ -625,6 +640,292 @@ function buildFromEmbed(
       replies: Number.isFinite(comments) ? comments : undefined,
     },
     sensitive: post.nsfw === true,
+  }
+}
+
+// ============================================================================
+// Archive path (when embed.reddit.com refuses us — Cloudflare's egress since 2026-10-22)
+// ============================================================================
+
+/**
+ * WHY THIS PATH EXISTS. From about 13:00 UTC on 2026-10-22, embed.reddit.com answers Cloudflare's egress with
+ * HTTP 403 and the 40-byte body "You've been blocked by network security.", for every post and every
+ * user-agent tried (BROWSER_UA, Discordbot, Twitterbot). Measured 2026-10-25 from a Cloudflare Worker (the
+ * Workers Playground, colos IAD and EWR, egress 2a06:98c0:3600::103). In the same hour production's /_api/v1
+ * answered fetch_fail for every Reddit post tried, and the scheduled check's rd row had failed 164 ticks in a
+ * row since 2026-10-22 (issue #108). Nothing here had changed; the last deploy was 2026-10-15. The same probe
+ * found www.reddit.com's .json, api.reddit.com, /api/info.json and the Atom feed answering 403 too,
+ * old.reddit.com redirecting to a login, and two sources still answering:
+ *
+ *   - REDDIT'S CRAWLER PAGE, www.reddit.com/r/{sub}/comments/{id}/ as Discordbot with redirects not followed
+ *     (the page caption.ts already reads). Its `<title>` names the post as it is NOW: "{title} : r/{sub}", or
+ *     "[ Removed by moderator ] : r/{sub}" once a moderator removed it. Its description and og:description
+ *     carry the counts and the author when Reddit prints them, and og:title opens "[Mature Content]" on an
+ *     NSFW post. It carries NO date and NO media url: its og:image is a generated share card or Reddit's
+ *     logo on 11 of the 14 post types read. Following its redirect gives a share card too, and the page of a
+ *     bare /comments/{id}/ link is a 380 KB generic page with no post in it.
+ *   - THE ARCTIC SHIFT ARCHIVE (caption.ts records the trade the owner accepted for it on 2026-10-11), whose
+ *     record is Reddit's own post object as ingested: created_utc, title, author, subreddit, permalink,
+ *     over_18, spoiler, url (the v.redd.it base, the i.redd.it file, the /gallery/ url), preview,
+ *     media_metadata, gallery_data and, on a crosspost, crosspost_parent_list. 200 in 866 ms from the same
+ *     Worker. v.redd.it still answers that egress (the HLS masters of bh1r38 and 1x2fqyu, 200), so a video
+ *     found this way still muxes.
+ *
+ * SO THE CARD IS BUILT FROM THE ARCHIVE AND VOUCHED FOR BY REDDIT: it renders only when Reddit's live
+ * `<title>` is exactly the archived title. That rule is what keeps an archive from bringing back what Reddit
+ * took down. In a 40-post r/AskReddit sample (posted 2026-10-21 00:00-01:00 UTC, read from the Worker four
+ * days later) the 38 live posts matched and the 2 a moderator removed did not; 60 of 60 r/relationship_advice
+ * posts matched. No user-deleted post turned up in either sample, so that shape is unmeasured. It is refused
+ * by the same rule, as is any title the two sources spell differently, whatever the reason: a false refusal
+ * costs a failure card, which is what every Reddit link got before this path existed.
+ *
+ * WHAT IS LIVE AND WHAT IS ARCHIVED. The fields that cannot change come from the archive: the date, the title
+ * (Reddit titles cannot be edited), the subreddit and the media. Everything that can change is Reddit's or
+ * left out. The counts are the crawler page's or none, because the archive's froze at ingest: 182 comments
+ * on bh1r38 against Reddit's 202 the same day, and a score of 1 on 1x2epoi read 4.7 hours after it was
+ * posted. The author is the crawler page's when it prints one. The body goes through caption.ts's
+ * pickCaption, which shows archived text only where Reddit's own text agrees with it. NSFW is either
+ * source's. A post marked NSFW after ingest whose crawler page carries no og:title (11 of the 40 in the
+ * AskReddit sample had none) is not seen as NSFW here; that gap is the archive's and is not closed.
+ *
+ * INDEX 0 IS THE SAME KIND AS THE EMBED RENDER'S (redditGifUrl says why that matters): a .gif url is the gif
+ * entry, an i.redd.it url the image, a v.redd.it base the remux video, a gallery its i.redd.it slides, a
+ * text post its inline pictures, a link post nothing. test/reddit-archive.test.mjs holds the two renders of
+ * the same posts equal.
+ */
+
+/**
+ * ONE PARSE PER ANSWER. The same archive text is read by fetch.ts (its subreddit), by the gif read, by the
+ * counters and by the normalizer, and a heavily awarded record runs to 260 KB (r/pics/comments/haucpf).
+ */
+let lastArchive: { json: string; data: unknown } | null = null
+
+/** Post `id`'s record in the archive's answer, or null: unparseable, empty, or not this post's. */
+function archiveRecord(json: unknown, id: unknown): Any | null {
+  if (typeof json !== 'string' || typeof id !== 'string') return null
+  if (lastArchive?.json !== json) {
+    let data: unknown = null
+    try { data = JSON.parse(json) } catch { /* not the archive's answer */ }
+    lastArchive = { json, data }
+  }
+  const rows = (lastArchive.data as Any)?.data
+  if (!Array.isArray(rows)) return null
+  return rows.find(r => r && typeof r === 'object' && (r as Any).id === id) ?? null
+}
+
+/** The subreddit the archive files post `id` under, so fetch.ts can ask the crawler page of a bare link. */
+export function redditArchiveSub(json: string, id: string): string | null {
+  const s = archiveRecord(json, id)?.subreddit
+  return typeof s === 'string' && REDDIT_SUB.test(s) ? s : null
+}
+
+/**
+ * EMBED.REDDIT.COM REFUSED US, rather than answering about the post. Only then is the archive asked: a page
+ * that says the post is not there (Reddit's not-found shell, HTTP 200, measured on every bad or deleted id)
+ * is Reddit's answer, and the archive is never asked to overrule it. Read on content first, the block page's
+ * own words; a 403, 429 or 5xx with no post in it is a refusal too, since it says nothing about the post
+ * (the same reading fetchretry.ts gives those statuses).
+ */
+export function redditEmbedRefused(status: number, html: string): boolean {
+  if (/id="canonical-url-updater"/.test(html)) return false
+  return blockPage(html) || status === 403 || status === 429 || status >= 500
+}
+
+/** Text as both sources are compared: entities decoded once, invisible characters dropped, spaces collapsed. */
+const flatText = (s: string): string => stripInvisible(decodeEntities(s)).replace(/\s+/g, ' ').trim()
+
+/** A count as Reddit prints it, "202", "12K", "1.2K", "2.5M", as a number, or undefined. */
+function printedCount(digits: string, unit: string | undefined): number | undefined {
+  const n = parseFloat(digits.replace(/,/g, ''))
+  if (!Number.isFinite(n)) return undefined
+  const scale = unit ? ({ k: 1e3, m: 1e6, b: 1e9 } as Record<string, number>)[unit.toLowerCase()] : 1
+  return Math.round(n * scale)
+}
+
+/**
+ * What Reddit's crawler page says about the post now. Null when the page is not a post's. `pageSub` is the
+ * subreddit the page was asked under, which is the one whose tagline its description prints: asked under a
+ * wrong one (r/pics for r/aww's bh1r38, measured), Reddit still serves the post, with r/pics's tagline.
+ */
+type Live = {
+  title: string; pageSub: string; nsfw: boolean; blurred: boolean; author?: string; likes?: number; replies?: number
+}
+
+const COUNT = String.raw`(-?[\d.,]+)\s*([KkMmBb])?`
+/** "Posted by FuManBoobs - 163 votes and 74 comments" (og:description; absent on some posts). */
+const POSTED_BY = new RegExp(String.raw`^Posted by ([A-Za-z0-9_-]+|\[deleted\]) - ${COUNT} votes? and ${COUNT} comments?$`)
+/** "12K votes, 202 comments. 38M subscribers…" (description; present only when the post has no body). */
+const COUNTS_LEAD = new RegExp(String.raw`^${COUNT} votes?, ${COUNT} comments?\.`)
+
+function crawlerLive(html: unknown): Live | null {
+  if (typeof html !== 'string' || !html || blockPage(html)) return null
+  const t = /<title>([\s\S]*?)<\/title>/.exec(html)
+  if (!t) return null
+  // "{title} : r/{sub}", or ": u/{name}" for a profile post. A title can itself hold " : r/", so the LAST
+  // one is the suffix. A page whose title has no suffix ("Reddit - The heart of the internet", the answer
+  // for an id that does not exist) is not a post's.
+  const full = flatText(t[1])
+  const suffix = / : ([ru])\/([A-Za-z0-9_-]+)$/.exec(full)
+  if (!suffix) return null
+  const meta = (key: string): string => {
+    const m = new RegExp(`<meta (?:name|property)="${key}" content="([^"]*)"`).exec(html)
+    return m ? flatText(m[1]) : ''
+  }
+  const by = POSTED_BY.exec(meta('og:description'))
+  const lead = COUNTS_LEAD.exec(meta('description'))
+  const counts = by ? [by[2], by[3], by[4], by[5]] : lead ? [lead[1], lead[2], lead[3], lead[4]] : null
+  return {
+    title: full.slice(0, suffix.index),
+    pageSub: suffix[1] === 'u' ? `u_${suffix[2]}` : suffix[2],
+    nsfw: meta('og:title').startsWith('[Mature Content]'),
+    // Reddit blurs the og:image of a spoiler-tagged picture (r/OnePiece/comments/1x34r8f: `?blur=40`).
+    blurred: /[?&]blur=\d/.test(meta('og:image')),
+    ...(by ? { author: by[1] } : {}),
+    ...(counts ? { likes: printedCount(counts[0], counts[1]), replies: printedCount(counts[2], counts[3]) } : {}),
+  }
+}
+
+/** The post's archived record and the live page's word on it, once they agree that this is the post. */
+type ArchiveFacts = { rec: Any; live: Live; sub: string; nsfw: boolean; spoiler: boolean }
+
+function archiveFacts(r: Any): ArchiveFacts | null {
+  const rec = archiveRecord(r?.archive, r?.id)
+  if (!rec || typeof rec.title !== 'string') return null
+  const live = crawlerLive(r.crawler)
+  if (!live || !live.title || live.title !== flatText(rec.title)) return null
+  const sub = typeof rec.subreddit === 'string' && REDDIT_SUB.test(rec.subreddit) ? rec.subreddit : null
+  if (!sub) return null
+  const nsfw = rec.over_18 === true || live.nsfw
+  // NSFW wins, as on the embed path (spoilerTagged): a post that is both reads as NSFW and keeps its body.
+  // The archive's flag can be stale (caption.ts measured two disagreements with the live page), and the blur
+  // is the only live sign; neither sees a tag added later to a post with no picture.
+  return { rec, live, sub, nsfw, spoiler: !nsfw && (rec.spoiler === true || live.blurred) }
+}
+
+/**
+ * The post's type in the embed page's words (its screenview's `type`), from the record's fields. A url
+ * decides wherever one can, because every record carries `url` and the 2019 ones lack some of the flags.
+ */
+function archiveType(rec: Any): string {
+  const url = typeof rec.url === 'string' ? rec.url : ''
+  if (typeof rec.crosspost_parent === 'string' && rec.crosspost_parent) return 'crosspost'
+  if (rec.is_self === true) return rec.media_metadata && typeof rec.media_metadata === 'object' ? 'multi_media' : 'text'
+  if (rec.is_gallery === true || REDDIT_GALLERY.test(url)) return 'gallery'
+  if (REDDIT_GIF.test(url)) return 'gif'
+  if (REDDIT_VIDEO.test(url) || rec.is_video === true) return 'video'
+  if (/^https:\/\/i\.redd\.it\//.test(url)) return 'image'
+  return 'link'
+}
+
+/** The link an archived link post points at (linkOf), for the worker's early prewarm. */
+export function redditArchiveLink(raw: unknown): string | undefined {
+  const r = raw as Any
+  const rec = r?.source === 'archive' ? archiveRecord(r.archive, r.id) : null
+  return rec ? linkOf(archiveType(rec), rec.url) : undefined
+}
+
+/**
+ * One media_metadata entry's i.redd.it file, spelt with the extension of its own preview url, which is the
+ * spelling the embed page's `-v0-{id}.{ext}` used (1x2epoi's two .jpg slides and 1x2wg7e's .png, compared
+ * 2026-10-25). Only still formats, as on the embed path; an animated entry has no `u` and is left out.
+ */
+function metadataFile(id: unknown, m: Any): string | null {
+  if (typeof id !== 'string' || !/^[a-z0-9]+$/.test(id) || !m || typeof m !== 'object') return null
+  if (m.status !== undefined && m.status !== 'valid') return null
+  const u = typeof m.s?.u === 'string' ? m.s.u : ''
+  const ext = (new RegExp(`/${id}\\.(png|jpe?g|webp)(?:\\?|$)`, 'i').exec(u) || [])[1]
+  return ext ? `https://i.redd.it/${id}.${ext.toLowerCase()}` : null
+}
+
+/** A gallery's slides, in gallery_data's order, which is the carousel's (1x2epoi, same day). */
+function archiveGallery(src: Any): Media[] {
+  const items = src?.gallery_data?.items
+  const meta = src?.media_metadata
+  if (!Array.isArray(items) || !meta || typeof meta !== 'object') return []
+  const urls = items.filter(it => it?.is_deleted !== true).map(it => metadataFile(it?.media_id, meta[it?.media_id]))
+  return [...new Set(urls.filter((u): u is string => u !== null))].map(url => ({ kind: 'image' as const, url, w: 0, h: 0 }))
+}
+
+/**
+ * A text post's inline pictures, in the order the body names them: as a preview.redd.it url (1x2wg7e) or as
+ * a `![img](id)` reference. The embed path reads the same pictures, in the same order, from its figures.
+ */
+function archiveInline(rec: Any): Media[] {
+  const st = typeof rec.selftext === 'string' ? rec.selftext : ''
+  const meta = rec.media_metadata
+  if (!meta || typeof meta !== 'object') return []
+  const ids = [...st.matchAll(/preview\.redd\.it\/([a-z0-9]+)\.[a-z]+\?|!\[img\]\(([a-z0-9]+)[\s)]/g)].map(m => m[1] ?? m[2])
+  const urls = ids.map(id => (meta[id]?.e === 'Image' ? metadataFile(id, meta[id]) : null))
+  return [...new Set(urls.filter((u): u is string => u !== null))].map(url => ({ kind: 'image' as const, url, w: 0, h: 0 }))
+}
+
+/** The record's preview, the external-preview cover a video post carries, as a poster. */
+function archivePoster(src: Any): { url: string; w: number; h: number } | null {
+  const s = src?.preview?.images?.[0]?.source
+  const url = typeof s?.url === 'string' ? decodeEntities(s.url) : ''
+  if (!POSTER_HOST.test(url)) return null
+  const w = Number(s.width), h = Number(s.height)
+  return { url, w: w > 0 ? w : 0, h: h > 0 ? h : 0 }
+}
+
+/** Media by type, from the record; a crosspost's from its parent's record, whose url it carries. */
+function archiveMedia(rec: Any, type: string, gifHead: unknown): Media[] {
+  const url = typeof rec.url === 'string' ? rec.url : ''
+  const src = type === 'crosspost' && rec.crosspost_parent_list?.[0] && typeof rec.crosspost_parent_list[0] === 'object'
+    ? rec.crosspost_parent_list[0] : rec
+  if (type === 'gif' || ((type === 'image' || type === 'crosspost') && REDDIT_GIF.test(url))) return [gifEntry(url, gifHead)]
+  if ((type === 'image' || type === 'crosspost') && /^https:\/\/i\.redd\.it\//.test(url)) {
+    return [{ kind: /\.gif(?:\?|$)/i.test(url) ? 'gif' : 'image', url, w: 0, h: 0 }]
+  }
+  if (type === 'gallery' || (type === 'crosspost' && REDDIT_GALLERY.test(url))) return archiveGallery(src)
+  if (type === 'multi_media') return archiveInline(rec)
+  if (type === 'video' || (type === 'crosspost' && REDDIT_VIDEO.test(url))) {
+    // The embed path's rule: a remux video only with a v.redd.it base AND a poster to degrade to.
+    const poster = archivePoster(src) ?? archivePoster(rec)
+    if (REDDIT_VIDEO.test(url) && poster) {
+      const hls = `${url}/HLSPlaylist.m3u8`
+      return [{
+        kind: 'video', url: hls, w: 0, h: 0, poster: poster.url,
+        ...(poster.w && poster.h ? { posterW: poster.w, posterH: poster.h } : {}),
+        remux: { video: hls },
+      }]
+    }
+    if (poster && type === 'video') return [{ kind: 'image', url: poster.url, w: 0, h: 0 }]
+  }
+  return []
+}
+
+function buildFromArchive(r: Any, ref: Extract<PostRef, { p: 'rd' }>): Post | null {
+  const facts = archiveFacts(r)
+  if (!facts) return null
+  const { rec, live, sub, nsfw, spoiler } = facts
+  const created = new Date(Number(rec.created_utc) * 1000)
+  if (!(Number(rec.created_utc) > 0) || Number.isNaN(created.getTime())) return null
+  const author = live.author
+    ?? (typeof rec.author === 'string' && /^[A-Za-z0-9_-]+$/.test(rec.author) ? rec.author : '[unknown]')
+  // The record's permalink is the path Reddit's 301 points at, slug included (/user/{name}/… for a profile).
+  const permalink = typeof rec.permalink === 'string'
+    && new RegExp(`^/(?:r|user)/[A-Za-z0-9_-]+/comments/${ref.id}/[^\\s?#"]*$`).test(rec.permalink)
+    ? rec.permalink : null
+  const canonical = permalink
+    ? `https://www.reddit.com${permalink}`
+    : sub.startsWith('u_')
+      ? `https://www.reddit.com/user/${sub.slice(2)}/comments/${ref.id}/`
+      : `https://www.reddit.com/r/${sub}/comments/${ref.id}/`
+  const type = archiveType(rec)
+  const link = linkOf(type, rec.url)
+  return {
+    ref: { p: 'rd', sub, id: ref.id },
+    canonical,
+    author: { name: `u/${author}`, handle: author, url: `https://www.reddit.com/user/${author}` },
+    title: decodeEntities(rec.title).trim(),
+    text: spoiler ? SPOILER_MARK : capBody(captionOf(r, live.pageSub, ref.id)?.text ?? ''),
+    ...(link ? { link } : {}),
+    ...(spoiler ? { spoiler: true as const } : {}),
+    createdAt: created,
+    media: archiveMedia(rec, type, r.gifHead),
+    counts: { likes: live.likes, replies: live.replies },
+    sensitive: nsfw,
   }
 }
 
@@ -737,6 +1038,7 @@ export function normalizeReddit(raw: unknown, ref: PostRef): Post | null {
   if (ref.p !== 'rd') return null
   const r = raw as Any
   if (r?.source === 'embed') return buildFromEmbed(typeof r.html === 'string' ? r.html : '', ref, r.gifHead, r.caption, r.parent)
+  if (r?.source === 'archive') return buildFromArchive(r, ref)
   if (r?.source === 'json') return buildFromOAuth(r.data, ref, r.gifHead)
   return buildFromOAuth(raw, ref)
 }

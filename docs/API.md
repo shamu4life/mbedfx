@@ -186,6 +186,12 @@ platform withholds (a hidden like count, comments switched off), indistinguishab
 key means unknown; v1 cannot encode a count known to be zero. Which of the four keys exist varies by
 site.
 
+A Reddit post read through the archive path (since 2026-10-22, when embed.reddit.com began refusing
+this service's egress; `src/platforms/reddit/normalize.ts`) carries the counts Reddit's own page
+prints, which Reddit rounds: `12K votes` is published as `12000`. When that page prints none, as for
+a post whose description is its body, both keys are absent. The archive's own counts are never
+published: they froze when it read the post.
+
 ### `text`
 
 What the card shows, the card's overlays composed in. v1 gives none of them a field of its own:
@@ -204,7 +210,8 @@ whichever comes first, on every platform (`clampText`, `src/render/text.ts`; the
 2026-10-11, replacing 253 characters). A Reddit body is stored up to 4000 characters. A Reddit post
 whose page carries no body (a picture, gallery, video, link or crosspost post) takes it from Reddit's
 crawler page, Reddit's feed, or the Arctic Shift archive, in that order (`src/platforms/reddit/caption.ts`),
-and a body Reddit cut short ends in `…`. A spoiler is `[spoiler]` wherever the source marks it (the
+and a body Reddit cut short ends in `…`. On the archive path every post's body is chosen that way, from
+Reddit's crawler page and the archive (the feed refuses this service's egress too). A spoiler is `[spoiler]` wherever the source marks it (the
 post page, Reddit's feed, the archive); a short caption read from Reddit's crawler description alone
 shows one as Reddit's own link preview does, in the clear, because Reddit drops the markers there
 (measured on r/Jujutsufolk/comments/1x2vdbg, 2026-10-11).

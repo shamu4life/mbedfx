@@ -41,7 +41,7 @@ import { fetchReddit, resolveRedditShareUrl } from './platforms/reddit/fetch.ts'
 import { modelInput, sourceLanguage, translateBest, withTranslation } from './translate.ts'
 import { displayName } from './render/chooser.ts'
 import { metaPlatformOf, resolveMetaShare, stripMetaTracking } from './platforms/metashare/fetch.ts'
-import { normalizeReddit, redditCaptionSource, redditEmbedLink, redditIncomplete } from './platforms/reddit/normalize.ts'
+import { normalizeReddit, redditCaptionSource, redditIncomplete } from './platforms/reddit/normalize.ts'
 import { linkedRef } from './linkref.ts'
 import { fetchYouTube, ytPageUrl } from './platforms/youtube/fetch.ts'
 import { ytDescriptionOf } from './platforms/youtube/description.ts'
@@ -298,20 +298,21 @@ export async function liveFetchProfile(
 }
 
 /**
- * A REDDIT LINK POST'S YOUTUBE MUX, STARTED THE MOMENT THE EMBED PAGE NAMES THE LINK — before the caption
- * lookup and the linked load, which together can take three more seconds. A promised video has to finish
- * muxing inside Discord's one ~10 s window from the head fetch, so every second of head start counts (4 of
- * 139 yt muxes finish within 5 s, 23 within 9 s). Review, 2026-10-11, after the first version prewarmed
- * from the render instead: late, and on seams a direct paste never prewarms from.
+ * A REDDIT LINK POST'S YOUTUBE MUX, STARTED THE MOMENT THE POST'S PAGE NAMES THE LINK — the embed page, or on
+ * the archive path the archive's record — before the caption lookup and the linked load, which together can
+ * take three more seconds. A promised video has to finish muxing inside Discord's one ~10 s window from the
+ * head fetch, so every second of head start counts (4 of 139 yt muxes finish within 5 s, 23 within 9 s).
+ * Review, 2026-10-11, after the first version prewarmed from the render instead: late, and on seams a direct
+ * paste never prewarms from.
  *
  * Runs once per Reddit post-cache miss, which bounds it the way the head's T0 prewarm is bounded. yt only,
  * under the same rule renderPostRoute's prewarm gives yt (no post-cache gate: the id is a real link from a
  * Reddit post that just loaded, and normalizeYouTube vouches for any id) and the same SPECULATIVE_MUX_CAP.
  * Never throws: fetch.ts swallows a throw, but this cannot produce one to begin with on a bad page.
  */
-function prewarmLinked(html: string, env: Env, ctx: ExecutionContext | undefined): void {
+function prewarmLinked(link: string, env: Env, ctx: ExecutionContext | undefined): void {
   if (!ctx || !env.MEDIA_RESOLVER || !env.MEDIA_CACHE || muxInflight.size >= SPECULATIVE_MUX_CAP) return
-  const ref = linkedRef(redditEmbedLink(html))
+  const ref = linkedRef(link)
   const pre = ref?.p === 'yt' ? prewarmable(ref) : null
   if (!ref || !pre) return
   const key = `mux/${refKey(ref)}/${pre.index}`
@@ -735,13 +736,16 @@ export async function liveFetchPost(
     }
     case 'rd': {
       // Reddit's anonymous .json is IP-blocked from our egress, so fetchReddit reads embed.reddit.com
-      // (credential-free, egress-safe) as PRIMARY, with the OAuth token path only as a fallback when
-      // app creds happen to be set. The embed surface can't tell a private sub from a missing post
-      // (both are the not-found shell), so a removed/private/deleted post is a null Post -> the generic
-      // "couldn't load"; the 'private' -> 🔒 gate only fires on the OAuth fallback.
+      // (credential-free) as PRIMARY, with the OAuth token path only as a fallback when app creds happen
+      // to be set, and since 2026-10-22, when embed.reddit.com began refusing our egress as well, the
+      // archive path (reddit/normalize.ts says what it reads). The embed surface can't tell a private sub
+      // from a missing post (both are the not-found shell), so a removed/private/deleted post is a null
+      // Post -> the generic "couldn't load"; the 'private' -> 🔒 gate only fires on the OAuth fallback.
       // Not for a person's request (the converter's preview, a browser on /_api/v1): those are the seams a
       // direct paste never prewarms from, and a doomed video would cost a container call there for nothing.
-      const got = await fetchReddit(ref, env, client === 'human' ? undefined : html => prewarmLinked(html, env, ctx))
+      const got = await fetchReddit(ref, env, client === 'human' ? undefined : link => prewarmLinked(link, env, ctx))
+      // Counted whether or not the archive then carried the card: the ok and assert_fail beside it say which.
+      if ((got.ok && got.source === 'archive') || (!got.ok && got.refused)) count(env, 'rd', 'embed_refused', client)
       if (!got.ok) {
         count(env, 'rd', got.reason, client)
         if (got.reason === 'private' && report) report.reason = 'private'

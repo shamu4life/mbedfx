@@ -64,8 +64,11 @@ export type FeedCaption = { kind: 'body'; text: string } | { kind: 'none' } | nu
  */
 const COUNTS_PREFIX = /^[\d.,]+\s*[KkMmBb]? votes?, [\d.,]+\s*[KkMmBb]? comments?\.\s+/
 
-/** The three block pages Reddit serves, named by their content (every one has been seen at HTTP 200 or 403). */
-function blocked(html: string): boolean {
+/**
+ * The three block pages Reddit serves, named by their content (every one has been seen at HTTP 200 or 403).
+ * Exported for normalize.ts, which reads the same crawler page for the archive path.
+ */
+export function blocked(html: string): boolean {
   const lower = html.toLowerCase()
   return lower.includes('blocked by network security') || lower.includes('whoa there, pardner')
     || html.includes('name="js_challenge"')

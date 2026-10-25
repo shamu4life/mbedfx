@@ -140,6 +140,13 @@ plays inline.
   date, and its fallback is the iframe the owner rejected. What remains of that idea is a topology,
   a non-Cloudflare IP for the container's YouTube traffic, and that is an owner decision (a proxy or
   a box), not a lift. Do not re-open it as a code question; the July roadmap carries the measurement.
+- An "egress-safe" upstream stays safe only until it isn't. embed.reddit.com was this project's one
+  unblocked Reddit read until about 13:00 UTC on 2026-10-22, when it began answering Cloudflare's egress
+  with a 403 block page for every post. Every Reddit card was the failure card for three days, and
+  only the scheduled check noticed (#108). The archive path in `src/platforms/reddit/normalize.ts`
+  carries Reddit now: Arctic Shift's record, rendered only when Reddit's live crawler page shows the
+  same title. Do not loosen that title match. It is what keeps the archive from showing a post Reddit
+  removed. `embed_refused` falling to zero is the sign the block lifted.
 - `git add -A` sweeps in agent scratch. `.gitignore` has four essays about this. Always use
   slashless patterns. A `dir/` pattern won't match a symlink or a path that doesn't exist yet.
 

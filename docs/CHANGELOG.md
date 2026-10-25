@@ -7,6 +7,22 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Fixed
+
+- **Reddit cards render again.** From about 13:00 UTC on 2026-10-22 embed.reddit.com answered
+  Cloudflare's egress with a 403 block page for every post and every user-agent (measured from a Worker
+  on 2026-10-25), and since every Reddit card was read from that page, every Reddit link drew "Couldn't
+  load this Reddit post" for three days; the scheduled check had filed it as #108 (and, through the
+  same post, #109 and #110 for the guest domains). When the embed page is refused, the card is now built
+  from the Arctic Shift archive's record of the post (the date, title, subreddit and media, the v.redd.it
+  video included) and rendered only when Reddit's live crawler page shows the same title, which is the
+  rule that keeps a removed post from coming back. The counts and the author are the live page's, the
+  body is chosen by the caption rule the embed path already used, and NSFW is either source's. Every
+  post type renders the same media at the same index as its embed render did (eleven posts compared).
+  The embed page is still asked first, so the full render returns by itself if Reddit lifts the block.
+  New outcome `embed_refused` counts it (`docs/METRICS.md`). Arctic Shift was already a source for
+  bodies Reddit cut; on this path every refused post's id is sent to it.
+
 ### Added
 
 - **A twice-weekly health check that opens an issue when something breaks.** The half-hourly smoke
