@@ -146,7 +146,13 @@ plays inline.
   only the scheduled check noticed (#108). The archive path in `src/platforms/reddit/normalize.ts`
   carries Reddit now: Arctic Shift's record, rendered only when Reddit's live crawler page shows the
   same title. Do not loosen that title match. It is what keeps the archive from showing a post Reddit
-  removed. `embed_refused` falling to zero is the sign the block lifted.
+  removed. `embed_refused` falling to zero is the sign the block lifted. The archive is not reliable
+  from here either: it rate-limits per address, and every Worker reaches a Cloudflare-proxied site
+  from the same one (2a06:98c0:3600::103), so in one minute on 2026-10-26 it answered 429 to 15 of
+  15 asks. Its answer is kept in R2 after the first success (`keptArchive`), which bounds the damage
+  to a post's first card. Single requests looked fine when it was built; measure an upstream under
+  load before depending on it. A dependable fix is an egress the archive does not share with every
+  Worker, and that is an owner decision.
 - `git add -A` sweeps in agent scratch. `.gitignore` has four essays about this. Always use
   slashless patterns. A `dir/` pattern won't match a symlink or a path that doesn't exist yet.
 
