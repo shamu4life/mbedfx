@@ -231,6 +231,44 @@ async function readRequired(
 }
 
 /**
+ * THE ARCHIVE'S ANSWER IS KEPT, because from this egress asking it is a coin flip. Measured 2026-10-26, the
+ * hour after the archive path shipped: production's /_api/v1 loaded 7 of 15 uncached posts (00:03 UTC), a
+ * Worker replaying the same 15 a minute later got `429 {"error":"Too many requests"}` on all 15, with
+ * x-ratelimit-reset 20 to 25 s and the reset on the minute, and the next minute's three asks all answered 200.
+ * The scheduled check at 00:00 UTC failed too. The archive allows "a couple requests per second" to an address
+ * (its API README), and every probe here, from IAD, EWR and LHR, reached it as the same address,
+ * 2a06:98c0:3600::103, which is Cloudflare's own egress to a Cloudflare-proxied site: that allowance is shared
+ * with every Worker that asks it. PullPush, the other Reddit archive, answered the same egress 429 as well.
+ *
+ * So one good answer per post is made to last. Everything the card takes from the record is fixed once the post
+ * exists (date, title, subreddit, media urls; normalize.ts says what is read live instead), and Reddit's live
+ * page still vouches for the post on every render, so a kept record cannot bring back a post Reddit removed.
+ * R2, not the per-colo Cache API, because the point is that a post read once anywhere is never asked about
+ * again. The bucket's expire-60d lifecycle rule (wrangler.jsonc) is the record's only TTL, and that is the
+ * right one: after it the post costs one more ask. Kept as received, the bytes normalize.ts already reads.
+ * This does not make a never-seen post's first card reliable; only an egress the archive does not share with
+ * every Worker would, and that is the owner's decision (CLAUDE.md).
+ */
+const archiveKey = (id: string) => `rd-archive/${id}.json`
+
+async function keptArchive(env: Env, id: string): Promise<string | undefined> {
+  try {
+    const obj = await env.MEDIA_CACHE?.get(archiveKey(id))
+    const text = obj ? await obj.text() : undefined
+    return text !== undefined && redditArchiveSub(text, id) ? text : undefined
+  } catch {
+    return undefined
+  }
+}
+
+/** Only an answer that holds this post's record is kept: a 429, a block page or an empty `data` is not. */
+async function keepArchive(env: Env, id: string, text: string): Promise<void> {
+  try {
+    await env.MEDIA_CACHE?.put(archiveKey(id), text, { httpMetadata: { contentType: 'application/json' } })
+  } catch { /* a write that fails costs the next render one more ask, never this card */ }
+}
+
+/**
  * WHEN EMBED.REDDIT.COM REFUSED US: the Arctic Shift archive's record and Reddit's crawler page, which
  * normalize.ts combines (its "Archive path" section says what each carries, and why a post renders only when
  * Reddit's live title is the archived one). The archive is asked for the whole record because its `fields=`
@@ -248,16 +286,18 @@ async function readRequired(
  * Never throws: a transport failure here is no evidence about the post, and the card is the failure card
  * either way.
  */
-async function fetchRedditArchive(ref: Extract<PostRef, { p: 'rd' }>, asked: string): Promise<RedditFetch> {
+async function fetchRedditArchive(ref: Extract<PostRef, { p: 'rd' }>, asked: string, env: Env): Promise<RedditFetch> {
   const until = Date.now() + ARCHIVE_PATH_BUDGET_MS
   const left = (cap: number) => Math.min(cap, until - Date.now())
   const crawl = (sub: string) => readRequired(crawlerUrl(sub, ref.id),
     { 'user-agent': CRAWLER_UA, accept: 'text/html' }, left(CRAWLER_POST_TIMEOUT_MS), 'manual')
   const early = asked !== '_' ? crawl(asked) : null
-  const archive = await readRequired(`https://arctic-shift.photon-reddit.com/api/posts/ids?ids=${ref.id}`,
+  const kept = await keptArchive(env, ref.id)
+  const archive = kept ?? await readRequired(`https://arctic-shift.photon-reddit.com/api/posts/ids?ids=${ref.id}`,
     { 'user-agent': ARCHIVE_UA, accept: 'application/json' }, left(ARCHIVE_POST_TIMEOUT_MS), 'follow', ARCHIVE_MAX_BYTES)
   const sub = archive === undefined ? null : redditArchiveSub(archive, ref.id)
   if (archive === undefined || !sub) return { ok: false, reason: 'assert_fail', refused: true }
+  if (kept === undefined) await keepArchive(env, ref.id, archive)
   const crawler = await (early ?? crawl(sub))
   if (crawler === undefined) return { ok: false, reason: 'assert_fail', refused: true }
   return { ok: true, source: 'archive', id: ref.id, archive, crawler }
@@ -514,7 +554,7 @@ export async function fetchReddit(
   // Only a REFUSAL reaches the archive. A page that says the post is not there is Reddit's answer
   // (normalize.ts redditEmbedRefused), and the archive is never asked to overrule it.
   if (!embed.ok && embed.refused) {
-    const arch = await fetchRedditArchive(ref, asked)
+    const arch = await fetchRedditArchive(ref, asked, env)
     if (!arch.ok) return arch
     tell(redditArchiveLink(arch))
     return withGifHead(arch)

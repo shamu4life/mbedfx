@@ -269,6 +269,80 @@ test('on the archive path a gif is still sized from its first ten bytes, and a l
   })
 })
 
+/** An R2 bucket with the two calls fetch.ts makes, recording what was written. */
+function fakeR2() {
+  const store = new Map()
+  return {
+    store,
+    async get(k) { return store.has(k) ? { text: async () => store.get(k) } : null },
+    async put(k, body) { store.set(k, String(body)) },
+  }
+}
+
+test('a post the archive answered once is never asked about again: its record is kept in R2, and Reddit still vouches every time', async () => {
+  /**
+   * The archive rate-limits the one address every Worker reaches it from (fetch.ts, keptArchive: 15 of 15
+   * asks answered 429 in one minute on 2026-10-26), so a post's first good answer is kept. The second render
+   * here asks the archive nothing, and it still asks Reddit's crawler page, because the title match is what
+   * keeps a removed post from coming back and a kept record must not skip it.
+   */
+  const MEDIA_CACHE = fakeR2()
+  const env = { MEDIA_CACHE }
+  const ref = { p: 'rd', sub: 'aww', id: 'bh1r38' }
+  const hosts = page => [
+    ['https://embed.reddit.com/', blocked],
+    ['https://arctic-shift.photon-reddit.com/', archiveOf('bh1r38')],
+    ['https://www.reddit.com/r/aww/', page],
+  ]
+  await withHosts(hosts(page('video')), async (asked) => {
+    const got = await fetchReddit(ref, env)
+    assert.equal(normalizeReddit(got, ref)?.title, 'Apparently reptiles like squeaky toys too')
+    assert.equal(asked.filter(a => a.url.startsWith('https://arctic-shift')).length, 1)
+  })
+  assert.deepEqual([...MEDIA_CACHE.store.keys()], ['rd-archive/bh1r38.json'])
+  await withHosts(hosts(page('video')), async (asked) => {
+    const got = await fetchReddit(ref, env)
+    assert.equal(normalizeReddit(got, ref)?.createdAt.toISOString(), '2019-04-24T23:47:31.000Z')
+    assert.equal(asked.filter(a => a.url.startsWith('https://arctic-shift')).length, 0, 'served from R2')
+    assert.equal(asked.filter(a => a.url.startsWith('https://www.reddit.com/')).length, 1, 'Reddit still asked')
+  })
+  // The same kept record, and Reddit now shows the post as removed: no card.
+  const removed = () => new Response(crawler('video').replace(/<title>[^<]*<\/title>/, '<title>[ Removed by moderator ] : r/aww</title>'), { status: 301 })
+  await withHosts(hosts(removed), async () => {
+    assert.equal(normalizeReddit(await fetchReddit(ref, env), ref), null)
+  })
+})
+
+test('a refused, empty or unparseable archive answer is never kept, so the next render asks again', async () => {
+  const MEDIA_CACHE = fakeR2()
+  for (const archive of [
+    () => new Response('{"data":null,"error":"Too many requests"}', { status: 429, headers: { 'x-ratelimit-reset': '25' } }),
+    () => new Response('{"data":[]}', { status: 200 }),
+    () => new Response('<html>522</html>', { status: 522 }),
+  ]) {
+    await withHosts([
+      ['https://embed.reddit.com/', blocked],
+      ['https://arctic-shift.photon-reddit.com/', archive],
+      ['https://www.reddit.com/r/aww/', page('video')],
+    ], async () => {
+      const got = await fetchReddit({ p: 'rd', sub: 'aww', id: 'bh1r38' }, { MEDIA_CACHE })
+      assert.deepEqual(got, { ok: false, reason: 'assert_fail', refused: true })
+    })
+  }
+  assert.equal(MEDIA_CACHE.store.size, 0)
+  // A kept value that is not this post's record (a corrupt write, another id) is ignored and the archive asked.
+  MEDIA_CACHE.store.set('rd-archive/bh1r38.json', answer('haucpf'))
+  await withHosts([
+    ['https://embed.reddit.com/', blocked],
+    ['https://arctic-shift.photon-reddit.com/', archiveOf('bh1r38')],
+    ['https://www.reddit.com/r/aww/', page('video')],
+  ], async (asked) => {
+    const got = await fetchReddit({ p: 'rd', sub: 'aww', id: 'bh1r38' }, { MEDIA_CACHE })
+    assert.equal(got.source, 'archive')
+    assert.equal(asked.filter(a => a.url.startsWith('https://arctic-shift')).length, 1)
+  })
+})
+
 test('every refusal is counted as embed_refused, beside ok or assert_fail, so the operator sees the block', async () => {
   const rows = []
   const env = { AE: { writeDataPoint: p => rows.push(p.blobs.slice(0, 2).join(' ')) }, TRANSLATE_GOOGLE: 'off' }

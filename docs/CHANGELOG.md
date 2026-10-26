@@ -23,6 +23,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   New outcome `embed_refused` counts it (`docs/METRICS.md`). Arctic Shift was already a source for
   bodies Reddit cut; on this path every refused post's id is sent to it.
 
+- **A Reddit post the archive answered once is not asked about again.** Within the hour, the archive
+  path turned out to fail about half the time in production: Arctic Shift rate-limits per address,
+  and every Cloudflare Worker reaches it from the same one, so in one minute on 2026-10-26 it answered
+  429 to 15 of 15 asks. Its record of a post is now kept in R2 after the first good answer (the bucket's
+  60-day lifecycle is its only expiry), so a post read once, by any render on any colo, never needs the
+  archive again; Reddit's live page still vouches for it every time. A post nobody has rendered yet can
+  still draw the failure card during a minute the archive is refusing Cloudflare.
+
 ### Added
 
 - **A twice-weekly health check that opens an issue when something breaks.** The half-hourly smoke
