@@ -1,0 +1,9 @@
+{
+  "name": "mbedfx-relay",
+  "private": true,
+  "description": "Forwards mbedfx's Reddit and archive requests from a non-Cloudflare address. See relay/README.md.",
+  "type": "module",
+  "license": "MIT",
+  "engines": { "node": ">=20" },
+  "scripts": { "start": "node server.mjs" }
+}

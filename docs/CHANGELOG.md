@@ -9,6 +9,16 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- **Reddit requests can leave from the owner's relay instead of Cloudflare.** Reddit refuses every
+  request from Cloudflare, and the archive the cards fall back to rate-limits the one address every
+  Cloudflare Worker shares, so where a request comes from decides whether a Reddit card works.
+  `relay/` is a small, key-locked forwarder for Google Cloud Run's free tier (the owner's choice), with
+  step-by-step Cloud Shell instructions in `relay/README.md`; it asks only Reddit's embed page, Reddit's
+  crawler page and the archive, and `/selftest` shows what that address gets from each. Once the
+  `REDDIT_RELAY_URL` and `REDDIT_RELAY_KEY` secrets are set, the embed page, the archive and the feed
+  are asked through it; anything the relay cannot answer goes direct, as before, and is counted
+  (`relay_fallback`, `docs/METRICS.md`). If Reddit serves the relay's address, full Reddit cards come back.
+
 - **Reddit cards render again.** From about 13:00 UTC on 2026-10-22 embed.reddit.com answered
   Cloudflare's egress with a 403 block page for every post and every user-agent (measured from a Worker
   on 2026-10-25), and since every Reddit card was read from that page, every Reddit link drew "Couldn't

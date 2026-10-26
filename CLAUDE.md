@@ -43,6 +43,7 @@ plays inline.
 | `src/render/text.ts` | `statParts`, the quote block, the plain-text builders |
 | `src/translate.ts` | detection, translation, the marker |
 | `container/server.py` | the `yt-dlp` + `ffmpeg` resolver |
+| `relay/server.mjs` | the Reddit relay, a key-locked forwarder on Google Cloud Run (owner's choice, 2026-10-26) so Reddit and the archive see a non-Cloudflare address. Three allowed hosts, nothing else; `/selftest` measures that egress. Deployed by the owner from Cloud Shell (`relay/README.md`), not by Workers Builds |
 | `public/index.html` | the converter page |
 | `docs/API.md` | the published `/_api/v1` contract. Read it before changing anything it names |
 
