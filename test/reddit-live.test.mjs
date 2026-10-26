@@ -15,9 +15,21 @@ const DISCORD = 'Mozilla/5.0 (compatible; Discordbot/2.0; +https://discordapp.co
 const bot = url => new Request(url, { headers: { 'user-agent': DISCORD } })
 const human = url => new Request(url, { headers: { 'user-agent': 'Mozilla/5.0 (Macintosh) Safari/605' } })
 const retainingCtx = () => ({ waitUntil() {} })
+/**
+ * BYTES, NOT RESPONSE OBJECTS, as Cloudflare's Cache API keeps them. The clone-on-put, clone-on-match
+ * version this replaced failed intermittently on Node 22.18.0, the version CI pins (.node-version): the
+ * stored entry for this file's second test turned up already consumed at its third read, with no code
+ * reading it in between (traced 2026-10-26: read cleanly at the second request, consumed by the fourth).
+ * 8 of 15 runs failed on 22.18.0 from #111 on, 0 of 20 on 22.22.0, and 0 of 15 on 22.18.0 before #111, whose
+ * change to this path's timing exposed it. Which part of Node's fetch does it was not pinned down; a store
+ * that holds plain bytes cannot lose a body to any of it, and it is what the real cache does.
+ */
 const fakeCache = () => {
   const m = new Map()
-  return { store: m, async match(k) { const v = m.get(k); return v ? v.clone() : undefined }, async put(k, v) { m.set(k, v.clone()) } }
+  return {
+    async match(k) { const v = m.get(k); return v ? new Response(v.body, v.init) : undefined },
+    async put(k, v) { m.set(k, { body: await v.arrayBuffer(), init: { status: v.status, headers: [...v.headers] } }) },
+  }
 }
 const fakeR2 = () => ({ async head() { return null }, async get() { return null }, async put() {} })
 const deps = () => ({
