@@ -31,7 +31,7 @@ import {
 import {
   instagramAgeGate, instagramCopyrightBlocked, instagramFullPageCard, instagramGraphQLCard, instagramPrivateGate,
   normalizeInstagram,
-  recoveredMediaFrom, withCopyrightRemux, withRecoveredVideo,
+  recoveredMediaFrom, withCopyrightRemux, withNoVideoNote, withRecoveredVideo,
 } from './platforms/instagram/normalize.ts'
 import { fetchTwitter } from './platforms/twitter/fetch.ts'
 import { normalizeTwitter } from './platforms/twitter/normalize.ts'
@@ -432,7 +432,8 @@ export async function liveFetchPost(
         const whole = instagramGraphQLCard(gql, ref)
         if (whole) {
           count(env, 'ig', 'graphql_recovered', client)
-          return whole
+          // A no-op on a reel the query gave its video (every one measured); see withNoVideoNote.
+          return withNoVideoNote(whole)
         }
         /**
          * BEFORE the generic failure, check the FULL /p/{code}/ page for a private-account signal.
@@ -509,7 +510,9 @@ export async function liveFetchPost(
           // The code is passed so the feed walk can STOP as soon as it finds this post, and so it
           // only pages at all for a post that is not already on page one. See IG_FEED_MAX_PAGES.
           const rec = recoveredMediaFrom(await fetchInstagramUserFeed(card.author.handle, code), code)
-          return withRecoveredVideo(card, rec)
+          // Every recovery spent: a reel that is still only its cover says so (withNoVideoNote), because the cover
+          // this page names has Instagram's play button printed on it (reported 2026-10-30, /reel/DfCz_wfx2zp/).
+          return withNoVideoNote(withRecoveredVideo(card, rec))
         }
         /**
          * THE AGE GATE GOES BEFORE THE PRIVATE ONE, and the order is load-bearing twice over.
@@ -659,7 +662,7 @@ export async function liveFetchPost(
         count(env, 'ig', 'copyright_remux', client)
         return withCopyrightRemux(post)
       }
-      return post
+      return withNoVideoNote(post)
     }
     case 'x': {
       const got = await fetchTwitter(ref, env)

@@ -811,6 +811,37 @@ export function instagramCopyrightBlocked(html: unknown): boolean {
  * blocked CAROUSEL ever appears this refuses it — see the length guard — because a carousel's items
  * are positional and pairing them with a feed item's renditions is an unmeasured mapping.
  */
+/**
+ * A REEL WHOSE VIDEO COULD NOT BE HAD SAYS SO ON ITS CARD, rather than drawing a cover a reader tries to play.
+ *
+ * THE DEFECT, reported 2026-10-30 on /reel/DfCz_wfx2zp/: the card was that reel's cover alone, and the cover the
+ * full page names (og:image) has Instagram's own play button printed into the picture, so people pressed a play
+ * button that does nothing and asked why they could not watch. Measured the same day, from a Cloudflare Worker
+ * (IAD) and again from a non-Cloudflare host, with the shipped requests: the shortcode query answers that reel
+ * `data: null` with a non-transient `field_exception` naming its root, the full page carries its og: set and no
+ * media item at all, and the account feed answers 404 (for a working control reel too). A control reel got its
+ * video from the same query from both hosts, so it is that reel, not this egress: nothing a logged-out client
+ * asks for returns its video.
+ *
+ * THE WORDING DOES NOT NAME A CAUSE, deliberately. The same card is reached when Instagram withholds a reel and
+ * when our own lookups stop working (a rotated doc_id, the feed's 404), and nothing here tells the two apart, so
+ * "signed-in viewers only" would be a guess on the second. What is true in both is what the card says.
+ *
+ * REELS ONLY, read off the canonical, which is `/reel/` only when the page itself said so (canonicalFor). A /p/
+ * post with one picture is a photo as often as not, and a note on a photo would be the false claim this replaces.
+ * PREPENDED AND IDEMPOTENT, the contract the YouTube notes keep: the cap trims the end, and a second pass on a
+ * cached post must not double it.
+ */
+export const IG_NO_VIDEO_NOTE = '🎬 The video could not be loaded here, so this is only its cover. Open it on Instagram'
+
+export function withNoVideoNote<T extends Post | null>(post: T): T {
+  if (!post || typeof post.canonical !== 'string' || !/^https:\/\/www\.instagram\.com\/reel\//.test(post.canonical)) return post
+  if (!Array.isArray(post.media) || post.media.some(m => m?.kind === 'video')) return post
+  const cur = typeof post.text === 'string' ? post.text : ''
+  if (cur.includes(IG_NO_VIDEO_NOTE)) return post
+  return { ...post, text: cur ? `${IG_NO_VIDEO_NOTE}\n\n${cur}` : IG_NO_VIDEO_NOTE }
+}
+
 export function withRecoveredVideo<T extends Post | null>(post: T, recovered: unknown): T {
   if (!post || !recovered) return post
   const list: Media[] = Array.isArray(recovered) ? recovered as Media[]
