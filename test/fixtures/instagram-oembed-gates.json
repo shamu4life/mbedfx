@@ -1,0 +1,23 @@
+{
+ "_captured": "2026-10-30 from a Cloudflare Worker (Workers Playground, colo EWR, egress 2a06:98c0:3600::103): GET https://www.instagram.com/api/v1/oembed/?url=https%3A%2F%2Fwww.instagram.com%2Freel%2F{code}%2F with user-agent facebookexternalhit/1.1 and accept application/json, the request fetchInstagramAudienceGate sends. Bodies verbatim.",
+ "reported": {
+  "code": "DfCz_wfx2zp",
+  "status": 400,
+  "body": "{\"message\":\"geoblock_required\",\"gating_type\":\"unappealable\",\"title\":\"This content isn't available to everyone\",\"description\":\"It can't be seen by certain audiences.\",\"buttons\":[],\"show_notice\":false,\"session_id\":\"\",\"blocks_logging_data\":\"\",\"geo_block_rule_type\":null,\"gating_type_thrift\":3,\"category_id\":null,\"alert_title\":\"You Can't See This Post\",\"alert_description\":\"It can't be seen by certain audiences.\",\"alert_buttons\":[\"OK\"],\"media_igid\":4018002499339775209,\"status\":\"fail\"}"
+ },
+ "account25": {
+  "code": "DZFDtEhoNPy",
+  "status": 400,
+  "body": "{\"message\":\"geoblock_required\",\"gating_type\":\"unappealable\",\"title\":\"People under 25 can't see this content\",\"description\":\"This account has set limits on who can see their profile and content.\",\"buttons\":[],\"show_notice\":false,\"session_id\":\"\",\"blocks_logging_data\":\"MIN_AGE_ACCOUNT\",\"geo_block_rule_type\":null,\"gating_type_thrift\":12,\"media_igid\":3910548142816285682,\"status\":\"fail\"}"
+ },
+ "publicControl": {
+  "code": "DZxLuleoEoC",
+  "status": 403,
+  "body": "Private media"
+ },
+ "madeUp": {
+  "code": "DQqQqQqQqQq",
+  "status": 404,
+  "body": "No Media Match"
+ }
+}

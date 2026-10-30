@@ -107,6 +107,12 @@ export type Outcome2 =
   // doc_id rotating; it was added precisely because nothing measured whether the query is refused in
   // the same windows as the page.
   | 'graphql_recovered'
+  // `reel_age_gated` is an Instagram reel drawn as its cover with the 🔞 note, because every recovery
+  // missed its video and Instagram's own oEmbed gate answer called it age-restricted (since 2026-10-30,
+  // instagramAudienceGate). NOT `age_restricted`: that one is a gate counter and stacks on `fetch_fail`,
+  // and this card renders, so counting it there would break the subtraction METRICS.md teaches. Read it
+  // against `fullpage_recovered`, which every one of these also counted.
+  | 'reel_age_gated'
   // `plugin_recovered` is a Facebook post read off Meta's EMBED-PLUGIN fragment because every
   // ordinary post surface answered our egress with a login wall (measured 2026-08-08 from
   // Cloudflare; see facebookPluginCard). Read it against `fb`/`ok`: while the wall stands this

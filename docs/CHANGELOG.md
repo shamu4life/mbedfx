@@ -15,8 +15,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   reel's video (its shortcode query answers `field_exception`, from Cloudflare and from a non-Cloudflare host
   alike, while a control reel answers with its video), so the card cannot have one. A reel left with only its
   cover now opens with "🎬 The video could not be loaded here, so this is only its cover. Open it on
-  Instagram" (`withNoVideoNote`). It names no cause, because the same card is reached when our own lookups
-  fail. Measured the same day: the account-feed recovery now answers 404 from Cloudflare for every reel, and
+  Instagram" (`withNoVideoNote`). That note names no cause, because the same card is reached when our own
+  lookups fail. When Instagram itself names the cause, the card does: the owner opened the reel logged out and
+  Instagram said "Age-restricted content", and Instagram's oEmbed endpoint answers that reel from a Worker with
+  a gate (HTTP 400, `gating_type_thrift: 3`). Such a reel now opens with "🔞 Age-restricted on Instagram.
+  Sign-in required to watch, so this is only its cover." and is marked sensitive, as YouTube's age note is
+  (`instagramAudienceGate`, asked beside the feed so it adds no time; new counter `reel_age_gated`). Only gate
+  3 and the 25+ account gate are read as age; a public reel's 403 "Private media" from the same endpoint is
+  read as nothing. Measured the same day: the account-feed recovery now answers 404 from Cloudflare for every reel, and
   the embed page carries no post for any, so Instagram cards currently come from the shortcode query alone.
 
 - **Reddit requests can leave from the owner's relay instead of Cloudflare.** Reddit refuses every
