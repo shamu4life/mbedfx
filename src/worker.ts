@@ -38,7 +38,7 @@ import { normalizeTwitter } from './platforms/twitter/normalize.ts'
 import { fetchThreads } from './platforms/threads/fetch.ts'
 import { normalizeThreads } from './platforms/threads/normalize.ts'
 import { fetchReddit, resolveRedditShareUrl } from './platforms/reddit/fetch.ts'
-import { modelInput, sourceLanguage, translateBest, withTranslation } from './translate.ts'
+import { modelInput, sourceLanguage, splitNotes, translateBest, withTranslation } from './translate.ts'
 import { displayName } from './render/chooser.ts'
 import { metaPlatformOf, resolveMetaShare, stripMetaTracking } from './platforms/metashare/fetch.ts'
 import { normalizeReddit, redditCaptionSource, redditIncomplete } from './platforms/reddit/normalize.ts'
@@ -4435,7 +4435,9 @@ async function translationFor(
 async function withTranslated(
   post: Post, env: Env, ctx: ExecutionContext, budgetMs: number,
 ): Promise<{ post: Post; pending: boolean; translated?: string; source: string }> {
-  const text = typeof post?.text === 'string' ? post.text : ''
+  // The author's words only: the notes this project prepends are English, and left in they hide the
+  // post's language and come back inside the translation. See CARD_NOTES.
+  const text = splitNotes(post?.text).body
   const source = sourceLanguage(text) ?? ''
   if (!source) return { post, pending: false, source }
   // NO LONGER GATED ON env.AI. Google's endpoint needs no binding, so a Worker with no Workers AI

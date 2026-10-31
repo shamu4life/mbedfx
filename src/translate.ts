@@ -1,4 +1,6 @@
 import type { Post } from './types.ts'
+import { IG_AGE_NOTE, IG_NO_VIDEO_NOTE } from './platforms/instagram/normalize.ts'
+import { AGE_NOTE, LENGTH_NOTE, LIVE_NOTE } from './platforms/youtube/normalize.ts'
 
 /**
  * TRANSLATION — Workers AI, opt-in, and never load-bearing.
@@ -62,6 +64,46 @@ const SCRIPTS: ReadonlyArray<readonly [string, RegExp]> = [
  * hashtags are stripped for the same reason — a translated @name is a broken mention.
  */
 const NOISE = /https?:\/\/\S+|[@#][\w.]+/g
+
+/**
+ * THE NOTES THIS PROJECT PREPENDS TO A CARD'S TEXT are its own English, not the author's words, so they are
+ * kept out of both questions this file asks: what language the post is in, and what it says.
+ *
+ * THE DEFECT, found 2026-10-31 right after IG_AGE_NOTE shipped: /reel/DfCz_wfx2zp/, whose caption mixes
+ * romaji with `#kpop好きな人と繋がりたい`, had rendered "🌐 Translated from Japanese" and stopped. Its caption
+ * alone reads as Japanese (10 kana and kanji in 35 letters once NOISE has taken the hashtags, 0.29, over
+ * FOREIGN_RATIO), and the note's 65 English letters in front of it took the share to 0.10, so
+ * sourceLanguage fell to the Latin rule and looksEnglish read the note's "on", "to", "so", "this" and "is"
+ * as English. YouTube's AGE_NOTE did the same to a short
+ * Japanese title, which nobody had reported. A note in the question would also come back inside the
+ * translation, printing it twice.
+ *
+ * ONE LIST, and test/translate.test.mjs derives it from the source and fails on a note left out of it,
+ * because a note missing here fails silently: the card renders, with no translation and no error.
+ */
+export const CARD_NOTES: readonly string[] = [IG_AGE_NOTE, IG_NO_VIDEO_NOTE, AGE_NOTE, LENGTH_NOTE, LIVE_NOTE]
+
+/**
+ * A card's text split into the notes leading it and the author's words after them. Notes are always
+ * PREPENDED, each as `${note}\n\n${rest}` (withNoVideoNote, withAgeNote, withLengthNote, withLiveNote), and
+ * can stack, so this peels them off the front only. A note's text met anywhere else is left where it is.
+ * Pure and total: a non-string is `{ notes: '', body: '' }`.
+ */
+export function splitNotes(text: unknown): { notes: string; body: string } {
+  let body = typeof text === 'string' ? text : ''
+  const notes: string[] = []
+  for (let found = true; found;) {
+    found = false
+    for (const note of CARD_NOTES) {
+      if (body === note || body.startsWith(`${note}\n\n`)) {
+        notes.push(note)
+        body = body.slice(note.length).replace(/^\n\n/, '')
+        found = true
+      }
+    }
+  }
+  return { notes: notes.join('\n\n'), body }
+}
 
 /** The share of non-ASCII needed before a post counts as foreign rather than as decorated English. */
 const FOREIGN_RATIO = 0.15
@@ -408,12 +450,16 @@ export function withTranslation(post: Post, translated: unknown, source: string)
   // composed again into a card carrying two translations.
   if (cur.includes(TRANSLATION_MARKER)) return post
   const english = translated.trim()
+  // OUR NOTES STAY FIRST, above the translation, and out of what the marker labels: "🔞 Age-restricted"
+  // printed under "🌐 Translated from Japanese" would read as the author's words. See CARD_NOTES.
+  const { notes, body } = splitNotes(cur)
   /**
    * WITH NO ORIGINAL, THE MARKER LEADS INSTEAD. It is a label for the line beneath it, so on a
    * body-less post a TRAILING marker would announce nothing at all — and a card ending in
    * "🌐 Translated from Japanese" with nothing after it reads as truncation.
    */
-  return { ...post, text: cur ? `${english}\n\n${marker}\n${cur}` : `${marker}\n${english}` }
+  const composed = body ? `${english}\n\n${marker}\n${body}` : `${marker}\n${english}`
+  return { ...post, text: notes ? `${notes}\n\n${composed}` : composed }
 }
 
 /**
