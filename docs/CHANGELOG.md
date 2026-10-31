@@ -9,16 +9,19 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
-- **A card's own notes no longer stop its caption being translated.** Found 2026-10-31 on production right
+- **A card's own lines no longer stop its caption being translated.** Found 2026-10-31 on production right
   after the Instagram age note shipped: /reel/DfCz_wfx2zp/ had rendered "🌐 Translated from Japanese", and
   with "🔞 Age-restricted on Instagram" in front of its caption it rendered no translation at all. The
   note's English letters took the caption's Japanese share from 0.29 to 0.10, under the 0.15 the detector
-  needs, and the Latin-script check then read the note's own words as English. YouTube's age note did the
-  same to a short Japanese title. The notes this project prepends (`CARD_NOTES`, in `src/translate.ts`) are
-  now split off before the language is detected and before the text is sent to be translated, and a
-  translated card keeps its note first, above the translation, rather than under "🌐 Translated from", where
-  it would read as the author's words. A test derives the note list from the platform normalizers, so a
-  new note cannot be left out of it silently.
+  needs, and the Latin-script check then read the note's own words as English. A review of the fix found
+  the same in YouTube's and PeerTube's live-stream notes, in the "🔁 boosted by @…" line on Mastodon and
+  Misskey boosts (a boosted "Bom dia amigos, tudo bem hoje" went untranslated), and in Imgur's trailing
+  "+N more images on Imgur". These lines are now split off before the language is detected and before the
+  text is sent to be translated (`CARD_NOTES` and `splitNotes`, in `src/translate.ts`), and a translated card
+  keeps them out of what "🌐 Translated from" labels: the leading ones above the translation, Imgur's after
+  the original. Mastodon-shaped YouTube cards had printed the age note under that marker as though the
+  author wrote it; both documents now read note, English, marker, original. A test derives the fixed notes
+  from the platform normalizers, so a new one cannot be left out silently.
 
 - **An Instagram reel whose video could not be had now says so on its card.** Reported 2026-10-30 on
   /reel/DfCz_wfx2zp/: the card was the reel's cover alone, and that cover has Instagram's play button printed

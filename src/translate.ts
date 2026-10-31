@@ -1,6 +1,7 @@
 import type { Post } from './types.ts'
 import { IG_AGE_NOTE, IG_NO_VIDEO_NOTE } from './platforms/instagram/normalize.ts'
 import { AGE_NOTE, LENGTH_NOTE, LIVE_NOTE } from './platforms/youtube/normalize.ts'
+import { PEERTUBE_LIVE_NOTE } from './platforms/peertube/normalize.ts'
 
 /**
  * TRANSLATION — Workers AI, opt-in, and never load-bearing.
@@ -66,7 +67,7 @@ const SCRIPTS: ReadonlyArray<readonly [string, RegExp]> = [
 const NOISE = /https?:\/\/\S+|[@#][\w.]+/g
 
 /**
- * THE NOTES THIS PROJECT PREPENDS TO A CARD'S TEXT are its own English, not the author's words, so they are
+ * THE LINES THIS PROJECT WRITES INTO A CARD'S TEXT are its own English, not the author's words, so they are
  * kept out of both questions this file asks: what language the post is in, and what it says.
  *
  * THE DEFECT, found 2026-10-31 right after IG_AGE_NOTE shipped: /reel/DfCz_wfx2zp/, whose caption mixes
@@ -74,35 +75,58 @@ const NOISE = /https?:\/\/\S+|[@#][\w.]+/g
  * alone reads as Japanese (10 kana and kanji in 35 letters once NOISE has taken the hashtags, 0.29, over
  * FOREIGN_RATIO), and the note's 65 English letters in front of it took the share to 0.10, so
  * sourceLanguage fell to the Latin rule and looksEnglish read the note's "on", "to", "so", "this" and "is"
- * as English. YouTube's AGE_NOTE did the same to a short
- * Japanese title, which nobody had reported. A note in the question would also come back inside the
- * translation, printing it twice.
+ * as English. A line left in the question also comes back inside the translation, and a line left in the
+ * body is printed under "🌐 Translated from" as though the author wrote it.
  *
- * ONE LIST, and test/translate.test.mjs derives it from the source and fails on a note left out of it,
- * because a note missing here fails silently: the card renders, with no translation and no error.
+ * WHICH OTHER LINES DO IT, measured with sourceLanguage the same day (a review of this change found them):
+ *   - YouTube's LIVE_NOTE, which withLiveNote puts ahead of a broadcast's description at build time: the
+ *     same caption behind it reads null. YouTube's AGE_NOTE never sits ahead of words that are detected:
+ *     an age-gated post's text is the note alone (normalizeYouTube), the title is in `title`, which is
+ *     never translated, and withAgeNote runs after translation on both seams. It is listed so the
+ *     activity seam composes the same text as describeTarget whichever order they run in.
+ *   - PeerTube's PEERTUBE_LIVE_NOTE, the same shape.
+ *   - Mastodon's and Misskey's "🔁 boosted by @{handle}": NOISE takes the handle and leaves "boosted by",
+ *     and "by" is an English function word, so a boosted "Bom dia amigos, tudo bem hoje" read null where the
+ *     post alone reads auto. It carries a handle, so it is matched by shape (NOTE_LEADS).
+ *   - Imgur's "+{n} more images on Imgur", APPENDED by bodyOf rather than prepended (NOTE_TAILS).
+ * NOT these: Lemmy's "!community" line and Pinterest's "Board:" line also tip a borderline caption, but
+ * what tips it is the community's or the board's own name, which is the site's text, not ours.
+ *
+ * ONE LIST, and test/translate-notes.test.mjs derives the fixed notes from the platform normalizers and
+ * fails on one left out, because a note missing here fails silently: the card renders, untranslated, with
+ * no error. The two shape-matched lines are pinned by tests that run their normalizers.
  */
-export const CARD_NOTES: readonly string[] = [IG_AGE_NOTE, IG_NO_VIDEO_NOTE, AGE_NOTE, LENGTH_NOTE, LIVE_NOTE]
+export const CARD_NOTES: readonly string[] = [IG_AGE_NOTE, IG_NO_VIDEO_NOTE, AGE_NOTE, LENGTH_NOTE, LIVE_NOTE, PEERTUBE_LIVE_NOTE]
+/** Leading lines of ours whose wording carries a value: mastoapi's and misskey's boost line. */
+const NOTE_LEADS: readonly RegExp[] = [/^🔁 boosted by @\S+$/u]
+/** Trailing lines of ours: imgur's bodyOf overflow count. */
+const NOTE_TAILS: readonly RegExp[] = [/^\+\d+ more images? on Imgur$/]
 
 /**
- * A card's text split into the notes leading it and the author's words after them. Notes are always
- * PREPENDED, each as `${note}\n\n${rest}` (withNoVideoNote, withAgeNote, withLengthNote, withLiveNote), and
- * can stack, so this peels them off the front only. A note's text met anywhere else is left where it is.
- * Pure and total: a non-string is `{ notes: '', body: '' }`.
+ * A card's text split into our lines leading it, the author's words, and our line ending it. The leading
+ * ones are always PREPENDED as `${line}\n\n${rest}` (withNoVideoNote, withAgeNote, withLengthNote,
+ * withLiveNote, the normalizers' boost and live lines) and can stack, so they are peeled off the front; the
+ * one trailing line is peeled off the end. A note's words met anywhere else are text and stay where they are.
+ * Pure and total: a non-string is all three empty.
  */
-export function splitNotes(text: unknown): { notes: string; body: string } {
+export function splitNotes(text: unknown): { notes: string; body: string; tail: string } {
   let body = typeof text === 'string' ? text : ''
   const notes: string[] = []
   for (let found = true; found;) {
     found = false
-    for (const note of CARD_NOTES) {
-      if (body === note || body.startsWith(`${note}\n\n`)) {
-        notes.push(note)
-        body = body.slice(note.length).replace(/^\n\n/, '')
-        found = true
-      }
+    const first = body.split('\n\n', 1)[0]
+    const lead = CARD_NOTES.find(n => n === first) ?? (NOTE_LEADS.some(re => re.test(first)) ? first : undefined)
+    if (lead !== undefined && first !== '') {
+      notes.push(lead)
+      body = body.slice(lead.length).replace(/^\n\n/, '')
+      found = true
     }
   }
-  return { notes: notes.join('\n\n'), body }
+  const cut = body.lastIndexOf('\n\n')
+  const last = cut < 0 ? body : body.slice(cut + 2)
+  const tail = NOTE_TAILS.some(re => re.test(last)) ? last : ''
+  if (tail) body = cut < 0 ? '' : body.slice(0, cut)
+  return { notes: notes.join('\n\n'), body, tail }
 }
 
 /** The share of non-ASCII needed before a post counts as foreign rather than as decorated English. */
@@ -450,16 +474,17 @@ export function withTranslation(post: Post, translated: unknown, source: string)
   // composed again into a card carrying two translations.
   if (cur.includes(TRANSLATION_MARKER)) return post
   const english = translated.trim()
-  // OUR NOTES STAY FIRST, above the translation, and out of what the marker labels: "🔞 Age-restricted"
-  // printed under "🌐 Translated from Japanese" would read as the author's words. See CARD_NOTES.
-  const { notes, body } = splitNotes(cur)
+  // OUR LINES STAY OUT OF WHAT THE MARKER LABELS: the leading ones above the translation, the trailing one
+  // after the original. "🔞 Age-restricted" printed under "🌐 Translated from Japanese" would read as the
+  // author's words. See CARD_NOTES.
+  const { notes, body, tail } = splitNotes(cur)
   /**
    * WITH NO ORIGINAL, THE MARKER LEADS INSTEAD. It is a label for the line beneath it, so on a
    * body-less post a TRAILING marker would announce nothing at all — and a card ending in
    * "🌐 Translated from Japanese" with nothing after it reads as truncation.
    */
   const composed = body ? `${english}\n\n${marker}\n${body}` : `${marker}\n${english}`
-  return { ...post, text: notes ? `${notes}\n\n${composed}` : composed }
+  return { ...post, text: [notes, composed, tail].filter(Boolean).join('\n\n') }
 }
 
 /**

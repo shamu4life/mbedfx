@@ -6266,8 +6266,11 @@ async function serve(req: Request, env: Env, ctx: ExecutionContext, d: Deps): Pr
           // ALL FIVE overlays, from the one record — it was three, then four, and the count is kept
           // current here because "applying only some of them" is the recurring defect. Each arrives
           // after the Post was built, and every one left out leaves the card silent about that fact
-          // on every first paste. Translation is applied LAST so the marker trails the body the age
-          // note may have extended. withDescription runs BEFORE withAgeNote so the note keeps the top
+          // on every first paste. Translation is applied LAST here and FIRST in describeTarget, and since
+          // 2026-10-31 that order no longer changes the text: withTranslation lifts the notes out of what
+          // its marker labels (translate.ts splitNotes), so both documents read note, English, marker,
+          // original. Before that, this one printed the age note under "🌐 Translated from" as though the
+          // author wrote it. withDescription runs BEFORE withAgeNote so the note keeps the top
           // of the body on an age-gated video, and before withTranslation so a foreign-language
           // description is what gets translated.
           //
