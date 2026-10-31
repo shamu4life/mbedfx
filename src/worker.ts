@@ -38,7 +38,7 @@ import { normalizeTwitter } from './platforms/twitter/normalize.ts'
 import { fetchThreads } from './platforms/threads/fetch.ts'
 import { normalizeThreads } from './platforms/threads/normalize.ts'
 import { fetchReddit, resolveRedditShareUrl } from './platforms/reddit/fetch.ts'
-import { modelInput, sourceLanguage, translateBest, withTranslation } from './translate.ts'
+import { modelInput, sourceLanguage, splitNotes, translateBest, withTranslation } from './translate.ts'
 import { displayName } from './render/chooser.ts'
 import { metaPlatformOf, resolveMetaShare, stripMetaTracking } from './platforms/metashare/fetch.ts'
 import { normalizeReddit, redditCaptionSource, redditIncomplete } from './platforms/reddit/normalize.ts'
@@ -4435,7 +4435,9 @@ async function translationFor(
 async function withTranslated(
   post: Post, env: Env, ctx: ExecutionContext, budgetMs: number,
 ): Promise<{ post: Post; pending: boolean; translated?: string; source: string }> {
-  const text = typeof post?.text === 'string' ? post.text : ''
+  // The author's words only: the notes this project prepends are English, and left in they hide the
+  // post's language and come back inside the translation. See CARD_NOTES.
+  const text = splitNotes(post?.text).body
   const source = sourceLanguage(text) ?? ''
   if (!source) return { post, pending: false, source }
   // NO LONGER GATED ON env.AI. Google's endpoint needs no binding, so a Worker with no Workers AI
@@ -6264,8 +6266,11 @@ async function serve(req: Request, env: Env, ctx: ExecutionContext, d: Deps): Pr
           // ALL FIVE overlays, from the one record — it was three, then four, and the count is kept
           // current here because "applying only some of them" is the recurring defect. Each arrives
           // after the Post was built, and every one left out leaves the card silent about that fact
-          // on every first paste. Translation is applied LAST so the marker trails the body the age
-          // note may have extended. withDescription runs BEFORE withAgeNote so the note keeps the top
+          // on every first paste. Translation is applied LAST here and FIRST in describeTarget, and since
+          // 2026-10-31 that order no longer changes the text: withTranslation lifts the notes out of what
+          // its marker labels (translate.ts splitNotes), so both documents read note, English, marker,
+          // original. Before that, this one printed the age note under "🌐 Translated from" as though the
+          // author wrote it. withDescription runs BEFORE withAgeNote so the note keeps the top
           // of the body on an age-gated video, and before withTranslation so a foreign-language
           // description is what gets translated.
           //
