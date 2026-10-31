@@ -811,6 +811,95 @@ export function instagramCopyrightBlocked(html: unknown): boolean {
  * blocked CAROUSEL ever appears this refuses it — see the length guard — because a carousel's items
  * are positional and pairing them with a feed item's renditions is an unmeasured mapping.
  */
+/**
+ * A REEL WHOSE VIDEO COULD NOT BE HAD SAYS SO ON ITS CARD, rather than drawing a cover a reader tries to play.
+ *
+ * THE DEFECT, reported 2026-10-30 on /reel/DfCz_wfx2zp/: the card was that reel's cover alone, and the cover the
+ * full page names (og:image) has Instagram's own play button printed into the picture, so people pressed a play
+ * button that does nothing and asked why they could not watch. Measured the same day, from a Cloudflare Worker
+ * (IAD) and again from a non-Cloudflare host, with the shipped requests: the shortcode query answers that reel
+ * `data: null` with a non-transient `field_exception` naming its root, the full page carries its og: set and no
+ * media item at all, and the account feed answers 404 (for a working control reel too). A control reel got its
+ * video from the same query from both hosts, so it is that reel, not this egress: nothing a logged-out client
+ * asks for returns its video.
+ *
+ * THE WORDING DOES NOT NAME A CAUSE, deliberately. The same card is reached when Instagram withholds a reel and
+ * when our own lookups stop working (a rotated doc_id, the feed's 404), and nothing here tells the two apart, so
+ * "signed-in viewers only" would be a guess on the second. What is true in both is what the card says.
+ *
+ * THE CAUSE IS NAMED ONLY WHEN INSTAGRAM NAMES IT. Passed `'age_restricted'` (instagramAudienceGate, which reads
+ * Instagram's own gate answer), the card carries IG_AGE_NOTE instead, and is marked sensitive the way YouTube's
+ * age note marks it. Anything else keeps the neutral note above.
+ *
+ * REELS ONLY, read off the canonical, which is `/reel/` only when the page itself said so (canonicalFor). A /p/
+ * post with one picture is a photo as often as not, and a note on a photo would be the false claim this replaces.
+ * PREPENDED AND IDEMPOTENT, the contract the YouTube notes keep: the cap trims the end, and a second pass on a
+ * cached post must not double it, nor add the other note beside it.
+ */
+export const IG_NO_VIDEO_NOTE = '🎬 The video could not be loaded here, so this is only its cover. Open it on Instagram'
+export const IG_AGE_NOTE = '🔞 Age-restricted on Instagram. Sign-in required to watch, so this is only its cover.'
+
+/** A reel card with no video in it: the one shape either note goes on, and the one worth asking the gate about. */
+export function reelLacksVideo(post: Post | null): boolean {
+  if (!post || typeof post.canonical !== 'string' || !/^https:\/\/www\.instagram\.com\/reel\//.test(post.canonical)) return false
+  return Array.isArray(post.media) && !post.media.some(m => m?.kind === 'video')
+}
+
+export function withNoVideoNote<T extends Post | null>(post: T, gate?: 'age_restricted'): T {
+  if (!post || !reelLacksVideo(post)) return post
+  const cur = typeof post.text === 'string' ? post.text : ''
+  if (cur.includes(IG_NO_VIDEO_NOTE) || cur.includes(IG_AGE_NOTE)) return post
+  if (gate === 'age_restricted') return { ...post, text: cur ? `${IG_AGE_NOTE}\n\n${cur}` : IG_AGE_NOTE, sensitive: true }
+  return { ...post, text: cur ? `${IG_NO_VIDEO_NOTE}\n\n${cur}` : IG_NO_VIDEO_NOTE }
+}
+
+/**
+ * INSTAGRAM'S OWN ANSWER TO "WHO MAY SEE THIS POST", read off its oEmbed endpoint (fetchInstagramAudienceGate).
+ * Pure: takes `{ status, body }` and returns `'age_restricted'` or undefined.
+ *
+ * WHY IT EXISTS. The reel reported 2026-10-30 (/reel/DfCz_wfx2zp/) drew its cover with the neutral note, and the
+ * owner then opened it logged out in a browser, where Instagram said: "Age-restricted content. This content is
+ * age-restricted based on your age or account settings. Log in to continue." So the note was true and still did
+ * not say the one thing a reader needed. Nothing the card path already holds carries that reason: the shortcode
+ * query refuses it with the same field_exception a made-up code gets, and its full page has a normal og: set and
+ * none of the `failure_reason` keys instagramAgeGate reads (those appear only for a 25+ ACCOUNT, whose page has
+ * no og: set at all).
+ *
+ * WHAT oEmbed ANSWERS, measured 2026-10-30 from a Cloudflare Worker (EWR) with the shipped request, verbatim in
+ * test/fixtures/instagram-oembed-gates.json:
+ *   - the reported reel: HTTP 400, JSON, `status: "fail"`, `gating_type_thrift: 3`, `blocks_logging_data: ""`,
+ *     `geo_block_rule_type: null`, titled "This content isn't available to everyone".
+ *   - a 25+ account's reel (DZFDtEhoNPy): HTTP 400, `gating_type_thrift: 12`, `blocks_logging_data:
+ *     "MIN_AGE_ACCOUNT"`, titled "People under 25 can't see this content". instagramAgeGate's own note already
+ *     named this answer as the fallback should the page stop carrying `failure_reason`.
+ *   - a PUBLIC reel that plays (DZxLuleoEoC): HTTP 403, text/html, the bare words "Private media". It is not
+ *     private. A rule reading 403 as a wall would put a false 🔒 on every public reel, so a 403 means nothing here.
+ *   - a made-up code: HTTP 404 "No Media Match".
+ *
+ * ONLY THOSE TWO GATES ARE CLAIMED, the discipline instagramAgeGate keeps for 'MA'. Gate 12 says "under 25" in
+ * Instagram's own words. Gate 3 is called age-restricted on the strength of ONE reel, whose logged-out web page
+ * says exactly that; its oEmbed wording ("can't be seen by certain audiences") is broader, so another gate-3 post
+ * could be restricted for some other reason. That is the risk this accepts, and why nothing else is mapped:
+ * every other gate number falls through to the neutral note, which is never false.
+ *
+ * `message: "geoblock_required"` IS NOT READ. Meta sends it for the age gates too (instagramAgeGate's note), so
+ * keying on it would call these region blocks. A REAL region block is refused instead: a non-null
+ * `geo_block_rule_type` means some rule other than age applies, and calling that age would be the wrong label
+ * that note warns about.
+ *
+ * Total over junk: anything that is not a 400 carrying that JSON is undefined, never a throw.
+ */
+export function instagramAudienceGate(answer: unknown): 'age_restricted' | undefined {
+  if (!answer || typeof answer !== 'object') return undefined
+  const { status, body } = answer as { status?: unknown, body?: unknown }
+  if (status !== 400 || typeof body !== 'string') return undefined
+  let gate: Any
+  try { gate = JSON.parse(body) } catch { return undefined }
+  if (!gate || typeof gate !== 'object' || gate.status !== 'fail' || gate.geo_block_rule_type != null) return undefined
+  if (gate.blocks_logging_data === 'MIN_AGE_ACCOUNT') return 'age_restricted'
+  return gate.gating_type_thrift === 3 ? 'age_restricted' : undefined
+}
+
 export function withRecoveredVideo<T extends Post | null>(post: T, recovered: unknown): T {
   if (!post || !recovered) return post
   const list: Media[] = Array.isArray(recovered) ? recovered as Media[]

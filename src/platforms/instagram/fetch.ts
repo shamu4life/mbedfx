@@ -518,6 +518,34 @@ export async function fetchInstagramFullPage(ref: Extract<PostRef, { p: 'ig' }>)
 }
 
 /**
+ * INSTAGRAM'S oEmbed, ASKED ONLY FOR WHY A REEL'S VIDEO IS WITHHELD. Returns `{ status, body }` or null; the
+ * reading is instagramAudienceGate's, in normalize.ts, which has the measurement.
+ *
+ * The `/reel/` form of the url and these two headers are the request measured from a Worker on 2026-10-30, so
+ * they are not to be tidied into the `/p/` form the other fetchers use without measuring that form first.
+ *
+ * THE STATUS IS RETURNED BECAUSE IT IS PART OF THE ANSWER: the gate is a 400 with JSON, and a public reel gets a
+ * 403 reading "Private media". A 400 is not retried (worthAskingAgain), so the one extra ask only ever spends
+ * itself on a refused request. The timeout bounds a label, never a card: on a miss the neutral note stays.
+ * Measured at 66 to 117 ms for every answer above.
+ */
+const IG_GATE_MS = 1500
+
+export async function fetchInstagramAudienceGate(code: string): Promise<{ status: number, body: string } | null> {
+  if (!SHORTCODE.test(code)) return null
+  const reel = encodeURIComponent(`https://www.instagram.com/reel/${code}/`)
+  try {
+    const res = await askTwice(`https://www.instagram.com/api/v1/oembed/?url=${reel}`, {
+      headers: { 'user-agent': INSTAGRAM_UA, accept: 'application/json' },
+      signal: AbortSignal.timeout(IG_GATE_MS),
+    })
+    return { status: res.status, body: await res.text() }
+  } catch {
+    return null
+  }
+}
+
+/**
  * THE SHORTCODE-SCOPED RECOVERY: one anonymous GraphQL POST that answers with the v1 media shape.
  * Returns the body or null; a throw is "no recovery", never an error.
  *

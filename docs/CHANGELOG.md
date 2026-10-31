@@ -9,6 +9,32 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- **An Instagram reel whose video could not be had now says so on its card.** Reported 2026-10-30 on
+  /reel/DfCz_wfx2zp/: the card was the reel's cover alone, and that cover has Instagram's play button printed
+  into the picture, so people pressed a play button that did nothing. Instagram gives no logged-out client that
+  reel's video (its shortcode query answers `field_exception`, from Cloudflare and from a non-Cloudflare host
+  alike, while a control reel answers with its video), so the card cannot have one. A reel left with only its
+  cover now opens with "🎬 The video could not be loaded here, so this is only its cover. Open it on
+  Instagram" (`withNoVideoNote`). That note names no cause, because the same card is reached when our own
+  lookups fail. When Instagram itself names the cause, the card does: the owner opened the reel logged out and
+  Instagram said "Age-restricted content", and Instagram's oEmbed endpoint answers that reel from a Worker with
+  a gate (HTTP 400, `gating_type_thrift: 3`). Such a reel now opens with "🔞 Age-restricted on Instagram.
+  Sign-in required to watch, so this is only its cover." and is marked sensitive, as YouTube's age note is
+  (`instagramAudienceGate`, asked beside the feed so it adds no time; new counter `reel_age_gated`). Only gate
+  3 and the 25+ account gate are read as age; a public reel's 403 "Private media" from the same endpoint is
+  read as nothing. Measured the same day: the account-feed recovery now answers 404 from Cloudflare for every reel, and
+  the embed page carries no post for any, so Instagram cards currently come from the shortcode query alone.
+
+- **Reddit requests can leave from the owner's relay instead of Cloudflare.** Reddit refuses every
+  request from Cloudflare, and the archive the cards fall back to rate-limits the one address every
+  Cloudflare Worker shares, so where a request comes from decides whether a Reddit card works.
+  `relay/` is a small, key-locked forwarder for Google Cloud Run's free tier (the owner's choice), with
+  step-by-step Cloud Shell instructions in `relay/README.md`; it asks only Reddit's embed page, Reddit's
+  crawler page and the archive, and `/selftest` shows what that address gets from each. Once the
+  `REDDIT_RELAY_URL` and `REDDIT_RELAY_KEY` secrets are set, the embed page, the archive and the feed
+  are asked through it; anything the relay cannot answer goes direct, as before, and is counted
+  (`relay_fallback`, `docs/METRICS.md`). If Reddit serves the relay's address, full Reddit cards come back.
+
 - **Reddit cards render again.** From about 13:00 UTC on 2026-10-22 embed.reddit.com answered
   Cloudflare's egress with a 403 block page for every post and every user-agent (measured from a Worker
   on 2026-10-25), and since every Reddit card was read from that page, every Reddit link drew "Couldn't

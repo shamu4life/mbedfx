@@ -107,6 +107,12 @@ export type Outcome2 =
   // doc_id rotating; it was added precisely because nothing measured whether the query is refused in
   // the same windows as the page.
   | 'graphql_recovered'
+  // `reel_age_gated` is an Instagram reel drawn as its cover with the 🔞 note, because every recovery
+  // missed its video and Instagram's own oEmbed gate answer called it age-restricted (since 2026-10-30,
+  // instagramAudienceGate). NOT `age_restricted`: that one is a gate counter and stacks on `fetch_fail`,
+  // and this card renders, so counting it there would break the subtraction METRICS.md teaches. Read it
+  // against `fullpage_recovered`, which every one of these also counted.
+  | 'reel_age_gated'
   // `plugin_recovered` is a Facebook post read off Meta's EMBED-PLUGIN fragment because every
   // ordinary post surface answered our egress with a login wall (measured 2026-08-08 from
   // Cloudflare; see facebookPluginCard). Read it against `fb`/`ok`: while the wall stands this
@@ -151,6 +157,14 @@ export type Outcome2 =
    * `assert_fail` on `rd` counted beside it (the same miss) is a refusal the archive could not carry either.
    */
   | 'embed_refused'
+  /**
+   * A REDDIT REQUEST THROUGH THE OWNER'S RELAY (src/platforms/reddit/relay.ts), one count per request, on `rd`.
+   * Added 2026-10-26 with the relay. `relay_ok` is an answer the relay marked as the upstream's; `relay_fallback`
+   * is one it could not give (a wrong key, the relay down or slow, Cloud Run's own error page), after which the
+   * request went direct. A relay that fails falls back silently by design, so this pair is the only thing that
+   * tells a working relay from a dead one: every fallback card is back on the rate-limited archive path.
+   */
+  | 'relay_ok' | 'relay_fallback'
   /**
    * A REDDIT LINK POST'S LINKED POST, per render (worker.ts linkedFor), counted on `rd`. Added 2026-10-11
    * with the composition itself.
@@ -538,6 +552,12 @@ export interface Env {
   // generic failure rather than throwing.
   REDDIT_CLIENT_ID?: string
   REDDIT_CLIENT_SECRET?: string
+  // The owner's Reddit relay on Google Cloud Run (relay/server.mjs; deployed per relay/README.md, owner's
+  // choice 2026-10-26): its https base url and the key it checks. Both are SECRETS, set in the Cloudflare
+  // dashboard, because a plain variable set there is replaced by the next Workers Builds deploy. With
+  // either missing, every Reddit request goes direct, exactly as before the relay (src/platforms/reddit/relay.ts).
+  REDDIT_RELAY_URL?: string
+  REDDIT_RELAY_KEY?: string
   // NOTHING ELSE BELONGS HERE WITHOUT A DELETION DATE. This interface briefly carried an optional
   // secret gating a debug endpoint that fetched a caller-supplied shortcode from our egress; it is
   // gone, with the probe module itself, its mount in worker.ts, and the wrangler secret. (The
@@ -595,6 +615,14 @@ export type MuxOutcome = Extract<Outcome2, `mux_${string}`>
  * a closed allowlist of its own error strings — never its stderr, which is suppressed at the source
  * precisely because it can carry the source url.
  */
+/**
+ * A relayed Reddit request's outcome. Its own function because the relay sits below the platform fetcher,
+ * where no client class is known; the row says `none` there, as a mux row does.
+ */
+export function countRelay(env: Env, outcome: 'relay_ok' | 'relay_fallback'): void {
+  env.AE?.writeDataPoint({ blobs: ['rd', outcome, 'none'], doubles: [1] })
+}
+
 export function countMux(env: Env, platform: Platform | 'none', outcome: MuxOutcome, ms: number): void {
   env.AE?.writeDataPoint({ blobs: [platform, outcome, 'none'], doubles: [1, Math.max(0, Math.round(ms))] })
 }

@@ -6,6 +6,7 @@ import {
 } from './normalize.ts'
 import { crawlerCaption, feedCaption } from './caption.ts'
 import { askTwice } from '../../fetchretry.ts'
+import { viaRelay } from './relay.ts'
 
 /**
  * I/O ONLY. Reddit blocks anonymous `.json` from datacenter IPs (verified 2026-07-21: our Workers
@@ -19,6 +20,10 @@ import { askTwice } from '../../fetchretry.ts'
  * security.", measured from a Worker 2026-10-25), and every Reddit card was the failure card until the
  * archive path (fetchRedditArchive below; normalize.ts says what it reads and why it is safe). The
  * embed page is still asked first, so the full render comes back by itself if Reddit lifts the block.
+ *
+ * WITH THE OWNER'S RELAY CONFIGURED (relay.ts; REDDIT_RELAY_URL and REDDIT_RELAY_KEY), the embed page, the
+ * archive and the feed are asked from a Google Cloud Run address instead, and every one of them falls back
+ * to the direct request below when the relay cannot answer. Reddit's crawler page is always asked directly.
  */
 
 const BROWSER_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36'
@@ -220,10 +225,11 @@ const ARCHIVE_MAX_BYTES = 4 * 1024 * 1024
  */
 async function readRequired(
   url: string, headers: Record<string, string>, ms: number, redirect: 'manual' | 'follow', cap?: number,
+  fetchImpl: typeof fetch = fetch,
 ): Promise<string | undefined> {
   if (ms < CAPTION_MIN_MS) return undefined
   try {
-    const res = await askTwice(url, { headers, redirect, signal: AbortSignal.timeout(ms) })
+    const res = await askTwice(url, { headers, redirect, signal: AbortSignal.timeout(ms) }, fetchImpl)
     return await readTextCapped(res, cap)
   } catch {
     return undefined
@@ -294,7 +300,8 @@ async function fetchRedditArchive(ref: Extract<PostRef, { p: 'rd' }>, asked: str
   const early = asked !== '_' ? crawl(asked) : null
   const kept = await keptArchive(env, ref.id)
   const archive = kept ?? await readRequired(`https://arctic-shift.photon-reddit.com/api/posts/ids?ids=${ref.id}`,
-    { 'user-agent': ARCHIVE_UA, accept: 'application/json' }, left(ARCHIVE_POST_TIMEOUT_MS), 'follow', ARCHIVE_MAX_BYTES)
+    { 'user-agent': ARCHIVE_UA, accept: 'application/json' }, left(ARCHIVE_POST_TIMEOUT_MS), 'follow', ARCHIVE_MAX_BYTES,
+    viaRelay(env))
   const sub = archive === undefined ? null : redditArchiveSub(archive, ref.id)
   if (archive === undefined || !sub) return { ok: false, reason: 'assert_fail', refused: true }
   if (kept === undefined) await keepArchive(env, ref.id, archive)
@@ -304,13 +311,15 @@ async function fetchRedditArchive(ref: Extract<PostRef, { p: 'rd' }>, asked: str
 }
 
 /** One caption source's body, or undefined on a throw, a timeout or no time left. Never throws. */
-async function readSource(url: string, headers: Record<string, string>, ms: number, redirect: 'manual' | 'follow'): Promise<string | undefined> {
+async function readSource(
+  url: string, headers: Record<string, string>, ms: number, redirect: 'manual' | 'follow', fetchImpl: typeof fetch = fetch,
+): Promise<string | undefined> {
   if (ms < CAPTION_MIN_MS) return undefined
   try {
     // NO-RETRY: deliberate. A body source is optional: the post loads without it, a failure only shortens
     // or drops the body, and a second ask would double the failure path inside the caption budget, which
     // getPost spends before the head's own deadline races begin. Bounded by `ms`. See withCaption.
-    const res = await fetch(url, { headers, redirect, signal: AbortSignal.timeout(ms) })
+    const res = await fetchImpl(url, { headers, redirect, signal: AbortSignal.timeout(ms) })
     return await readTextCapped(res)
   } catch {
     return undefined
@@ -337,7 +346,7 @@ async function readSource(url: string, headers: Record<string, string>, ms: numb
  * (normalize.ts crosspostMedia). That page is then read even when no body is wanted, and nothing else is.
  */
 async function withCaption(
-  got: Extract<RedditFetch, { source: 'embed' }>, id: string, wantPoster = false,
+  got: Extract<RedditFetch, { source: 'embed' }>, id: string, env: Env, wantPoster = false,
 ): Promise<Extract<RedditFetch, { source: 'embed' }>> {
   const needed = redditNeedsCaption(got.html)
   if (!needed && !wantPoster) return got
@@ -354,10 +363,10 @@ async function withCaption(
   if (said.kind === 'unknown' || cut) {
     caption.feed = await readSource(`https://www.reddit.com/by_id/t3_${id}/.rss`,
       { 'user-agent': BROWSER_UA, accept: 'application/atom+xml,application/xml;q=0.9,*/*;q=0.8' },
-      left(FEED_TIMEOUT_MS), 'manual')
+      left(FEED_TIMEOUT_MS), 'manual', viaRelay(env))
     if (cut && feedCaption(caption.feed ?? '', id) === null) {
       caption.archive = await readSource(`https://arctic-shift.photon-reddit.com/api/posts/ids?ids=${id}&fields=id,selftext`,
-        { 'user-agent': ARCHIVE_UA, accept: 'application/json' }, left(ARCHIVE_TIMEOUT_MS), 'follow')
+        { 'user-agent': ARCHIVE_UA, accept: 'application/json' }, left(ARCHIVE_TIMEOUT_MS), 'follow', viaRelay(env))
     }
   }
   return { ...got, caption }
@@ -377,7 +386,7 @@ async function withCaption(
  */
 const PARENT_BUDGET_MS = 2000
 
-async function galleryParent(id: string): Promise<string | undefined> {
+async function galleryParent(id: string, env: Env): Promise<string | undefined> {
   if (!POST_ID.test(id)) return undefined
   const until = Date.now() + PARENT_BUDGET_MS
   const page = async (sub: string): Promise<string | undefined> => {
@@ -386,7 +395,7 @@ async function galleryParent(id: string): Promise<string | undefined> {
     try {
       // NO-RETRY: deliberate. The slides are optional (the crosspost loads without them), and a second ask
       // would double the failure path inside the head budget the caption lookup spends beside it.
-      const res = await fetch(`https://embed.reddit.com/r/${sub}/comments/${id}/`, {
+      const res = await viaRelay(env)(`https://embed.reddit.com/r/${sub}/comments/${id}/`, {
         headers: { 'user-agent': BROWSER_UA, accept: 'text/html' }, redirect: 'follow', signal: AbortSignal.timeout(ms),
       })
       return await readTextCapped(res)
@@ -412,11 +421,11 @@ async function galleryParent(id: string): Promise<string | undefined> {
  * 200, so liveness is the canonical url present and no `/undefined` marker, never status. A thrown fetch
  * is NOT caught (a transport failure is the worker's null, not a Reddit signal).
  */
-async function fetchRedditEmbed(ref: Extract<PostRef, { p: 'rd' }>, sub: string): Promise<RedditFetch> {
+async function fetchRedditEmbed(ref: Extract<PostRef, { p: 'rd' }>, sub: string, env: Env): Promise<RedditFetch> {
   const res = await askTwice(`https://embed.reddit.com/r/${sub}/comments/${encodeURIComponent(ref.id)}/`, {
     headers: { 'user-agent': BROWSER_UA, accept: 'text/html' },
     redirect: 'follow',
-  })
+  }, viaRelay(env))
   const html = await res.text()
   if (/id="canonical-url-updater"/.test(html) && !/\/undefined"/.test(html)) {
     return { ok: true, source: 'embed', html }
@@ -512,7 +521,7 @@ export async function fetchReddit(
   }
   if (!POST_ID.test(ref.id)) return { ok: false, reason: 'assert_fail' }
   const asked = ref.sub && SUB.test(ref.sub) ? ref.sub : '_'
-  let embed = await fetchRedditEmbed(ref, asked)
+  let embed = await fetchRedditEmbed(ref, asked, env)
   /**
    * ASK AGAIN UNDER THE REAL SUBREDDIT when the page says the post lives elsewhere: a bare /comments/{id}
    * link (asked as `_`), or a wrong sub. The first answer is a stripped render — no title, author, counts
@@ -527,7 +536,7 @@ export async function fetchReddit(
       // A re-ask that throws keeps the first answer: a thinner card, never the failure card a transport
       // error would otherwise become here (askTwice rethrows), which Discord would freeze.
       try {
-        const full = await fetchRedditEmbed(ref, real)
+        const full = await fetchRedditEmbed(ref, real, env)
         if (full.ok) embed = full
       } catch { /* keep the placeholder render */ }
     }
@@ -541,8 +550,8 @@ export async function fetchReddit(
     const needs = redditCrosspostNeeds(embed.html)
     const [gifHead, got, parent] = await Promise.all([
       gifHeadOf(embed),
-      withCaption(embed, ref.id, needs !== null && 'poster' in needs),
-      needs && 'gallery' in needs ? galleryParent(needs.gallery) : Promise.resolve(undefined),
+      withCaption(embed, ref.id, env, needs !== null && 'poster' in needs),
+      needs && 'gallery' in needs ? galleryParent(needs.gallery, env) : Promise.resolve(undefined),
     ])
     return { ...got, ...(gifHead ? { gifHead } : {}), ...(parent ? { parent } : {}) }
   }
