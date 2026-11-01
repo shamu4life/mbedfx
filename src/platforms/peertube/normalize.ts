@@ -99,6 +99,9 @@ export function peertubeThumb(video: Record<string, unknown>, host: string): str
   return p.startsWith('/') ? `https://${host}${p}` : ''
 }
 
+/** The note a live stream's card leads with. Named so translate.ts can keep it out of translation (CARD_NOTES). */
+export const PEERTUBE_LIVE_NOTE = '🔴 Live, no preview'
+
 export function normalizePeerTube(
   video: Record<string, unknown>,
   ref: Extract<PostRef, { p: 'pt' }>,
@@ -144,7 +147,7 @@ export function normalizePeerTube(
   const desc = capBody(str(video.description).trim())
   const chan = str(channel?.displayName)
   const text = [
-    live ? '🔴 Live, no preview' : '',
+    live ? PEERTUBE_LIVE_NOTE : '',
     chan ? `📺 ${chan}` : '',
     desc,
   ].filter(Boolean).join('\n\n')

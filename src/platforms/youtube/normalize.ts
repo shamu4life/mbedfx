@@ -411,7 +411,7 @@ function uploadDate(got: YouTubeFetch): Date {
  *
  * 18 IS NOT HARDCODED. yt-dlp reports the uploader's actual threshold; anything above zero is a gate.
  */
-const AGE_NOTE = '🔞 Age-restricted on YouTube. Sign-in required, so no preview here.'
+export const AGE_NOTE = '🔞 Age-restricted on YouTube. Sign-in required, so no preview here.'
 
 /**
  * The description carried on the fetch, or ''. Total over junk for the same reason every other
