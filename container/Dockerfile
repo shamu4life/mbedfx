@@ -127,7 +127,7 @@ RUN curl -fsSL https://github.com/denoland/deno/releases/latest/download/deno-x8
 # yt-dlp[default,curl-cffi] — the extras are unchanged and argued above. Do not relax this to a
 # floor again: a floor makes the running version unrecorded and un-revertable, which is the state the
 # 2026-08 diagnosis had to work around.
-RUN pip install --no-cache-dir "yt-dlp[default,curl-cffi]==2026.8.19"
+RUN pip install --no-cache-dir "yt-dlp[default,curl-cffi]==2026.10.21"
 
 WORKDIR /app
 COPY server.py .
