@@ -15,9 +15,10 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   paste started the whole thing again. Now it leaves a mark in R2. For six hours after that, the card
   shows the poster with "The video couldn't be loaded here. Open the original to watch it.", the API
   says `muxing: false`, and nothing sends the video back to the container. After six hours the next
-  paste tries again: YouTube refuses only some of the requests from Cloudflare's network, and how many
-  changes from hour to hour. A new `card_gave_up` counter keeps these renders in the failure
-  rate (see `docs/METRICS.md`).
+  paste tries again, since the same container command downloaded that video fine from a home
+  connection. This covers videos fetched from their page (YouTube, Facebook and the other yt-dlp
+  sites); Bluesky and Reddit are unchanged. A new `card_gave_up` counter keeps these renders in the
+  failure rate (see `docs/METRICS.md`).
 
 - **A card's own lines no longer stop its caption being translated.** Found 2026-10-31 on production right
   after the Instagram age note shipped: /reel/DfCz_wfx2zp/ had rendered "🌐 Translated from Japanese", and

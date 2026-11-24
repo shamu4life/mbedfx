@@ -255,7 +255,7 @@ export function claimIsLive(claimedAt: unknown, now: number): boolean {
  * same container command, run from a residential connection with the same yt-dlp, ffmpeg and Deno,
  * downloaded the video fine. So the failure was in production's path to YouTube, not in the argv.
  *
- * SO A GIVE-UP NOW LEAVES A MARK: an empty R2 object at muxFailKey(key). R2 stamps `uploaded` on it,
+ * SO A GIVE-UP NOW LEAVES A MARK: an empty R2 object at muxFailKey(key, RESOLVER_GENERATION). R2 stamps `uploaded` on it,
  * which is the timestamp, so no metadata has to round-trip. While it is fresh, every dispatch site
  * skips the container (muxClaimed, scheduleMux), and settleMux draws the poster with MUX_GAVE_UP_NOTE
  * as a FINAL answer: `muxing: false`, and the card may cache for RESP_TTL.
@@ -272,7 +272,7 @@ export function claimIsLive(claimedAt: unknown, now: number): boolean {
  * the unbounded direction (a video blocked forever), while ignoring it costs one more attempt.
  */
 export const MUX_GIVE_UP_WINDOW_MS = 6 * 60 * 60 * 1000
-export const muxFailKey = (key: string): string => `muxfail/${key}`
+export const muxFailKey = (key: string, generation: string): string => `muxfail/${generation}/${key}`
 export function gaveUpIsFresh(uploaded: unknown, now: number): boolean {
   const at = uploaded instanceof Date ? uploaded.getTime() : NaN
   return Number.isFinite(at) && now - at >= 0 && now - at < MUX_GIVE_UP_WINDOW_MS

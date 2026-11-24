@@ -2267,7 +2267,7 @@ async function muxGaveUp(env: Env, key: string): Promise<boolean> {
   const cache = env.MEDIA_CACHE
   if (!cache) return false
   try {
-    const mark = await cache.head(muxFailKey(key)) as { uploaded?: unknown } | null
+    const mark = await cache.head(muxFailMarkKey(key)) as { uploaded?: unknown } | null
     return !!mark && gaveUpIsFresh(mark.uploaded, Date.now())
   } catch {
     return false
@@ -2283,13 +2283,29 @@ async function muxGaveUp(env: Env, key: string): Promise<boolean> {
  * milliseconds and whose average docs/METRICS.md publishes; a zero there drags that average down for
  * every platform, which is card_degraded's warning in analytics.ts. The attempts that led here are
  * already counted one by one (`mux_gate` and friends), and the reader-facing half is `card_gave_up`.
+ *
+ * TWO GIVE-UPS LEAVE NO MARK, and both would do harm if they did:
+ *  - THE LAST ATTEMPT THREW. MuxRunner.alarm's own comment says a throw is "our own bug or a binding
+ *    that vanished", not evidence about the video. A container outage longer than the ~41-minute
+ *    schedule would otherwise write off every video pasted during it for six hours after the fix.
+ *  - THE JOB HAS NO `page`. Bluesky's and Reddit's `{video}` jobs ride the same alarm, but settleMux
+ *    arms them without racing and keeps their player on the card. A mark would gate /_media for six
+ *    hours behind a player the card still promises: a guaranteed 503 where a later fetch might work.
  */
-export async function recordMuxGiveUp(env: Env, key: string): Promise<void> {
-  try { await env.MEDIA_CACHE?.put(muxFailKey(key), '') } catch { /* see the docstring */ }
+export async function recordMuxGiveUp(env: Env, job: MuxJob, threw: boolean): Promise<void> {
+  if (threw || !job.source?.page) return
+  try { await env.MEDIA_CACHE?.put(muxFailMarkKey(job.key), '') } catch { /* see the docstring */ }
 }
 export async function clearMuxGiveUp(env: Env, key: string): Promise<void> {
-  try { await env.MEDIA_CACHE?.delete?.(muxFailKey(key)) } catch { /* a stale mark is ignored anyway */ }
+  try { await env.MEDIA_CACHE?.delete?.(muxFailMarkKey(key)) } catch { /* a stale mark is ignored anyway */ }
 }
+
+/**
+ * THE MARK IS KEYED UNDER RESOLVER_GENERATION, so the lever CLAUDE.md names for ending a bad-image
+ * outage also ends every verdict written during it. Without the segment, the only recovery from a
+ * wave of wrong marks would be deleting the `muxfail/` prefix by hand. Exported for the tests.
+ */
+export const muxFailMarkKey = (key: string): string => muxFailKey(key, RESOLVER_GENERATION)
 
 /**
  * How long a request will WAIT for a cold {page} mux before giving up and promising no video.

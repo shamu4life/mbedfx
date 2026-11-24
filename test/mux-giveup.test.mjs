@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { handle, recordMuxGiveUp, clearMuxGiveUp } from '../src/worker.ts'
+import { handle, recordMuxGiveUp, clearMuxGiveUp, muxFailMarkKey } from '../src/worker.ts'
 import { MUX_GAVE_UP_NOTE, MUX_GIVE_UP_WINDOW_MS, gaveUpIsFresh, muxFailKey } from '../src/muxpolicy.ts'
 import { RESP_TTL } from '../src/cache.ts'
 import { refKey } from '../src/refkey.ts'
@@ -38,7 +38,7 @@ function fakeR2() {
   const store = new Map()
   return {
     store,
-    mark(key, uploaded) { store.set(muxFailKey(key), { body: '', uploaded }) },
+    mark(key, uploaded, at = muxFailMarkKey(key)) { store.set(at, { body: '', uploaded }) },
     async head(k) { const v = store.get(k); return v ? { size: v.body.length, uploaded: v.uploaded } : null },
     async get(k) {
       const v = store.get(k)
@@ -119,18 +119,47 @@ test('the window is fresh inside six hours, stale after, and a mark with no read
     'the window must be well over RESP_TTL, or a cached give-up card outlives its verdict')
 })
 
-test('recordMuxGiveUp writes the mark beside the video key, and clearMuxGiveUp removes it', async () => {
+const pageJob = ref => ({ key: muxKey(ref), slotKey: refKey(ref), source: { page: `https://www.youtube.com/watch?v=${ref.id}` } })
+
+test('a {page} give-up writes the mark under the resolver generation, and clearMuxGiveUp removes it', async () => {
   const r2 = fakeR2()
   const env = envWith({ r2 })
-  const key = muxKey(ytRef('giveup00001'))
-  await recordMuxGiveUp(env, key)
-  assert.ok(r2.store.has(muxFailKey(key)))
-  assert.equal(muxFailKey(key), `muxfail/${key}`)
-  await clearMuxGiveUp(env, key)
-  assert.equal(r2.store.has(muxFailKey(key)), false)
+  const job = pageJob(ytRef('giveup00001'))
+  await recordMuxGiveUp(env, job, false)
+  assert.ok(r2.store.has(muxFailMarkKey(job.key)))
+  assert.match(muxFailMarkKey(job.key), new RegExp(`^muxfail/g\\d+/${job.key.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`),
+    'the generation segment is what lets a RESOLVER_GENERATION bump end a wave of wrong marks')
+  await clearMuxGiveUp(env, job.key)
+  assert.equal(r2.store.has(muxFailMarkKey(job.key)), false)
   // Neither may throw: the alarm that calls them never throws.
-  await recordMuxGiveUp({}, key)
-  await clearMuxGiveUp({}, key)
+  await recordMuxGiveUp({}, job, false)
+  await clearMuxGiveUp({}, job.key)
+})
+
+test('a give-up whose last attempt THREW leaves no mark: our own outage is not a verdict on the video', async () => {
+  const r2 = fakeR2()
+  const job = pageJob(ytRef('giveup00011'))
+  await recordMuxGiveUp(envWith({ r2 }), job, true)
+  assert.equal(r2.store.size, 0)
+})
+
+test('a {video} give-up leaves no mark: Bluesky and Reddit keep their player, so /_media must keep trying', async () => {
+  const r2 = fakeR2()
+  const job = { key: 'mux/bs:did/0', slotKey: 'bs:did', source: { video: 'https://video.bsky.app/x/playlist.m3u8' } }
+  await recordMuxGiveUp(envWith({ r2 }), job, false)
+  assert.equal(r2.store.size, 0)
+})
+
+test('a mark written under ANOTHER resolver generation is ignored: the outage lever clears verdicts too', async () => {
+  const ref = ytRef('giveup00012')
+  const r2 = fakeR2()
+  r2.mark(muxKey(ref), new Date(Date.now() - 60_000), muxFailKey(muxKey(ref), 'g0'))
+  const resolver = countingResolver()
+  const c = ctx()
+  const j = await (await handle(bot(apiUrl(ref)), envWith({ r2, resolver }), c, deps())).json()
+  await settle(c)
+  assert.equal(j.muxing, true, 'treated as no mark')
+  assert.ok(resolver.calls.length >= 1, 'and the container is asked again')
 })
 
 test('INSIDE THE WINDOW the API answers a final still, with the note, and no container call is made', async () => {
