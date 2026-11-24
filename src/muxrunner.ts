@@ -1,7 +1,7 @@
 import { DurableObject } from 'cloudflare:workers'
 import type { Env } from './analytics.ts'
 import type { MuxJob } from './types.ts'
-import { runMuxJob } from './worker.ts'
+import { clearMuxGiveUp, recordMuxGiveUp, runMuxJob } from './worker.ts'
 import { claimIsLive, firstMuxDelayMs, nextMuxDelayMs } from './muxpolicy.ts'
 
 /**
@@ -101,6 +101,13 @@ export class MuxRunner extends DurableObject<Env> {
     if (done || next === null) {
       // FINISHED, or out of attempts. Either way this object has nothing left to remember, and a DO
       // that keeps storage keeps costing — `deleteAll` is what lets it be collected.
+      //
+      // OUT OF ATTEMPTS LEAVES A MARK IN R2, not here (muxpolicy.ts muxFailKey). Forgetting the
+      // verdict along with the job is what let the next render arm a fresh one and report "still
+      // muxing" for as long as anyone kept pasting. R2 rather than this object's storage so the
+      // render path can read it beside the bytes it already heads, with no RPC. A success clears it.
+      if (done) await clearMuxGiveUp(this.env, job.key)
+      else await recordMuxGiveUp(this.env, job.key)
       await this.ctx.storage.deleteAll()
       return
     }

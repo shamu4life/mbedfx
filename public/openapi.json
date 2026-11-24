@@ -418,7 +418,7 @@
           },
           "still": {
             "type": "boolean",
-            "description": "This picture is standing in for a video. Read it with the envelope's `muxing`: `still` false with `muxing` false is an ordinary picture; `still` true with `muxing` true means a video is still muxing, so ask again; `still` true with `muxing` false means a video exists that cannot be served — it is longer than the remux ceiling, or it is a live or scheduled broadcast with no finished file behind it — and that is final for as long as this card is cached. Without this flag the last case is indistinguishable from a photograph except by reading the English in `text`."
+            "description": "This picture is standing in for a video. Read it with the envelope's `muxing`: `still` false with `muxing` false is an ordinary picture; `still` true with `muxing` true means a video is still muxing, so ask again; `still` true with `muxing` false means a video exists that cannot be served — it is longer than the remux ceiling, or it is a live or scheduled broadcast with no finished file behind it — and that is final for as long as this card is cached. It also means every scheduled attempt to mux the video failed; that verdict holds for six hours, after which the next request tries again. Without this flag the last case is indistinguishable from a photograph except by reading the English in `text`."
           }
         },
         "required": ["kind", "url", "poster", "width", "height", "still"],

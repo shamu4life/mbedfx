@@ -11,7 +11,7 @@ import { clampText, statParts } from './render/text.ts'
 import { proxyableVideoUrl, serveDirectVideo } from './mediaproxy.ts'
 import { parseRefKey, refKey } from './refkey.ts'
 import { count, countWait, countMux, type Env, type GateReason, type MuxOutcome } from './analytics.ts'
-import { YT_PROMISE, promisable } from './muxpolicy.ts'
+import { MUX_GAVE_UP_NOTE, YT_PROMISE, gaveUpIsFresh, muxFailKey, promisable } from './muxpolicy.ts'
 import { runSmoke, smokeOutcome, SMOKE_CHECKS, SMOKE_CLIENT, type SmokeResult } from './smoke.ts'
 import { cronColo, healthSummary, readHealth, recordSmoke } from './health.ts'
 import { cookiesFor, jarAvailable, poolSetButUnused, twitterAccounts, type CredentialPlatform } from './credentials.ts'
@@ -2168,6 +2168,13 @@ const MUX_JOIN_MS = 25_000
 async function muxClaimed(
   env: Env, key: string, source: Media['remux'], slotKey: string, platform: CredentialPlatform | null,
 ): Promise<{ size: number } | null> {
+  /**
+   * THE GIVE-UP GATE, ahead of the claim, so it covers every claiming caller at once: both prewarms,
+   * /_media's serveMuxed and settleMux. A video the alarm gave up on in the last MUX_GIVE_UP_WINDOW_MS
+   * gets no container call. Its bytes are still served if they somehow exist, which is why this
+   * answers with the R2 head rather than a bare null.
+   */
+  if (await muxGaveUp(env, key)) return env.MEDIA_CACHE ? env.MEDIA_CACHE.head(key) : null
   const runner = env.MUX_RUNNER?.getByName(key)
   let mine = true
   if (runner?.claim) {
@@ -2210,11 +2217,16 @@ async function muxClaimed(
  * it did — the inline attempt still runs, still capped at thirty seconds.
  */
 function scheduleMux(env: Env, key: string, slotKey: string, source: Media['remux']): Promise<void> {
-  if (!env.MUX_RUNNER || !source) return Promise.resolve()
+  const runner = env.MUX_RUNNER
+  if (!runner || !source) return Promise.resolve()
   const durable: NonNullable<Media['remux']> = source.page ? { page: source.page } : source
+  // NOT ARMED INSIDE THE GIVE-UP WINDOW. The alarm runs with `claim = false` and so never meets the
+  // gate in muxClaimed; refusing to arm it here is what keeps a given-up video off the container.
+  // The head is awaited inside this already fire-and-forget promise, so it costs the render nothing.
   // The DO is addressed BY THE MUX KEY, which makes it one object per video worldwide — the global
   // dedupe muxInflight has never been able to provide (it is isolate-local, and says so).
-  return env.MUX_RUNNER.getByName(key).schedule({ key, slotKey, source: durable })
+  return muxGaveUp(env, key)
+    .then(gaveUp => gaveUp ? undefined : runner.getByName(key).schedule({ key, slotKey, source: durable }))
     // A failed RPC must never take down the render that scheduled it. The inline attempt is still
     // running and the next paste will arm it again; this is a best-effort upgrade, not a dependency.
     .catch(() => undefined)
@@ -2242,6 +2254,41 @@ export async function runMuxJob(env: Env, job: MuxJob): Promise<boolean> {
   // it races is worth a second download.
   const head = await muxOnce(env, job.key, job.source, job.slotKey, jarPlatform(ref), false)
   return head !== null
+}
+
+/**
+ * Has the alarm given up on this video within MUX_GIVE_UP_WINDOW_MS? See muxFailKey for the why.
+ *
+ * NEVER THROWS, and false on any doubt: no bucket, a failed head, or a mark with no readable `uploaded`.
+ * Every caller is a dispatch decision, and the safe default for one is the behaviour before the mark
+ * existed, which is to try.
+ */
+async function muxGaveUp(env: Env, key: string): Promise<boolean> {
+  const cache = env.MEDIA_CACHE
+  if (!cache) return false
+  try {
+    const mark = await cache.head(muxFailKey(key)) as { uploaded?: unknown } | null
+    return !!mark && gaveUpIsFresh(mark.uploaded, Date.now())
+  } catch {
+    return false
+  }
+}
+
+/**
+ * THE ALARM'S VERDICT, written and cleared from src/muxrunner.ts, which cannot reach the bucket helpers
+ * itself. Both never throw: the alarm's own contract is that it never throws (see MuxRunner.alarm), and
+ * a mark that fails to write only means one more attempt on the next paste.
+ *
+ * NOT COUNTED HERE. A `mux_gave_up` row would join the `mux_*` block, whose double2 is elapsed
+ * milliseconds and whose average docs/METRICS.md publishes; a zero there drags that average down for
+ * every platform, which is card_degraded's warning in analytics.ts. The attempts that led here are
+ * already counted one by one (`mux_gate` and friends), and the reader-facing half is `card_gave_up`.
+ */
+export async function recordMuxGiveUp(env: Env, key: string): Promise<void> {
+  try { await env.MEDIA_CACHE?.put(muxFailKey(key), '') } catch { /* see the docstring */ }
+}
+export async function clearMuxGiveUp(env: Env, key: string): Promise<void> {
+  try { await env.MEDIA_CACHE?.delete?.(muxFailKey(key)) } catch { /* a stale mark is ignored anyway */ }
 }
 
 /**
@@ -2450,6 +2497,8 @@ async function settleMux(
    * written for. One flag was being asked to mean both "changed" and "incomplete".
    */
   let rewritten = false
+  /** At least one entry is a still because the alarm gave up on it: the card gets MUX_GAVE_UP_NOTE. */
+  let gaveUp = false
   const media = await Promise.all(own.map(async (m, i) => {
     if (!m?.remux) return m
     if (!m.remux.page) {
@@ -2548,6 +2597,31 @@ async function settleMux(
     }
     const key = `mux/${refKey(post.ref)}/${i}`
     /**
+     * THE ALARM ALREADY GAVE UP ON THIS VIDEO, so the answer is final for MUX_GIVE_UP_WINDOW_MS: the
+     * poster, MUX_GAVE_UP_NOTE on the card, and nothing armed or raced. See muxFailKey for the
+     * measurement that found every render of such a video saying "still muxing" forever.
+     *
+     * TREATED LIKE THE OVER-CEILING ARM: `rewritten`, not `degraded`, so the card caches for RESP_TTL
+     * (900 s, well inside the window) and the API reports `muxing: false`. PLACED BEFORE THE PROMISE
+     * BRANCH, and the still carries no `pendingMux`, because promising a video the alarm could not
+     * make is the frozen-play-button bug promisable() exists to stop.
+     *
+     * COUNTED, unlike the over-ceiling and live arms, because it is the same reader-facing failure
+     * card_degraded counts (see `card_gave_up` in analytics.ts). An R2 head is the price, paid by
+     * every cold {page} render: the warm check in ensureMuxed sits behind the claim and cannot answer
+     * this. A warm video is checked here too, and a stray mark beside real bytes is ignored.
+     */
+    if (await muxGaveUp(env, key)) {
+      const still = stillOf(m)
+      const warm = await env.MEDIA_CACHE?.head(key).catch(() => null)
+      if (!warm && still) {
+        count(env, countAs ?? post.ref.p, 'card_gave_up', client)
+        rewritten = true
+        gaveUp = true
+        return still
+      }
+    }
+    /**
      * THE ALARM IS ARMED BEFORE THE RACE, not after it, and that ordering is the fix.
      *
      * The comment that used to sit here said the mux "runs to completion regardless of who wins this
@@ -2617,7 +2691,11 @@ async function settleMux(
   // `rewritten` is checked too, or the over-ceiling still is computed and discarded. `degraded` is
   // returned as it stands: that rewrite is permanent and its card is meant to cache.
   if (!degraded && !rewritten && !promised) return { post, degraded: false, promised: false }
-  return { post: { ...post, media: media.filter((m): m is Media => m != null) }, degraded, promised }
+  const cur = typeof post.text === 'string' ? post.text : ''
+  // ONE NOTE, prepended like LENGTH_NOTE and the others, and never twice: settleMux runs on more than
+  // one seam per paste, and a post object can come back through here already noted.
+  const text = gaveUp && !cur.includes(MUX_GAVE_UP_NOTE) ? (cur ? `${MUX_GAVE_UP_NOTE}\n\n${cur}` : MUX_GAVE_UP_NOTE) : post.text
+  return { post: { ...post, text, media: media.filter((m): m is Media => m != null) }, degraded, promised }
 }
 
 /**

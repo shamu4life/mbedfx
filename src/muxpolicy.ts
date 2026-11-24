@@ -244,3 +244,43 @@ export const MUX_CLAIM_TTL_MS = 40_000
 export function claimIsLive(claimedAt: unknown, now: number): boolean {
   return typeof claimedAt === 'number' && Number.isFinite(claimedAt) && now - claimedAt >= 0 && now - claimedAt < MUX_CLAIM_TTL_MS
 }
+
+/**
+ * A VIDEO THE ALARM GAVE UP ON, and how long that verdict holds.
+ *
+ * THE DEFECT, measured 2026-11-24 on yt:zp8_bKhhnlw. Every attempt answered `mux failed` (HTTP 502 from
+ * the container) for over 25 minutes, and the API kept saying `muxing: true` the whole time. The alarm
+ * did give up, after MUX_RETRY_MS ran out, but it then deleted everything it knew (`deleteAll`), so the
+ * next render armed a fresh job and the card went back to "still muxing". Nothing ever said no. The
+ * same container command, run from a residential connection with the same yt-dlp, ffmpeg and Deno,
+ * downloaded the video fine. So the failure was in production's path to YouTube, not in the argv.
+ *
+ * SO A GIVE-UP NOW LEAVES A MARK: an empty R2 object at muxFailKey(key). R2 stamps `uploaded` on it,
+ * which is the timestamp, so no metadata has to round-trip. While it is fresh, every dispatch site
+ * skips the container (muxClaimed, scheduleMux), and settleMux draws the poster with MUX_GAVE_UP_NOTE
+ * as a FINAL answer: `muxing: false`, and the card may cache for RESP_TTL.
+ *
+ * SIX HOURS, AND NOT FOREVER, because what failed was measured as a RATE rather than a block: about
+ * 40-50% of Cloudflare-egress YouTube requests are refused (container/Dockerfile). A permanent verdict
+ * would write off a video that a later attempt could serve. After the window the mark is ignored, and
+ * the next paste gets the whole retry schedule again. It has to be well over RESP_TTL (900 s), or a
+ * cached give-up card would outlive the verdict it was drawn from. It is about nine of the alarm's
+ * ~41-minute schedules, so a video that never works costs at most four attempts a day instead of an
+ * unbounded loop on a four-slot pool.
+ *
+ * A MARK WITH NO `uploaded` COUNTS AS NO MARK. Refusing to mux on a timestamp we cannot read would be
+ * the unbounded direction (a video blocked forever), while ignoring it costs one more attempt.
+ */
+export const MUX_GIVE_UP_WINDOW_MS = 6 * 60 * 60 * 1000
+export const muxFailKey = (key: string): string => `muxfail/${key}`
+export function gaveUpIsFresh(uploaded: unknown, now: number): boolean {
+  const at = uploaded instanceof Date ? uploaded.getTime() : NaN
+  return Number.isFinite(at) && now - at >= 0 && now - at < MUX_GIVE_UP_WINDOW_MS
+}
+
+/**
+ * The card's line for a video the alarm gave up on. It names no cause, because none is known: the
+ * container's stderr is suppressed (it can carry the source url) and the Worker sees only the 502.
+ * Listed in translate.ts CARD_NOTES so the translator never reads it as the author's words.
+ */
+export const MUX_GAVE_UP_NOTE = "⚠️ The video couldn't be loaded here. Open the original to watch it."

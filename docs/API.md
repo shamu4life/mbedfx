@@ -262,15 +262,15 @@ GIFs and Reddit posts labelled `image` with a .gif were always `gif`.
 
 ### `still`
 
-A video that hasn't finished muxing, one too long to mux at all, or a live broadcast with no
-finished file behind it, is published as an `image` entry carrying `still: true`; `url` and `poster`
+A video that hasn't finished muxing, one too long to mux at all, a live broadcast with no
+finished file behind it, or one whose every mux attempt failed, is published as an `image` entry carrying `still: true`; `url` and `poster`
 are both the poster frame, where the bytes are. Read it with the top-level `muxing` flag:
 
 | `still` | `muxing` | Meaning |
 |---|---|---|
 | `false` | `false` | An ordinary picture. |
 | `true` | `true` | A video is still muxing. Ask again on the horizon under [`muxing` and `pending`](#muxing-and-pending): seconds for a short video, minutes for a long one. |
-| `true` | `false` | A video exists that cannot be served. Too long to mux, in which case the verdict is permanent; or a live or scheduled broadcast, in which case it is final for as long as this card is cached and the archive will mux normally once the stream ends. |
+| `true` | `false` | A video exists that cannot be served. Too long to mux, in which case the verdict is permanent; or a live or scheduled broadcast, in which case it is final for as long as this card is cached and the archive will mux normally once the stream ends; or every scheduled mux attempt failed, in which case `text` starts with "The video couldn't be loaded here" and the verdict holds for six hours, after which the next request tries again. |
 
 Without `still`, that last row is indistinguishable from an ordinary photo except by reading the
 English in `text`.
