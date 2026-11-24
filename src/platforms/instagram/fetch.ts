@@ -347,7 +347,7 @@ export async function fetchInstagram(ref: Extract<PostRef, { p: 'ig' }>): Promis
  * is therefore "unchanged from before this existed", never a regression.
  */
 const IG_HANDLE = /^[A-Za-z0-9._]{1,40}$/
-const IG_WEB_APP_ID = '936619743392459'
+export const IG_WEB_APP_ID = '936619743392459'
 
 /**
  * HOW MANY PAGES OF THE ACCOUNT FEED THE RECOVERY WILL WALK, and the whole reason it walks at all.
@@ -587,7 +587,7 @@ export async function fetchInstagramAudienceGate(code: string): Promise<{ status
  * existing chain, so the residential evidence bounds the UPSIDE — the win may be zero from Workers —
  * rather than the downside.
  */
-const IG_GRAPHQL_DOC_ID = '27128499623469141'
+export const IG_GRAPHQL_DOC_ID = '27128499623469141'
 /** The documented root as a key holding an object. See the content check at the end of the fetcher. */
 const GQL_ROOT_OBJECT = /"xdt_api__v1__media__shortcode__web_info"\s*:\s*\{/
 
