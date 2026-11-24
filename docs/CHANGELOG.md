@@ -204,6 +204,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Changed
 
+- **A failed mux now says why, in the Worker's log.** YouTube muxes failed 232 times in a week against
+  37 successes, and every failure read `mux failed` with nothing after it, because the container threw
+  yt-dlp's and ffmpeg's error output away (it can contain signed URLs). The container now keeps the
+  last error line, replaces every URL in it with `<url>`, cuts it to 160 characters and sends it as
+  `detail`. The Worker strips URLs again and adds it to the `mux failed` line in `wrangler tail`. It
+  never reaches a counter or a response.
 - **yt-dlp moves from 2026.8.19 to 2026.11.23.** This one binary resolves video for Dailymotion,
   Streamable, Imgur, Facebook, TikTok and YouTube, and it had been three months behind upstream. Wrangler
   moves to 4.167.0 and `@cloudflare/workers-types` to 5.20261124.1. Supersedes PRs #114, #117, #118

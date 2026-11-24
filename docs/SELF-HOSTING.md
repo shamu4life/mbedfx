@@ -217,11 +217,13 @@ cover image (`src/worker.ts`).
 | | |
 |---|---|
 | `200 video/mp4` | the result file, streamed. Where ffmpeg writes it (a `{video}` tracks mux, a yt-dlp merge, the HLS fixup) it is a remux, never a transcode: `-c copy -movflags +faststart`. A single-format `{page}` download is the site's own file written verbatim, so not necessarily faststart. An ISO-BMFF result is sent only once its top-level boxes all walk as whole and an mdat carries data, else `502 incomplete result`; that catches a file cut off inside a box, not a short input ffmpeg rewrote into whole boxes. WebM, FLV and MPEG-TS are passed through unjudged |
-| `200 application/json` | meta mode, a passthrough of `yt-dlp -J`; or probe mode, `{ok, video, ytdlp, ffmpeg, hlsExtensionPicky, muxCheck, ms, serving, clients, tiktok}` |
-| `4xx/5xx application/json` | `{"error": "..."}`. `400` bad json / `need 'page' or 'video'` / invalid source; `401` unauthorized; `404` not found; `502` mux failed, meta failed, empty or oversized result, incomplete result; `504` mux timed out, meta timed out; `500` internal error |
+| `200 application/json` | meta mode, a passthrough of `yt-dlp -J`; or probe mode, `{ok, video, ytdlp, ffmpeg, hlsExtensionPicky, muxCheck, ms, serving, clients, tiktok, hls}` |
+| `4xx/5xx application/json` | `{"error": "..."}`, plus a `detail` line on a `502` mux failed. `400` bad json / `need 'page' or 'video'` / invalid source; `401` unauthorized; `404` not found; `502` mux failed, meta failed, empty or oversized result, incomplete result; `504` mux timed out, meta timed out; `500` internal error |
 | `GET /health` | `200 ok` |
 
-stderr is suppressed on failure; it can carry the source URL.
+A failed mux's stderr can carry the source URL, so it is never passed through. The container keeps
+its last error line, replaces every URL in it with `<url>`, and cuts it to 160 characters; that is `detail`.
+The Worker strips URLs again and writes it only to its log.
 
 **Environment** (no longer one block: `MAX_SECONDS`, `MAX_BYTES` and `PROC_TIMEOUT` at the top of
 `container/server.py`, `MUX_PAGE_TIMEOUT` under the note that argues it, `RESOLVER_SECRET` further
