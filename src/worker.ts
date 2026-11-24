@@ -1824,8 +1824,16 @@ const RESOLVER_SLOTS = 4
  * file cut off inside a box or with no media in it; a short input that ffmpeg rewrote into whole,
  * shorter boxes still passes (see _mux_result_verdict's note). Every meta record is fine. The marker
  * is `muxCheck: "boxes"` in `/_clients`.
+ *
+ * g16 -> g17, 2026-11-24, AFTER A STALE IMAGE WAS FOUND, the first two uses' order again. #125 shipped
+ * Reddit connection reuse and the x-mux-* stage headers, and the first three cold Reddit muxes after
+ * its deploy all wrote `stage_times` rows reading `variant: unknown`, `run_ms: -1`: the old image
+ * answering. They took 24 s and 28 s for 37 s and 76 s clips, so the change being measured never ran.
+ * Every record is fine. The marker is the `x-mux-variant` header, read back as `stage_times` blob6.
+ * Side effect, intended: give-up marks are keyed by this string (muxFailMarkKey), so every 6-hour
+ * verdict written under g16 is retired with it.
  */
-const RESOLVER_GENERATION = 'g16'
+const RESOLVER_GENERATION = 'g17'
 /**
  * THE STORED-RECORD HALF, pinned at the value the shared string had when it split, so the split
  * itself invalidates nothing. Read by metaCacheKey and by nothing else.
