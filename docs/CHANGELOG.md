@@ -187,6 +187,10 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Changed
 
+- **yt-dlp moves from 2026.8.19 to 2026.11.23.** This one binary resolves video for Dailymotion,
+  Streamable, Imgur, Facebook, TikTok and YouTube, and it had been three months behind upstream. Wrangler
+  moves to 4.167.0 and `@cloudflare/workers-types` to 5.20261124.1. Supersedes PRs #114, #117, #118
+  and #119.
 - **A card shows up to 500 characters or 10 lines of a post's body, on every platform** (owner's
   numbers, replacing 253 characters). The line cap keeps the counts row inside Discord's ~20-line cut
   of an activity card. A cut never splits an emoji or a flag, and trailing blank lines are dropped
