@@ -2016,7 +2016,28 @@ function muxPlatformOf(slotKey: string): Platform | 'none' {
  */
 async function muxErrorBody(res: Response): Promise<string> {
   try {
-    return (await res.text()).slice(0, 200)
+    // 512, not 200: since the container started sending `detail` (up to 160 characters, see
+    // _error_detail in container/server.py) a 200-character cut could land inside the JSON and make
+    // logDetail's parse fail. The classifying strings sit in `error`, at the front, either way.
+    return (await res.text()).slice(0, 512)
+  } catch {
+    return ''
+  }
+}
+
+/**
+ * THE CONTAINER'S ONE-LINE REASON, for `wrangler tail` only — never a counter, never a response.
+ *
+ * Added 2026-11-24, when YouTube muxes were failing 232 to 37 with nothing but `mux failed` to go on.
+ * The container already strips every url (_error_detail). This strips them AGAIN, so a container image
+ * from before that function, or a future bug in it, still cannot put a signed googlevideo url in a
+ * log line. "" for a body that is not JSON or has no detail.
+ */
+export function logDetail(body: string): string {
+  try {
+    const d = (JSON.parse(body) as { detail?: unknown }).detail
+    if (typeof d !== 'string') return ''
+    return d.replace(/(?:https?|wss?|ftp):\/\/\S+|\b[\w.-]+\.googlevideo\.com\S*/gi, '<url>').slice(0, 160)
   } catch {
     return ''
   }
@@ -2084,7 +2105,7 @@ async function ensureMuxed(
        * query. `key` is the ref, the outcome is a fixed enum, and no part of the body is stored.
        */
       countMux(env, site, muxOutcomeOf(attempt.status, detail), Date.now() - startedAt)
-      console.error('mux failed', key, attempt.status)
+      console.error('mux failed', key, attempt.status, logDetail(detail))
       return null
     }
   }

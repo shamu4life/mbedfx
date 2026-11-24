@@ -1181,5 +1181,69 @@ class HlsProbe(unittest.TestCase):
         self.assertEqual(order[-1], "hls", "a new row must never delay or fail the old ones")
 
 
+class ErrorDetail(unittest.TestCase):
+    """A FAILED MUX SAYS WHY, and never with a url in it (_error_detail, 2026-11-24)."""
+
+    SIGNED = "https://rr3---sn-secret.googlevideo.com/videoplayback?id=LEAKED&sig=SECRET"
+
+    def setUp(self):
+        self._run, self._resolve, self._secret = srv.subprocess.run, srv.socket.getaddrinfo, srv.RESOLVER_SECRET
+        srv.RESOLVER_SECRET = None
+        srv.socket.getaddrinfo = lambda host, port, **kw: [
+            (socket.AF_INET, socket.SOCK_STREAM, socket.IPPROTO_TCP, "", ("93.184.216.34", port))
+        ]
+        self.kwargs = []
+
+    def tearDown(self):
+        srv.subprocess.run, srv.socket.getaddrinfo, srv.RESOLVER_SECRET = self._run, self._resolve, self._secret
+
+    def _fails_with(self, stderr):
+        def run(cmd, **kw):
+            self.kwargs.append(kw)
+            raise srv.subprocess.CalledProcessError(1, cmd, stderr=stderr)
+        srv.subprocess.run = run
+
+    def test_the_last_error_line_is_kept_and_every_url_is_removed(self):
+        err = (f"[download] Destination: x\nERROR: unable to download video data: HTTP Error 403: Forbidden "
+               f"({self.SIGNED})\n").encode()
+        d = srv._error_detail(err)
+        self.assertTrue(d.startswith("ERROR: unable to download video data: HTTP Error 403"), d)
+        self.assertNotIn("googlevideo", d)
+        self.assertNotIn("LEAKED", d)
+        self.assertNotIn("SECRET", d)
+        self.assertIn("<url>", d)
+
+    def test_a_bare_host_is_removed_too_and_the_line_is_bounded(self):
+        d = srv._error_detail(b"ERROR: rr3---sn-x.googlevideo.com/videoplayback?sig=SECRET refused " + b"x" * 400)
+        self.assertNotIn("SECRET", d)
+        self.assertLessEqual(len(d), 160)
+
+    def test_no_error_line_falls_back_to_the_last_line_and_nothing_is_empty(self):
+        self.assertEqual(srv._error_detail(b"first\nlast words\n"), "last words")
+        self.assertEqual(srv._error_detail(b""), "")
+        self.assertEqual(srv._error_detail(None), "")
+        self.assertEqual(srv._error_detail("ERROR: str works too"), "ERROR: str works too")
+        # ffmpeg ends progress lines with \r; the reason must not be glued to them.
+        self.assertEqual(srv._error_detail(b"frame=1\rframe=2\r[hls] Error opening input: 403\n"),
+                         "[hls] Error opening input: 403")
+
+    def test_a_failed_page_mux_answers_502_with_the_reason_and_classifies_the_same(self):
+        self._fails_with(f"ERROR: [youtube] abc123: Sign in to confirm you're not a bot {self.SIGNED}".encode())
+        status, _, body = _drive_post({"page": PAGE})
+        j = json.loads(body)
+        self.assertEqual(status, 502)
+        self.assertEqual(j["error"], "mux failed", "the Worker classifies on this string, unchanged")
+        self.assertIn("Sign in to confirm", j["detail"])
+        self.assertNotIn("googlevideo", body.decode() if isinstance(body, bytes) else body)
+        self.assertEqual(self.kwargs[0].get("stderr"), srv.subprocess.PIPE, "captured, never inherited")
+
+    def test_a_failed_tracks_mux_answers_the_same_and_no_detail_means_no_key(self):
+        self._fails_with(b"")
+        status, _, body = _drive_post({"video": "https://cdn.example/v.mp4"})
+        self.assertEqual((status, json.loads(body)), (502, {"error": "mux failed"}),
+                         "an empty reason adds no key, so the body is exactly what it was")
+        self.assertEqual(self.kwargs[0].get("stderr"), srv.subprocess.PIPE)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -1,7 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
-import { handle } from '../src/worker.ts'
+import { handle, logDetail } from '../src/worker.ts'
 import { refKey } from '../src/refkey.ts'
 
 // The /_media/ remux orchestration, exercised with a synthetic post that carries a `remux` video and
@@ -348,7 +348,9 @@ test('every 502 the container\'s mux path can send has a counter name of its own
    * its own member of the Set, so a refactor that silently stopped counting one string still passed.
    */
   const py = readFileSync(new URL('../container/server.py', import.meta.url), 'utf8')
-  const strings = [...new Set([...py.matchAll(/_json_error\(502, "([^"]+)"\)/g)].map(m => m[1]))]
+  // `[,)]`, not `\)`: "mux failed" now carries a third argument (_error_detail), and a pattern that
+  // stopped at the paren silently dropped the very string this test exists to guard.
+  const strings = [...new Set([...py.matchAll(/_json_error\(502, "([^"]+)"[,)]/g)].map(m => m[1]))]
     .filter(s => !s.startsWith('meta '))
   assert.ok(strings.includes('incomplete result') && strings.includes('mux failed'),
     `the extraction must find the strings it is guarding: ${JSON.stringify(strings)}`)
@@ -472,4 +474,38 @@ test('NO PART OF THE CONTAINER ERROR BODY IS EVER STORED — the url-suppression
   assert.ok(!serialized.includes('googlevideo'), `a url reached the counter: ${serialized}`)
   assert.ok(!serialized.includes('LEAKED'), 'nor any part of the body')
   assert.equal(muxRows(points)[0].blobs[1], 'mux_gate', 'and it is still classified correctly')
+})
+
+test('THE CONTAINER\'S REASON REACHES THE LOG, with any url stripped a second time, and nowhere else', async () => {
+  // 2026-11-24: 232 YouTube muxes failed in a week with nothing but "mux failed" to read. The container
+  // now sends a url-free `detail`; this pins that the Worker logs it, strips urls AGAIN (an old image or
+  // a bug upstream must not put a signed url in a log line), and still keeps it out of every counter.
+  const body = JSON.stringify({
+    error: 'mux failed',
+    detail: 'ERROR: unable to download video data: HTTP Error 403: Forbidden https://rr3---sn-secret.googlevideo.com/videoplayback?id=LEAKED',
+  })
+  const { env, points } = countingMuxEnv(async () => new Response(body, { status: 502 }))
+  const logged = []
+  const real = console.error
+  console.error = (...args) => { logged.push(args) }
+  try {
+    await handle(aeReq(), env, ctx, { cache: fakeCache(), fetchPost: async () => aePost() })
+  } finally {
+    console.error = real
+  }
+  const line = logged.find(a => a[0] === 'mux failed')
+  assert.ok(line, `the failure is logged: ${JSON.stringify(logged)}`)
+  assert.match(String(line[3]), /HTTP Error 403: Forbidden <url>/, 'the reason, with the url replaced')
+  assert.ok(!JSON.stringify(logged).includes('LEAKED'), 'no part of the url reaches the log')
+  assert.ok(!JSON.stringify(points).includes('403'), 'and the reason reaches no counter')
+  assert.equal(muxRows(points)[0].blobs[1], 'mux_gate')
+})
+
+test('logDetail: no detail, a non-JSON body and a bare googlevideo host all come out safe', () => {
+  assert.equal(logDetail('{"error":"mux failed"}'), '')
+  assert.equal(logDetail('not json'), '')
+  assert.equal(logDetail(''), '')
+  assert.equal(logDetail('{"detail":42}'), '')
+  assert.equal(logDetail('{"detail":"ERROR: rr1---sn-x.googlevideo.com/videoplayback?sig=S refused"}'), 'ERROR: <url> refused')
+  assert.ok(logDetail(JSON.stringify({ detail: 'x'.repeat(500) })).length <= 160)
 })

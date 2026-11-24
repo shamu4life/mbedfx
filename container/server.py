@@ -38,6 +38,7 @@ but this defends in depth anyway:
 import ipaddress
 import json
 import os
+import re
 import socket
 import struct
 import subprocess
@@ -378,6 +379,35 @@ def _input_opts(url: str) -> list[str]:
     return opts
 
 
+_URL_RE = re.compile(r"(?:https?|wss?|ftp)://\S+|\b[\w.-]+\.googlevideo\.com\S*", re.IGNORECASE)
+
+
+def _error_detail(stderr) -> str:
+    """ONE LINE SAYING WHY A MUX FAILED, with every url removed. "" when there is nothing to say.
+
+    WHY IT EXISTS, 2026-11-24. YouTube muxes failed 232 times in a week against 37 successes, every one a
+    bare `mux failed`, averaging 2.3 s. The network, the cookie jar, the tracks route and the
+    completeness walk were each ruled out by measurement, and the same argv downloaded the reported
+    video from a residential line. The one fact left was the error itself, and it was thrown away here.
+
+    WHY IT WAS THROWN AWAY, AND WHAT CHANGED. A yt-dlp or ffmpeg error can echo a signed googlevideo url,
+    and this body reaches the Worker. That is still true, so the line is the last ERROR line (else the
+    last line), every url and every googlevideo host is replaced with `<url>`, and it is cut to 160
+    characters, the same bound _probe_error puts on /_clients. The Worker strips urls AGAIN before it
+    logs (worker.ts logDetail), never puts it in a counter or a response, and only `wrangler tail`
+    sees it.
+    """
+    text = stderr or b""
+    if isinstance(text, bytes):
+        text = text.decode("utf-8", "replace")
+    lines = [ln.strip() for ln in text.replace("\r", "\n").splitlines() if ln.strip()]
+    if not lines:
+        return ""
+    errors = [ln for ln in lines if "ERROR" in ln or "Error" in ln]
+    line = (errors or lines)[-1]
+    return _URL_RE.sub("<url>", line)[:160]
+
+
 def _mux_tracks(video: str, audio: str | None, out: str) -> None:
     video = _safe_url(video)
     cmd = ["ffmpeg", "-nostdin", "-y", *_input_opts(video), "-i", video]
@@ -385,8 +415,10 @@ def _mux_tracks(video: str, audio: str | None, out: str) -> None:
         audio = _safe_url(audio)
         cmd += [*_input_opts(audio), "-i", audio, "-map", "0:v:0", "-map", "1:a:0"]
     cmd += ["-c", "copy", "-movflags", "+faststart", "-fs", str(MAX_BYTES), "-f", "mp4", out]
+    # stderr is CAPTURED, not shown: a failure's last line becomes the 502's `detail` after
+    # _error_detail strips every url out of it. See _error_detail for why that is safe to send.
     subprocess.run(cmd, check=True, timeout=PROC_TIMEOUT, stdin=subprocess.DEVNULL,
-                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                   stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
 
 
 class _CookieJar:
@@ -505,8 +537,10 @@ def _mux_page(page: str, out: str, jar=None) -> None:
     # MUX_PAGE_TIMEOUT, NOT PROC_TIMEOUT + 60. This one call downloads the whole video before it can
     # write a byte, so its wall scales with the source; the other two subprocesses do not, and one of
     # them is what src/muxpolicy.ts's tracks alarm is timed against. See MUX_PAGE_TIMEOUT's own note.
+    # stderr is CAPTURED for the 502's `detail` (see _error_detail); `--quiet --no-warnings` above keep
+    # it to the ERROR lines, so this is a few hundred bytes, not a progress log.
     subprocess.run(cmd, check=True, timeout=MUX_PAGE_TIMEOUT, stdin=subprocess.DEVNULL,
-                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                   stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
 
 
 # A MUX RESULT HAS TO BE A WHOLE FILE, NOT MERELY A NON-EMPTY ONE.
@@ -1162,8 +1196,10 @@ class Handler(BaseHTTPRequestHandler):
     def log_message(self, format, *args):  # no request logging (privacy: no urls in logs)
         pass
 
-    def _json_error(self, code: int, msg: str) -> None:
-        body = json.dumps({"error": msg}).encode()
+    def _json_error(self, code: int, msg: str, detail: str = "") -> None:
+        # `error` stays FIRST and unchanged: the Worker classifies on it (muxOutcomeOf). `detail` is
+        # only ever _error_detail's url-free line, and is left out when there is none.
+        body = json.dumps({"error": msg, **({"detail": detail} if detail else {})}).encode()
         self.send_response(code)
         self.send_header("content-type", "application/json")
         self.send_header("content-length", str(len(body)))
@@ -1336,14 +1372,15 @@ class Handler(BaseHTTPRequestHandler):
             self._json_error(400, "invalid source")
         except subprocess.TimeoutExpired:
             self._json_error(504, "mux timed out")
-        except subprocess.CalledProcessError:
-            # stderr is suppressed on purpose — it can carry the source url. When this is the Worker's
+        except subprocess.CalledProcessError as e:
+            # stderr USED TO BE suppressed outright, because it can carry the source url; it is now
+            # captured and reduced to _error_detail's url-free line. When this is the Worker's
             # last attempt it counts as `mux_gate` and /_media/ answers a no-store 503 (serveMuxed's
             # notReady); a failed `{video}` shortcut that has a `{page}` fallback is neither counted
             # nor served. Either way it means "ffmpeg or yt-dlp exited non-zero", which includes OUR
             # ffmpeg refusing an input: every 2024-05..2025-11 Reddit video with audio landed here
             # until REDDIT_HLS_HOST above.
-            self._json_error(502, "mux failed")
+            self._json_error(502, "mux failed", _error_detail(e.stderr))
         except Exception:
             self._json_error(500, "internal error")
         finally:
