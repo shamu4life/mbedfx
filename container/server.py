@@ -1010,6 +1010,98 @@ def _probe_tiktok():
     return row
 
 
+# A VIDEO WHOSE ONLY DOWNLOADABLE FORMATS, FOR OUR CLIENTS, ARE HLS. Measured 2026-11-24 from a
+# residential connection with yt-dlp 2026.11.23 and Deno: under YT_PLAYER_CLIENTS every https format of
+# this video was skipped (web_embedded and mweb "missing a URL", the SABR-only experiment; tv_simply
+# "require a GVS PO Token"), and the exact _mux_page argv selected `95-21`, both m3u8. It downloaded
+# there, 4,403,386 bytes, and production answered `mux failed` (502) on every attempt for 25 minutes.
+# PROBE_VIDEO cannot see this path: "Me at the zoo" still has https formats, so the rows above pass
+# while this video cannot mux. If this one is ever taken down, `extracted: false` says so; pick another
+# whose https formats are all skipped under YT_PLAYER_CLIENTS.
+PROBE_HLS_VIDEO = "zp8_bKhhnlw"
+
+
+def _probe_hls():
+    """CAN THIS EGRESS FETCH YOUTUBE HLS? The path the mux takes when YouTube offers us nothing else.
+
+    THREE STEPS, because each fails for a different reason and only the last is the download:
+      1. extract with YT_PLAYER_CLIENTS and YT_FORMAT_SELECTOR, the mux's own arguments, and report what
+         was picked (`picked`, `protocols`): if no m3u8 is picked, this video is not on the HLS path here;
+      2. fetch the picked format's playlist (`playlist`: `ok` means HTTP 200 and an #EXTM3U body);
+      3. fetch the first PROBE_RANGE bytes of its first segment (`segment`, `bytes`).
+    Every fetch carries yt-dlp's own per-format headers, the lesson of _probe_tiktok's second version.
+    No url is published: they are signed, and this goes into an HTTP response. Only `host` is.
+
+    Never raises, and takes no input, for the same reasons as the rows above.
+    """
+    row = {"video": PROBE_HLS_VIDEO, "extracted": False, "formats": 0, "picked": "", "protocols": [],
+           "host": "", "playlist": "not-reached", "segment": "not-reached", "bytes": 0, "error": "",
+           "ms": 0}
+    started = time.monotonic()
+    try:
+        cmd = ["yt-dlp", "--skip-download", "-J", "--no-warnings",
+               "--extractor-args", f"youtube:player_client={YT_PLAYER_CLIENTS}",
+               "-f", YT_FORMAT_SELECTOR, "--", f"https://www.youtube.com/watch?v={PROBE_HLS_VIDEO}"]
+        out = subprocess.run(cmd, capture_output=True, timeout=PROBE_TIMEOUT, stdin=subprocess.DEVNULL)
+        if out.returncode != 0:
+            row["error"] = _probe_error(out.stderr)
+            return row
+        info = json.loads(out.stdout or b"{}")
+        row["extracted"] = True
+        row["formats"] = len(info.get("formats") or [])
+        picked = info.get("requested_formats") or [info]
+        row["picked"] = str(info.get("format_id") or "")
+        row["protocols"] = [str(f.get("protocol") or "") for f in picked]
+        fmt = next((f for f in picked if "m3u8" in str(f.get("protocol") or "")), None)
+        if fmt is None:
+            row["playlist"] = "not-hls"
+            return row
+        url = fmt.get("url")
+        if not isinstance(url, str) or not url:
+            row["playlist"] = "no-url"
+            return row
+        try:
+            row["host"] = urlsplit(url).hostname or ""
+        except Exception:
+            row["host"] = ""
+        hdrs = {"user-agent": _PROBE_UA}
+        for k, val in (fmt.get("http_headers") or {}).items():
+            if isinstance(k, str) and isinstance(val, str) and k.lower() != "range":
+                hdrs[k] = val
+        try:
+            req = urllib.request.Request(_safe_url(url), headers=hdrs)
+            with urllib.request.urlopen(req, timeout=20) as r:
+                text = r.read(1 << 20).decode("utf-8", "replace")
+        except urllib.error.HTTPError as e:
+            row["playlist"] = f"http-{e.code}"
+            return row
+        if not text.lstrip().startswith("#EXTM3U"):
+            # A 200 that is not a playlist is a decoy (CLAUDE.md: assert on content, never on status).
+            row["playlist"] = "not-a-playlist"
+            return row
+        row["playlist"] = "ok"
+        first = next((ln.strip() for ln in text.splitlines() if ln.strip() and not ln.startswith("#")), "")
+        if not first:
+            row["segment"] = "none-listed"
+            return row
+        seg_hdrs = dict(hdrs, range=f"bytes=0-{PROBE_RANGE}")
+        try:
+            req = urllib.request.Request(_safe_url(urljoin(url, first)), headers=seg_hdrs)
+            with urllib.request.urlopen(req, timeout=20) as r:
+                body = r.read(PROBE_RANGE + 1)
+            row["bytes"] = len(body)
+            row["segment"] = "ok" if body else "empty"
+        except urllib.error.HTTPError as e:
+            row["segment"] = f"http-{e.code}"
+    except subprocess.TimeoutExpired:
+        row["error"] = "timeout"
+    except Exception as e:
+        row["error"] = type(e).__name__
+    finally:
+        row["ms"] = int((time.monotonic() - started) * 1000)
+    return row
+
+
 def _probe_clients():
     """Every client in PROBE_CLIENTS, serially. Serial ON PURPOSE: the instance this runs on has a
     QUARTER of a vCPU (measured 2026-08-28: extraction alone costs 14-17s there against 5.7s at 1
@@ -1020,6 +1112,8 @@ def _probe_clients():
     # SERIAL WITH THE REST, same one-vCPU reason as above. Last, so a TikTok change can never delay
     # or fail the YouTube rows this endpoint already existed to report.
     tiktok = _probe_tiktok()
+    # LAST AGAIN, after TikTok, for the same reason: a new row must never delay or fail the old ones.
+    hls = _probe_hls()
     return {
         "video": PROBE_VIDEO,
         "ytdlp": _ytdlp_version(),
@@ -1040,6 +1134,7 @@ def _probe_clients():
         "serving": [r["client"] for r in rows if r["gvs"] == "ok"],
         "clients": rows,
         "tiktok": tiktok,
+        "hls": hls,
     }
 
 

@@ -111,8 +111,19 @@ in `PROBE_CLIENTS` and then RANGE-FETCHES the format that client chose, reportin
   "muxCheck": "boxes",                                 // since 2026-10-05; absent = stores short muxes
   "serving": ["default", "web_embedded", "tv_simply", "mweb", "web_safari"],
   "clients": [ { "client": "default", "extracted": true, "formats": 24,
-                 "gvs": "ok", "bytes": 65536, "ms": 3378 }, … ] }
+                 "gvs": "ok", "bytes": 65536, "ms": 3378 }, … ],
+  "hls": { "video": "zp8_bKhhnlw", "extracted": true, "picked": "95-21",   // since 2026-11-24
+           "protocols": ["m3u8_native"], "host": "manifest.googlevideo.com",
+           "playlist": "ok", "segment": "ok", "bytes": 65536, "ms": 5572 } }
 ```
+
+**`hls` covers the path the `clients` rows can't see.** Some videos give our three clients no
+direct download at all, only HLS playlists, and `PROBE_VIDEO` isn't one of them. `hls` runs the mux's
+own clients and format selector on a video that is (`PROBE_HLS_VIDEO`). `protocols` says what the
+selector picked, `playlist` whether the playlist came back (`ok` means a 200 whose body starts with
+`#EXTM3U`), and `segment` whether the first segment's bytes did. The sample above is from a home
+connection. From production, an `http-403` in either field means googlevideo refuses HLS to the
+container's network.
 
 **The range fetch is the whole point.** A client can extract happily and then be refused by
 googlevideo, and only fetching bytes tells the two apart — `android_vr` reported `extracted: true,
