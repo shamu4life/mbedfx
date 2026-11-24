@@ -78,6 +78,27 @@ function csrfOf(res: Response | null): string {
   return /(?:^|[\s,;])csrftoken=([^;,\s]+)/.exec(all)?.[1] ?? ''
 }
 
+/**
+ * EVERY COOKIE THE HOMEPAGE SET, as one Cookie header, and how many there were. The first run from
+ * production (2026-11-24) passed the homepage and the ruling but got a 540 KB HTML page from the query
+ * while sending only `csrftoken`; yt-dlp sends its whole jar (mid, ig_did, datr and friends), so this
+ * does too. Values go to Instagram only; the probe reports the count, never a name's value.
+ */
+export function cookieJarOf(res: Response | null): { header: string; count: number } {
+  const h = res?.headers as (Headers & { getSetCookie?: () => string[] }) | undefined
+  const lines = h?.getSetCookie ? h.getSetCookie() : (h?.get('set-cookie') ?? '').split(/,(?=\s*[A-Za-z0-9_.-]+=)/)
+  const pairs = lines.map(l => l.split(';')[0].trim()).filter(kv => /^[A-Za-z0-9_.-]+=[^\s]*$/.test(kv))
+  return { header: pairs.join('; '), count: pairs.length }
+}
+
+/** What a browser's own fetch() adds to a same-origin XHR on instagram.com. */
+const BROWSERISH = {
+  'accept-language': 'en-US,en;q=0.9',
+  'sec-fetch-site': 'same-origin',
+  'sec-fetch-mode': 'cors',
+  'sec-fetch-dest': 'empty',
+}
+
 export async function probeInstagramGraphQL(f: Fetch = fetch): Promise<Record<string, unknown>> {
   const code = IG_PROBE_SHORTCODE
   const started = Date.now()
@@ -104,13 +125,14 @@ export async function probeInstagramGraphQL(f: Fetch = fetch): Promise<Record<st
   const home = await timed(f, 'https://www.instagram.com/', { headers: { 'user-agent': UA, accept: 'text/html' } })
   const lsd = lsdOf(home.text)
   const csrf = csrfOf(home.res)
-  const cookie = csrf ? `csrftoken=${csrf}` : ''
+  const jar = cookieJarOf(home.res)
+  const cookie = jar.header || (csrf ? `csrftoken=${csrf}` : '')
   const ruling = await timed(f, `https://www.instagram.com/api/v1/web/get_ruling_for_content/?content_type=MEDIA&target_id=${pk}`,
-    { headers: { ...api, ...(cookie ? { cookie } : {}) } })
+    { headers: { ...api, ...BROWSERISH, ...(cookie ? { cookie } : {}) } })
   const rulingOk = /"status"\s*:\s*"ok"/.test(ruling.text)
   const gql = await timed(f, 'https://www.instagram.com/api/graphql', {
     method: 'POST',
-    headers: { ...api, 'content-type': 'application/x-www-form-urlencoded', 'x-fb-friendly-name': NEW_FRIENDLY,
+    headers: { ...api, ...BROWSERISH, 'content-type': 'application/x-www-form-urlencoded', 'x-fb-friendly-name': NEW_FRIENDLY,
       ...(csrf && rulingOk ? { 'x-csrftoken': csrf } : {}), 'x-fb-lsd': lsd, 'x-requested-with': 'XMLHttpRequest',
       referer: `https://www.instagram.com/reel/${code}/`, ...(cookie ? { cookie } : {}) },
     body: new URLSearchParams({ lsd, fb_api_caller_class: 'RelayModern', fb_api_req_friendly_name: NEW_FRIENDLY,
@@ -118,7 +140,7 @@ export async function probeInstagramGraphQL(f: Fetch = fetch): Promise<Record<st
   })
   const newRow = {
     docId: IG_NEW_DOC_ID,
-    home: { status: home.status, bytes: home.bytes, ms: home.ms, lsd: !!lsd, csrf: !!csrf },
+    home: { status: home.status, bytes: home.bytes, ms: home.ms, lsd: !!lsd, csrf: !!csrf, cookies: jar.count },
     ruling: { status: ruling.status, ms: ruling.ms, kind: bodyKind(ruling.text), ok: rulingOk, message: probeMessage(ruling.text) },
     graphql: { status: gql.status, bytes: gql.bytes, ms: gql.ms, kind: bodyKind(gql.text),
       root: /"xig_polaris_media"\s*:\s*\{/.test(gql.text),
