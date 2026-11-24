@@ -1240,9 +1240,106 @@ class ErrorDetail(unittest.TestCase):
     def test_a_failed_tracks_mux_answers_the_same_and_no_detail_means_no_key(self):
         self._fails_with(b"")
         status, _, body = _drive_post({"video": "https://cdn.example/v.mp4"})
-        self.assertEqual((status, json.loads(body)), (502, {"error": "mux failed"}),
-                         "an empty reason adds no key, so the body is exactly what it was")
+        j = json.loads(body)
+        self.assertEqual((status, j["error"]), (502, "mux failed"))
+        self.assertNotIn("detail", j, "an empty reason adds no key")
+        self.assertEqual(set(j) - {"error"}, {"run_ms", "uptime_s", "variant"}, "only the timing rides along")
+        self.assertEqual(j["variant"], "default", "a non-Reddit host is unchanged")
         self.assertEqual(self.kwargs[0].get("stderr"), srv.subprocess.PIPE)
+
+
+class RedditReuseAndStage(unittest.TestCase):
+    """C and B of 2026-11-24: Reddit tracks try connection reuse first and fall back once, and every
+    mux answer says how long it ran, how warm the instance was and which variant served."""
+
+    RD = "https://v.redd.it/abc123/HLSPlaylist.m3u8"
+
+    def setUp(self):
+        self._run, self._resolve, self._secret = srv.subprocess.run, srv.socket.getaddrinfo, srv.RESOLVER_SECRET
+        self._picky = srv._ffmpeg_has_extension_picky
+        srv._ffmpeg_has_extension_picky = lambda: True
+        srv.RESOLVER_SECRET = None
+        srv.socket.getaddrinfo = lambda host, port, **kw: [
+            (socket.AF_INET, socket.SOCK_STREAM, socket.IPPROTO_TCP, "", ("93.184.216.34", port))
+        ]
+        self.cmds = []
+
+    def tearDown(self):
+        srv.subprocess.run, srv.socket.getaddrinfo, srv.RESOLVER_SECRET = self._run, self._resolve, self._secret
+        srv._ffmpeg_has_extension_picky = self._picky
+
+    def _runs(self, *outcomes):
+        """One entry per ffmpeg run: True writes a file and succeeds, False fails like a bad redirect."""
+        it = iter(outcomes)
+        def run(cmd, **kw):
+            self.cmds.append(cmd)
+            if next(it):
+                with open(cmd[-1], "wb") as f:
+                    f.write(b"x")
+                return type("R", (), {"returncode": 0, "stdout": b""})()
+            raise srv.subprocess.CalledProcessError(1, cmd, stderr=b"[hls] Error opening input\n")
+        srv.subprocess.run = run
+
+    def test_reddit_tries_reuse_first_and_only_reddit(self):
+        self.assertNotIn("-http_persistent", srv._input_opts(self.RD, reuse=True))
+        self.assertIn("-http_persistent", srv._input_opts(self.RD, reuse=False))
+        self.assertIn("-http_persistent", srv._input_opts("https://video.bsky.app/x/playlist.m3u8", reuse=True),
+                      "Bluesky's cross-host redirects are why the flag exists; reuse must never reach it")
+        self.assertIn("-reconnect", srv._input_opts(self.RD, reuse=True), "the other robustness options stay")
+
+    def test_a_reuse_success_reports_reuse(self):
+        self._runs(True)
+        info = {}
+        srv._mux_tracks(self.RD, None, tempfile.mktemp(suffix=".mp4"), info)
+        self.assertEqual(info["variant"], "reuse")
+        self.assertEqual(len(self.cmds), 1)
+        self.assertNotIn("-http_persistent", self.cmds[0])
+
+    def test_a_fast_reuse_failure_falls_back_once_to_the_old_options(self):
+        self._runs(False, True)
+        info = {}
+        srv._mux_tracks(self.RD, "https://v.redd.it/abc123/HLS_AUDIO.m3u8", tempfile.mktemp(suffix=".mp4"), info)
+        self.assertEqual(info["variant"], "fallback")
+        self.assertEqual(len(self.cmds), 2)
+        self.assertNotIn("-http_persistent", self.cmds[0])
+        self.assertEqual(self.cmds[1].count("-http_persistent"), 2, "both inputs back on the old options")
+
+    def test_a_double_failure_raises_and_a_slow_failure_is_not_retried(self):
+        self._runs(False, False)
+        with self.assertRaises(srv.subprocess.CalledProcessError):
+            srv._mux_tracks(self.RD, None, tempfile.mktemp(suffix=".mp4"), {})
+        self.assertEqual(len(self.cmds), 2)
+        self.cmds.clear()
+        self._runs(False, True)
+        real = srv.REUSE_FALLBACK_WITHIN_S
+        srv.REUSE_FALLBACK_WITHIN_S = -1
+        try:
+            with self.assertRaises(srv.subprocess.CalledProcessError):
+                srv._mux_tracks(self.RD, None, tempfile.mktemp(suffix=".mp4"), {})
+        finally:
+            srv.REUSE_FALLBACK_WITHIN_S = real
+        self.assertEqual(len(self.cmds), 1, "a run that failed slowly is not run a second time")
+
+    def test_a_non_reddit_host_runs_once_with_the_old_options(self):
+        self._runs(True)
+        info = {}
+        srv._mux_tracks("https://video.bsky.app/x/playlist.m3u8", None, tempfile.mktemp(suffix=".mp4"), info)
+        self.assertEqual((info["variant"], len(self.cmds)), ("default", 1))
+        self.assertIn("-http_persistent", self.cmds[0])
+
+    def test_a_successful_mux_carries_its_timing_headers(self):
+        real_verdict = srv._mux_result_verdict
+        srv._mux_result_verdict = lambda path: "complete"
+        self._runs(True)
+        try:
+            status, headers, _ = _drive_post({"video": self.RD})
+        finally:
+            srv._mux_result_verdict = real_verdict
+        self.assertEqual(status, 200)
+        h = {k.lower(): v for k, v in headers.items()} if isinstance(headers, dict) else {k.lower(): v for k, v in headers}
+        self.assertEqual(h.get("x-mux-variant"), "reuse")
+        self.assertTrue(h.get("x-mux-run-ms", "").isdigit())
+        self.assertTrue(h.get("x-mux-uptime-s", "").isdigit())
 
 
 if __name__ == "__main__":

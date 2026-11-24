@@ -247,6 +247,19 @@ FFMPEG_PROTOCOLS = "http,https,tcp,tls,crypto"
 # dropped read rather than failing. Verified 2026-07-22: turns a failing Bluesky mux clean. Applied per
 # INPUT (before each -i), which is where ffmpeg reads http options.
 HTTP_OPTS = ["-http_persistent", "0", "-reconnect", "1", "-reconnect_streamed", "1", "-reconnect_delay_max", "5"]
+# THE SAME OPTIONS WITH CONNECTION REUSE LEFT ON (ffmpeg's default), tried first for REDDIT_HLS_HOST only.
+# `-http_persistent 0` above exists for Bluesky's cross-host segment redirects, and it was applied to
+# Reddit too, so every playlist and segment of a Reddit video paid a fresh TLS handshake. Cold Reddit
+# muxes measured 8-11 s in production (Analytics Engine `mux_ok` on `rd`, 2026-11-24) against a
+# Discord fetch that gives up at about 10 s, so the first paste of a Reddit video often froze with no
+# player. Whether v.redd.it redirects segments across hosts could not be checked from the dev sandbox
+# (Reddit refuses it anonymously), so this is NOT trusted blind: _mux_tracks retries once with
+# HTTP_OPTS when the reuse run fails fast, and reports which variant served (x-mux-variant).
+HTTP_OPTS_REUSE = [o for i, o in enumerate(HTTP_OPTS) if not (o == "-http_persistent" or (i > 0 and HTTP_OPTS[i - 1] == "-http_persistent"))]
+# A REUSE FAILURE IS RETRIED ONLY IF IT FAILED THIS FAST. A cross-host redirect breaks on the first
+# segment, in well under a second; a run that dies after this long failed for some other reason, and
+# a second full run would push the attempt past the Worker's tracks budget (MUX_FIRST_ATTEMPT_TRACKS_MS).
+REUSE_FALLBACK_WITHIN_S = 30
 # REDDIT'S HLS IS OPENED WITH THE HLS DEMUXER'S EXTENSION CHECK OFF, and only Reddit's.
 #
 # WHAT BREAKS WITHOUT IT. No Reddit video WITH AUDIO uploaded between about 2024-05-01 and
@@ -297,6 +310,14 @@ REDDIT_HLS_HOST = "v.redd.it"
 HLS_PROBE_TIMEOUT = 3
 _hls_picky_known: bool | None = None
 CHUNK = 1 << 16
+# WHEN THIS PROCESS STARTED, so a mux can say how warm its instance was (`uptime_s` on the 200's
+# x-mux-uptime-s header and in a 502's body). A small number on a slow mux means the time went to a
+# cold boot, not to the remux; the Worker records it in its `stage_times` row (docs/METRICS.md).
+_STARTED = time.monotonic()
+
+
+def _uptime_s() -> int:
+    return int(time.monotonic() - _STARTED)
 
 
 class _NoRedirect(urllib.request.HTTPRedirectHandler):
@@ -367,13 +388,15 @@ def _hls_picky_answer() -> bool | None:
     return _hls_picky_known
 
 
-def _input_opts(url: str) -> list[str]:
+def _input_opts(url: str, reuse: bool = False) -> list[str]:
     """The options that go before one input's `-i`, which is where ffmpeg reads per-input options.
 
     Takes the url `_safe_url` has already passed, so a refused source never reaches the probe.
+    `reuse` keeps ffmpeg's connection reuse on, and only for REDDIT_HLS_HOST (see HTTP_OPTS_REUSE).
     """
-    opts = ["-protocol_whitelist", FFMPEG_PROTOCOLS, *HTTP_OPTS]
     parts = urlsplit(url)
+    keep_alive = reuse and parts.hostname == REDDIT_HLS_HOST
+    opts = ["-protocol_whitelist", FFMPEG_PROTOCOLS, *(HTTP_OPTS_REUSE if keep_alive else HTTP_OPTS)]
     if parts.hostname == REDDIT_HLS_HOST and parts.path.endswith(".m3u8") and _ffmpeg_has_extension_picky():
         opts += ["-extension_picky", "0"]
     return opts
@@ -408,12 +431,38 @@ def _error_detail(stderr) -> str:
     return _URL_RE.sub("<url>", line)[:160]
 
 
-def _mux_tracks(video: str, audio: str | None, out: str) -> None:
+def _mux_tracks(video: str, audio: str | None, out: str, info: dict | None = None) -> None:
+    """Remux `video` (+ `audio`) into a faststart mp4 at `out`. Raises like subprocess.run(check=True).
+
+    `info`, when given, gets `variant`: `reuse` (Reddit, connection reuse on), `fallback` (Reddit, the
+    reuse run failed fast and HTTP_OPTS served), or `default` (every other host, unchanged).
+    """
     video = _safe_url(video)
-    cmd = ["ffmpeg", "-nostdin", "-y", *_input_opts(video), "-i", video]
+    audio = _safe_url(audio) if audio else None
+    reddit = urlsplit(video).hostname == REDDIT_HLS_HOST
+    if not reddit:
+        if info is not None:
+            info["variant"] = "default"
+        return _run_tracks(video, audio, out, reuse=False)
+    started = time.monotonic()
+    try:
+        _run_tracks(video, audio, out, reuse=True)
+        if info is not None:
+            info["variant"] = "reuse"
+    except subprocess.CalledProcessError:
+        if time.monotonic() - started > REUSE_FALLBACK_WITHIN_S:
+            if info is not None:
+                info["variant"] = "reuse"
+            raise
+        if info is not None:
+            info["variant"] = "fallback"
+        _run_tracks(video, audio, out, reuse=False)
+
+
+def _run_tracks(video: str, audio: str | None, out: str, reuse: bool) -> None:
+    cmd = ["ffmpeg", "-nostdin", "-y", *_input_opts(video, reuse), "-i", video]
     if audio:
-        audio = _safe_url(audio)
-        cmd += [*_input_opts(audio), "-i", audio, "-map", "0:v:0", "-map", "1:a:0"]
+        cmd += [*_input_opts(audio, reuse), "-i", audio, "-map", "0:v:0", "-map", "1:a:0"]
     cmd += ["-c", "copy", "-movflags", "+faststart", "-fs", str(MAX_BYTES), "-f", "mp4", out]
     # stderr is CAPTURED, not shown: a failure's last line becomes the 502's `detail` after
     # _error_detail strips every url out of it. See _error_detail for why that is safe to send.
@@ -1196,10 +1245,11 @@ class Handler(BaseHTTPRequestHandler):
     def log_message(self, format, *args):  # no request logging (privacy: no urls in logs)
         pass
 
-    def _json_error(self, code: int, msg: str, detail: str = "") -> None:
+    def _json_error(self, code: int, msg: str, detail: str = "", stage: dict | None = None) -> None:
         # `error` stays FIRST and unchanged: the Worker classifies on it (muxOutcomeOf). `detail` is
-        # only ever _error_detail's url-free line, and is left out when there is none.
-        body = json.dumps({"error": msg, **({"detail": detail} if detail else {})}).encode()
+        # only ever _error_detail's url-free line, and is left out when there is none. `stage` is the
+        # mux path's timing (run_ms, uptime_s, variant): numbers and a fixed word, never a url.
+        body = json.dumps({"error": msg, **({"detail": detail} if detail else {}), **(stage or {})}).encode()
         self.send_response(code)
         self.send_header("content-type", "application/json")
         self.send_header("content-length", str(len(body)))
@@ -1328,12 +1378,19 @@ class Handler(BaseHTTPRequestHandler):
 
         fd, out = tempfile.mkstemp(suffix=".mp4")
         os.close(fd)
+        # THE MUX'S OWN CLOCK. The Worker times the whole fetch; the gap between that and run_ms is
+        # boot, queueing and transfer, which is the split the 8-15 s cold muxes of 2026-11-24 needed.
+        info = {"variant": "page"}
+        run_started = time.monotonic()
+        def stage() -> dict:
+            return {"run_ms": int((time.monotonic() - run_started) * 1000), "uptime_s": _uptime_s(),
+                    "variant": info.get("variant", "page")}
         try:
             if isinstance(page, str) and page:
                 with _CookieJar(cookies) as jar:
                     _mux_page(page, out, jar)
             elif isinstance(video, str) and video:
-                _mux_tracks(video, req.get("audio") if isinstance(req.get("audio"), str) else None, out)
+                _mux_tracks(video, req.get("audio") if isinstance(req.get("audio"), str) else None, out, info)
             else:
                 return self._json_error(400, "need 'page' or 'video'")
 
@@ -1357,9 +1414,13 @@ class Handler(BaseHTTPRequestHandler):
             if _mux_result_verdict(out) == MP4_INCOMPLETE:
                 return self._json_error(502, "incomplete result")
 
+            st = stage()
             self.send_response(200)
             self.send_header("content-type", "video/mp4")
             self.send_header("content-length", str(size))
+            self.send_header("x-mux-run-ms", str(st["run_ms"]))
+            self.send_header("x-mux-uptime-s", str(st["uptime_s"]))
+            self.send_header("x-mux-variant", st["variant"])
             self.end_headers()
             with open(out, "rb") as f:
                 while True:
@@ -1380,7 +1441,7 @@ class Handler(BaseHTTPRequestHandler):
             # nor served. Either way it means "ffmpeg or yt-dlp exited non-zero", which includes OUR
             # ffmpeg refusing an input: every 2024-05..2025-11 Reddit video with audio landed here
             # until REDDIT_HLS_HOST above.
-            self._json_error(502, "mux failed", _error_detail(e.stderr))
+            self._json_error(502, "mux failed", _error_detail(e.stderr), stage())
         except Exception:
             self._json_error(500, "internal error")
         finally:

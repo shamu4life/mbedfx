@@ -344,6 +344,15 @@ export type Outcome2 =
    */
   | 'card_gave_up'
   /**
+   * ONE CONTAINER ATTEMPT, TIMED IN STAGES (2026-11-24) — written by countStage, never by count().
+   *
+   * Cold muxes ran 8-11 s on Reddit and 11-15 s on YouTube against a Discord fetch that gives up at
+   * about 10 s, and `mux_ok`'s single duration could not say where the time went. Outside the `mux_*`
+   * block on purpose: its doubles are not one duration, and joining that block would poison its
+   * published average (card_degraded's warning above). docs/METRICS.md has the column layout.
+   */
+  | 'stage_times'
+  /**
    * THE PROMISE FUNNEL (1.15.0) — the four rows that say, without a paste, whether a cold YouTube
    * paste is getting the native player. None is `mux_`-prefixed, for card_degraded's reason.
    *
@@ -635,6 +644,36 @@ export function countRelay(env: Env, outcome: 'relay_ok' | 'relay_fallback'): vo
 
 export function countMux(env: Env, platform: Platform | 'none', outcome: MuxOutcome, ms: number): void {
   env.AE?.writeDataPoint({ blobs: [platform, outcome, 'none'], doubles: [1, Math.max(0, Math.round(ms))] })
+}
+
+/** One container attempt's stages. Every field is a number or a fixed word: no url, no ref. */
+export interface MuxStage {
+  /** `tracks` (ffmpeg from urls) or `page` (yt-dlp), from the attempt the Worker sent. */
+  route: 'tracks' | 'page'
+  /** `ok` (bytes stored), `fail` (the container said no), `refused` (bytes not stored), `error` (no answer). */
+  result: 'ok' | 'fail' | 'refused' | 'error'
+  /** The container's x-mux-variant: `reuse`, `fallback`, `default`, `page`; `unknown` from an older image. */
+  variant: string
+  /** Worker wall clock for the resolver fetch, headers to last byte read. */
+  fetchMs: number
+  /** The container's own run time (x-mux-run-ms); -1 when the image does not send it. */
+  runMs: number
+  /** R2 write plus head, on `ok`/`refused`; 0 otherwise. */
+  r2Ms: number
+  /** Seconds since the container process started (x-mux-uptime-s); -1 when unknown. Small = cold boot. */
+  uptimeS: number
+}
+
+/**
+ * THE `stage_times` ROW. blobs: platform, 'stage_times', 'none', route, result, variant.
+ * doubles: 1, fetchMs, runMs, r2Ms, uptimeS. `fetchMs - runMs` is boot, queueing and transfer.
+ */
+export function countStage(env: Env, platform: Platform | 'none', s: MuxStage): void {
+  const n = (x: number) => (Number.isFinite(x) ? Math.round(x) : -1)
+  env.AE?.writeDataPoint({
+    blobs: [platform, 'stage_times', 'none', s.route, s.result, s.variant.slice(0, 16)],
+    doubles: [1, n(s.fetchMs), n(s.runMs), n(s.r2Ms), n(s.uptimeS)],
+  })
 }
 
 /**

@@ -204,6 +204,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Changed
 
+- **The first paste of a Bluesky or Reddit video starts its mux while the card renders.** Until now the
+  mux only started when Discord asked for the file, 2-3 s later, and a cold Reddit mux takes 8-11 s while
+  Discord stops waiting at about 10 s. Two Reddit links pasted on 2026-11-14 and -16 froze without a
+  player this way. Reddit's remux also reuses connections now instead of opening a new one for every
+  segment, and retries once the old way if that fails fast. A new `stage_times` row records where each
+  attempt's time goes (see `docs/METRICS.md`).
 - **A failed mux now says why, in the Worker's log.** YouTube muxes failed 232 times in a week against
   37 successes, and every failure read `mux failed` with nothing after it, because the container threw
   yt-dlp's and ffmpeg's error output away (it can contain signed URLs). The container now keeps the

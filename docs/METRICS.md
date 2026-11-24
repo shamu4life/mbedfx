@@ -277,6 +277,36 @@ SELECT quantileExactWeighted(0.5)(double2, _sample_interval) AS wait_p50_ms,
 FROM mbedfx_counters WHERE blob1 = 'yt' AND blob2 = 'video_ok' AND timestamp > NOW() - INTERVAL '24' HOUR
 ```
 
+### `stage_times`
+
+One row per container attempt, a failed one included, written since 2026-11-24 to find where a cold
+mux's seconds go. Cold Reddit muxes ran 8-11 s and YouTube ones about 11 s, and Discord stops waiting
+for the video about 10 s after it reads the card. It is outside the `mux_*` rows, so it never touches
+their average.
+
+| Column | Holds |
+|---|---|
+| `blob4` | `tracks` (ffmpeg from URLs) or `page` (yt-dlp) |
+| `blob5` | `ok`, `fail`, `refused` (bytes not stored) |
+| `blob6` | `reuse` or `fallback` (Reddit's connection reuse, and whether it had to retry without it), `default`, `page`, or `unknown` from an older container image |
+| `double2` | ms from the Worker's request to the container's answer: boot, queueing and the run |
+| `double3` | the container's own run time in ms, or `-1` when unknown |
+| `double4` | ms to stream the file into R2 and check it |
+| `double5` | seconds the container process had been up, or `-1`. A small number means a cold boot |
+
+`double2 - double3` is the time spent before the run started.
+
+```sql
+SELECT blob1 AS platform, blob4 AS route, blob6 AS variant,
+  SUM(_sample_interval) AS n,
+  SUM(double2 * _sample_interval) / SUM(_sample_interval) AS fetch_ms,
+  SUM(double3 * _sample_interval) / SUM(_sample_interval) AS run_ms,
+  SUM(double4 * _sample_interval) / SUM(_sample_interval) AS r2_ms
+FROM mbedfx_counters
+WHERE timestamp > NOW() - INTERVAL '1' DAY AND blob2 = 'stage_times' AND blob5 = 'ok'
+GROUP BY platform, route, variant
+```
+
 ### `card_gave_up`
 
 A render drew the poster because the mux alarm had already used every attempt on this video in the
