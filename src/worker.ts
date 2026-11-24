@@ -10,7 +10,7 @@ import { bytesIndex, byline, isSpoiler, mediaOf, mediaUrl, str, themeColor, usab
 import { clampText, statParts } from './render/text.ts'
 import { proxyableVideoUrl, serveDirectVideo } from './mediaproxy.ts'
 import { parseRefKey, refKey } from './refkey.ts'
-import { count, countWait, countMux, type Env, type GateReason, type MuxOutcome } from './analytics.ts'
+import { count, countWait, countMux, countStage, type Env, type GateReason, type MuxOutcome, type MuxStage } from './analytics.ts'
 import { MUX_GAVE_UP_NOTE, YT_PROMISE, gaveUpIsFresh, muxFailKey, promisable } from './muxpolicy.ts'
 import { runSmoke, smokeOutcome, SMOKE_CHECKS, SMOKE_CLIENT, type SmokeResult } from './smoke.ts'
 import { cronColo, healthSummary, readHealth, recordSmoke } from './health.ts'
@@ -2033,6 +2033,20 @@ async function muxErrorBody(res: Response): Promise<string> {
  * from before that function, or a future bug in it, still cannot put a signed googlevideo url in a
  * log line. "" for a body that is not JSON or has no detail.
  */
+/** The container's stage fields off a 502 body; `unknown`/-1 for an older image or a non-JSON body. */
+function stageOfError(body: string): Pick<MuxStage, 'variant' | 'runMs' | 'uptimeS'> {
+  try {
+    const j = JSON.parse(body) as { variant?: unknown; run_ms?: unknown; uptime_s?: unknown }
+    return {
+      variant: typeof j.variant === 'string' ? j.variant : 'unknown',
+      runMs: typeof j.run_ms === 'number' ? j.run_ms : -1,
+      uptimeS: typeof j.uptime_s === 'number' ? j.uptime_s : -1,
+    }
+  } catch {
+    return { variant: 'unknown', runMs: -1, uptimeS: -1 }
+  }
+}
+
 export function logDetail(body: string): string {
   try {
     const d = (JSON.parse(body) as { detail?: unknown }).detail
@@ -2088,15 +2102,34 @@ async function ensureMuxed(
   if (!attempts.length) attempts.push(from as Record<string, unknown>)
 
   let muxed: Response | null = null
+  /** The successful attempt's stages, finished below once the R2 write has been timed. */
+  let okStage: MuxStage | null = null
   for (let i = 0; i < attempts.length; i++) {
+    const route: MuxStage['route'] = typeof attempts[i].page === 'string' ? 'page' : 'tracks'
+    const t0 = Date.now()
     const attempt = await resolverStub(resolver, slotKey).fetch('http://media-resolver/resolve', {
       method: 'POST', body: JSON.stringify(attempts[i]), headers,
     })
-    if (attempt.ok && attempt.body) { muxed = attempt; break }
+    // THE CONTAINER ANSWERS ONLY AFTER ITS MUX FINISHED (container/server.py streams the file after the
+    // run), so time-to-headers is boot + queueing + run, and run_ms inside it is the run alone.
+    const fetchMs = Date.now() - t0
+    if (attempt.ok && attempt.body) {
+      muxed = attempt
+      okStage = {
+        route, result: 'ok', fetchMs, r2Ms: 0,
+        variant: attempt.headers.get('x-mux-variant') ?? 'unknown',
+        runMs: Number(attempt.headers.get('x-mux-run-ms') ?? -1),
+        uptimeS: Number(attempt.headers.get('x-mux-uptime-s') ?? -1),
+      }
+      break
+    }
     // A failed SHORTCUT is not a verdict on the video — the page attempt still has to speak. Only the
     // last failure is worth reporting, and the body of a discarded one has to be released. Reading it
     // to the end releases it exactly as cancel() did, and unlike cancel() it keeps the reason.
     const detail = await muxErrorBody(attempt)
+    // TIMED EVERY ATTEMPT, a discarded shortcut included: a slow failing tracks attempt is time the
+    // page attempt behind it never gets back, and that is exactly the kind of loss this row exists for.
+    countStage(env, site, { route, result: 'fail', fetchMs, r2Ms: 0, ...stageOfError(detail) })
     if (i === attempts.length - 1) {
       /**
        * COUNTED **AND** LOGGED, which is the change. The console line is server-side only and needs
@@ -2120,14 +2153,17 @@ async function ensureMuxed(
   // would not hold it in memory to save it (see MUX_BUFFER_MAX). Returning null degrades this view
   // to the cover still, which is the same honest answer a failed mux gives — but it must NOT be
   // counted as one, or `mux_gate` starts blaming YouTube for our own buffer ceiling.
+  const r2Started = Date.now()
   if (!(await putMuxed(cache, key, muxed, env))) {
     countMux(env, site, 'mux_refused', Date.now() - startedAt)
+    if (okStage) countStage(env, site, { ...okStage, result: 'refused', r2Ms: Date.now() - r2Started })
     return null
   }
   const stored = await cache.head(key)
   // COUNTED ON THE WAY OUT, not at the 200: `mux_ok` means the bytes are IN R2 and the next view can
   // play them, which is the claim anyone reading this counter actually cares about.
   countMux(env, site, stored ? 'mux_ok' : 'mux_refused', Date.now() - startedAt)
+  if (okStage) countStage(env, site, { ...okStage, result: stored ? 'ok' : 'refused', r2Ms: Date.now() - r2Started })
   return stored
 }
 
@@ -2541,7 +2577,25 @@ async function settleMux(
     if (!m.remux.page) {
       // ARM, DO NOT RACE. See the guard above: this is the whole of Bluesky's and Reddit's alarm
       // coverage, and it deliberately does not touch the returned entry.
-      ctx.waitUntil(scheduleMux(env, `mux/${refKey(post.ref)}/${i}`, refKey(post.ref), m.remux))
+      const key = `mux/${refKey(post.ref)}/${i}`
+      ctx.waitUntil(scheduleMux(env, key, refKey(post.ref), m.remux))
+      /**
+       * AND START THE MUX NOW, NOT WHEN DISCORD ASKS FOR THE FILE (2026-11-24). Until this, the only
+       * place a Bluesky or Reddit mux started was /_media's serveMuxed, so the clock began at the
+       * video fetch, 2-3 s after the head. A cold Reddit mux runs 8-11 s and Discord drops the video
+       * fetch at about 10 s from the head, so those seconds decided whether the first paste played;
+       * the owner's two failed Reddit pastes of 2026-11-14 and -16 were both cold muxes of 8-11 s.
+       *
+       * STILL NOT A RACE: nothing awaits it, the entry is returned untouched and the card is
+       * byte-identical. serveMuxed's muxOnce joins this same promise inside the isolate (muxInflight)
+       * or this isolate's claim from another one (muxClaimed), so it is one download, started
+       * earlier. Bounded by SPECULATIVE_MUX_CAP like every other dispatch made before a reader asks
+       * for bytes, and by the give-up mark inside muxClaimed. The Post already exists here, so the
+       * prewarm's reachability concern (renderPostRoute) does not apply.
+       */
+      if (muxInflight.size < SPECULATIVE_MUX_CAP) {
+        ctx.waitUntil(muxOnce(env, key, m.remux, refKey(post.ref), jarPlatform(post.ref)).catch(() => null))
+      }
       return m
     }
     /**

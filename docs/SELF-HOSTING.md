@@ -218,7 +218,7 @@ cover image (`src/worker.ts`).
 |---|---|
 | `200 video/mp4` | the result file, streamed. Where ffmpeg writes it (a `{video}` tracks mux, a yt-dlp merge, the HLS fixup) it is a remux, never a transcode: `-c copy -movflags +faststart`. A single-format `{page}` download is the site's own file written verbatim, so not necessarily faststart. An ISO-BMFF result is sent only once its top-level boxes all walk as whole and an mdat carries data, else `502 incomplete result`; that catches a file cut off inside a box, not a short input ffmpeg rewrote into whole boxes. WebM, FLV and MPEG-TS are passed through unjudged |
 | `200 application/json` | meta mode, a passthrough of `yt-dlp -J`; or probe mode, `{ok, video, ytdlp, ffmpeg, hlsExtensionPicky, muxCheck, ms, serving, clients, tiktok, hls}` |
-| `4xx/5xx application/json` | `{"error": "..."}`, plus a `detail` line on a `502` mux failed. `400` bad json / `need 'page' or 'video'` / invalid source; `401` unauthorized; `404` not found; `502` mux failed, meta failed, empty or oversized result, incomplete result; `504` mux timed out, meta timed out; `500` internal error |
+| `4xx/5xx application/json` | `{"error": "..."}`, plus a `detail` line and `run_ms`, `uptime_s`, `variant` on a `502` mux failed. A `200` mux carries the same three as `x-mux-run-ms`, `x-mux-uptime-s` and `x-mux-variant` headers. `400` bad json / `need 'page' or 'video'` / invalid source; `401` unauthorized; `404` not found; `502` mux failed, meta failed, empty or oversized result, incomplete result; `504` mux timed out, meta timed out; `500` internal error |
 | `GET /health` | `200 ok` |
 
 A failed mux's stderr can carry the source URL, so it is never passed through. The container keeps

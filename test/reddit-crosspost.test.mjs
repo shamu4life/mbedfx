@@ -248,7 +248,11 @@ async function twoRenders(ref, flaky, routes) {
   const env = {
     AE: { writeDataPoint() {} }, ASSETS: { async fetch() { return new Response('a') } }, TRANSLATE_GOOGLE: 'off',
     MEDIA_CACHE: { async head() { return null }, async get() { return null }, async put() {} },
-    MEDIA_RESOLVER: { getByName: () => ({ fetch: () => new Promise(() => {}) }) },
+    // ANSWERS AT ONCE, with the container's "not ready". It used to never answer, which was harmless while
+    // no Reddit render dispatched a mux; since 2026-11-24 settleMux starts a `{video}` mux at render time,
+    // and the helper below awaits every waitUntil, so a resolver that never answers hung all three tests.
+    // These tests are about crosspost loading, not the mux: a 503 keeps "no video stored" without the hang.
+    MEDIA_RESOLVER: { getByName: () => ({ fetch: async () => new Response('', { status: 503 }) }) },
   }
   const waits = []
   const ctx = { waitUntil(p) { waits.push(Promise.resolve(p).catch(() => {})) } }
