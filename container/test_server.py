@@ -33,6 +33,7 @@ import socket
 import struct
 import tempfile
 import unittest
+import urllib.error
 import urllib.request
 
 
@@ -679,9 +680,10 @@ class RedditHls(unittest.TestCase):
         """/_clients is how an operator tells a stale instance from a fix that failed, so the two keys
         must be there, and a probe that never answered must read as null, not as an ffmpeg without the
         check (which is what a stale image looks like)."""
-        real = (srv._probe_one, srv._probe_tiktok)
+        real = (srv._probe_one, srv._probe_tiktok, srv._probe_hls)
         srv._probe_one = lambda c: {"client": c, "gvs": "ok"}
         srv._probe_tiktok = lambda: {}
+        srv._probe_hls = lambda: {}
         try:
             for answer, want in (({"stdout": HLS_HELP_7_1_5}, True),
                                  ({"stdout": HLS_HELP_6_1_1}, False),
@@ -692,7 +694,7 @@ class RedditHls(unittest.TestCase):
                 self.assertIn("ffmpeg", out)
                 self.assertIs(out["hlsExtensionPicky"], want, answer)
         finally:
-            srv._probe_one, srv._probe_tiktok = real
+            srv._probe_one, srv._probe_tiktok, srv._probe_hls = real
 
     def test_the_marker_reports_the_ffmpeg_version_or_unknown(self):
         """/_clients carries this so an operator can tell a stale instance from a fix that failed."""
@@ -998,15 +1000,16 @@ class DoPostCompleteness(unittest.TestCase):
         """A pooled instance can keep an old image after a deploy reports done (worker.ts
         RESOLVER_GENERATION), and an old one would store short files again. The key's presence is how
         an operator tells the two apart from outside."""
-        real = (srv._probe_one, srv._probe_tiktok, srv._hls_picky_known)
+        real = (srv._probe_one, srv._probe_tiktok, srv._hls_picky_known, srv._probe_hls)
         srv._probe_one = lambda c: {"client": c, "gvs": "ok"}
         srv._probe_tiktok = lambda: {}
+        srv._probe_hls = lambda: {}
         srv._hls_picky_known = True
         srv.subprocess.run = lambda cmd, **kw: type("R", (), {"stdout": b"", "returncode": 0})()
         try:
             self.assertEqual(srv._probe_clients().get("muxCheck"), "boxes")
         finally:
-            srv._probe_one, srv._probe_tiktok, srv._hls_picky_known = real
+            srv._probe_one, srv._probe_tiktok, srv._hls_picky_known, srv._probe_hls = real
 
 
 class HandlerShape(unittest.TestCase):
@@ -1041,7 +1044,7 @@ class HandlerShape(unittest.TestCase):
     def test_probe_helpers_are_module_level_and_not_swallowed_by_the_class(self):
         # The mirror of the above, and the half that localises the failure: if these ever became
         # attributes of Handler, the class body has eaten them again.
-        for name in ("_probe_one", "_probe_clients", "_probe_error", "_probe_tiktok",
+        for name in ("_probe_one", "_probe_clients", "_probe_error", "_probe_tiktok", "_probe_hls",
                      "_ffmpeg_has_extension_picky", "_ffmpeg_version", "_input_opts",
                      "_mux_result_verdict"):
             self.assertTrue(callable(getattr(srv, name, None)), f"{name} must be module level")
@@ -1054,6 +1057,128 @@ class HandlerShape(unittest.TestCase):
         self.assertTrue(srv.PROBE_VIDEO)
         self.assertIsInstance(srv.PROBE_CLIENTS, tuple)
         self.assertIn("web_embedded", srv.PROBE_CLIENTS)
+        self.assertIsInstance(srv.PROBE_HLS_VIDEO, str)
+        self.assertTrue(srv.PROBE_HLS_VIDEO)
+
+
+class HlsProbe(unittest.TestCase):
+    """/_clients' HLS row: the path the mux takes when YouTube offers our clients nothing but m3u8.
+    yt-dlp and the network are stubbed; what is asserted is what the row says about each answer."""
+
+    PLAYLIST = "https://manifest.googlevideo.com/api/manifest/hls_playlist/expire/1/sig/SECRET/index.m3u8"
+    SEGMENT = "https://rr1---sn-x.googlevideo.com/videoplayback/sq/0/sig/SECRET/seg.ts"
+
+    def setUp(self):
+        self._run = srv.subprocess.run
+        self._open = srv.urllib.request.urlopen
+        self._resolve = srv.socket.getaddrinfo
+        srv.socket.getaddrinfo = lambda host, port, **kw: [
+            (socket.AF_INET, socket.SOCK_STREAM, socket.IPPROTO_TCP, "", ("142.250.0.1", port))
+        ]
+        self.cmds, self.reqs = [], []
+
+    def tearDown(self):
+        srv.subprocess.run = self._run
+        srv.urllib.request.urlopen = self._open
+        srv.socket.getaddrinfo = self._resolve
+
+    def _ytdlp(self, info=None, returncode=0, stderr=b""):
+        def run(cmd, **kw):
+            self.cmds.append(cmd)
+            return type("R", (), {"stdout": json.dumps(info or {}).encode(), "stderr": stderr,
+                                  "returncode": returncode})()
+        srv.subprocess.run = run
+
+    def _net(self, answers):
+        """answers: one per request, in order — bytes for a 200 body, or an int for an HTTP error."""
+        it = iter(answers)
+        def urlopen(req, timeout=None):
+            self.reqs.append(req)
+            a = next(it)
+            if isinstance(a, int):
+                raise urllib.error.HTTPError(req.full_url, a, "x", {}, None)
+            return io.BytesIO(a)
+        srv.urllib.request.urlopen = urlopen
+
+    def _hls_info(self, protocol="m3u8_native"):
+        return {"format_id": "95-21", "formats": [{}] * 3, "protocol": protocol, "url": self.PLAYLIST,
+                "http_headers": {"Referer": "https://www.youtube.com/", "Range": "bytes=9-9"}}
+
+    def test_a_working_path_reports_playlist_segment_and_bytes_and_publishes_no_url(self):
+        self._ytdlp(self._hls_info())
+        self._net([f"#EXTM3U\n#EXTINF:5,\n{self.SEGMENT}\n".encode(), b"\x00" * 1000])
+        row = srv._probe_hls()
+        self.assertEqual((row["extracted"], row["picked"], row["protocols"]), (True, "95-21", ["m3u8_native"]))
+        self.assertEqual((row["playlist"], row["segment"], row["bytes"]), ("ok", "ok", 1000))
+        self.assertEqual(row["host"], "manifest.googlevideo.com")
+        self.assertNotIn("SECRET", json.dumps(row), "signed urls never reach the HTTP response")
+        cmd = self.cmds[0]
+        self.assertIn(f"youtube:player_client={srv.YT_PLAYER_CLIENTS}", cmd, "the mux's own clients")
+        self.assertEqual(cmd[cmd.index("-f") + 1], srv.YT_FORMAT_SELECTOR, "and the mux's own selector")
+        self.assertEqual(self.reqs[0].get_header("Referer"), "https://www.youtube.com/", "yt-dlp's headers are sent")
+        self.assertIsNone(self.reqs[0].get_header("Range"), "an upstream Range never dictates ours")
+        self.assertEqual(self.reqs[1].get_header("Range"), f"bytes=0-{srv.PROBE_RANGE}")
+        self.assertEqual(self.reqs[1].full_url, self.SEGMENT)
+
+    def test_a_relative_segment_is_resolved_against_the_playlist(self):
+        self._ytdlp(self._hls_info())
+        self._net([b"#EXTM3U\n#EXTINF:5,\nseg0.ts\n", b"x"])
+        srv._probe_hls()
+        self.assertEqual(self.reqs[1].full_url, self.PLAYLIST.rsplit("/", 1)[0] + "/seg0.ts")
+
+    def test_a_refused_playlist_and_a_refused_segment_are_answers_not_errors(self):
+        self._ytdlp(self._hls_info())
+        self._net([403])
+        self.assertEqual(srv._probe_hls()["playlist"], "http-403")
+        self._net([f"#EXTM3U\n{self.SEGMENT}\n".encode(), 403])
+        row = srv._probe_hls()
+        self.assertEqual((row["playlist"], row["segment"], row["bytes"]), ("ok", "http-403", 0))
+
+    def test_a_200_that_is_not_a_playlist_is_a_decoy(self):
+        self._ytdlp(self._hls_info())
+        self._net([b"<html>sign in</html>"])
+        self.assertEqual(srv._probe_hls()["playlist"], "not-a-playlist")
+
+    def test_a_video_that_is_not_on_the_hls_path_says_so(self):
+        self._ytdlp(self._hls_info(protocol="https"))
+        self._net([])
+        row = srv._probe_hls()
+        self.assertEqual((row["playlist"], row["protocols"]), ("not-hls", ["https"]))
+        self.assertEqual(self.reqs, [], "nothing is fetched")
+
+    def test_split_tracks_find_the_m3u8_one(self):
+        info = {"format_id": "136+140", "requested_formats": [
+            {"protocol": "https", "url": "https://rr1.googlevideo.com/v"},
+            dict(self._hls_info(), protocol="m3u8_native")]}
+        self._ytdlp(info)
+        self._net([b"#EXTM3U\nseg.ts\n", b"x"])
+        row = srv._probe_hls()
+        self.assertEqual(row["protocols"], ["https", "m3u8_native"])
+        self.assertEqual(self.reqs[0].full_url, self.PLAYLIST)
+
+    def test_an_extraction_failure_is_one_short_line_and_never_raises(self):
+        self._ytdlp(returncode=1, stderr=b"WARNING: x\nERROR: [youtube] zp8_bKhhnlw: Video unavailable\n")
+        row = srv._probe_hls()
+        self.assertEqual(row["extracted"], False)
+        self.assertTrue(row["error"].startswith("ERROR: [youtube]"))
+        def boom(cmd, **kw):
+            raise srv.subprocess.TimeoutExpired(cmd, 1)
+        srv.subprocess.run = boom
+        self.assertEqual(srv._probe_hls()["error"], "timeout")
+
+    def test_clients_carries_the_row_last(self):
+        real = (srv._probe_one, srv._probe_tiktok, srv._probe_hls)
+        order = []
+        srv._probe_one = lambda c: order.append(c) or {"client": c, "gvs": "ok"}
+        srv._probe_tiktok = lambda: order.append("tiktok") or {}
+        srv._probe_hls = lambda: order.append("hls") or {"playlist": "ok"}
+        srv.subprocess.run = lambda cmd, **kw: type("R", (), {"stdout": b"", "returncode": 0})()
+        try:
+            out = srv._probe_clients()
+        finally:
+            srv._probe_one, srv._probe_tiktok, srv._probe_hls = real
+        self.assertEqual(out["hls"], {"playlist": "ok"})
+        self.assertEqual(order[-1], "hls", "a new row must never delay or fail the old ones")
 
 
 if __name__ == "__main__":

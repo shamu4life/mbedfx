@@ -84,6 +84,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- **`/_clients` now tests YouTube's HLS path too.** Some videos give our player clients nothing but
+  HLS playlists, and the existing rows only test a direct download of "Me at the zoo", so they stayed
+  green while `zp8_bKhhnlw` failed every mux. The new `hls` row runs the mux's own clients and
+  format selector on that video, then fetches the playlist and its first segment from the container's
+  network. See `container/README.md`.
+
 - **A twice-weekly health check that opens an issue when something breaks.** The half-hourly smoke
   cron (`src/smoke.ts`) has counted its verdicts since 2026-08-12 and told nobody: when the counters
   were finally read on 2026-10-14, TikTok had failed on almost every tick since 2026-10-06 and
