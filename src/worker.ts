@@ -28,6 +28,7 @@ import { AWEME_PLAY, normalizeTikTok, tiktokGate, tiktokRefFrom, videoDetailScop
 import {
   fetchInstagram, fetchInstagramAudienceGate, fetchInstagramFullPage, fetchInstagramGraphQLMedia, fetchInstagramUserFeed,
 } from './platforms/instagram/fetch.ts'
+import { probeInstagramGraphQL } from './platforms/instagram/probe.ts'
 import {
   instagramAgeGate, instagramAudienceGate, instagramCopyrightBlocked, instagramFullPageCard, instagramGraphQLCard,
   instagramPrivateGate, normalizeInstagram, reelLacksVideo,
@@ -6070,6 +6071,22 @@ async function serve(req: Request, env: Env, ctx: ExecutionContext, d: Deps): Pr
       )
     }
   }
+  /**
+   * `/_igprobe` — WHICH INSTAGRAM GRAPHQL QUERY ANSWERS FROM THIS EGRESS. See src/platforms/instagram/probe.ts
+   * for why (graphql_recovered went to zero on 2026-11-19) and what it reports. No input, no urls in the
+   * answer, and cached for five minutes so a loop cannot spend Instagram's patience with this egress: the
+   * real card path shares it.
+   */
+  if (url.pathname === '/_igprobe') {
+    const key = 'https://mbedfx.internal/_igprobe'
+    const hit = await d.cache.match(key).catch(() => undefined)
+    if (hit) return hit
+    const body = JSON.stringify(await probeInstagramGraphQL())
+    const headers = { 'content-type': 'application/json', 'cache-control': 'public, max-age=300' }
+    ctx.waitUntil(d.cache.put(key, new Response(body, { headers })).catch(() => undefined))
+    return new Response(body, { headers })
+  }
+
   if (url.pathname === '/_clients') {
     const resolver = env.MEDIA_RESOLVER
     if (!resolver) {

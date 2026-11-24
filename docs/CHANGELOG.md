@@ -84,6 +84,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- **`/_igprobe` asks Instagram's two GraphQL queries from the Worker and reports what each one got.**
+  The fallback that rescued 43 to 70 Instagram cards a day stopped working on 2026-11-19, and
+  videos started showing as stills the same day. yt-dlp has since moved to a different query. From a
+  home connection both answer "Rate limit exceeded" or a login page, which says nothing about
+  Cloudflare's network, so this runs them from the Worker. It takes no input, publishes no URL or
+  token, and caches its answer for five minutes.
 - **`/_clients` now tests YouTube's HLS path too.** Some videos give our player clients nothing but
   HLS playlists, and the existing rows only test a direct download of "Me at the zoo", so they stayed
   green while `zp8_bKhhnlw` failed every mux. The new `hls` row runs the mux's own clients and
