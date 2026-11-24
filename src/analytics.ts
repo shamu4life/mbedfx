@@ -334,6 +334,16 @@ export type Outcome2 =
    */
   | 'card_degraded'
   /**
+   * THE CARD DREW A VIDEO THE ALARM GAVE UP ON (muxpolicy.ts MUX_GIVE_UP_WINDOW_MS) — per render, real
+   * client, the same shape as `card_degraded` and outside the `mux_*` block for the same reason.
+   *
+   * IT IS THE SAME FAILURE card_degraded COUNTS, from the reader's side: a still where a player should
+   * be. Before the give-up mark existed these renders were `card_degraded` rows; now settleMux answers
+   * them without waiting, so they would vanish from that ratio and YouTube's first-paste failure rate
+   * would improve on paper with nothing fixed. Read the two together: (card_degraded + card_gave_up) / ok.
+   */
+  | 'card_gave_up'
+  /**
    * THE PROMISE FUNNEL (1.15.0) — the four rows that say, without a paste, whether a cold YouTube
    * paste is getting the native player. None is `mux_`-prefixed, for card_degraded's reason.
    *

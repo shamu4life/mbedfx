@@ -277,6 +277,23 @@ SELECT quantileExactWeighted(0.5)(double2, _sample_interval) AS wait_p50_ms,
 FROM mbedfx_counters WHERE blob1 = 'yt' AND blob2 = 'video_ok' AND timestamp > NOW() - INTERVAL '24' HOUR
 ```
 
+### `card_gave_up`
+
+A render drew the poster because the mux alarm had already used every attempt on this video in the
+last six hours (`MUX_GIVE_UP_WINDOW_MS` in `src/muxpolicy.ts`). Per render, with a real client in
+`blob3` and `0` in `double2`, the same shape as `card_degraded`. These renders used to be
+`card_degraded` rows, so read the two together. On their own, `card_degraded / ok` would improve
+without anything getting better:
+
+```sql
+SELECT blob1 AS platform,
+  SUM(IF(blob2 IN ('card_degraded', 'card_gave_up'), _sample_interval, 0)) AS still,
+  SUM(IF(blob2 = 'ok', _sample_interval, 0)) AS ok
+FROM mbedfx_counters
+WHERE timestamp > NOW() - INTERVAL '7' DAY AND blob3 = 'discord'
+GROUP BY platform
+```
+
 ### Reading `card_degraded`
 
 **`mux_ok` can be high while every card is still a picture.** The two answer different questions, and

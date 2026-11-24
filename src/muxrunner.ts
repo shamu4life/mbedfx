@@ -1,7 +1,7 @@
 import { DurableObject } from 'cloudflare:workers'
 import type { Env } from './analytics.ts'
 import type { MuxJob } from './types.ts'
-import { runMuxJob } from './worker.ts'
+import { clearMuxGiveUp, recordMuxGiveUp, runMuxJob } from './worker.ts'
 import { claimIsLive, firstMuxDelayMs, nextMuxDelayMs } from './muxpolicy.ts'
 
 /**
@@ -90,17 +90,28 @@ export class MuxRunner extends DurableObject<Env> {
     }
     const attempt = (await this.ctx.storage.get<number>(ATTEMPT)) ?? 0
     let done = false
+    let threw = false
     try {
       done = await runMuxJob(this.env, job)
     } catch {
       // A throw here is our own bug or a binding that vanished; either way it is not evidence about
-      // the video, and it is handled exactly like a failed mux — see the docstring.
+      // the video, and it is handled exactly like a failed mux — see the docstring. It is remembered
+      // only so a final throw leaves no give-up mark (see recordMuxGiveUp).
       done = false
+      threw = true
     }
     const next = nextMuxDelayMs(attempt)
     if (done || next === null) {
       // FINISHED, or out of attempts. Either way this object has nothing left to remember, and a DO
       // that keeps storage keeps costing — `deleteAll` is what lets it be collected.
+      //
+      // OUT OF ATTEMPTS LEAVES A MARK IN R2, not here (muxpolicy.ts muxFailKey). Forgetting the
+      // verdict along with the job is what let the next render arm a fresh one and report "still
+      // muxing" for as long as anyone kept pasting. R2 rather than this object's storage so the
+      // render path can read it beside the bytes it already heads, with no RPC. A success clears it.
+      // Which give-ups leave no mark is decided in recordMuxGiveUp, where the tests can reach it.
+      if (done) await clearMuxGiveUp(this.env, job.key)
+      else await recordMuxGiveUp(this.env, job, threw)
       await this.ctx.storage.deleteAll()
       return
     }

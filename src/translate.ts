@@ -2,6 +2,7 @@ import type { Post } from './types.ts'
 import { IG_AGE_NOTE, IG_NO_VIDEO_NOTE } from './platforms/instagram/normalize.ts'
 import { AGE_NOTE, LENGTH_NOTE, LIVE_NOTE } from './platforms/youtube/normalize.ts'
 import { PEERTUBE_LIVE_NOTE } from './platforms/peertube/normalize.ts'
+import { MUX_GAVE_UP_NOTE } from './muxpolicy.ts'
 
 /**
  * TRANSLATION — Workers AI, opt-in, and never load-bearing.
@@ -96,7 +97,7 @@ const NOISE = /https?:\/\/\S+|[@#][\w.]+/g
  * fails on one left out, because a note missing here fails silently: the card renders, untranslated, with
  * no error. The two shape-matched lines are pinned by tests that run their normalizers.
  */
-export const CARD_NOTES: readonly string[] = [IG_AGE_NOTE, IG_NO_VIDEO_NOTE, AGE_NOTE, LENGTH_NOTE, LIVE_NOTE, PEERTUBE_LIVE_NOTE]
+export const CARD_NOTES: readonly string[] = [IG_AGE_NOTE, IG_NO_VIDEO_NOTE, AGE_NOTE, LENGTH_NOTE, LIVE_NOTE, PEERTUBE_LIVE_NOTE, MUX_GAVE_UP_NOTE]
 /** Leading lines of ours whose wording carries a value: mastoapi's and misskey's boost line. */
 const NOTE_LEADS: readonly RegExp[] = [/^🔁 boosted by @\S+$/u]
 /** Trailing lines of ours: imgur's bodyOf overflow count. */
