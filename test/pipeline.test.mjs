@@ -2567,13 +2567,16 @@ test('A COPYRIGHT-BLOCKED REEL FALLS BACK TO THE ACCOUNT FEED WHEN THE SHORTCODE
   } finally {
     globalThis.fetch = real
   }
-  assert.equal(urls.length, 3, `blocked reel = embed + graphql + feed, got ${JSON.stringify(urls)}`)
+  // FOUR since 2026-11-24: the logged-out query loads the homepage for its session, gets none from this
+  // stub (no lsd token in the fixture), and declines without asking the query itself.
+  assert.equal(urls.length, 4, `blocked reel = embed + graphql + homepage + feed, got ${JSON.stringify(urls)}`)
   assert.ok(urls[0].includes('/embed/captioned/'), 'the embed is still FIRST and still primary')
   assert.ok(urls[1].includes('/graphql/query/'), 'the cheap shortcode query is tried before the walk')
+  assert.equal(urls[2], 'https://www.instagram.com/', 'then the logged-out query\'s homepage session')
   // The handle comes off the PARSED payload, not the ref — pinned so a refactor that passes the
   // shortcode here (which the feed endpoint would happily 200 on, with the wrong account's posts)
   // is caught rather than silently serving a stranger's video.
-  assert.ok(urls[2].includes('/api/v1/feed/user/fixture_user_10/'), `the feed must be scoped to the OWNER, got ${urls[2]}`)
+  assert.ok(urls[3].includes('/api/v1/feed/user/fixture_user_10/'), `the feed must be scoped to the OWNER, got ${urls[3]}`)
 })
 
 test('A PUBLIC POST WHOSE EMBED FAILED IS NOT PRIVATE — the false 🔒, end to end', async () => {
