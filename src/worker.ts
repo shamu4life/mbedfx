@@ -6,7 +6,7 @@ import { render } from './render/index.ts'
 import { redirect } from './render/fail.ts'
 import { toMastodonStatus, toOEmbed } from './render/mastodon.ts'
 import { pickMedia, pickMediaEntry } from './media.ts'
-import { bytesIndex, byline, isSpoiler, mediaOf, mediaUrl, str, themeColor, usable } from './render/embed.ts'
+import { bytesIndex, byline, isSpoiler, knownDate, mediaOf, mediaUrl, str, themeColor, usable } from './render/embed.ts'
 import { clampText, statParts } from './render/text.ts'
 import { proxyableVideoUrl, serveDirectVideo } from './mediaproxy.ts'
 import { PIN_ID, parseRefKey, refKey } from './refkey.ts'
@@ -3956,25 +3956,27 @@ const META_WAIT_API_MS = 8000
  * exactly this reason. The claim still holds for the meta extract, which costs seconds, not minutes.
  *
  * THE COST, STATED EXACTLY, because the imprecise version of it is flattering. A first paste of a cold
- * video shows the card with its THUMBNAIL instead of an inline player, without the counts, and dated
- * THE EPOCH rather than undated -- createdAt is a Date and the Mastodon document always emits one, so
- * an unknown date renders as 1 January 1970. Every later view has the player, the counts and the real
- * date, from the records the abandoned calls wrote under ctx.waitUntil.
+ * video shows the card with its THUMBNAIL instead of an inline player, without the counts, and with
+ * no date. Until 2026-11-25 that last part read "dated THE EPOCH rather than undated": the Mastodon
+ * document always emitted a `created_at`, so an unknown date rendered as 1 January 1970. It now
+ * leaves the field out (toMastodonStatus has the measurement). Every later view has the player, the
+ * counts and the real date, from the records the abandoned calls wrote under ctx.waitUntil.
  *
- * That 1970 is the same sentinel Facebook cards already ship to Discord in production for every post
- * (facebook/normalize.ts argues it: an absent date beats a guessed one), so it is not a new shape --
- * but it IS a visible wrong-looking date, and CLAUDE.md records the YouTube epoch as a reported bug
- * once already. It is accepted here only because the alternative it replaces is NO CARD AT ALL. The
+ * That 1970 was the same sentinel Facebook cards shipped to Discord in production for every undated
+ * post (facebook/normalize.ts argues it: an absent date beats a guessed one), so it was not a new
+ * shape -- but it WAS a visible wrong-looking date, and CLAUDE.md records the YouTube epoch as a
+ * reported bug once already. It was accepted here only because the alternative it replaced is NO CARD AT ALL. The
  * clause that used to follow — "and because it lasts exactly one view" — IS FALSE, corrected
  * 2026-08-29: Discord stores the embed inside the message and never re-unfurls it
  * (discord-api-docs#1663, already cited by fetchretry.ts, twitter/fetch.ts, youtube/innertube.ts and
  * analytics.ts in this same tree), so the first paste is the only paste and a wrong date is frozen in
  * that message forever. That is the second claim this cut rested on, and it cuts both ways: it is why
  * these budgets are worth raising at all, and why losing the bet is permanent.
- * Suppressing the field when the date is unknown is the real fix
- * and is NOT done here: Discord is the consumer, a Mastodon document missing a required field may be
- * rejected outright, and rejecting it reintroduces precisely the bug this constant exists to remove.
- * That change wants its own measurement against a live unfurl.
+ * Suppressing the field when the date is unknown was the real fix, and it was held back for one
+ * reason: Discord is the consumer, a Mastodon document missing a required field might be rejected
+ * outright, and rejecting it would reintroduce precisely the bug this constant exists to remove. It
+ * got its live measurement on 2026-11-25 (Discord drew the full card without the field; see
+ * toMastodonStatus), and the renderer now leaves the field out for every platform. Nothing here changed.
  *
  * NOT APPLIED TO /_api/v1 OR /_card. Those are read by the converter page with a human watching a
  * spinner, and they are the surface that WARMS a link deliberately; shortening them would make the
@@ -5146,9 +5148,9 @@ async function describeTarget(
   /**
    * THE META WARM, AND IT IS NOT OPTIONAL ON EITHER SURFACE. The record is filled by the ACTIVITY
    * route — that is, by Discord unfurling the link — so it is cold for exactly the links somebody is
-   * about to ask about and has not sent yet. Skipping it here reports createdAt 1970, no duration, no
-   * counts and no age note on every fresh YouTube link, which is the bug that was reported as "it
-   * ALWAYS says no upload date".
+   * about to ask about and has not sent yet. Skipping it here reports no date (createdAt 1970 then,
+   * `null` since 2026-11-25), no duration, no counts and no age note on every fresh YouTube link, which
+   * is the bug that was reported as "it ALWAYS says no upload date".
    *
    * It adds no container call: the caller is about to paste this into Discord, which dispatches the
    * identical `yt-dlp -J`. It moves the one that was already coming a few seconds earlier, behind
@@ -5318,16 +5320,17 @@ function toApiPost(post: Post, origin: string) {
     platform: post.ref.p,
     canonical: post.canonical,
     /**
-     * THE EPOCH IS NOT A DATE, IT IS A HOLE, and this is the one place the API deliberately answers
-     * differently from the card. A Post with no known upload date carries `new Date(0)`, and /_card
-     * serialises that as "1970-01-01T00:00:00.000Z" because the page draws a "⚠ no upload date" note
-     * beside it and a reader can see what happened. An API consumer sees a plausible timestamp and
-     * sorts by it. So `null` — the same refusal to fill a hole with something that looks like an
-     * answer that the cards make in words.
+     * THE EPOCH IS NOT A DATE, IT IS A HOLE. A Post with no known upload date carries `new Date(0)`,
+     * and an API consumer handed "1970-01-01T00:00:00.000Z" sees a plausible timestamp and sorts by
+     * it. So `null`, the same refusal to fill a hole with something that looks like an answer.
+     *
+     * NO LONGER THE ONE SURFACE THAT REFUSES. Until 2026-11-25 /_card sent the epoch and the
+     * activity document printed it, and this was the deliberate exception. Since the paste recorded
+     * at toMastodonStatus, the document leaves the field out and /_card sends `null` too, all three
+     * through knownDate, so they can't disagree about which dates are unknown. The test is the
+     * same one this line used before, `instanceof Date` and not the epoch, plus a finite check.
      */
-    createdAt: post.createdAt instanceof Date && post.createdAt.getTime() !== 0
-      ? post.createdAt.toISOString()
-      : null,
+    createdAt: knownDate(post)?.toISOString() ?? null,
     title: str(post.title) || null,
     /**
      * `str()` ON THE TEXT TOO, and it was missing while `title` right beside it had it — which is what
@@ -6995,7 +6998,15 @@ async function serve(req: Request, env: Env, ctx: ExecutionContext, d: Deps): Pr
         sensitive: !!post.sensitive,
         // The page blurs the preview's media for this, as Discord is asked to blur the card's.
         spoiler: isSpoiler(post),
-        createdAt: post.createdAt instanceof Date ? post.createdAt.toISOString() : null,
+        /**
+         * `null` FOR AN UNKNOWN DATE, because that is what the card now shows: nothing. The page prints
+         * what we send (public/index.html footLine), and it used to get the epoch and print
+         * "12/31/1969 ⚠ no upload date" under a card Discord dated 12/31/69. Since 2026-11-25 the
+         * activity document leaves the date out (toMastodonStatus has the measurement) and Discord's
+         * footer reads just "mbedfx", which is exactly what footLine prints for `null`. Sending the
+         * epoch here again would preview a date the real card no longer shows.
+         */
+        createdAt: knownDate(post)?.toISOString() ?? null,
         media: own.map(({ m, i }) => ({
           // A 'gif' is drawn as an IMAGE, since 2026-10-05: the page draws an image from `url` and a video
           // from its poster, a GIF has no poster, and an <img> animates it, as Discord is expected to loop the

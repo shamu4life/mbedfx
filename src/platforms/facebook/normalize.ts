@@ -156,7 +156,8 @@ export function normalizeFacebook(meta: FacebookMeta | null, ref: PostRef): Post
     text: caption(meta, who),
     // Upstream's timestamp, RANGE-CHECKED by the one shared rule rather than by a bare isFinite guard —
     // see platforms/uploaddate.ts for the Invalid-Date-throws-on-toISOString defect that guard admits.
-    // 0 keeps the old epoch fallback, which the activity JSON renders as 1970 exactly as it did before.
+    // 0 keeps the old epoch fallback. The renderers read the epoch as "no date" (render/embed.ts knownDate):
+    // since 2026-11-25 the activity JSON leaves the field out rather than printing 1970.
     createdAt: uploadDateOrEpoch(meta.timestamp),
     /**
      * Remux the watch/reel/share PAGE (yt-dlp resolves it, including share redirects). w/h are the

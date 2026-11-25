@@ -174,8 +174,8 @@ place an absent key carries meaning. With nothing to report: `title` is `null`, 
 ### `createdAt`
 
 `null` where a platform publishes no post date, and until a second, slower call brings one. A Post
-without one holds `new Date(0)`, which `/_card` draws as `"1970-01-01T00:00:00.000Z"` beside a
-`⚠ no upload date` note and `toApiPost` sends as `null`. Sort a `null` as unknown, never as old
+without one holds `new Date(0)` internally. `toApiPost` and `/_card` both send that as `null`, and
+the Discord card leaves the date out. Sort a `null` as unknown, never as old
 (`test/api.test.mjs:142`).
 
 ### `counts`

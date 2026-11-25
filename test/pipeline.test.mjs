@@ -2289,6 +2289,86 @@ test('WAIT GUARDS: humans go to YouTube, n past 60 is refused, malformed paths f
   }
 })
 
+/**
+ * AN UNDATED POST'S CARD, END TO END (issue #49). A Facebook post read from the og: page has no date,
+ * and the normalizer writes `new Date(0)`. Until 2026-11-25 the activity document printed it and
+ * Discord's footer said 12/31/69. These run the real route for one post twice, dated and undated,
+ * through every surface Discord or Telegram reads: the head, the document on both status paths, and
+ * the oEmbed callback. Each test mints its own post id; within a test the two renders run one after
+ * the other with their own caches, so neither can answer for the other.
+ */
+const fbDatePost = (ref, page, createdAt) => ({
+  ref,
+  canonical: `https://www.facebook.com/${page}/posts/${ref.id.split('_').pop()}/`,
+  author: { name: 'Example Page', url: `https://www.facebook.com/${page}/` },
+  text: 'a caption on a post Facebook printed no date for',
+  createdAt,
+  media: [{ kind: 'image', url: 'https://scontent.xx.fbcdn.net/v/t39.30808-6/example.jpg', w: 0, h: 0 }],
+  counts: {}, sensitive: false,
+})
+const fbSurfaces = async (page, path, createdAt) => {
+  const deps = { cache: fakeCache(), fetchPost: async ref => fbDatePost(ref, page, createdAt) }
+  const get = async (p, ua = DISCORD) => {
+    const res = await handle(req(p, ua), fakeEnv(), ctx, deps)
+    assert.equal(res.status, 200, p)
+    return res.text()
+  }
+  const head = await get(path)
+  const sid = /activity\+json" href="[^"]*\/statuses\/(1\d+)"/.exec(head)[1]
+  return {
+    head,
+    doc: await get(`/api/v1/statuses/${sid}`),
+    users: await get(`/users/${page}/statuses/${sid}`),
+    oembed: await get(`/_oembed/${sid}`),
+    telegram: await get(path, 'TelegramBot (like TwitterBot)'),
+  }
+}
+
+test('AN UNDATED POST\'S DOCUMENT HAS NO created_at, on both status paths, and is the dated one minus exactly those two keys', async () => {
+  // The paste that settled this is recorded at toMastodonStatus and in mastodon.test.mjs. What this
+  // adds is the whole route: nothing between the renderer and the wire puts a date back.
+  const page = 'UndatedDocPage'
+  const path = `/${page}/posts/1000000000000041`
+  const undated = await fbSurfaces(page, path, new Date(0))
+  const dated = await fbSurfaces(page, path, new Date('2026-11-20T15:04:05.000Z'))
+
+  const u = JSON.parse(undated.doc)
+  assert.ok(!('created_at' in u), 'the status carries no created_at')
+  assert.ok(!('created_at' in u.account), 'and neither does its account')
+  assert.ok(!undated.doc.includes('1970'), 'the epoch is nowhere in the document')
+  assert.equal(u.media_attachments.length, 1, 'the picture Discord drew in the measured paste is still there')
+  assert.equal(undated.users, undated.doc, 'the advertised /users/ path answers the same document')
+
+  // A known date is unchanged: both fields, the same instant.
+  const d = JSON.parse(dated.doc)
+  assert.equal(d.created_at, '2026-11-20T15:04:05.000Z')
+  assert.equal(d.account.created_at, '2026-11-20T15:04:05.000Z')
+  // The undated document is the dated one with the two keys deleted and nothing else changed, as
+  // serialised bytes: the same shape as the variant Discord was shown.
+  delete d.created_at
+  delete d.account.created_at
+  assert.equal(undated.doc, JSON.stringify(d))
+})
+
+test('THE HEAD AND THE oEMBED ARE THE SAME BYTES WITH OR WITHOUT A DATE, because neither ever carried one', async () => {
+  /**
+   * MEASURED BEFORE THE FIX, rather than fixed on suspicion: the OpenGraph head (Discord's and
+   * Telegram's) and the oEmbed answer print no date of any kind, so the 1970 lived in the activity
+   * document alone, and that is the only place the fix touches. If a date-bearing tag is ever added to
+   * a head (article:published_time, say), this fails, and the new tag needs the same knownDate check
+   * the document has.
+   */
+  const page = 'UndatedHeadPage'
+  const path = `/${page}/posts/1000000000000051`
+  const undated = await fbSurfaces(page, path, new Date(0))
+  const dated = await fbSurfaces(page, path, new Date('2026-11-20T15:04:05.000Z'))
+  for (const k of ['head', 'oembed', 'telegram']) {
+    assert.equal(undated[k], dated[k], `${k}: the date changes nothing here`)
+    assert.ok(!undated[k].includes('1970'), `${k}: no epoch`)
+    assert.ok(!dated[k].includes('2026-11-20'), `${k}: and no date at all, so there was nothing to fix`)
+  }
+})
+
 test('A SLIDESHOW IS UNTOUCHED — one hop already, and it must cost no extra fetch', async () => {
   // MUST NOT BREAK. Slideshows are the arm that already renders the activity card correctly, so
   // the fix must be invisible to them: their images are not aweme urls and nothing may probe.

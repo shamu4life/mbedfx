@@ -16,16 +16,6 @@ All notable changes to mbedfx are documented here. The format follows
   Bluesky, Reddit, Mastodon and YouTube posts drew the same card through it as on mbedfx.app. Twitter's
   lacked its repost count. Later that day `docker compose` built both images on the same host and ran
   them. The cards matched again, and the adapter image held no `.env`. See `docs/SELF-HOSTING.md`.
-- **A paste test for Facebook cards with no date (issue #49).** `/_wait/d/0/{tag}/{facebook post path}`
-  and `/_wait/d/1/{tag}/{facebook post path}` serve the post's normal Discord head, except that the
-  activity link's id carries an experiment code. Behind `0` is today's status, dated 1970. Behind `1`
-  is the same status without `created_at` and `account.created_at`. Pasting the two links in two
-  separate Discord messages shows whether Discord still draws the card when the date is missing. Two
-  messages, because both cards carry the same post url and Discord can fold embeds that share a url
-  into one card. Every fetch of either status writes a `wait_api` row (600 or 601), which tells a card
-  Discord refused apart from one it never fetched. The routes take only Facebook post paths, and every
-  answer they build is `no-store`; an error from the post itself passes through as production sends it.
-  No other response changes. Nobody has pasted the pair yet.
 - **pin.it share links work, and the converter swaps the share code out.** Following a pin.it link lands on
   a URL with `sender=` in it, the sharer's Pinterest user id. The converter now turns
   `pin.it/{code}` into `/pin.it/{code}` (the host stays in the path because a bare `/{code}` reads as
@@ -64,9 +54,20 @@ All notable changes to mbedfx are documented here. The format follows
 - **More Facebook cards show a real date instead of 1970.** Posts read from Facebook's embed plugin
   use the time the plugin stores on the post (`data-utime`). A Facebook video whose container answer
   has no `timestamp` uses its `upload_date`, as YouTube already does. Three kinds still have no date:
-  posts read from the og: page, plugin posts without that time, and videos with neither field. They
-  still show 1970 (`createdAt: null` in `/_api/v1`). Leaving the field out instead waits on the
-  `/_wait/d` test in Discord, which may refuse a document without it.
+  posts read from the og: page, plugin posts without that time, and videos with neither field. Their
+  cards now show no date at all instead of 1970 (next entry), and `/_api/v1` still says
+  `createdAt: null`.
+- **Cards for posts with no known date no longer say 12/31/69 (issue #49).** When mbedfx had no date
+  for a post, the document Discord builds a media card from carried 1970-01-01, and Discord put it in
+  the footer ("mbedfx • 12/31/69, 7:00 PM" on the client it was checked on). The date is now left
+  out, and the footer reads "mbedfx". The fix is in the renderer, so it covers every site: Facebook
+  posts read from the og: page, a YouTube video whose date hasn't loaded yet, and posts from the other
+  sites that sometimes arrive without one. On 2026-11-25 one Facebook post was pasted into Discord
+  twice through a temporary test route, once as mbedfx sent it then and once without the date. Both
+  drew the full card with its picture, and only the first showed 12/31/69. The route never reached a
+  release and is gone. The converter's preview follows the card and shows "mbedfx" where it used to
+  show 12/31/1969 with a "no upload date" warning. `/_api/v1` already sent `createdAt: null` for
+  these posts and still does. An undated card with a video hasn't been pasted yet.
 - **Off Cloudflare, the scheduled check needs `SMOKE_RUNNER` bound.** `docs/SELF-HOSTING.md` (and the
   1.17.0 entry below) said a self-hosted deploy could leave it unset. Without it the cron's fallback
   reads `caches.default`, which Node doesn't have, so every tick would throw. The adapter binds a

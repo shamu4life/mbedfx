@@ -333,7 +333,7 @@
           "createdAt": {
             "type": ["string", "null"],
             "format": "date-time",
-            "description": "ISO 8601, UTC. `null` where the platform publishes no post date, and until a slower second call brings one. Never the epoch: a post with no known date carries `new Date(0)` internally and the cards draw that beside a `no upload date` note, but a consumer would sort by it. Sort a `null` as unknown, never as old."
+            "description": "ISO 8601, UTC. `null` where the platform publishes no post date, and until a slower second call brings one. Never the epoch: a post with no known date carries `new Date(0)` internally, and a consumer would sort by it. The cards show no date for such a post. Sort a `null` as unknown, never as old."
           },
           "title": {
             "type": ["string", "null"],
