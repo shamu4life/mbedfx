@@ -6,6 +6,10 @@ All notable changes to mbedfx are documented here. The format follows
 
 ## [Unreleased]
 
+## [1.17.0] - 2026-11-24
+
+**Upgrading:** self-hosters run a full `wrangler deploy` so the container rebuilds (the `g17` `RESOLVER_GENERATION` bump in the code moves instances over), and set `YT_ACCOUNTS` to one or two throwaway YouTube accounts if YouTube asks their network to sign in. For API consumers, `still: true` with `muxing: false` can now also mean every mux attempt failed.
+
 ### Added
 
 - **More accounts than one secret can hold.** A Worker secret is capped at about 5.1 kB, so
@@ -3274,7 +3278,8 @@ The full request pipeline, proven end to end with the one non-adversarial platfo
 
 95 tests, `node --test`; `tsc --noEmit` clean.
 
-[Unreleased]: https://github.com/shamu4life/mbedfx/compare/v1.16.0...HEAD
+[Unreleased]: https://github.com/shamu4life/mbedfx/compare/v1.17.0...HEAD
+[1.17.0]: https://github.com/shamu4life/mbedfx/compare/v1.16.0...v1.17.0
 [1.16.0]: https://github.com/shamu4life/mbedfx/compare/v1.15.2...v1.16.0
 [1.15.2]: https://github.com/shamu4life/mbedfx/compare/v1.15.1...v1.15.2
 [1.15.1]: https://github.com/shamu4life/mbedfx/compare/v1.15.0...v1.15.1
