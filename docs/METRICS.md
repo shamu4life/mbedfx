@@ -240,8 +240,9 @@ WHERE timestamp > NOW() - INTERVAL '1' HOUR AND blob1 = 'yt'
 
 `ok` counts a usable **date**, not merely a 200 — a 200 carrying an empty `videoDetails` is the exact
 failure mode a sibling client (ANDROID_VR) already exhibits, and counting it as success would hide the
-one thing worth watching. `fail` climbing toward the total means the cards have silently gone back to
-1 January 1970, which is the state this counter exists to make loud.
+one thing worth watching. `fail` climbing toward the total means the cards have silently lost their
+dates (1 January 1970 until 2026-11-25, no date at all since), which is the state this counter exists
+to make loud.
 
 ### Reading the promise funnel (1.15.0)
 

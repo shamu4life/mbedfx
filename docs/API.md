@@ -522,7 +522,7 @@ two requests rather than one: `askTwice` (`src/fetchretry.ts`) asks a second tim
 refused with 408, 425, 429 or a 5xx, or threw, which is the shape of a Cloudflare-egress refusal
 rather than of a verdict. Every other status is an answer about the post, 404, 403 and 410 included,
 so a dead link still costs exactly one request. 1.12.0 widened it to the YouTube oembed leg, where a
-single refusal costs the vouch and dates the card 1 January 1970, and to both Threads fetches, which
+single refusal costs the vouch and leaves the card without a date, and to both Threads fetches, which
 the retry lint could not see because they are `fetch(…).then(…)` inside a `Promise.all`.
 
 Exactly one call in `src/` sets an `AbortSignal`, and it does not change that count: `fetchInnertube`
