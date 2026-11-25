@@ -410,7 +410,11 @@ test('AN OUT-OF-RANGE UPSTREAM TIMESTAMP IS A CARD, NOT A 500, on the activity r
   const res = await handle(req(`/users/x/statuses/${encodeStatusId(refKey(ref))}`), envWith(binding), ctx, await liveDeps())
   assert.equal(res.status, 200, 'an upstream timestamp must never crash a public route')
   const json = await res.json()
-  assert.equal(json.created_at, '1970-01-01T00:00:00.000Z', 'and the fallback is the honest epoch')
+  // REWRITTEN 2026-11-25: this pinned `"1970-01-01T00:00:00.000Z"`, the epoch Discord printed as
+  // 12/31/69. The normalizer still falls back to the epoch (the Invalid-Date test above), and the
+  // document now leaves the field out for it, which a real Discord paste showed draws the full card
+  // (render/mastodon.ts toMastodonStatus).
+  assert.ok(!('created_at' in json) && !('created_at' in json.account), 'and the fallback is no date at all')
   assert.equal(json.account.display_name, 'Winter.Desire', 'the rest of the card is unaffected')
 })
 

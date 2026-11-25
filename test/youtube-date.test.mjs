@@ -145,6 +145,18 @@ const deps = (post) => ({
 })
 
 const createdAt = async res => (await res.json()).created_at
+/**
+ * NO DATE, as the activity document says it since 2026-11-25: neither the status nor its account has a
+ * `created_at` key. Until then every "no date is honest" assertion in this file pinned
+ * `"1970-01-01T00:00:00.000Z"`, which Discord printed as 12/31/69. The rule those assertions guard is
+ * unchanged (no date is invented), only its wire form: a real Discord paste showed the card draws in
+ * full without the field (render/mastodon.ts toMastodonStatus). Key absence, not `=== undefined`, so
+ * a `null` (a document nobody pasted) fails too.
+ */
+const undated = async res => {
+  const doc = await res.json()
+  return !('created_at' in doc) && !!doc.account && !('created_at' in doc.account)
+}
 
 test('A WARM META ENTRY gives the real created_at with ZERO container calls', async () => {
   const ref = ytRef('dQw4w9WgXcQ')
@@ -229,7 +241,7 @@ test('INNERTUBE ANSWERS AND ITS ANSWER IS THE ONE WRITTEN — the container besi
   }
 })
 
-test('THE SECURITY PIN: an UNVOUCHED post costs ZERO container calls and renders the epoch', async () => {
+test('THE SECURITY PIN: an UNVOUCHED post costs ZERO container calls and renders no date', async () => {
   /**
    * The sibling of facebook-meta's "PREWARM SCOPE: an unknown, never-fetched ref costs ZERO container
    * muxes". The post-cache gate the yt mux prewarm uses is WEAK on this platform — normalizeYouTube
@@ -240,7 +252,7 @@ test('THE SECURITY PIN: an UNVOUCHED post costs ZERO container calls and renders
   const { seen, binding } = fakeResolver()
   const res = await handle(req(activity(ref)), envWith(binding), ctx, deps(unvouchedPost(ref)))
   assert.equal(seen.meta, 0, 'an id YouTube never vouched for must not reach the container')
-  assert.equal(await createdAt(res), '1970-01-01T00:00:00.000Z', 'and the answer is honest, not invented')
+  assert.ok(await undated(res), 'and the answer is honest, not invented')
 })
 
 test('A CONTAINER THAT NEVER ANSWERS still returns, honestly, and the work is handed to waitUntil', async () => {
@@ -250,7 +262,7 @@ test('A CONTAINER THAT NEVER ANSWERS still returns, honestly, and the work is ha
   const t0 = Date.now()
   const res = await handle(req(activity(ref)), envWith(binding), { waitUntil: p => waits.push(p) }, deps(vouchedPost(ref)))
   const elapsed = Date.now() - t0
-  assert.equal(await createdAt(res), '1970-01-01T00:00:00.000Z', 'no date is honest; a wrong one is not')
+  assert.ok(await undated(res), 'no date is honest; a wrong one is not')
   /**
    * THE BOUND IS THIS ARM'S OWN BUDGET NOW, and the old one could not fail for the bug it guarded.
    *
@@ -421,7 +433,7 @@ test('A JUNK OR MISSING timestamp is NEVER written — the self-healing rule', a
     const r2 = fakeR2()
     const { binding } = fakeResolver({ meta: () => Response.json(junk[i]) })
     const res = await handle(req(activity(ref)), envWith(binding, r2), ctx, deps(vouchedPost(ref)))
-    assert.equal(await createdAt(res), '1970-01-01T00:00:00.000Z', `${JSON.stringify(junk[i])} must not render`)
+    assert.ok(await undated(res), `${JSON.stringify(junk[i])} must not render`)
     assert.ok(!r2.store.has(metaCacheKey(ref)),
       `an unvalidated extract must never be cached for 30 days: ${JSON.stringify(junk[i])}`)
   }
@@ -1096,7 +1108,7 @@ test('AN ANSWER WITH NO USABLE DATE DOES NOT NEGATIVELY CACHE THE VIDEO — our 
   const env = envWith(binding)
 
   const first = await handle(req(activity(ref)), env, ctx, deps(vouchedPost(ref)))
-  assert.equal(await createdAt(first), '1970-01-01T00:00:00.000Z', 'no date anywhere, so no date is honest')
+  assert.ok(await undated(first), 'no date anywhere, so no date is honest')
   assert.equal(seen.meta, 1)
 
   const second = await handle(req(activity(ref)), env, ctx, deps(vouchedPost(ref)))

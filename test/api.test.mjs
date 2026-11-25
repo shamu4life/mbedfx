@@ -139,17 +139,20 @@ test('THE API ANSWERS A POST AS DATA, with OUR media urls and no card vocabulary
   }
 })
 
-test('AN UNKNOWN UPLOAD DATE IS null, NOT THE EPOCH — the one place the API answers differently from the card', async () => {
+test('AN UNKNOWN UPLOAD DATE IS null, NOT THE EPOCH, on the API and on /_card alike', async () => {
   /**
    * THE DEFECT THIS PREVENTS IS A SILENT ONE IN SOMEBODY ELSE'S CODE. A Post with no known upload date
-   * carries `new Date(0)`, and /_card serialises that faithfully as "1970-01-01T00:00:00.000Z" —
-   * which is fine there, because the page draws a "no upload date" note beside it and a reader can
-   * see what happened. An API consumer gets a well-formed timestamp, sorts by it, and silently files
-   * every date-less post at the beginning of time.
+   * carries `new Date(0)`. An API consumer handed "1970-01-01T00:00:00.000Z" gets a well-formed
+   * timestamp, sorts by it, and silently files every date-less post at the beginning of time. So the
+   * API refuses to fill the hole.
    *
-   * So the API refuses to fill the hole, which is the same rule the cards follow in words. Both
-   * surfaces are asserted here together, because the difference is deliberate and the next person to
-   * see it will otherwise "fix" one of them.
+   * REWRITTEN 2026-11-25. This test used to pin the opposite on /_card: it serialised the epoch
+   * "faithfully", because the Discord card printed 12/31/69 and the page drew a "no upload date" note
+   * beside it, and the comment warned that the difference was deliberate. The difference is gone. A
+   * paste in a real Discord client showed the card draws in full with no date, and the activity
+   * document now leaves the field out (src/render/mastodon.ts toMastodonStatus). The preview prints
+   * what we send, so /_card now sends `null` and the page's footer reads "mbedfx", as the card's
+   * does. An epoch here would preview a date no card shows any more.
    */
   const dateless = twitterPost('2000000000000000002', { createdAt: new Date(0) })
 
@@ -157,8 +160,14 @@ test('AN UNKNOWN UPLOAD DATE IS null, NOT THE EPOCH — the one place the API an
   assert.equal(api.post.createdAt, null, 'the API says it does not know')
 
   const { body: card } = await get(cardReq('/apiwatch/status/2000000000000000002'), dateless)
-  assert.equal(card.createdAt, '1970-01-01T00:00:00.000Z',
-    'the card still serialises it faithfully, because the page renders a note next to it')
+  assert.equal(card.createdAt, null, 'and so does the preview, because the card no longer prints a date either')
+
+  // A KNOWN date is untouched on both, so neither line above can be met by dropping every date.
+  const dated = twitterPost('2000000000000000003', { createdAt: new Date('2026-07-01T12:00:00.000Z') })
+  const { body: api2 } = await get(apiReq('https://x.com/apiwatch/status/2000000000000000003'), dated)
+  assert.equal(api2.post.createdAt, '2026-07-01T12:00:00.000Z')
+  const { body: card2 } = await get(cardReq('/apiwatch/status/2000000000000000003'), dated)
+  assert.equal(card2.createdAt, '2026-07-01T12:00:00.000Z')
 })
 
 test('COUNTS THAT CANNOT BE TRUSTED ARE OMITTED, never published as a number', async () => {

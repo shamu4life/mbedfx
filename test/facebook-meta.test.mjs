@@ -178,7 +178,7 @@ async function dateTrip(id, dict) {
   const doc = await (await handle(req(new URL(href).pathname), env, ctx, d)).json()
   const stored = r2.store.get(metaCacheKey(ref))
   assert.ok(stored, 'the extract was persisted')
-  return { record: JSON.parse(new TextDecoder().decode(stored.bytes)), createdAt: doc.created_at }
+  return { record: JSON.parse(new TextDecoder().decode(stored.bytes)), createdAt: doc.created_at, doc }
 }
 
 test('A FACEBOOK VIDEO WITH NO timestamp TAKES upload_date — the 1970 card had a date beside it', async () => {
@@ -194,15 +194,19 @@ test('A FACEBOOK VIDEO WITH NO timestamp TAKES upload_date — the 1970 card had
   assert.equal(createdAt, '2026-07-16T00:00:00.000Z')
 })
 
-test('timestamp STILL WINS over upload_date, and a dict with neither keeps the epoch', async () => {
+test('timestamp STILL WINS over upload_date, and a dict with neither publishes no date at all', async () => {
   // The precise source first: `timestamp` carries a time of day and upload_date does not.
   const both = await dateTrip('10153231379946102', { ...META_JSON, upload_date: '20260101' })
   assert.equal(both.record.timestamp, META_JSON.timestamp)
   assert.equal(both.createdAt, new Date(META_JSON.timestamp * 1000).toISOString())
-  // Junk in both fields is no date, and no date is still the epoch: nothing is made up to fill it.
+  // Junk in both fields is no date, and nothing is made up to fill it. REWRITTEN 2026-11-25: this
+  // used to pin `created_at: "1970-01-01T00:00:00.000Z"`, the epoch Discord printed as 12/31/69.
+  // The Post still carries the epoch internally; the document now leaves the field out, which a
+  // real Discord paste showed draws the full card with no date (render/mastodon.ts toMastodonStatus).
   const neither = await dateTrip('10153231379946103', { ...META_JSON, timestamp: null, upload_date: 'yesterday' })
   assert.equal(neither.record.timestamp, undefined)
-  assert.equal(neither.createdAt, '1970-01-01T00:00:00.000Z')
+  assert.ok(!('created_at' in neither.doc), 'no date on the status')
+  assert.ok(!('created_at' in neither.doc.account), 'and none on the account')
 })
 
 test('a meta response with NO title is a null Post — the content assertion, not the status', async () => {

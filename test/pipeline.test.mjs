@@ -2255,18 +2255,26 @@ test('WAIT GUARDS: humans go to YouTube, n past 60 is refused, malformed paths f
   }
   // The old experiment paths are gone, not merely unlinked: Discord never consumed a status from
   // them, and a route that still answered would invite a sixth paste of nothing.
-  for (const path of ['/_wait/act/0/1121116', '/_wait/mact/0/1121116', '/_wait/bact/0/1121116', '/_wait/cact/0/1121116']) {
+  // d's head route went the same way on 2026-11-25, the day its one paste answered issue #49. Its
+  // two heads were production's Facebook head with the activity id marked 9600/9601; a leftover
+  // that still marked one would send a crawler to a document nothing answers any more.
+  for (const path of ['/_wait/act/0/1121116', '/_wait/mact/0/1121116', '/_wait/bact/0/1121116', '/_wait/cact/0/1121116',
+    '/_wait/d/0/t1/ExpPage/posts/1000000000000011', '/_wait/d/1/t1/ExpPage/posts/1000000000000011']) {
     const res = await stockServing(() => handle(req(path, DISCORD), fakeEnv(), ctx, {}))
     // Content, not status: an unrouted path falls to the site assets at 200. What must be true
     // is that nothing status-shaped comes back.
     assert.ok(!(res.headers.get('content-type') || '').includes('activity+json'), path)
-    assert.ok(!(await res.text()).includes('media_attachments'), path)
+    const text = await res.text()
+    assert.ok(!text.includes('media_attachments'), path)
+    assert.ok(!text.includes('/statuses/960'), `${path}: no head marked for the retired d surface`)
   }
   // A 9-prefixed id that is not a wait id is an ordinary bad status id. 5 became p on 2026-09-02,
-  // and the guard moved to digit 6; 6 became d on 2026-11-25, but d takes only 00 (control) and 01
-  // (variant), so `9605` and `9602` are still not wait ids and must 404 exactly as they did before
-  // d existed. Digit 7 has no surface at all. The last two have no sentinel after the prefix.
-  for (const path of ['/users/youtube/statuses/9605' + '1121116', '/api/v1/statuses/9602' + '1121116', '/api/v1/statuses/9705' + '1121116',
+  // and the guard moved to digit 6. 6 was d for one day (2026-11-25, 9600 control and 9601
+  // variant), and since d was removed every `96nn` id is unassigned again, those two included: a
+  // Discord crawler that re-asks for one gets the same 404 as any other bad id. Digit 7 has never
+  // had a surface. The last two have no sentinel after the prefix.
+  for (const path of ['/users/youtube/statuses/9605' + '1121116', '/api/v1/statuses/9600' + '1121116', '/api/v1/statuses/9601' + '1121116',
+    '/users/ExpPage/statuses/9601' + '1121116', '/api/v1/statuses/9602' + '1121116', '/api/v1/statuses/9705' + '1121116',
     '/api/v1/statuses/9105' + '2121116', '/api/v1/statuses/950406' + '2121116']) {
     const env = fakeEnv()
     const res = await handle(req(path, DISCORD), env, ctx, {})
@@ -2282,135 +2290,83 @@ test('WAIT GUARDS: humans go to YouTube, n past 60 is refused, malformed paths f
 })
 
 /**
- * THE DATELESS-DOCUMENT EXPERIMENT (/_wait/d, issue #49). Facebook's og: page carries no date, so
- * production publishes 1970 in both `created_at` fields, and leaving them out has waited on an
- * unmeasured fear that Discord refuses a status without them. These pin what makes one paste of
- * two links a reading: the head is production's own head with only the activity id changed, the
- * control document is production's own document under the wait id, the variant lacks both dates
- * and nothing else, each fetch counts 600 or 601, and none of it reaches a response outside the
- * experiment. Every test mints its own post id, so no cache or in-flight map is shared between them.
+ * AN UNDATED POST'S CARD, END TO END (issue #49). A Facebook post read from the og: page has no date,
+ * and the normalizer writes `new Date(0)`. Until 2026-11-25 the activity document printed it and
+ * Discord's footer said 12/31/69. These run the real route for one post twice, dated and undated,
+ * through every surface Discord or Telegram reads: the head, the document on both status paths, and
+ * the oEmbed callback. Each test mints its own post id; within a test the two renders run one after
+ * the other with their own caches, so neither can answer for the other.
  */
-const fbExpPost = (ref, page) => ({
+const fbDatePost = (ref, page, createdAt) => ({
   ref,
   canonical: `https://www.facebook.com/${page}/posts/${ref.id.split('_').pop()}/`,
   author: { name: 'Example Page', url: `https://www.facebook.com/${page}/` },
   text: 'a caption on a post Facebook printed no date for',
-  // What normalize.ts's og: page card hands the renderer today, and the value under test.
-  createdAt: new Date(0),
-  media: [{ kind: 'image', url: 'https://scontent.xx.fbcdn.net/v/t39.30808-6/example.jpg', width: 0, height: 0 }],
+  createdAt,
+  media: [{ kind: 'image', url: 'https://scontent.xx.fbcdn.net/v/t39.30808-6/example.jpg', w: 0, h: 0 }],
   counts: {}, sensitive: false,
 })
-const fbExpDeps = page => {
-  const asked = []
-  return { asked, cache: fakeCache(), fetchPost: async ref => { asked.push(ref); return fbExpPost(ref, page) } }
-}
-
-test('WAIT d/{v} HEAD: production\'s own Facebook head, and only the activity id carries the experiment', async () => {
-  const page = 'ExpHeadPage'
-  const path = `/${page}/posts/1000000000000011`
-  const direct = await handle(req(path, DISCORD), fakeEnv(), ctx, fbExpDeps(page))
-  const directHead = await direct.text()
-  const sid = /activity\+json" href="[^"]*\/statuses\/(1\d+)"/.exec(directHead)[1]
-  assert.ok(directHead.includes(`/_oembed/${sid}"`), 'the production head carries the counts link under the same id')
-  for (const v of ['0', '1']) {
-    const res = await handle(req(`/_wait/d/${v}/t${v}${path}`, DISCORD), fakeEnv(), ctx, fbExpDeps(page))
-    assert.equal(res.status, 200)
-    assert.equal(res.headers.get('cache-control'), 'no-store', 'an experiment result must never be pinned by a response cache')
-    assert.equal(res.headers.get('content-type'), direct.headers.get('content-type'))
-    const head = await res.text()
-    assert.ok(head.includes(`/statuses/960${v}${sid}"`), `the activity id is 9, d=6, 0${v}, then the real id`)
-    assert.ok(head.includes(`/_oembed/${sid}"`), 'the counts link keeps the real id: it carries no date')
-    assert.equal(head.replace(`/statuses/960${v}${sid}"`, `/statuses/${sid}"`), directHead,
-      'the id is the ONLY difference from production\'s head, so the two cards can differ only by their documents')
-  }
-  // The query survives the re-entry: /photo/?fbid= names its post nowhere else.
-  const deps = fbExpDeps(page)
-  const photo = await handle(req('/_wait/d/0/t9/photo/?fbid=1000000000000012', DISCORD), fakeEnv(), ctx, deps)
-  assert.equal(photo.status, 200)
-  assert.deepEqual(deps.asked.map(r => [r.kind, r.id]), [['photo', '1000000000000012']], 'the fbid in the query is the post rendered')
-  assert.match(await photo.text(), /activity\+json" href="[^"]*\/statuses\/9600\d+"/)
-})
-
-test('WAIT d/{v} DOCUMENT: the control is today\'s document, the variant lacks both dates and nothing else', async () => {
-  const page = 'ExpDocPage'
-  const path = `/${page}/posts/1000000000000021`
-  const deps = fbExpDeps(page)
-  const head = await (await handle(req(path, DISCORD), fakeEnv(), ctx, deps)).text()
-  const sid = /activity\+json" href="[^"]*\/statuses\/(1\d+)"/.exec(head)[1]
-  const plain = await handle(req(`/api/v1/statuses/${sid}`, DISCORD), fakeEnv(), ctx, deps)
-  const direct = await plain.text()
-  // THE ORDINARY DOCUMENT IS BYTE-IDENTICAL to what the renderer has always produced, headers too:
-  // the intercept above the router must never touch a `1…` id.
-  assert.equal(direct, JSON.stringify(toMastodonStatus(fbExpPost(deps.asked[0], page), 'https://staging.megapenispoopenfarten.sex', 'videos')))
-  assert.equal(plain.headers.get('cache-control'), null, 'and production\'s document keeps its own headers')
-  assert.equal(direct.split('"created_at":"1970-01-01T00:00:00.000Z"').length - 1, 2,
-    'today\'s document carries the epoch twice, the status and the account: the control has to show that card')
-  const rows = []
-  const env = { ...fakeEnv(), AE: { writeDataPoint: r => rows.push(r) } }
-  const fetchDoc = async p => {
-    const res = await handle(req(p, DISCORD), env, ctx, deps)
+const fbSurfaces = async (page, path, createdAt) => {
+  const deps = { cache: fakeCache(), fetchPost: async ref => fbDatePost(ref, page, createdAt) }
+  const get = async (p, ua = DISCORD) => {
+    const res = await handle(req(p, ua), fakeEnv(), ctx, deps)
     assert.equal(res.status, 200, p)
-    assert.equal(res.headers.get('cache-control'), 'no-store', p)
-    assert.equal(res.headers.get('content-type'), 'application/json', `${p}: the content-type Discord was measured reading`)
     return res.text()
   }
-  const control = await fetchDoc(`/api/v1/statuses/9600${sid}`)
-  assert.equal(control, direct.replace(`{"id":"${sid}"`, `{"id":"9600${sid}"`),
-    'the control is production\'s document byte for byte, under the id it was fetched as')
-  const variant = await fetchDoc(`/api/v1/statuses/9601${sid}`)
-  const v = JSON.parse(variant)
-  assert.equal(v.id, `9601${sid}`)
-  assert.ok(!('created_at' in v), 'the status has no created_at')
-  assert.ok(!('created_at' in v.account), 'and neither does its account, which carried the same 1970 value')
-  const expected = JSON.parse(control.replace(`{"id":"9600${sid}"`, `{"id":"9601${sid}"`))
-  delete expected.created_at
-  delete expected.account.created_at
-  assert.equal(variant, JSON.stringify(expected), 'the two dates are the ONLY difference from the control, down to key order')
-  assert.ok(v.media_attachments.length === 1 && v.media_attachments[0].url.includes('/_media/'),
-    'the picture is the real /_media/ url: d rewrites no media, or a missing picture could be its doing')
-  // The users path answers the same documents, and every fetch counts which code it carried.
-  assert.equal(await fetchDoc(`/users/${page}/statuses/9601${sid}`), variant)
-  assert.deepEqual(rows.filter(r => r.blobs[1].startsWith('wait_')).map(r => [r.blobs, r.doubles]), [
-    [['none', 'wait_api', 'discord'], [1, 600]],
-    [['none', 'wait_api', 'discord'], [1, 601]],
-    [['none', 'wait_users', 'discord'], [1, 601]],
-  ], 'a wait_api row with 601 is what says Discord fetched the variant at all')
+  const head = await get(path)
+  const sid = /activity\+json" href="[^"]*\/statuses\/(1\d+)"/.exec(head)[1]
+  return {
+    head,
+    doc: await get(`/api/v1/statuses/${sid}`),
+    users: await get(`/users/${page}/statuses/${sid}`),
+    oembed: await get(`/_oembed/${sid}`),
+    telegram: await get(path, 'TelegramBot (like TwitterBot)'),
+  }
+}
+
+test('AN UNDATED POST\'S DOCUMENT HAS NO created_at, on both status paths, and is the dated one minus exactly those two keys', async () => {
+  // The paste that settled this is recorded at toMastodonStatus and in mastodon.test.mjs. What this
+  // adds is the whole route: nothing between the renderer and the wire puts a date back.
+  const page = 'UndatedDocPage'
+  const path = `/${page}/posts/1000000000000041`
+  const undated = await fbSurfaces(page, path, new Date(0))
+  const dated = await fbSurfaces(page, path, new Date('2026-11-20T15:04:05.000Z'))
+
+  const u = JSON.parse(undated.doc)
+  assert.ok(!('created_at' in u), 'the status carries no created_at')
+  assert.ok(!('created_at' in u.account), 'and neither does its account')
+  assert.ok(!undated.doc.includes('1970'), 'the epoch is nowhere in the document')
+  assert.equal(u.media_attachments.length, 1, 'the picture Discord drew in the measured paste is still there')
+  assert.equal(undated.users, undated.doc, 'the advertised /users/ path answers the same document')
+
+  // A known date is unchanged: both fields, the same instant.
+  const d = JSON.parse(dated.doc)
+  assert.equal(d.created_at, '2026-11-20T15:04:05.000Z')
+  assert.equal(d.account.created_at, '2026-11-20T15:04:05.000Z')
+  // The undated document is the dated one with the two keys deleted and nothing else changed, as
+  // serialised bytes: the same shape as the variant Discord was shown.
+  delete d.created_at
+  delete d.account.created_at
+  assert.equal(undated.doc, JSON.stringify(d))
 })
 
-test('WAIT d GUARDS: only a Facebook post re-enters, a human keeps production\'s redirect, an unmarkable head is refused', async () => {
-  const page = 'ExpGuardPage'
-  const path = `/${page}/posts/1000000000000031`
-  // A human gets production's answer for the path untouched, which is the redirect to Facebook.
-  const human = await handle(req(`/_wait/d/1/t1${path}`, 'Mozilla/5.0 (Macintosh) Safari/605.1'), fakeEnv(), ctx, fbExpDeps(page))
-  assert.equal(human.status, 302)
-  assert.equal(human.headers.get('location'), `https://www.facebook.com${path}/`)
-  // Refused BEFORE re-entry: this route reads a 200 into memory, so a /_media/ tail would buffer a
-  // video, and a /_wait/ tail would nest experiments. A gallery mode moves the sentinel off 1.
-  for (const tail of ['/profile/alice.bsky.social/post/3k2a', '/_media/fb%3Apost%3AExpGuardPage_1000000000000031/0',
-    `/_wait/d/0/t${path}`, `/_wait/a/60/dQw4w9WgXcQ`, `${path}/p`, '/users/x/statuses/96011121116', '/']) {
-    const deps = fbExpDeps(page)
-    const res = await handle(req(`/_wait/d/0/t${tail}`, DISCORD), fakeEnv(), ctx, deps)
-    assert.equal(res.status, 404, tail)
-    assert.equal(res.headers.get('cache-control'), 'no-store', tail)
-    assert.equal(deps.asked.length, 0, `${tail}: nothing was fetched`)
+test('THE HEAD AND THE oEMBED ARE THE SAME BYTES WITH OR WITHOUT A DATE, because neither ever carried one', async () => {
+  /**
+   * MEASURED BEFORE THE FIX, rather than fixed on suspicion: the OpenGraph head (Discord's and
+   * Telegram's) and the oEmbed answer print no date of any kind, so the 1970 lived in the activity
+   * document alone, and that is the only place the fix touches. If a date-bearing tag is ever added to
+   * a head (article:published_time, say), this fails, and the new tag needs the same knownDate check
+   * the document has.
+   */
+  const page = 'UndatedHeadPage'
+  const path = `/${page}/posts/1000000000000051`
+  const undated = await fbSurfaces(page, path, new Date(0))
+  const dated = await fbSurfaces(page, path, new Date('2026-11-20T15:04:05.000Z'))
+  for (const k of ['head', 'oembed', 'telegram']) {
+    assert.equal(undated[k], dated[k], `${k}: the date changes nothing here`)
+    assert.ok(!undated[k].includes('1970'), `${k}: no epoch`)
+    assert.ok(!dated[k].includes('2026-11-20'), `${k}: and no date at all, so there was nothing to fix`)
   }
-  // Content, not status: an unmatched path falls through to ordinary routing. What must be true is
-  // that no head marked for the experiment comes back.
-  for (const bad of ['/_wait/d/2/t' + path, '/_wait/d/0/' + path, '/_wait/d/0/' + 'x'.repeat(25) + path]) {
-    const res = await handle(req(bad, DISCORD), fakeEnv(), ctx, fbExpDeps(page))
-    assert.ok(!(await res.text()).includes('/statuses/960'), `${bad}: v is 0 or 1 and the tag is 1-24 word characters`)
-  }
-  // A tail spelled `//host/…` stays on OUR origin: the target is concatenated, never resolved as
-  // a url relative to the origin, where `//` would name a host and move every link in the head.
-  const slashed = await (await handle(req(`/_wait/d/0/t/${path}`, DISCORD), fakeEnv(), ctx, fbExpDeps(page))).text()
-  const hrefs = [...slashed.matchAll(/href="([^"]*)"/g)].map(m => new URL(m[1]).host)
-  assert.ok(hrefs.includes('staging.megapenispoopenfarten.sex'))
-  assert.deepEqual([...new Set(hrefs.filter(h => !h.endsWith('facebook.com')))], ['staging.megapenispoopenfarten.sex'])
-  // A head with nothing to mark is refused rather than served as a second control. Telegram gets
-  // the plain og: head, which carries no activity link at all.
-  const tg = await handle(req(`/_wait/d/1/t1${path}`, 'TelegramBot (like TwitterBot)'), fakeEnv(), ctx, fbExpDeps(page))
-  assert.equal(tg.status, 422)
-  assert.equal(tg.headers.get('cache-control'), 'no-store')
 })
 
 test('A SLIDESHOW IS UNTOUCHED — one hop already, and it must cost no extra fetch', async () => {

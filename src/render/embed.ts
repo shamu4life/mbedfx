@@ -338,6 +338,27 @@ export const isSensitive = (post: Post): boolean =>
 export const isSpoiler = (post: Post): boolean => post?.spoiler === true
 
 /**
+ * THE POST'S DATE, OR null WHEN NOBODY KNOWS IT. `Post.createdAt` is a required Date, so a normalizer
+ * with no date to give writes the epoch: uploadDateOrEpoch (platforms/uploaddate.ts) for Facebook
+ * videos, the yt-dlp tier, Mastodon, Misskey, Lemmy, PeerTube, Pinterest and Twitch; a bare
+ * `new Date(0)` for Facebook's og: page and for its plugin card without `data-utime`; and a YouTube
+ * post until its meta record lands. The epoch is a hole, never an answer. No post this project reads
+ * was made in 1970, and uploadDateFrom's 2005 floor sends every earlier value there too.
+ *
+ * ONE PREDICATE for every surface that publishes a date. The activity document leaves its two date
+ * fields out on null (toMastodonStatus says why), and /_api/v1 and /_card send `null`. Before
+ * 2026-11-25 each asked the question itself, and the activity document didn't ask at all, which is
+ * how every undated card came to read 12/31/69 in Discord (issue #49).
+ *
+ * `instanceof Date` and the finite check because a renderer's input is a cache record (see str()).
+ * A date that can't be printed is as unknown as a missing one, and toISOString would throw on it.
+ */
+export const knownDate = (post: Post): Date | null => {
+  const d = post?.createdAt
+  return d instanceof Date && Number.isFinite(d.getTime()) && d.getTime() !== 0 ? d : null
+}
+
+/**
  * "This post has a video Discord can actually play." ONE definition, because BOTH heads in
  * discord.ts now ask it — renderSpoof for its og:video fallback and renderPost for the plain
  * head's video branch — and they must not answer it differently. The same rule usable() and
