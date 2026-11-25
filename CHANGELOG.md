@@ -77,6 +77,14 @@ Nobody else has anything to do.
   minus the container, since Workers Free has no Containers. Videos that need muxing show their cover
   still, and YouTube cards use YouTube's own player. Nobody has deployed it on the Free plan or
   measured the Worker against Free's limits of 10 ms of CPU and 50 subrequests per request.
+- **Both generic configs have a `previews` block.** New Workers, including the ones the Deploy to
+  Cloudflare button makes, build every branch other than `main` as a Worker Preview, and
+  `wrangler preview` stops with an error when the config has no such block. Each Preview gets Workers
+  AI, the Durable Objects, the container (not on Free) and an Analytics Engine dataset of its own. It
+  gets no R2 bucket, because a Preview's bucket has to be created by hand first. In a Preview, then,
+  a video that needs muxing shows its cover still, and translations and post records are fetched
+  again on every view. The comment in `wrangler.jsonc` shows how to add a bucket. Nobody has built a
+  Preview from either file yet.
 
 ### Fixed
 

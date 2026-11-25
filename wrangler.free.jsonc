@@ -55,5 +55,20 @@
   "ai": { "binding": "AI" },
   "analytics_engine_datasets": [
     { "binding": "AE", "dataset": "mbedfx_selfhost_counters" }
-  ]
+  ],
+  // WORKER PREVIEWS, as in wrangler.jsonc, whose comment explains the block: no R2 bucket, so a
+  // Preview needs no setup, and a dataset of its own. Like the top level, no container and no
+  // MEDIA_RESOLVER. Whether Workers Free runs Previews at all is unchecked.
+  "previews": {
+    "analytics_engine_datasets": [
+      { "binding": "AE", "dataset": "mbedfx_selfhost_preview_counters" }
+    ],
+    "ai": { "binding": "AI" },
+    "durable_objects": {
+      "bindings": [
+        { "name": "MUX_RUNNER", "class_name": "MuxRunner" },
+        { "name": "SMOKE_RUNNER", "class_name": "SmokeRunner" }
+      ]
+    }
+  }
 }

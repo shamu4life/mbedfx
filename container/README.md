@@ -232,10 +232,11 @@ needs a running Docker-compatible CLI.
 If a change here didn't take effect, check the build log for `Building image` and
 `Modified application`. If neither line is there, the image never shipped.
 
-A preview build, meaning any branch that isn't `main`, runs
-`npx wrangler versions upload -c wrangler.production.jsonc` instead and doesn't build the image at
-all. A container change lands only on merge, untested until then. See
-[Warm instances](#warm-instances).
+A branch other than `main` gets a Worker Preview instead, built by
+`npx wrangler preview -c wrangler.production.jsonc` since 2026-11-25. Before then it ran
+`versions upload`, which never built the image, so a container change went untested until it
+merged. The `previews` block in that file gives each Preview its own bucket and its own container
+application, built from the branch's `container/Dockerfile`. See [Warm instances](#warm-instances).
 
 The Worker side is already committed: the `@cloudflare/containers` dependency, `src/container.ts`
 (the `MediaResolver` DO class), the deploy entry `src/index.ts`, and the `containers` /

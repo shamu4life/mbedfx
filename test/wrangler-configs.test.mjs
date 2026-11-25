@@ -7,7 +7,8 @@ import { GUEST_HOSTS } from '../src/guesthost.ts'
  * THE THREE WRANGLER CONFIGS (self-hosting phase 3, 2026-11-25).
  *
  *   wrangler.production.jsonc  the public instance. Workers Builds deploys it with `-c` on main and
- *                              uploads it with `-c` on other branches. Its own facts (name, domains,
+ *                              builds a Worker Preview from it with `-c` on other branches (`npx
+ *                              wrangler preview`, since 2026-11-25). Its own facts (name, domains,
  *                              pinned container application, vars) are pinned by the smoke, guesthost,
  *                              openapi and yt-promise-off tests, which read it and nothing else.
  *   wrangler.jsonc             the generic config: `npx wrangler deploy` from a checkout, `npm run
@@ -43,10 +44,14 @@ const prodZones = (prod.routes ?? []).map(r => (typeof r === 'string' ? r : r.pa
 // Production's resource names. Every one is a distinctive string, so the scan below can search for it
 // in the raw text, comments included. The Worker name is not ("mbedfx" is in every file name here), so
 // it is compared by value.
+// Production's Preview bucket and dataset count too. They live in the owner's account as well, so a
+// generic file deployed there must not name them either.
 const prodResources = [
   ...(prod.r2_buckets ?? []).map(b => b.bucket_name),
   ...(prod.analytics_engine_datasets ?? []).map(d => d.dataset),
   ...(prod.containers ?? []).map(c => c.name).filter(Boolean),
+  ...(prod.previews?.r2_buckets ?? []).map(b => b.bucket_name),
+  ...(prod.previews?.analytics_engine_datasets ?? []).map(d => d.dataset),
 ]
 // The DO classes production's migrations create, in order. A fresh account replays every tag.
 const doClasses = cfg => (cfg.migrations ?? []).flatMap(m => [...(m.new_sqlite_classes ?? []), ...(m.new_classes ?? [])])
@@ -172,6 +177,63 @@ test('wrangler.free.jsonc has no container and no MEDIA_RESOLVER binding, and ke
   assert.deepEqual(bound, prod.durable_objects.bindings.filter(b => b.name !== 'MEDIA_RESOLVER'))
 })
 
+/**
+ * THE GENERIC FILES' PREVIEWS BLOCKS (2026-11-25). Workers Builds on a new Worker, which is what the
+ * Deploy to Cloudflare button makes, runs `npx wrangler preview` for every branch other than main. That
+ * reads the root file, and wrangler stops with an error when the file has no `previews` block. A Preview
+ * gets only what the block lists, so a Durable Object binding it leaves out does not exist there, and
+ * code that reaches for it can fail with a 1101.
+ *
+ * No test here requires or forbids an R2 bucket in a generic Preview. The blocks leave MEDIA_CACHE out
+ * so that a Preview needs no setup (wrangler.jsonc says what that costs), and a self-hoster who creates
+ * a Preview bucket may add one. The test checks only that such a bucket is not the one the Worker
+ * itself serves from. The scan above keeps out production's resources, its Preview ones included.
+ */
+for (const file of GENERIC) {
+  test(`${file} has a previews block that keeps the Worker's own bindings and keeps off its data`, () => {
+    const cfg = read(file)
+    const pv = cfg.previews
+    assert.ok(pv, 'wrangler preview refuses to run without a previews block')
+    // Branch traffic stays out of the Worker's own counters, and a branch's mux or record out of the
+    // cache the Worker serves.
+    const ownDatasets = (cfg.analytics_engine_datasets ?? []).map(d => d.dataset)
+    for (const d of pv.analytics_engine_datasets ?? []) {
+      assert.ok(!ownDatasets.includes(d.dataset), `${file}: preview dataset ${d.dataset} is the Worker's own`)
+    }
+    const ownBuckets = (cfg.r2_buckets ?? []).map(b => b.bucket_name)
+    for (const b of pv.r2_buckets ?? []) {
+      assert.ok(!ownBuckets.includes(b.bucket_name), `${file}: preview bucket ${b.bucket_name} is the Worker's own`)
+    }
+    // The bindings the code reads, except MEDIA_CACHE, exist in a Preview too.
+    const names = list => (list ?? []).map(x => x.binding).sort()
+    assert.deepEqual(names(pv.analytics_engine_datasets), names(cfg.analytics_engine_datasets))
+    assert.deepEqual(pv.ai, cfg.ai)
+    assert.deepEqual(pv.durable_objects?.bindings, cfg.durable_objects.bindings)
+    // Cron and routes never apply to a Preview.
+    assert.equal(pv.routes, undefined)
+    assert.equal(pv.triggers, undefined)
+  })
+}
+
+test('wrangler.jsonc gives each Preview the container, unnamed', () => {
+  /**
+   * The MEDIA_RESOLVER binding above is in the block, and its class extends a Container base that
+   * throws when no container backs it. A `name` would pin every Preview to one application; wrangler
+   * rejects it and names each Preview's application itself.
+   */
+  const cfg = read('wrangler.jsonc')
+  const pc = cfg.previews.containers ?? []
+  assert.deepEqual(pc.map(c => c.class_name).sort(), cfg.containers.map(c => c.class_name).sort())
+  for (const c of pc) assert.equal(c.name, undefined, 'a preview container takes no fixed name')
+})
+
+test('wrangler.free.jsonc keeps the container out of its Previews too', () => {
+  /** Workers Free has no Containers, in a Preview no more than at the top level. */
+  const pv = read('wrangler.free.jsonc').previews
+  assert.equal(pv.containers, undefined)
+  assert.ok(!pv.durable_objects.bindings.some(b => b.name === 'MEDIA_RESOLVER'))
+})
+
 test('npm run deploy does not name the production config', () => {
   /**
    * `npm run deploy` deploys the generic file, and that is safe only because the generic file's name
@@ -192,15 +254,22 @@ test('npm run deploy does not name the production config', () => {
  * stdout on a TTY). So `secret put X < file` creates a stub mbedfx-selfhost, stores the secret on it
  * and prints Success, and production keeps the old value.
  *
+ * `wrangler preview` joined the list when main's Workers Builds moved to Worker Previews (#143). It
+ * takes its Worker from `--worker-name` or the config, and its `--name` names the Preview, not the
+ * Worker. A missing Worker gets the same kind of prompt with the same yes ("does not exist yet. Would
+ * you like to create it for this Preview?", `fallbackValue: true`), so a bare `npx wrangler preview`
+ * from a checkout creates mbedfx-selfhost and previews that.
+ *
  * What counts as a command: an inline code span starting `npx wrangler`, and any line of a fenced
  * block that runs wrangler, with backslash continuations joined. A bare inline `wrangler tail` is the
  * docs naming the tool ("`wrangler tail` still works with Workers Logs off") and is not checked. That
  * is the one hole: a recipe written that way slips through, so write recipes with `npx`.
  */
 const OWNER_DOCS = ['CLAUDE.md', 'docs/CREDENTIALS.md', 'docs/METRICS.md', 'container/README.md', PROD_FILE]
-// The subcommands whose Worker is `args.name ?? config.name` (tail: its positional). `containers list`
-// and `containers info` are account-wide and read no Worker name; `deploy` is the tests above.
-const PICKS_BY_NAME = /^(?:npx\s+)?wrangler\s+(?:secret|tail|deployments|versions|rollback)\b/
+// The subcommands whose Worker is `args.name ?? config.name` (tail: its positional; preview:
+// `--worker-name`). `containers list` and `containers info` are account-wide and read no Worker name;
+// `deploy` is the tests above.
+const PICKS_BY_NAME = /^(?:npx\s+)?wrangler\s+(?:secret|tail|deployments|versions|rollback|preview)\b/
 const esc = s => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 
 function wranglerCommands(text) {
@@ -224,7 +293,7 @@ function wranglerCommands(text) {
 
 const reachesProduction = cmd =>
   new RegExp(`(?:^|\\s)(?:-c|--config)(?:\\s+|=)${esc(PROD_FILE)}(?:\\s|$)`).test(cmd) ||
-  new RegExp(`(?:^|\\s)--name(?:\\s+|=)${esc(prod.name)}(?:\\s|$)`).test(cmd) ||
+  new RegExp(`(?:^|\\s)--${/\bwrangler\s+preview\b/.test(cmd) ? 'worker-name' : 'name'}(?:\\s+|=)${esc(prod.name)}(?:\\s|$)`).test(cmd) ||
   new RegExp(`^(?:npx\\s+)?wrangler\\s+tail\\s+${esc(prod.name)}(?:\\s|$)`).test(cmd)
 
 test('the owner-doc scan finds the recipes it checks, and tells a targeted command from a bare one', () => {
@@ -233,20 +302,60 @@ test('the owner-doc scan finds the recipes it checks, and tells a targeted comma
    * per-file tests below passing on an empty list.
    */
   const cmds = OWNER_DOCS.flatMap(f => wranglerCommands(raw(f))).filter(c => PICKS_BY_NAME.test(c))
-  assert.ok(cmds.length >= 6, `expected the owner docs' secret/tail/versions recipes, found ${JSON.stringify(cmds)}`)
+  assert.ok(cmds.length >= 6, `expected the owner docs' secret/tail/preview recipes, found ${JSON.stringify(cmds)}`)
   assert.ok(!reachesProduction('npx wrangler secret put YT_ACCOUNTS < accounts.json'))
   assert.ok(!reachesProduction('npx wrangler tail'))
   assert.ok(!reachesProduction('npx wrangler secret put X -c wrangler.jsonc'))
   assert.ok(reachesProduction(`npx wrangler secret put YT_ACCOUNTS -c ${PROD_FILE} < accounts.json`))
   assert.ok(reachesProduction(`npx wrangler versions list --name ${prod.name}`))
   assert.ok(reachesProduction(`npx wrangler tail ${prod.name} --format json`))
+  // preview's --name names the Preview; its Worker comes from --worker-name or the config.
+  assert.ok(!reachesProduction('npx wrangler preview'))
+  assert.ok(!reachesProduction(`npx wrangler preview --name ${prod.name}`))
+  assert.ok(reachesProduction(`npx wrangler preview -c ${PROD_FILE}`))
+  assert.ok(reachesProduction(`npx wrangler preview --worker-name ${prod.name}`))
 })
 
 for (const file of OWNER_DOCS) {
   test(`${file}: every wrangler command that takes its Worker from the config names production's config or Worker`, () => {
     for (const cmd of wranglerCommands(raw(file)).filter(c => PICKS_BY_NAME.test(c))) {
       assert.ok(reachesProduction(cmd),
-        `${file}: \`${cmd}\` reaches mbedfx-selfhost from a checkout. Add -c ${PROD_FILE}, or --name ${prod.name}`)
+        `${file}: \`${cmd}\` reaches mbedfx-selfhost from a checkout. Add -c ${PROD_FILE}, or --name ${prod.name} (--worker-name for preview)`)
     }
   })
 }
+
+/**
+ * THE PREVIEWS BLOCK NEVER REACHES PRODUCTION'S DATA (2026-11-25).
+ *
+ * Every non-main branch push runs `npx wrangler preview -c wrangler.production.jsonc`, and a Preview
+ * inherits nothing, so wrangler.production.jsonc carries its own `previews` block. The two things it must
+ * never share are production's R2 bucket (a branch's half-finished mux or record would land in the cache
+ * production serves from) and production's Analytics Engine dataset (branch traffic would count in
+ * production's numbers). The names are read from the production file itself, not listed here, so a
+ * renamed production resource is still guarded. And a binding production's code reads but the block
+ * leaves out does not exist in a Preview at all (Cloudflare: "your Worker can return a 1101 error"), so
+ * the Durable Object bindings and the container must mirror the top level.
+ */
+test('THE PREVIEWS BLOCK NEVER NAMES PRODUCTION\'S BUCKET OR DATASET, and mirrors its Durable Objects and container', () => {
+  const cfg = JSON.parse(readFileSync('wrangler.production.jsonc', 'utf8').replace(/^\s*\/\/.*$/gm, ''))
+  const pv = cfg.previews
+  assert.ok(pv, 'wrangler preview refuses to run without a previews block')
+  const prodBuckets = cfg.r2_buckets.map(b => b.bucket_name)
+  const prodDatasets = cfg.analytics_engine_datasets.map(d => d.dataset)
+  for (const b of pv.r2_buckets ?? []) assert.ok(!prodBuckets.includes(b.bucket_name), `preview bucket ${b.bucket_name} is production's`)
+  for (const d of pv.analytics_engine_datasets ?? []) assert.ok(!prodDatasets.includes(d.dataset), `preview dataset ${d.dataset} is production's`)
+  // Every binding production's code reads exists in a Preview too.
+  const names = list => (list ?? []).map(x => x.binding).sort()
+  assert.deepEqual(names(pv.r2_buckets), names(cfg.r2_buckets))
+  assert.deepEqual(names(pv.analytics_engine_datasets), names(cfg.analytics_engine_datasets))
+  assert.deepEqual(pv.ai, cfg.ai)
+  assert.deepEqual(pv.durable_objects.bindings, cfg.durable_objects.bindings)
+  // One preview container per production container class, with no fixed application name: each
+  // Preview gets its own container app, and a name would pin them all to one.
+  assert.deepEqual(pv.containers.map(c => c.class_name).sort(), cfg.containers.map(c => c.class_name).sort())
+  for (const c of pv.containers) assert.equal(c.name, undefined, 'a preview container takes no fixed name')
+  // Production's triggers never belong to a Preview.
+  assert.equal(pv.routes, undefined)
+  assert.equal(pv.triggers, undefined)
+})

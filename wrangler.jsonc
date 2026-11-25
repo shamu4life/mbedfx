@@ -92,5 +92,51 @@
     // OWN NAME, for the same reason as the bucket. docs/METRICS.md queries production's dataset; use
     // this name in their FROM clauses.
     { "binding": "AE", "dataset": "mbedfx_selfhost_counters" }
-  ]
+  ],
+  // WORKER PREVIEWS. New Workers use them, including the ones the Deploy to Cloudflare button makes:
+  // Workers Builds runs `npx wrangler preview` for every branch other than main, and that reads this
+  // file. Without a `previews` block wrangler stops with an error. Apart from the assets, a Preview gets
+  // none of the bindings above, so one this block leaves out does not exist there. Cloudflare gives
+  // each Preview its own Durable Object namespaces and its own container application, named by
+  // wrangler, so nothing here has to be created first.
+  //
+  // NO R2 BUCKET, SO A PREVIEW NEEDS NO SETUP. A Preview's bucket must exist before the Preview runs,
+  // and wrangler creates only the top-level one. Pointing this block at the top-level bucket would let
+  // a branch's half-finished mux or stored record into the cache your Worker serves. MEDIA_CACHE is
+  // optional (Env in src/analytics.ts) and the code checks for it before every use, so a Preview runs
+  // without it. What a Preview does differently:
+  //   - no muxed video. withResolver in src/worker.ts needs MEDIA_CACHE as well as MEDIA_RESOLVER, so
+  //     a video that needs muxing shows its cover still. The container still answers extracts and
+  //     /_clients.
+  //   - /_health answers 503.
+  //   - post records, translations and Reddit archive answers are not stored, so every view fetches
+  //     them again.
+  // After every Preview wrangler lists MEDIA_CACHE as "configured for your production Worker but not
+  // for Previews". Expect it: leaving the bucket out is what this block does. To mux in Previews,
+  // create a bucket just for them and add it to the block:
+  //     npx wrangler r2 bucket create mbedfx-selfhost-preview-media
+  //     "r2_buckets": [{ "binding": "MEDIA_CACHE", "bucket_name": "mbedfx-selfhost-preview-media" }],
+  //
+  // A DATASET OF ITS OWN, created by its first write, keeps branch traffic out of the counters above.
+  // No vars, since YT_PROMISE is off when unset, and no secrets, so a Preview runs without credential
+  // pools. Cron and routes never apply to a Preview. Workers Logs stay off: when this block sets no
+  // observability, wrangler gives the Preview the top-level setting.
+  "previews": {
+    "analytics_engine_datasets": [
+      { "binding": "AE", "dataset": "mbedfx_selfhost_preview_counters" }
+    ],
+    "ai": { "binding": "AI" },
+    "durable_objects": {
+      "bindings": [
+        { "name": "MEDIA_RESOLVER", "class_name": "MediaResolver" },
+        { "name": "MUX_RUNNER", "class_name": "MuxRunner" },
+        { "name": "SMOKE_RUNNER", "class_name": "SmokeRunner" }
+      ]
+    },
+    // The same size as the top level, so extracts in a Preview take as long as on the Worker. No
+    // `name`: wrangler refuses one here and names each Preview's application itself.
+    "containers": [
+      { "class_name": "MediaResolver", "image": "./container/Dockerfile", "max_instances": 10, "instance_type": "standard-2" }
+    ]
+  }
 }

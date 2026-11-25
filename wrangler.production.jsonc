@@ -88,8 +88,7 @@
   // PHASE-2 VIDEO PLAYBACK. The media-resolver container (ffmpeg + yt-dlp) and its R2 mux cache. A
   // `wrangler deploy` from here on builds the container image, so a Docker-compatible CLI (Docker
   // Desktop or Colima) must be running — see container/README.md. Optional shared secret:
-  // `npx wrangler secret put RESOLVER_SECRET -c wrangler.production.jsonc` and set the same value on
-  // the container. Without the -c it lands on the root file's mbedfx-selfhost, not on this Worker.
+  // `wrangler secret put RESOLVER_SECRET` and set the same value on the container.
   "r2_buckets": [
     // R2 BUCKETS CANNOT BE RENAMED. Pointing the binding at a new name does not move anything: the
     // old `fxeverything-media` keeps its objects and this one starts EMPTY. That is safe here and
@@ -287,5 +286,44 @@
     // A NEW DATASET STARTS AT ZERO. Historical counters stay in `fxeverything_counters` and are still
     // queryable there; they do not migrate. Renaming was the owner's call, made knowing that.
     { "binding": "AE", "dataset": "mbedfx_counters" }
-  ]
+  ],
+  // WORKER PREVIEWS, added 2026-11-25. Every push to a branch other than main runs
+  // `npx wrangler preview -c wrangler.production.jsonc` (Workers Builds, Previews Base), and wrangler
+  // refuses to run it without this block, because a Preview inherits NOTHING from the settings above:
+  // every PR's Workers Builds check failed until it existed. Each Preview gets its own Durable Object
+  // namespaces and its own container app, built from the branch's container/Dockerfile, so a branch can
+  // be measured from Cloudflare's network at its workers.dev Preview URL (preview_urls, above) before it
+  // merges, which is what CLAUDE.md asks for and what pin.it and Facebook /share needed.
+  //
+  // What a Preview must never share with production:
+  // - the R2 bucket. mbedfx-preview-media was created by hand on 2026-11-25 with a 7-day expiry rule
+  //   (`preview-expiry`). Pointing a Preview at mbedfx-media would let a branch's half-finished mux or
+  //   stored record land in production's cache, where the next production render would serve it.
+  // - the Analytics Engine dataset. mbedfx_preview_counters is created by its first write; sharing
+  //   mbedfx_counters would count branch traffic in production's numbers.
+  // No secrets are set for Previews, so a Preview runs without credential pools and degrades the way an
+  // unconfigured self-host does. Cron and the custom domains above never apply to a Preview
+  // (Cloudflare's limitation), so no scheduled check runs there and no domain is claimed.
+  // The container keeps production's size, so a Preview's mux timing is production's; max_instances
+  // is a cap and does not bill.
+  "previews": {
+    "vars": { "YT_PROMISE": "off" },
+    "r2_buckets": [
+      { "binding": "MEDIA_CACHE", "bucket_name": "mbedfx-preview-media" }
+    ],
+    "analytics_engine_datasets": [
+      { "binding": "AE", "dataset": "mbedfx_preview_counters" }
+    ],
+    "ai": { "binding": "AI" },
+    "durable_objects": {
+      "bindings": [
+        { "name": "MEDIA_RESOLVER", "class_name": "MediaResolver" },
+        { "name": "MUX_RUNNER", "class_name": "MuxRunner" },
+        { "name": "SMOKE_RUNNER", "class_name": "SmokeRunner" }
+      ]
+    },
+    "containers": [
+      { "class_name": "MediaResolver", "image": "./container/Dockerfile", "max_instances": 10, "instance_type": "standard-2" }
+    ]
+  }
 }

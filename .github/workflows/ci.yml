@@ -14,7 +14,7 @@
 #
 #     build command:   npm run build                                       (tests + typecheck)
 #     deploy command:  npx wrangler deploy -c wrangler.production.jsonc    (main)
-#     branch command:  npx wrangler versions upload -c wrangler.production.jsonc
+#     preview command: npx wrangler preview -c wrangler.production.jsonc   (other branches)
 #
 # THE -c IS LOAD-BEARING. The root wrangler.jsonc is the generic self-host config. Workers Builds
 # replaces a config's Worker name with the connected Worker's, so a deploy command without -c puts the

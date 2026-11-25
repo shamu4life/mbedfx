@@ -172,7 +172,7 @@ explains the defect it prevents.
 
 Production deploys from Cloudflare Workers Builds and nowhere else. It watches `main`, and what you
 merge is what deploys: `npx wrangler deploy -c wrangler.production.jsonc` on `main`, and
-`npx wrangler versions upload -c wrangler.production.jsonc` on other branches. **Never run either by
+`npx wrangler preview -c wrangler.production.jsonc` on other branches. **Never run either by
 hand.** A hand deploy overwrites whatever the build shipped, and prod goes on looking healthy. That
 has cost this project real downtime.
 
