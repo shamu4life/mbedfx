@@ -593,7 +593,7 @@ export interface Env {
   // pointer, and a test now fails the suite for any source comment that names one.) Three tests
   // in test/pipeline.test.mjs enforce that by reading the TREE — which is why the secret's
   // name is deliberately not spelled here; the mount is what survives a partial deletion.
-  // `wrangler.jsonc` declares ZERO `env` stanzas: one worker, one secret store, so a leftover
+  // `wrangler.production.jsonc` declares ZERO `env` stanzas: one worker, one secret store, so a leftover
   // secret becomes a PRODUCTION secret the day the Phase 3 cutover moves the apex onto it.
 }
 

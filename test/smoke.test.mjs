@@ -5,9 +5,9 @@ import { fetchableInstance } from '../src/platforms/fedihost.ts'
 import { GUEST_HOSTS } from '../src/guesthost.ts'
 
 /**
- * The zones this project owns and serves. All three are live; see wrangler.jsonc's routes comment.
+ * The zones this project owns and serves. All three are live; see wrangler.production.jsonc's routes comment.
  *
- * DELIBERATELY NOT DERIVED FROM wrangler.jsonc, even though the SSRF test below reads that file. The
+ * DELIBERATELY NOT DERIVED FROM wrangler.production.jsonc, even though the SSRF test below reads that file. The
  * check this feeds — "a route is on a zone we own" — becomes vacuous the moment the list of zones we
  * own is read out of the list of routes. Keeping it a separate declaration is the whole mechanism: a
  * route added without a human deciding it belongs here fails, loudly, in a test named for the rule.
@@ -43,7 +43,7 @@ test('routes are bare hostnames on our own zone — apex claimed, wildcard never
   /**
    * REVERSED 2026-07-25, DELIBERATELY. This test used to assert the opposite — that the apex was
    * NOT claimed — because the apex served the live fxtiktok worker and taking it was a pending
-   * Phase 3 step. That cutover has now happened (see wrangler.jsonc's routes comment), so the old
+   * Phase 3 step. That cutover has now happened (see wrangler.production.jsonc's routes comment), so the old
    * assertion was guarding a state we intentionally left. What survives is everything the old test
    * was ACTUALLY protecting, which was never "the apex specifically":
    *
@@ -138,7 +138,7 @@ test('THE MUX CEILING IS ONE NUMBER IN TWO FILES — the worker must not refuse 
 test('EVERY DOMAIN THE PAGE OFFERS IS ONE THE WORKER SERVES — a subset, deliberately not equality', () => {
   /**
    * REWRITTEN 2026-08-03. This asserted EQUALITY between public/index.html's host list and
-   * wrangler.jsonc's routes, on the reasoning that a served domain missing from the page would hand
+   * wrangler.production.jsonc's routes, on the reasoning that a served domain missing from the page would hand
    * out links on a different domain than the one you arrived at.
    *
    * THAT REASONING WAS RIGHT ABOUT THE MECHANISM AND WRONG ABOUT THE GOAL. A name in that array ships
@@ -158,7 +158,7 @@ test('EVERY DOMAIN THE PAGE OFFERS IS ONE THE WORKER SERVES — a subset, delibe
    * host served it.
    *
    * EXTENDED 2026-10-11 WITH GUEST_HOSTS, when the owner asked for sorryifuckedyour.mom and
-   * hotsinglesnear.you to be offered as buttons. They are served, but not through wrangler.jsonc: they
+   * hotsinglesnear.you to be offered as buttons. They are served, but not through wrangler.production.jsonc: they
    * are custom domains of the owner's you-stupid Worker, which hands this one its embed paths over a
    * service binding (src/guesthost.ts), and listing them in routes would try to take the domains off
    * that Worker (test/guesthost.test.mjs forbids it). Reading routes alone therefore called two working
@@ -175,7 +175,7 @@ test('EVERY DOMAIN THE PAGE OFFERS IS ONE THE WORKER SERVES — a subset, delibe
   const offered = m[1].split(',').map(x => x.trim().replace(/^'|'$/g, '')).filter(Boolean)
   assert.ok(offered.length > 0, 'and it offers at least one domain')
   for (const host of offered) {
-    assert.ok(served.has(host), `the page offers ${host}, which neither wrangler.jsonc nor GUEST_HOSTS serves`)
+    assert.ok(served.has(host), `the page offers ${host}, which neither wrangler.production.jsonc nor GUEST_HOSTS serves`)
   }
 
   // Every offered domain needs a button, or the toggle cannot reach it. The reverse is checked too:
@@ -250,15 +250,15 @@ test('EVERY DOMAIN THE WORKER SERVES IS ONE THE PAGE RECOGNISES AS OURS — the 
   }
 })
 
-test('EVERY SERVING ZONE IS REFUSED BY THE SSRF GUARD — the coupling wrangler.jsonc claims', () => {
+test('EVERY SERVING ZONE IS REFUSED BY THE SSRF GUARD — the coupling wrangler.production.jsonc claims', () => {
   /**
    * THE HOLE THIS CLOSES. A fediverse ref NAMES ITS OWN ORIGIN, so `/{our-own-host}/post/1` would
    * induce the Worker to fetch itself back through the edge — where Cloudflare's default subrequest
    * behaviour bypasses the zone's own WAF. fedihost.ts's clause 2 exists to refuse exactly that, and
    * it can only refuse hosts it has been told about.
    *
-   * Adding a route to wrangler.jsonc while forgetting OWN_HOSTS is therefore a SILENT SSRF hole: the
-   * new domain serves normally and nothing fails, so nothing catches it. wrangler.jsonc's routes
+   * Adding a route to wrangler.production.jsonc while forgetting OWN_HOSTS is therefore a SILENT SSRF hole: the
+   * new domain serves normally and nothing fails, so nothing catches it. wrangler.production.jsonc's routes
    * comment asserts the two lists are coupled; before this test, nothing made that true. The
    * 2026-07-30 rename is exactly the kind of change that would have opened it.
    *

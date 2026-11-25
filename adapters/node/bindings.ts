@@ -503,7 +503,7 @@ export const ENV_VARS = [
 
 /**
  * The string half of `Env`. Two values are not passed through as given:
- *   - YT_PROMISE defaults to "off", which is what wrangler.jsonc sets on the public instance. Until
+ *   - YT_PROMISE defaults to "off", which is what wrangler.production.jsonc sets on the public instance. Until
  *     2026-11-25 an unset var meant the YouTube activity-document promise was ON, so without this the
  *     same paste drew a different card here than there. The code now reads unset as off by itself
  *     (src/muxpolicy.ts ytPromiseOn), so this changes nothing that renders today. It stays as the

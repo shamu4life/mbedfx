@@ -1409,7 +1409,7 @@ class Handler(BaseHTTPRequestHandler):
             # IT DOES NOT REPAIR AN OBJECT ALREADY IN R2: the Worker serves a stored mux without asking
             # here again. mux/yt:txqiwrbYGrs/0 stays broken until the owner deletes it from the
             # mbedfx-media bucket, or the bucket's `expire-60d` lifecycle rule (recorded in
-            # wrangler.jsonc as re-added 2026-07-30; it lives on the bucket, not in this repo) removes
+            # wrangler.production.jsonc as re-added 2026-07-30; it lives on the bucket, not in this repo) removes
             # it 60 days after it was written, a date nobody has measured.
             if _mux_result_verdict(out) == MP4_INCOMPLETE:
                 return self._json_error(502, "incomplete result")

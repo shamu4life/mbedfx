@@ -523,7 +523,7 @@ test('every string var Env declares is read from the environment, and nothing el
   assert.deepEqual([...ENV_VARS].sort(), declared)
 
   const env = envVars({ YT_PROMISE: '', OWN_HOSTS: 'mine.example', AI: '1', ASSETS: 'x', PATH: '/bin', X_ACCOUNTS_2: '[]' }, ['embed.example.test'])
-  assert.equal(env.YT_PROMISE, 'off', 'unset or empty is production\'s value, from wrangler.jsonc')
+  assert.equal(env.YT_PROMISE, 'off', 'unset or empty is production\'s value, from wrangler.production.jsonc')
   assert.equal(env.OWN_HOSTS, 'mine.example embed.example.test', 'the served host is refused as an instance too')
   assert.equal(env.X_ACCOUNTS_2, '[]', 'the overflow pools are read through a computed key and still arrive')
   for (const k of ['AI', 'ASSETS', 'PATH']) assert.equal(k in env, false, k)

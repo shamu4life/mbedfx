@@ -207,7 +207,7 @@ test('YOUTUBE KEEPS ?v= — the one query parameter that is an id, not a tracker
 })
 
 test('BOTH DOMAINS ARE OFFERED, AND BOTH ARE REAL', () => {
-  // The toggle is only honest if the second domain is genuinely served — see wrangler.jsonc routes.
+  // The toggle is only honest if the second domain is genuinely served — see wrangler.production.jsonc routes.
   for (const host of ['mbedfx.app', 'megapenispoopenfarten.sex']) {
     const r = convert('https://twitter.com/jack/status/20', host)
     assert.equal(r.url, `https://${host}/jack/status/20`)

@@ -61,7 +61,7 @@ export const MAX_BODY = 512 * 1024
 /**
  * Hosts this Worker is served from, which it must never be induced to fetch. See clause 2.
  *
- * EVERY SERVING DOMAIN MUST BE LISTED, and adding one to wrangler.jsonc without adding it here is a
+ * EVERY SERVING DOMAIN MUST BE LISTED, and adding one to wrangler.production.jsonc without adding it here is a
  * silent SSRF hole rather than a cosmetic omission: a fediverse ref names its own origin, so
  * `/{our-own-host}/post/1` would make the Worker fetch itself through the edge — the one request
  * clause 2 exists to refuse. The `.endsWith('.' + h)` test below covers every subdomain, so a bare

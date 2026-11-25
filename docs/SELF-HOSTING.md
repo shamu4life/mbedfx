@@ -46,9 +46,9 @@ resolver on a quarter of a vCPU until 2026-08-28 and paid 14-17 s per YouTube ex
 vCPU the same extract measured 3.1-4.7 s per client from the same egress that day. For a long time
 that 15.9 s was read as YouTube throttling a datacenter IP, and it was our own CPU. The gain stops
 dead at one vCPU, because the hot path is single-threaded Python and an `ffmpeg -c copy` remux, so
-four cores buy nothing over one. `wrangler.jsonc` now asks for `standard-2` (1 vCPU, 6 GiB memory,
-12 GB disk); a self-hoster wants at least one dedicated core and enough disk for `MAX_BYTES` plus the
-unmerged tracks.
+four cores buy nothing over one. Both `wrangler.production.jsonc` and the generic `wrangler.jsonc` ask
+for `standard-2` (1 vCPU, 6 GiB memory, 12 GB disk); a self-hoster wants at least one dedicated core
+and enough disk for `MAX_BYTES` plus the unmerged tracks.
 
 ---
 
@@ -93,8 +93,8 @@ Deno build by name. On ARM it runs under emulation.
 Every string variable and secret the Worker reads comes from the environment under its own name:
 `RESOLVER_SECRET`, `OWN_HOSTS`, `YT_PROMISE`, the `*_ACCOUNTS` pools and the rest of
 [the binding table](#what-replaces-each-binding-and-what-degrades-without-it). `YT_PROMISE` is off
-unless it is exactly `on`, which matches the public instance (its `wrangler.jsonc` sets `off`). An
-empty value counts as unset.
+unless it is exactly `on`, which matches the public instance (its `wrangler.production.jsonc` sets
+`off`). An empty value counts as unset.
 
 ### What each stand-in gives up
 

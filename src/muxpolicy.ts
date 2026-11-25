@@ -213,10 +213,10 @@ export const YT_PROMISE = true
  * case folding, because a near miss should land on the safe side and the safe side is off.
  *
  * OPT-IN SINCE 2026-11-25. Until then the test was `!== 'off'`, so production, which sets
- * `YT_PROMISE: "off"` in wrangler.jsonc, ran with it off, and every deployment that did NOT set the
+ * `YT_PROMISE: "off"` in wrangler.production.jsonc, ran with it off, and every deployment that did NOT set the
  * var ran with it on: a self-hoster who copied the Worker without that line got the worse default,
  * measured below, and nothing told them. Production is unchanged, because "off" is still off, and its
- * explicit "off" stays in wrangler.jsonc as the record of the decision. Removing `=== 'on'` for the
+ * explicit "off" stays in wrangler.production.jsonc as the record of the decision. Removing `=== 'on'` for the
  * old `!== 'off'` puts every deployment without the var back on a promise that reached Discord in time
  * one time in eight.
  *

@@ -21,7 +21,7 @@ import type { ClientClass, Platform } from './types.ts'
  * and the SmokeExpect docstring is where the case for keeping that rare is written down.
  *
  * WHAT IT DOES NOT COLLECT. Platform, outcome and nothing else, through the existing counters. No
- * url, no ip, no user agent, no geolocation. wrangler.jsonc explains at length why Workers Logs are
+ * url, no ip, no user agent, no geolocation. wrangler.production.jsonc explains at length why Workers Logs are
  * off on this service and why turning them on to make debugging easier would be the wrong trade;
  * a monitor that reintroduced that by the back door would be a worse defect than the outage it
  * detects.
@@ -144,7 +144,7 @@ export const SMOKE_CHECKS: readonly SmokeCheck[] = [
    * and nobody noticed); since 1.15.0 a head whose mux the document will promise carries the activity
    * link and an og:image on the poster slot and NO og:video, while the no-verdict, live and
    * over-ceiling states keep the iframe. On the warm video this row checks, og:video is OUR mp4.
-   * SINCE 2026-11-24, with `YT_PROMISE: "off"` (wrangler.jsonc), every degraded yt head is the iframe
+   * SINCE 2026-11-24, with `YT_PROMISE: "off"` (wrangler.production.jsonc), every degraded yt head is the iframe
    * again, and cardVerdict refuses an og:video whose og:video:type is text/html, so the iframe can
    * no longer satisfy this row the way it did under 1.14.0.
    *
@@ -160,7 +160,7 @@ export const SMOKE_CHECKS: readonly SmokeCheck[] = [
    * hit could only ever be served a card that had the player.
    *
    * THE KNOWN FALSE ALARM IS THE BUCKET'S OWN BROOM, and it is bounded to about one tick every 60
-   * days. wrangler.jsonc records the lifecycle rule `expire-60d` on mbedfx-media, which deletes an
+   * days. wrangler.production.jsonc records the lifecycle rule `expire-60d` on mbedfx-media, which deletes an
    * object 60 days after it was WRITTEN — a read does not refresh it — so roughly that often this row
    * finds the mp4 swept and reports `no-video`. The tick that finds it gone is also the tick that arms
    * the MuxRunner alarm on a 19-second video, so the next tick 30 minutes later is warm again. One or
