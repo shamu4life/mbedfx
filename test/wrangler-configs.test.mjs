@@ -205,7 +205,9 @@ const esc = s => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 
 function wranglerCommands(text) {
   const found = []
-  const prose = text.replace(/^```[^\n]*\n([\s\S]*?)^```/gm, (_, body) => {
+  // Fences may be indented (inside a list item); a fence left in the prose would flip the backtick
+  // parity below and hide every span after it.
+  const prose = text.replace(/^[ \t]*```[^\n]*\n([\s\S]*?)^[ \t]*```/gm, (_, body) => {
     for (const line of body.replace(/\\\n\s*/g, ' ').split('\n')) {
       const m = line.match(/(?:npx\s+)?wrangler\s.*$/)
       if (m) found.push(m[0].trim())

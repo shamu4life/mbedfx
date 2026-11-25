@@ -248,9 +248,10 @@ render the cover still.
 To require the shared-secret header on mbedfx.app, run
 `npx wrangler secret put RESOLVER_SECRET -c wrangler.production.jsonc` and set the same
 `RESOLVER_SECRET` on the container as a container secret. Forget the `-c` and the secret goes to
-`mbedfx-selfhost`, the root config's Worker, created on the spot if the value comes in on a pipe;
-"Pushing it" in `docs/CREDENTIALS.md` shows how little wrangler says about that. A deployment of the
-generic file leaves the `-c` off.
+`mbedfx-selfhost`, the root config's Worker. If that Worker doesn't exist, wrangler asks whether to
+create it with yes as the default, and when the value comes in on a pipe it creates it without
+asking. "Pushing it" in `docs/CREDENTIALS.md` shows how little wrangler says about that. A
+deployment of the generic file leaves the `-c` off.
 
 Do not use `containers[].image_vars` for the secret. Wrangler documents that as build-time only, and
 a value set there never reaches the running instance.
