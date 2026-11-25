@@ -488,7 +488,7 @@ Most mean nothing as an absolute number, and several mislead alone.
 | Counter | What a rise means | Read against |
 |---|---|---|
 | `ok` | A card was rendered and served. The health denominator. | nothing |
-| `assert_fail` | The page didn't answer: upstream changed shape, blocked mbedfx, or served a decoy. Not "the post is gone". On `ig`, the only way to see the 599 KB HTTP-200 decoy. | `fetch_fail`; on `yt`, `ok` (the ratio is the oembed-miss rate); on `dm`/`st`/`im`, `meta_timeout` |
+| `assert_fail` | The page didn't answer: upstream changed shape, blocked mbedfx, or served a decoy. Not "the post is gone". On `ig`, the only way to see the 599 KB HTTP-200 decoy. On `pn` it has two sources since 2026-11-25: the pin fetch, and the pin.it shortener giving no redirect at all. If pasted `/pin/…` links still draw cards, the rise is the shortener's. | `fetch_fail`; on `yt`, `ok` (the ratio is the oembed-miss rate); on `dm`/`st`/`im`, `meta_timeout` |
 | `meta_timeout` | **Ours, not theirs.** The container metadata call was still extracting when our budget ran out. Fires on `dm`/`st`/`im`, where that call *is* the card, so the reader got the generic "couldn't load" for a post that is fine. It lands in R2 under `waitUntil` a moment later, so the next unfurl is a warm hit and a re-paste heals. A first paste does not. | `assert_fail` on the same platform: this one is a budget to fix, that one an upstream that moved |
 | `fetch_fail` | The generic failure card was served. Subtract the named failures to leave the ones with no name. | everything below that stacks on it |
 | `age_restricted` | An age wall (🔞). Every emitter reads a positive signal out of the platform's payload; none infers a wall from missing tags. | `pool_unused`, same platform |
