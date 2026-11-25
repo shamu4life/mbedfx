@@ -5853,6 +5853,28 @@ async function serve(req: Request, env: Env, ctx: ExecutionContext, d: Deps): Pr
    *       UNFURL (it subtracts, and p/4/6 loses). Wait id `9` `5` nn mm + real id; code 5nnmm.
    *       `mediap` is a distinct slot so its urls never collide with m's — Discord caches a failed
    *       fetch per url for a while. p/0/0 is its positive control (a/0 and m/0 folded together).
+   *   `/_wait/d/{v}/{tag}/{facebook post path}` — THE DATELESS DOCUMENT (2026-11-25, issue #49).
+   *       Not a patience question, and the one surface that is not YouTube. Facebook's og: page
+   *       carries no post date, so production publishes the 1970 epoch as `created_at`. Leaving
+   *       the field out has waited on one caution, repeated in three places and never measured:
+   *       that Discord refuses a status without it. The head is the ORDINARY production head for
+   *       that path, rendered by re-entering handle() with the query kept (`/photo/?fbid=` names
+   *       its post there), and exactly one thing in it changes: the activity link's id becomes
+   *       `9` `6` `0{v}` + the real id. v=0 is the control: the document is today's, byte for
+   *       byte, under the wait id. v=1 is the variant: `created_at` and `account.created_at` are
+   *       deleted and nothing else is. Paste them in TWO SEPARATE messages: both cards carry the
+   *       same og:url and status url (the Facebook permalink), and Discord's client can fold
+   *       embeds that share a url into one gallery card, which would hide whether the variant drew
+   *       at all (review, 2026-11-25; the folding is reported, not measured here). And the post
+   *       may carry more than one image, so expect a picture per attachment. The control draws today's card
+   *       dated 1970. A variant that draws the same card with its picture and no date says the
+   *       field can go; one that draws the head-only card (this head has no og:image, so that one
+   *       shows no picture) says Discord needs it. The `wait_api` row (600 control, 601 variant)
+   *       separates "fetched and refused" from "never fetched". Unlike the YouTube surfaces, no
+   *       label goes into the head: the two heads differ by the id alone, so a difference between
+   *       the cards can only come from the document. The {tag} is required because the head url
+   *       is the only url a retry can change. The activity id is the same under every tag, so a
+   *       retry that leaves no new row was answered without fetching the document again.
    *
    * WHY THIS EXISTS (2026-08-31). The owner's verdict on 1.14.0's stock player: it re-wraps the
    * YouTube playback Discord already has, which is a stopgap and not the goal. The goal is the
@@ -5890,17 +5912,21 @@ async function serve(req: Request, env: Env, ctx: ExecutionContext, d: Deps): Pr
     // above the router, because the router would otherwise hand a `9…` id to decodeStatusId and
     // 404 it — and because the handle segment is decoration the router discards, which is why
     // the experiment cannot ride there if Discord rewrites onto /api/v1/.
-    const wsid = /^\/(users\/[^/]+|api\/v1)\/statuses\/(9(?:([1-4])(\d\d)|(5)(\d\d)(\d\d))(1\d+))$/.exec(url.pathname)
+    // Surface 6 is d, and only with 00 or 01 after it (the lookahead): d is a control and one
+    // variant, not a number to sweep. Any other `96nn…` id is still not a wait id, so it reaches
+    // the router and 404s exactly as it did before d existed.
+    const wsid = /^\/(users\/[^/]+|api\/v1)\/statuses\/(9(?:([1-4]|6(?=0[01]))(\d\d)|(5)(\d\d)(\d\d))(1\d+))$/.exec(url.pathname)
     if (wsid) {
       const [, path, waitSid, sdigit4, ns4, sdigit5, nds, nms, realSid] = wsid
-      const surface = sdigit5 ? 'p' : ({ '1': 'a', '2': 'm', '3': 'b', '4': 'c' } as const)[sdigit4 as '1' | '2' | '3' | '4']
+      const surface = sdigit5 ? 'p' : ({ '1': 'a', '2': 'm', '3': 'b', '4': 'c', '6': 'd' } as const)[sdigit4 as '1' | '2' | '3' | '4' | '6']
       // p carries two holds, the document's and the video's; the others carry one, and for them
       // the document hold is the surface's own number (only a uses it).
       const n = Number(sdigit5 ? nms : ns4)
       const ndoc = Number(sdigit5 ? nds : ns4)
       if (n > 60 || ndoc > 60) return new Response('n is 0-60', { status: 400 })
       // The wait code is every digit between the `9` and the real id, as one number: 105 = a/5,
-      // 50406 = p/4/6. One rule for all six surfaces, so any row reads back to its url.
+      // 50406 = p/4/6, 601 = d's variant. One rule for every surface, so any row reads back to
+      // its url.
       const code = Number(waitSid.slice(1, waitSid.length - realSid.length))
       // Which path Discord fetches a status from was asserted in this codebase for months and
       // measured on 2026-09-02: /api/v1/ every time (5 of 5 real crawls), the advertised /users/
@@ -5918,6 +5944,34 @@ async function serve(req: Request, env: Env, ctx: ExecutionContext, d: Deps): Pr
       // as its first key, so this touches the top-level id and nothing else; the real id is a
       // 40-odd digit string that occurs nowhere else in the document.
       let body = (await real.text()).replace(`{"id":"${realSid}"`, `{"id":"${waitSid}"`)
+      if (surface === 'd') {
+        // No hold and no /_media/ rewrite: d asks about one field, so the media must be exactly
+        // the media production serves. The control (n = 0) stops at the id rewrite. The variant
+        // drops both dates, because toMastodonStatus writes the post's date into both, and a
+        // document that kept either one would still be carrying the 1970 value under test.
+        // Parsed and re-serialised rather than cut out with a regex: JSON.stringify of
+        // JSON.parse of Response.json's output is the same bytes less the deleted keys, and a
+        // regex over a caption that happens to contain `"created_at":` could cut the wrong one.
+        if (n === 1) {
+          let doc: Record<string, unknown>
+          try {
+            doc = JSON.parse(body) as Record<string, unknown>
+          } catch {
+            return new Response('the activity document was not JSON', { status: 502, headers: { 'cache-control': 'no-store' } })
+          }
+          delete doc.created_at
+          const account = doc.account
+          if (account && typeof account === 'object') delete (account as Record<string, unknown>).created_at
+          body = JSON.stringify(doc)
+        }
+        const heads = new Headers(real.headers)
+        heads.delete('content-length')
+        // no-store, like every experiment head: a cached answer would make a retry re-read the
+        // first crawl. Set on d alone, so the other surfaces keep the headers their recorded
+        // readings were taken with.
+        heads.set('cache-control', 'no-store')
+        return new Response(body, { status: 200, headers: heads })
+      }
       if (surface !== 'a') {
         // Only VIDEO urls (/_media/{key}/{digits}) carry the stall. Poster (/p0) and avatar
         // segments stay on the real route, so the card's imagery cannot confound the reading —
@@ -6044,6 +6098,47 @@ async function serve(req: Request, env: Env, ctx: ExecutionContext, d: Deps): Pr
       heads.delete('content-range')
       heads.delete('accept-ranges')
       return new Response(readable, { status: 200, headers: heads })
+    }
+    // d's HEAD: the production head for a Facebook post path, with only its activity id changed.
+    // See the block comment for the question it asks.
+    const wd = /^\/_wait\/d\/([01])\/[\w-]{1,24}(\/.*)$/.exec(url.pathname)
+    if (wd) {
+      const [, v, tail] = wd
+      const noStore = { 'cache-control': 'no-store' }
+      // Concatenated, never new URL(tail, origin): a tail spelled `//other.host/…` would be read as
+      // a host there, and every link in the head is built from the request's origin.
+      const target = `${url.origin}${tail}${url.search}`
+      // ONLY A FACEBOOK POST, checked before re-entering. handle() answers every route, and this
+      // reads a 200 into memory: an unchecked tail could buffer a whole video off /_media/, or
+      // nest /_wait/ surfaces inside each other. A gallery mode is refused because it moves the
+      // id's sentinel off `1`, and `direct` because that answer is a file, not a head.
+      const tr = route(new URL(target))
+      if (tr.kind !== 'post' || tr.ref.p !== 'fb' || tr.gallery || tr.direct) {
+        return new Response('the d surface takes a Facebook post path', { status: 404, headers: noStore })
+      }
+      const real = await handle(new Request(target, { headers: req.headers }), env, ctx, d)
+      // Unchanged when it is not a card: a human gets production's redirect to Facebook, and a
+      // failure answer is the measurement's to show, not this route's to hide.
+      if (real.status !== 200) return real
+      if (!(real.headers.get('content-type') || '').startsWith('text/html')) {
+        void real.body?.cancel()
+        return new Response('the post did not answer with a head', { status: 422, headers: noStore })
+      }
+      const head = await real.text()
+      // The link discord.ts emits for every Discord head except the stock one. EXACTLY ONE, with
+      // the `1` sentinel, or the experiment refuses: a head it cannot mark would come back as a
+      // second control, and two identical cards would read as "the field is not needed".
+      const act = /(type="application\/activity\+json" href="[^"]*\/statuses\/)(1\d+)"/g
+      if ((head.match(act) || []).length !== 1) {
+        return new Response('the head has no activity link this experiment can mark', { status: 422, headers: noStore })
+      }
+      // The /_oembed/ link keeps the real id. It carries no date, so both cards share it.
+      // A function, not `$1960…`: in a replacement string that reads as a request for group 19.
+      const body = head.replace(act, (_, pre: string, sid: string) => `${pre}960${v}${sid}"`)
+      const heads = new Headers(real.headers)
+      heads.delete('content-length')
+      heads.set('cache-control', 'no-store')
+      return new Response(body, { status: 200, headers: heads })
     }
     // p takes two holds (document, then video); the others one. Parsed into one shape so the head
     // below is the same head for all six surfaces, which is what makes their cards comparable.
