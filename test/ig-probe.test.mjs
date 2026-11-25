@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { probeInstagramGraphQL, shortcodeToPk, probeMessage, bodyKind, IG_PROBE_SHORTCODE, IG_NEW_DOC_ID } from '../src/platforms/instagram/probe.ts'
+import { probeInstagramGraphQL, shortcodeToPk, probeMessage, bodyKind, cookieJarOf, IG_PROBE_SHORTCODE, IG_NEW_DOC_ID } from '../src/platforms/instagram/probe.ts'
 import { handle } from '../src/worker.ts'
 
 /** /_igprobe (2026-11-24): which Instagram GraphQL query answers from the Worker's egress. */
@@ -61,6 +61,37 @@ test('a working new path is reported step by step, with no url, token or body in
   assert.equal(JSON.parse(body.get('variables')).media_id, shortcodeToPk(IG_PROBE_SHORTCODE))
   assert.equal(gql.init.headers['x-csrftoken'], 'CSRFTOKEN', 'csrf only once the ruling says ok, as yt-dlp does')
   assert.ok(asked.length <= 5, 'at most five requests to Instagram per run')
+})
+
+test('cookieJarOf forwards every homepage cookie and reports only how many', () => {
+  const h = new Headers()
+  h.append('set-cookie', 'csrftoken=AAA; Path=/; Secure')
+  h.append('set-cookie', 'mid=BBB; Expires=Wed, 24 Nov 2027 00:00:00 GMT; Path=/')
+  h.append('set-cookie', 'ig_did=CCC; Path=/')
+  const jar = cookieJarOf(new Response('', { headers: h }))
+  assert.equal(jar.count, 3)
+  assert.equal(jar.header, 'csrftoken=AAA; mid=BBB; ig_did=CCC', 'a comma inside Expires does not split a cookie')
+  assert.deepEqual(cookieJarOf(null), { header: '', count: 0 })
+})
+
+test('the new path sends the whole jar and browser-style headers, and reports the count only', async () => {
+  const { asked, f } = fakeInstagram([
+    ['https://www.instagram.com/graphql/query/', () => new Response('{}')],
+    ['https://www.instagram.com/api/v1/web/get_ruling_for_content/', () => new Response('{"status":"ok"}')],
+    ['https://www.instagram.com/api/graphql', () => new Response('{"data":{"xig_polaris_media":{}}}')],
+    ['https://www.instagram.com/', () => {
+      const h = new Headers()
+      h.append('set-cookie', 'csrftoken=CSRFTOKEN; Path=/')
+      h.append('set-cookie', 'mid=MIDVALUE; Path=/')
+      return new Response('<html></html>', { headers: h })
+    }],
+  ])
+  const out = await probeInstagramGraphQL(f)
+  assert.equal(out.new.home.cookies, 2)
+  const gql = asked.find(a => a.url === 'https://www.instagram.com/api/graphql')
+  assert.equal(gql.init.headers.cookie, 'csrftoken=CSRFTOKEN; mid=MIDVALUE')
+  assert.equal(gql.init.headers['sec-fetch-site'], 'same-origin')
+  assert.ok(!JSON.stringify(out).includes('MIDVALUE'), 'no cookie value in the answer')
 })
 
 test('a decoy page and a network failure read as answers, never as a throw', async () => {
