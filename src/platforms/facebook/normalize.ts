@@ -9,8 +9,9 @@ import { uploadDateOrEpoch } from '../uploaddate.ts'
  * caption, poster and dimensions all come from the SAME yt-dlp that resolves the video (a `-J` metadata
  * call in the container) — the one source that works. No I/O — the container call lives in worker.ts.
  *
- * IT READS THE CLOCK ONCE (uploadDateOrEpoch's future bound), and this docstring used to claim it did
- * not — see platforms/uploaddate.ts. Nothing else here is clock-dependent.
+ * IT READS THE CLOCK IN ONE PLACE, uploadDateOrEpoch's future bound, and this docstring used to claim it
+ * did not — see platforms/uploaddate.ts. Two readers reach it: normalizeFacebook's video timestamp and,
+ * since 2026-11-24, facebookPluginCard's data-utime (fbPluginDate). Nothing else here is clock-dependent.
  */
 
 /**
