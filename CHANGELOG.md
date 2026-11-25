@@ -16,6 +16,14 @@ All notable changes to mbedfx are documented here. The format follows
   Bluesky, Reddit, Mastodon and YouTube posts drew the same card through it as on mbedfx.app. Twitter's
   lacked its repost count. The Docker image and the compose file haven't been built yet. See
   `docs/SELF-HOSTING.md`.
+- **A paste test for Facebook cards with no date (issue #49).** `/_wait/d/0/{tag}/{facebook post path}`
+  and `/_wait/d/1/{tag}/{facebook post path}` serve the post's normal Discord head, except that the
+  activity link's id carries an experiment code. Behind `0` is today's status, dated 1970. Behind `1`
+  is the same status without `created_at` and `account.created_at`. Pasting both links in one Discord
+  message shows whether Discord still draws the card when the date is missing. Every fetch of either
+  status writes a `wait_api` row (600 or 601), which tells a card Discord refused apart from one it
+  never fetched. The routes answer `no-store` and take only Facebook post paths. No other response
+  changes. Nobody has pasted the pair yet.
 
 ### Fixed
 
@@ -30,8 +38,8 @@ All notable changes to mbedfx are documented here. The format follows
   use the time the plugin stores on the post (`data-utime`). A Facebook video whose container answer
   has no `timestamp` uses its `upload_date`, as YouTube already does. Three kinds still have no date:
   posts read from the og: page, plugin posts without that time, and videos with neither field. They
-  still show 1970 (`createdAt: null` in `/_api/v1`). Leaving the field out instead waits on a test
-  in Discord, which may refuse a document without it.
+  still show 1970 (`createdAt: null` in `/_api/v1`). Leaving the field out instead waits on the
+  `/_wait/d` test in Discord, which may refuse a document without it.
 - **Off Cloudflare, the scheduled check needs `SMOKE_RUNNER` bound.** `docs/SELF-HOSTING.md` (and the
   1.17.0 entry below) said a self-hosted deploy could leave it unset. Without it the cron's fallback
   reads `caches.default`, which Node doesn't have, so every tick would throw. The adapter binds a
