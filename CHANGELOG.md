@@ -6,14 +6,16 @@ All notable changes to mbedfx are documented here. The format follows
 
 ## [Unreleased]
 
-**Upgrading:** if you forked mbedfx and deploy the root `wrangler.jsonc`, your next deploy uses new
-names: Worker `mbedfx-selfhost`, R2 bucket `mbedfx-selfhost-media`, Analytics Engine dataset
-`mbedfx_selfhost_counters`, container application `mbedfx-selfhost-mediaresolver`. It creates a
-second Worker next to your old one, with an empty cache. To keep your Worker, put your own names back
-in `wrangler.jsonc`, or keep your old file and deploy it with `-c`. If you keep your old Worker name,
-keep its `containers[].name` too. A Durable Object class can belong to only one container
-application, so a new name fails the deploy with `DURABLE_OBJECT_ALREADY_HAS_APPLICATION`. Nobody
-else has anything to do.
+**Upgrading:** if you forked mbedfx and deploy the root `wrangler.jsonc`, it now names a different
+Worker (`mbedfx-selfhost`), R2 bucket (`mbedfx-selfhost-media`), Analytics Engine dataset
+(`mbedfx_selfhost_counters`) and container application (`mbedfx-selfhost-mediaresolver`). Deployed
+as it is, it creates a second Worker with an empty cache, and the old one keeps its domains, its
+half-hourly check and its container bill until you delete it. To keep your existing Worker, save
+your old config under another name, such as `wrangler.mine.jsonc`, and deploy it with
+`npx wrangler deploy -c wrangler.mine.jsonc`. If Workers Builds deploys your fork, put the same `-c`
+in its deploy command. Don't copy the old names back into `wrangler.jsonc`: `npm run build` fails
+when that file uses mbedfx.app's names or sets `containers[].name`, and the old file did both unless
+you changed it. Nobody else has anything to do.
 
 ### Added
 
