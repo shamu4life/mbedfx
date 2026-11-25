@@ -377,14 +377,14 @@ test('A STOP WAITS FOR THE REQUEST IN FLIGHT, not only for waitUntil work (revie
   // The reproduction: a container that answers after 1.5 s, a /_clients call in flight, then a stop
   // 0.3 s in. The first version closed the server and drained only the waitUntil set, so the caller
   // got an empty reply while the log said "all settled".
+  let repliedAt = 0
   const slow = await fakeContainer((call, res) => setTimeout(() => {
+    repliedAt = Date.now()
     res.writeHead(200, { 'content-type': 'application/json' })
     res.end(JSON.stringify({ ok: true, serving: ['web_embedded'], clients: [] }))
   }, 1500))
   const { adapter, port } = await start({ containerUrl: slow.url })
-  let answeredAt = 0
   const inFlight = raw(port, 'GET', '/_clients', { host: new URL(PRIMARY).host })
-    .then(res => { answeredAt = Date.now(); return res })
   await new Promise(r => setTimeout(r, 300))
   let stoppedAt = 0
   const stopped = gracefulStop(adapter, 5000).then(r => { stoppedAt = Date.now(); return r })
@@ -393,8 +393,15 @@ test('A STOP WAITS FOR THE REQUEST IN FLIGHT, not only for waitUntil work (revie
   assert.deepEqual(JSON.parse(res.body.toString()).serving, ['web_embedded'])
   const r = await stopped
   // THE ORDER IS THE FIX: main() calls process.exit as soon as this resolves, so resolving before the
-  // answer went out is the empty reply the review reproduced.
-  assert.ok(answeredAt > 0 && stoppedAt >= answeredAt, `stop resolved after the answer (${stoppedAt - answeredAt} ms)`)
+  // answer went out is the empty reply the review reproduced. The bug resolved ~0.3 s in, about 1.2 s
+  // before the container had even replied, so "after the container replied" is what catches it.
+  //
+  // NOT "after the CLIENT read the answer", which this asserted first and which failed by 1 ms on a
+  // GitHub runner on 2026-11-25 (`-1 ms`, PR #137). The client and the server share this process, and
+  // once the server has written the last byte and closed the socket, its close callback and the
+  // client's 'end' can run in either order. The client getting the whole 200 body, asserted above, is
+  // the proof the answer went out; this line only orders the stop against the upstream.
+  assert.ok(repliedAt > 0 && stoppedAt >= repliedAt, `stop resolved after the container replied (${stoppedAt - repliedAt} ms)`)
   assert.equal(r.requestsDone, true, 'and the stop says so')
   assert.equal(r.backgroundClean, true)
   // A request after the stop is refused: the server no longer listens.
