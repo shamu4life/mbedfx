@@ -68,12 +68,19 @@ const recordingAE = () => {
   return { rows, writeDataPoint(d) { rows.push(d) } }
 }
 
+/**
+ * `YT_PROMISE: 'on'` SINCE 2026-11-25, when the promise became opt-in (src/muxpolicy.ts ytPromiseOn).
+ * Before that an env with no var WAS promise mode, so this file tested it without naming it. Every
+ * test here is about promise mode, so the var is set once, here, the way an operator turns it on, and
+ * every assertion below is unchanged. test/yt-promise-off.test.mjs pins what an unset var does now.
+ */
 const envWith = ({ resolver, r2 = fakeR2(), ae = recordingAE() } = {}) => ({
   AE: ae,
   ASSETS: { async fetch() { return new Response('a') } },
   MEDIA_CACHE: r2,
   MEDIA_RESOLVER: resolver,
   TRANSLATE_GOOGLE: 'off',
+  YT_PROMISE: 'on',
 })
 
 const depsFor = post => ({
@@ -120,16 +127,19 @@ const countingResolver = () => {
 const rowsOf = (ae, outcome) => ae.rows.filter(r => r.blobs?.[1] === outcome)
 
 test('promisable(): a known duration under the ceiling, never live, never blind', () => {
-  assert.equal(YT_PROMISE, true, 'the switch is on; flipping it is the rollback')
-  assert.equal(promisable({ duration: 60 }), true)
-  assert.equal(promisable({ duration: YT_PROMISE_MAX_SECONDS }), true, 'the ceiling is inclusive')
-  assert.equal(promisable({ duration: YT_PROMISE_MAX_SECONDS + 1 }), false)
-  assert.equal(promisable({}), false, 'no duration verdict = Innertube refused = we know nothing = no promise')
-  assert.equal(promisable({ duration: 0 }), false, 'a live stream reports lengthSeconds 0')
-  assert.equal(promisable({ duration: 60, live: true }), false)
-  assert.equal(promisable({ duration: 60, gated: true }), false,
+  // REWRITTEN 2026-11-25: every call passes ON, because with no env the promise is now off and every
+  // line below would read false for that reason alone instead of for the vouch it is testing.
+  const ON = { YT_PROMISE: 'on' }
+  assert.equal(YT_PROMISE, true, 'the master switch is on; flipping it is the rollback')
+  assert.equal(promisable({ duration: 60 }, ON), true)
+  assert.equal(promisable({ duration: YT_PROMISE_MAX_SECONDS }, ON), true, 'the ceiling is inclusive')
+  assert.equal(promisable({ duration: YT_PROMISE_MAX_SECONDS + 1 }, ON), false)
+  assert.equal(promisable({}, ON), false, 'no duration verdict = Innertube refused = we know nothing = no promise')
+  assert.equal(promisable({ duration: 0 }, ON), false, 'a live stream reports lengthSeconds 0')
+  assert.equal(promisable({ duration: 60, live: true }, ON), false)
+  assert.equal(promisable({ duration: 60, gated: true }, ON), false,
     'age-gated: an ordinary duration, and a mux that can NEVER succeed')
-  assert.equal(promisable(null), false)
+  assert.equal(promisable(null, ON), false)
 })
 
 test('THE MUX IS DISPATCHED AT T0, BEFORE THE POST FETCH RETURNS — every second before the first byte is a point of conversion', async () => {

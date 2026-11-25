@@ -37,6 +37,16 @@ All notable changes to mbedfx are documented here. The format follows
   as `?url=/pin.it/{code}`. The shortener was measured from a home connection on 2026-11-25. Nobody
   has measured it from Cloudflare's network yet.
 
+### Changed
+
+- **The YouTube promise is off unless `YT_PROMISE` is `on`.** Until now only `off` turned it off,
+  so a deployment that never set the var promised Discord an mp4 for a cold short video whenever
+  it knew the video's length. On 2026-11-24 that promise made Discord's window one time in eight,
+  and every miss left a player in the message that never plays. mbedfx.app already had
+  `YT_PROMISE: "off"` in `wrangler.jsonc`, so it renders the same cards as before. Self-hosters who
+  left the var out now get YouTube's own player on a first paste, as mbedfx.app does. To get the
+  promise back, set `YT_PROMISE=on`.
+
 ### Fixed
 
 - **Pinterest "shared with you" links convert to the bare pin.** The converter turned
@@ -62,6 +72,17 @@ All notable changes to mbedfx are documented here. The format follows
   reads `caches.default`, which Node doesn't have, so every tick would throw. The adapter binds a
   stand-in. The same page now shows the current `Deps` and counts 24 `waitUntil` call sites, not
   fifteen.
+
+### Security
+
+- **A self-hosted instance won't fetch the domain it's being asked on.** The fediverse routes take
+  the instance from the link's path. So `/embed.example.com/post/1`, requested on embed.example.com,
+  made the deployment fetch itself unless its operator had listed that domain in `OWN_HOSTS`. On
+  Cloudflare that request comes back in through the edge and skips the zone's WAF. Now the Worker
+  passes each request's domain to the guard, plus the domain under it on a `d.` host, and the request
+  is refused without any setting. A deployment with two or more domains still needs `OWN_HOSTS`,
+  because a request on one can name another. Nothing changes on mbedfx.app, whose domains were
+  already on the built-in list.
 
 ## [1.17.0] - 2026-11-24
 

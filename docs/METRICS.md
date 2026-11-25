@@ -245,6 +245,10 @@ one thing worth watching. `fail` climbing toward the total means the cards have 
 
 ### Reading the promise funnel (1.15.0)
 
+This funnel only fills where the promise is on, which means `YT_PROMISE` set to exactly `on`. It's
+off without the var, and mbedfx.app has run with it off since 2026-11-24, so there `card_promised`
+stays at zero.
+
 Since 1.15.0 a cold YouTube paste whose duration is known and under `YT_PROMISE_MAX_SECONDS`
 (`src/muxpolicy.ts`) is PROMISED: the head stands the stock player down and keeps the activity
 link, the activity document keeps `type:'video'`, and `/_media` waits for the mux. Discord gives

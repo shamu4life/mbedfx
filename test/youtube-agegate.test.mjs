@@ -126,7 +126,10 @@ test('AN AGE-GATED ENTRY IS MARKED gated, AND IS THEREFORE NEVER PROMISED', () =
   assert.equal(m.gated, true, 'the entry itself must carry the fact, not just the post')
   assert.equal(m.kind, 'video', 'it is still a video in the POST — the degrade is the renderer\'s job')
   assert.ok(m.remux?.page, 'and it keeps its remux, exactly as a live entry does')
-  assert.equal(promisable(m), false, 'but it must never be promised: the mux can never succeed')
+  // `ON` on every promisable() call here since 2026-11-25, when the promise became opt-in: with no env
+  // it is off, so the gated refusal below would pass for that reason alone, and the control would fail.
+  const ON = { YT_PROMISE: 'on' }
+  assert.equal(promisable(m, ON), false, 'but it must never be promised: the mux can never succeed')
 
   // An ordinary video carries no flag at all — the change is additive and invisible without a gate.
   assert.equal(normalizeYouTube(gated({}), REF).media[0].gated, undefined)
@@ -140,8 +143,8 @@ test('AN AGE-GATED ENTRY IS MARKED gated, AND IS THEREFORE NEVER PROMISED', () =
    * the fix. The duration is the one from the fixture header: 177s, straight off yt-dlp, comfortably
    * inside the 240s window — which is exactly why this video was promised before the fix.
    */
-  assert.equal(promisable({ ...m, duration: 177 }), false, 'gated: refused despite an ordinary duration')
-  assert.equal(promisable({ ...m, duration: 177, gated: undefined }), true,
+  assert.equal(promisable({ ...m, duration: 177 }, ON), false, 'gated: refused despite an ordinary duration')
+  assert.equal(promisable({ ...m, duration: 177, gated: undefined }, ON), true,
     'the SAME entry without the gate is promised, so the gate is what refused it')
 })
 

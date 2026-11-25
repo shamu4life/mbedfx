@@ -1,9 +1,11 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
-import { handle } from '../src/worker.ts'
+import { handle, liveFetchPost } from '../src/worker.ts'
 import { refKey } from '../src/refkey.ts'
-import { fetchableInstance, instanceFetchable } from '../src/platforms/fedihost.ts'
+import { encodeStatusId } from '../src/statusid.ts'
+import { GUEST_HOSTS } from '../src/guesthost.ts'
+import { fetchableInstance, instanceFetchable, selfHosts } from '../src/platforms/fedihost.ts'
 import { fetchMasto } from '../src/platforms/mastoapi/fetch.ts'
 import { fetchLemmy } from '../src/platforms/lemmy/fetch.ts'
 import { getGuestToken, resetGuestToken } from '../src/platforms/twitter/fetch.ts'
@@ -70,9 +72,14 @@ test('OWN_HOSTS is ADDITIVE — a set, empty or junk value can never un-block mb
 })
 
 test('UNSET is not "wide open": the built-in list, the address guard and the shape check all still stand', () => {
-  // What an unset OWN_HOSTS actually leaves reachable is ONE host — the operator's own public domain,
-  // which resolves to their own public address. It is a misconfiguration, not a route into a network,
-  // and saying so precisely is what stops the next reader from either panicking or shrugging.
+  // What an unset OWN_HOSTS actually leaves reachable is the operator's own public domain, which
+  // resolves to their own public address. It is a misconfiguration, not a route into a network, and
+  // saying so precisely is what stops the next reader from either panicking or shrugging.
+  //
+  // NARROWED 2026-11-25, comment only: since the request's origin reaches the guard (section 1b
+  // below), a request can no longer name the domain it arrived on. What an unset value still leaves
+  // open is a SIBLING serving domain. The assertions here are unchanged, because they call the pure
+  // gate with no origin, which is exactly the guard as it was.
   assert.equal(fetchableInstance('mbedfx.app'), false, 'the built-in list needs no config')
   assert.equal(fetchableInstance('127.0.0.1'), false, 'nor does the address guard')
   assert.equal(fetchableInstance('localhost'), false)
@@ -91,6 +98,182 @@ test('the LAN names that FEDI_HOST admits are refused by the address guard, not 
   for (const lan of ['api.localhost', 'printer.local', 'db.internal', 'host.home.arpa', '1.0.0.127.in-addr.arpa']) {
     assert.equal(fetchableInstance(lan), false, `${lan} must never be fetchable`)
   }
+})
+
+// ── 1b. The request's own origin, refused with no configuration at all.
+//
+// A Cloudflare self-hoster serving embed.example.com who never set OWN_HOSTS left
+// `/embed.example.com/post/1` open ON embed.example.com: the Worker fetched itself back through the
+// edge, past the zone's own WAF, and nothing failed. The Node adapter already covered its own case by
+// folding PUBLIC_ORIGIN into OWN_HOSTS; a Cloudflare deploy has no such step. Since 2026-11-25 every
+// request-carrying path hands its `url.origin` to the four fediverse fetchers as `self`.
+//
+// Driven through handle() with the REAL liveFetchPost and a counted network, because the defect was a
+// missing argument between the two: a test of the pure gate alone passed the whole time it was open.
+// Every request carries the Discordbot UA, since a human is redirected before any fetch and would make
+// "zero fetches" true for the wrong reason. Every test has its own post ids.
+
+const DISCORD = 'Mozilla/5.0 (compatible; Discordbot/2.0; +https://discordapp.com)'
+const botReq = url => new Request(url, { headers: { 'user-agent': DISCORD } })
+const fediEnv = () => ({
+  AE: { writeDataPoint() {} }, ASSETS: { async fetch() { return new Response('a') } }, TRANSLATE_GOOGLE: 'off',
+})
+const liveDeps = () => ({
+  cache: fakeCache(), fetchPost: liveFetchPost,
+  resolveShortlink: async () => ({ kind: 'unresolved' }), resolveRedditShare: async () => null,
+  resolveMetaShare: async () => null, fetchProfile: async () => null,
+})
+/** Runs `work` with the network replaced, and returns the hostname of every request it made. */
+async function hostsAskedDuring(work) {
+  const real = globalThis.fetch
+  const asked = []
+  globalThis.fetch = async input => {
+    asked.push(new URL(typeof input === 'string' ? input : input.url).hostname)
+    // Not a post in any of the four APIs, so every fetcher fails its content assert after asking.
+    return new Response('{}', { status: 404, headers: { 'content-type': 'application/json' } })
+  }
+  try { await work() } finally { globalThis.fetch = real }
+  return asked
+}
+/** One post path per fediverse family, naming `host`. Four arms in liveFetchPost, four call sites. */
+const fediPaths = (host, n) => ({
+  lm: `/${host}/post/${9100000 + n}`,
+  ms: `/${host}/@someone/so${n}ms`,
+  mk: `/${host}/notes/so${n}mk`,
+  pt: `/${host}/w/selfOriginPt${String(n).padStart(6, '0')}`,
+})
+
+test('selfHosts: the request origin, and on a d. host its parent too, in the same shape as DIRECT_MEDIA_HOST', () => {
+  assert.deepEqual(selfHosts('https://embed.example.com'), ['embed.example.com'])
+  assert.deepEqual(selfHosts('https://d.embed.example.com'), ['d.embed.example.com', 'embed.example.com'],
+    'd. is an alias of the apex, so a request there is a request to the deployment the apex serves')
+  assert.deepEqual(selfHosts('https://d.d.embed.example.com'), ['d.d.embed.example.com', 'd.embed.example.com'],
+    'ONE label, as worker.ts reads one')
+  assert.deepEqual(selfHosts('https://d.com'), ['d.com'],
+    'not a direct host to worker.ts either, and its "parent" would be the TLD: refusing every .com instance')
+  assert.deepEqual(selfHosts('https://Embed.Example.COM.'), ['embed.example.com'], 'case and a trailing dot')
+  assert.deepEqual(selfHosts('embed.example.com'), ['embed.example.com'],
+    'a bare hostname guards too, rather than failing to parse and guarding nothing')
+  assert.deepEqual(selfHosts('http://localhost:8787'), ['localhost'], 'the Node adapter default origin')
+  for (const none of [undefined, '', 'not a url', 'https://']) {
+    assert.deepEqual(selfHosts(none), [], `${JSON.stringify(none)} is no extra information`)
+  }
+})
+
+test('the request origin is refused by the pure gate, subdomains included, and a real instance is not', () => {
+  for (const self of ['https://embed.example.com', 'https://d.embed.example.com', 'https://embed.example.com.']) {
+    assert.equal(fetchableInstance('embed.example.com', self), false, `embed.example.com from ${self}`)
+    assert.equal(fetchableInstance('staging.embed.example.com', self), false, `a subdomain, from ${self}`)
+    assert.equal(fetchableInstance('lemmy.world', self), true, `lemmy.world from ${self}`)
+    assert.equal(fetchableInstance('example.com', self), true, 'the PARENT of the apex is somebody else')
+  }
+  assert.equal(fetchableInstance('lemmy.com', 'https://d.com'), true, 'd.com does not refuse all of .com')
+})
+
+test('PRODUCTION IS UNCHANGED: on every host mbedfx.app is served from, the origin refuses nothing new', () => {
+  // Every production hostname is already in, or under, the built-in list, so `self` must add nothing
+  // there. Compared against the gate with NO origin rather than against a list of expected answers, so
+  // this fails if `self` ever changes a production answer in either direction.
+  const serving = [
+    'mbedfx.app', 'd.mbedfx.app', 'megapenispoopenfarten.sex', 'd.megapenispoopenfarten.sex',
+    'forsen.sex', 'd.forsen.sex', 'mbedfx.someone.workers.dev',
+    ...GUEST_HOSTS, ...GUEST_HOSTS.map(h => `d.${h}`),
+  ]
+  const instances = [
+    'lemmy.world', 'mstdn.social', 'misskey.io', 'framatube.org', 'piefed.social', 'example.com',
+    'embed.example.com', 'mbedfx.app', 'forsen.sex', ...GUEST_HOSTS,
+  ]
+  for (const host of serving) {
+    for (const h of instances) {
+      assert.equal(fetchableInstance(h, `https://${host}`), fetchableInstance(h), `${h} asked from ${host}`)
+    }
+  }
+})
+
+test('a POST naming the domain it was requested on is refused with ZERO fetches, on all four platforms', async () => {
+  for (const [p, path] of Object.entries(fediPaths('embed.example.com', 1))) {
+    const asked = await hostsAskedDuring(() =>
+      handle(botReq(`https://embed.example.com${path}`), fediEnv(), ctx, liveDeps()))
+    assert.deepEqual(asked, [], `${p}: the Worker must not fetch the host it is being served on`)
+  }
+})
+
+test('the CONTROL on the same harness: a different instance requested on that domain is still fetched', async () => {
+  // Without this the test above would pass against a harness that never reached a fetcher at all.
+  const hosts = { lm: 'lemmy.world', ms: 'mstdn.social', mk: 'misskey.io', pt: 'framatube.org' }
+  for (const [p, host] of Object.entries(hosts)) {
+    const asked = await hostsAskedDuring(() =>
+      handle(botReq(`https://embed.example.com${fediPaths(host, 2)[p]}`), fediEnv(), ctx, liveDeps()))
+    assert.ok(asked.length > 0 && asked.every(h => h === host), `${p}: asked ${JSON.stringify(asked)}`)
+  }
+})
+
+test('from d.embed.example.com, embed.example.com is refused too, and a real instance is still fetched', async () => {
+  // The d. host serves the post's bytes (serveDirectMedia), which reaches the fetcher through getPost
+  // like every other route. Refusing only `d.embed.example.com` would leave the apex, the host anyone
+  // would actually name, open on every direct-media request.
+  for (const [p, path] of Object.entries(fediPaths('embed.example.com', 3))) {
+    const asked = await hostsAskedDuring(() =>
+      handle(botReq(`https://d.embed.example.com${path}`), fediEnv(), ctx, liveDeps()))
+    assert.deepEqual(asked, [], `${p} from the d. host`)
+  }
+  const asked = await hostsAskedDuring(() =>
+    handle(botReq(`https://d.embed.example.com${fediPaths('lemmy.world', 4).lm}`), fediEnv(), ctx, liveDeps()))
+  assert.ok(asked.length > 0 && asked.every(h => h === 'lemmy.world'), JSON.stringify(asked))
+})
+
+test('the converter, the API, /_media/ and the activity document carry the origin too', async () => {
+  // Each reaches the fetcher through its own getPost call site: describeTarget for /_card and
+  // /_api/v1, the media route, and the activity/oEmbed arm. One forgotten site is one open door.
+  const o = 'https://embed.example.com'
+  const lm = { p: 'lm', host: 'embed.example.com', kind: 'post', id: '9100005' }
+  const surfaces = {
+    card: `${o}/_card?p=${encodeURIComponent(fediPaths('embed.example.com', 6).lm)}`,
+    api: `${o}/_api/v1?url=${encodeURIComponent(`${o}${fediPaths('embed.example.com', 7).lm}`)}`,
+    media: `${o}/_media/${encodeURIComponent(refKey(lm))}/0`,
+    activity: `${o}/users/someone/statuses/${encodeStatusId(refKey({ ...lm, id: '9100008' }))}`,
+  }
+  for (const [name, url] of Object.entries(surfaces)) {
+    const asked = await hostsAskedDuring(() => handle(botReq(url), fediEnv(), ctx, liveDeps()))
+    assert.deepEqual(asked, [], `${name} must not fetch the host it is served on`)
+  }
+  // And the same surfaces still fetch a real instance, so the zeroes above are the guard and not a
+  // surface that never reached a fetcher.
+  const real = { p: 'lm', host: 'lemmy.world', kind: 'post', id: '9100009' }
+  const controls = {
+    card: `${o}/_card?p=${encodeURIComponent(fediPaths('lemmy.world', 10).lm)}`,
+    api: `${o}/_api/v1?url=${encodeURIComponent(`${o}${fediPaths('lemmy.world', 11).lm}`)}`,
+    media: `${o}/_media/${encodeURIComponent(refKey(real))}/0`,
+    activity: `${o}/users/someone/statuses/${encodeStatusId(refKey({ ...real, id: '9100012' }))}`,
+  }
+  for (const [name, url] of Object.entries(controls)) {
+    const asked = await hostsAskedDuring(() => handle(botReq(url), fediEnv(), ctx, liveDeps()))
+    assert.ok(asked.length > 0 && asked.every(h => h === 'lemmy.world'), `${name}: ${JSON.stringify(asked)}`)
+  }
+})
+
+test('production and guest hosts behave as before: a real instance is fetched, their own zones are not', async () => {
+  for (const host of ['mbedfx.app', 'd.mbedfx.app', GUEST_HOSTS[0], `d.${GUEST_HOSTS[1]}`]) {
+    const fetched = await hostsAskedDuring(() =>
+      handle(botReq(`https://${host}${fediPaths('lemmy.world', 13).lm}`), fediEnv(), ctx, liveDeps()))
+    assert.ok(fetched.length > 0 && fetched.every(h => h === 'lemmy.world'), `${host}: ${JSON.stringify(fetched)}`)
+    const apex = host.replace(/^d\./, '')
+    const own = await hostsAskedDuring(() =>
+      handle(botReq(`https://${host}${fediPaths(apex, 14).lm}`), fediEnv(), ctx, liveDeps()))
+    assert.deepEqual(own, [], `${apex} from ${host}, refused by the built-in list exactly as before`)
+  }
+})
+
+test('NO ORIGIN IS TODAY: a caller without a request gets exactly the guard it had, never a stricter one', async () => {
+  // liveFetchPost called directly (a test, or any future caller with no request in hand) passes no
+  // `self`, and embed.example.com is in no list, so it is fetched, as it always was. The same call
+  // with the origin is the refusal, so the difference between the two is the new argument alone.
+  const ref = { p: 'lm', host: 'embed.example.com', kind: 'post', id: '9100015' }
+  const without = await hostsAskedDuring(() => liveFetchPost(ref, fediEnv(), 'discord'))
+  assert.ok(without.length > 0 && without.every(h => h === 'embed.example.com'), JSON.stringify(without))
+  const withOrigin = await hostsAskedDuring(() =>
+    liveFetchPost({ ...ref, id: '9100016' }, fediEnv(), 'discord', undefined, undefined, undefined, 'https://embed.example.com'))
+  assert.deepEqual(withOrigin, [])
 })
 
 // ── 2. The DNS seam, at the boundary where it decides whether a request is made at all.

@@ -90,11 +90,15 @@ export interface FediEnv {
    * ADDITIVE, NEVER A REPLACEMENT, and that is the whole answer to "what is the safe default":
    *
    *   - UNSET is not "wide open". The built-in list still stands, the address guard (clause 7)
-   *     still refuses every private destination, and FEDI_HOST still refuses IP literals. What an
-   *     unset value leaves open is exactly ONE host: the operator's own public domain, which
-   *     resolves to their own public address. The worst case there is a single self-request that
-   *     lands on a path this Worker does not serve as an API, fails clause 6's content assert, and
-   *     renders "couldn't load". It is a misconfiguration, not a way into a network.
+   *     still refuses every private destination, and FEDI_HOST still refuses IP literals. Since
+   *     2026-11-25 the domain a request ARRIVED ON is refused too (InstanceGuard.self, from
+   *     worker.ts), so a deployment with one domain that forgets this setting can no longer be made
+   *     to fetch itself. What an unset value still leaves open is a SIBLING: a second serving
+   *     domain, named in a path requested on the first. That host is the operator's own public
+   *     domain, which resolves to their own public address. The worst case there is a single
+   *     self-request that lands on a path this Worker does not serve as an API, fails clause 6's
+   *     content assert, and renders "couldn't load". It is a misconfiguration, not a way into a
+   *     network.
    *   - SET cannot subtract. A typo, an empty string, or a hostile value cannot un-block mbedfx's
    *     own zones, so the failure mode of getting this wrong is always "too strict", never "too
    *     open". A guard whose config can widen it is a guard one env var away from being absent.
@@ -102,7 +106,9 @@ export interface FediEnv {
    * Still MANDATORY for a public self-hosted instance, and docs/SELF-HOSTING.md says so: on
    * Cloudflare a self-fetch re-enters through the edge and bypasses the zone's own WAF, and off it
    * a service that will fetch its own hostname is a service that will fetch its own siblings on the
-   * same private network the moment DNS says so.
+   * same private network the moment DNS says so. The request-origin refusal does not make it
+   * optional: it covers only the domain each request came in on, so every other serving domain is
+   * known to this guard through this list alone.
    */
   OWN_HOSTS?: string
   /**
@@ -117,9 +123,56 @@ export interface FediEnv {
 
 /** Everything a fediverse fetcher knows about ITS OWN deployment, threaded from worker.ts. */
 export interface InstanceGuard {
-  /** The origin this request arrived on, when a caller has one. Refused like any OWN_HOSTS entry. */
+  /**
+   * The ORIGIN this request arrived on (`https://embed.example.com`, a URL's `.origin`), when a
+   * caller has one. Refused like any OWN_HOSTS entry, subdomains included, and a `d.` alias is
+   * refused as its parent too (see selfHosts). worker.ts passes `url.origin`; a bare hostname is
+   * read the same way, because until selfHosts existed one did not parse and silently guarded
+   * nothing, which is the wrong way for a misspelled argument to fail.
+   *
+   * ABSENT means "no extra information", never "admit more": a test, a direct caller, or anything
+   * else without a request in hand gets exactly the built-in list plus env.OWN_HOSTS.
+   */
   self?: string
   env?: FediEnv
+}
+
+/**
+ * The hosts a request origin makes this guard refuse: its own hostname, plus, on a `d.` host, the
+ * host with that ONE label taken off.
+ *
+ * WHY THE PARENT. `d.` is not a separate site. worker.ts (DIRECT_MEDIA_HOST) reads a leading `d.` as
+ * "serve this post's bytes", and every `d.` domain in production is an alias of a serving apex
+ * (d.mbedfx.app, d.sorryifuckedyour.mom). So a request on d.embed.example.com is a request to a
+ * deployment that also answers on embed.example.com, and `/embed.example.com/post/1` requested there
+ * is the same self-fetch as on the apex. Refusing only `d.embed.example.com` would leave the apex,
+ * the host an attacker would actually name, open on every direct-media request.
+ *
+ * THE SAME SHAPE AS DIRECT_MEDIA_HOST (`^d\.[^.]+\.`): `d.` followed by at least two more labels. On
+ * `d.com` the parent would be the bare TLD `com`, and refusing every .com instance on the strength
+ * of one odd hostname is an outage, not a guard. worker.ts does not treat `d.com` as a direct host
+ * either, so here it is just its own hostname. If that regex changes, change this one with it.
+ *
+ * WHAT THIS DOES NOT HANDLE: a `d.` host directly under a multi-label public suffix (`d.co.uk`) would
+ * refuse that whole suffix. Telling `co.uk` from `example.com` needs the public suffix list, which
+ * this project does not carry. The failure is "too strict" for one implausible deployment, and that
+ * host is already a direct-media host to worker.ts, so the two readings of `d.` still agree.
+ *
+ * A TRAILING DOT IS DROPPED: `embed.example.com.` is the same host as `embed.example.com`, and the
+ * `===`/`endsWith` match in fetchableInstance would otherwise miss it. declaredHosts does the same.
+ */
+export function selfHosts(self?: string): string[] {
+  if (!self) return []
+  let h: string
+  try {
+    // The same reading declaredHosts gives an OWN_HOSTS entry: an origin, or a bare hostname.
+    h = new URL(self.includes('//') ? self : `https://${self}`).hostname.toLowerCase().replace(/\.$/, '')
+  } catch {
+    // A malformed origin is not a reason to admit the host; it is simply no extra information.
+    return []
+  }
+  if (!h) return []
+  return /^d\.[^.]+\./.test(h) ? [h, h.slice(2)] : [h]
 }
 
 /** `a.example, https://b.example` -> ['a.example', 'b.example']. Total: junk contributes nothing. */
@@ -155,14 +208,9 @@ export function fetchableInstance(host: string, self?: string, env?: FediEnv): b
   // deliberately not left to it: this is the check that survives someone widening the regex to allow
   // a port, a numeric label, or an IDN, none of which look like they touch SSRF.
   if (blockedHost(host)) return false
-  const own = [...OWN_HOSTS, ...declaredHosts(env?.OWN_HOSTS)]
-  if (self) {
-    try {
-      own.push(new URL(self).hostname.toLowerCase())
-    } catch {
-      // A malformed origin is not a reason to admit the host; it is simply no extra information.
-    }
-  }
+  // Three sources, all ADDED to one list, so none of them can take a host off another's: the built-in
+  // zones, the operator's declared ones, and the origin this request arrived on.
+  const own = [...OWN_HOSTS, ...declaredHosts(env?.OWN_HOSTS), ...selfHosts(self)]
   return !own.some(h => host === h || host.endsWith(`.${h}`))
 }
 

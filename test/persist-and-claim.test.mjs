@@ -47,12 +47,16 @@ function fakeR2(initial = {}) {
   }
 }
 const recordingAE = () => { const rows = []; return { rows, writeDataPoint(d) { rows.push(d) } } }
+// `YT_PROMISE: 'on'` since 2026-11-25, when the promise became opt-in (src/muxpolicy.ts ytPromiseOn).
+// These tests were written when an env without the var was promise mode, and the head assertions below
+// ("the crawler render promises") are about that mode, so it is named here rather than lost.
 const envWith = ({ resolver, r2 = fakeR2(), ae = recordingAE(), runner } = {}) => ({
   AE: ae,
   ASSETS: { async fetch() { return new Response('a') } },
   MEDIA_CACHE: r2,
   MEDIA_RESOLVER: resolver,
   TRANSLATE_GOOGLE: 'off',
+  YT_PROMISE: 'on',
   ...(runner ? { MUX_RUNNER: runner } : {}),
 })
 const ytPost = (ref, over = {}) => ({

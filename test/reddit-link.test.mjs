@@ -38,9 +38,11 @@ const rowsOf = (ae, outcome) => ae.rows.filter(r => r.blobs?.[1] === outcome)
 const silentResolver = () => ({ getByName: () => ({ fetch: () => new Promise(() => {}) }) })
 /** A container that refuses at once, for the seams that would otherwise wait out a 9 s budget. */
 const failingResolver = () => ({ getByName: () => ({ fetch: async () => new Response('', { status: 502 }) }) })
+// `YT_PROMISE: 'on'` since 2026-11-25, when the promise became opt-in (src/muxpolicy.ts ytPromiseOn).
+// The linked-video cards here are pinned in promise mode, which an env without the var used to be.
 const envWith = ({ ae = recordingAE(), resolver = silentResolver() } = {}) => ({
   AE: ae, ASSETS: { async fetch() { return new Response('a') } },
-  MEDIA_CACHE: fakeR2(), MEDIA_RESOLVER: resolver, TRANSLATE_GOOGLE: 'off',
+  MEDIA_CACHE: fakeR2(), MEDIA_RESOLVER: resolver, TRANSLATE_GOOGLE: 'off', YT_PROMISE: 'on',
 })
 
 const rdRef = id => ({ p: 'rd', sub: 'theydidthemath', id })

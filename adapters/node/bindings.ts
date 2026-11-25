@@ -503,9 +503,12 @@ export const ENV_VARS = [
 
 /**
  * The string half of `Env`. Two values are not passed through as given:
- *   - YT_PROMISE defaults to "off", which is what wrangler.jsonc sets on the public instance. Left
- *     unset, the YouTube activity-document promise would be on here and off there, and the same paste
- *     would draw two different cards.
+ *   - YT_PROMISE defaults to "off", which is what wrangler.jsonc sets on the public instance. Until
+ *     2026-11-25 an unset var meant the YouTube activity-document promise was ON, so without this the
+ *     same paste drew a different card here than there. The code now reads unset as off by itself
+ *     (src/muxpolicy.ts ytPromiseOn), so this changes nothing that renders today. It stays as the
+ *     second lock: if that predicate ever slides back to "anything but off", this adapter still runs
+ *     the value production measured, and test/node-adapter.test.mjs still sees "off" on the env.
  *   - OWN_HOSTS gains the hosts of PUBLIC_ORIGIN. The value is additive (src/platforms/fedihost.ts),
  *     so this can only make the guard stricter, and it means the domain this adapter serves is
  *     refused as a fediverse instance even when the operator forgets to list it.
