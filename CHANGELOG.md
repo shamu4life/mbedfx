@@ -3297,7 +3297,8 @@ The full request pipeline, proven end to end with the one non-adversarial platfo
 [1.12.3]: https://github.com/shamu4life/mbedfx/compare/v1.12.2...v1.12.3
 [1.12.2]: https://github.com/shamu4life/mbedfx/compare/v1.12.1...v1.12.2
 [1.12.1]: https://github.com/shamu4life/mbedfx/compare/v1.12.0...v1.12.1
-[1.12.0]: https://github.com/shamu4life/mbedfx/compare/v1.11.0...v1.12.0
+[1.12.0]: https://github.com/shamu4life/mbedfx/compare/v1.11.1...v1.12.0
+[1.11.1]: https://github.com/shamu4life/mbedfx/compare/v1.11.0...v1.11.1
 [1.11.0]: https://github.com/shamu4life/mbedfx/compare/v1.10.1...v1.11.0
 [1.10.1]: https://github.com/shamu4life/mbedfx/compare/v1.10.0...v1.10.1
 [1.10.0]: https://github.com/shamu4life/mbedfx/compare/v1.9.1...v1.10.0
