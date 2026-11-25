@@ -1,0 +1,88 @@
+# mbedfx off Cloudflare: the Node adapter, and the media-resolver container beside it.
+#
+#   docker compose -f adapters/node/compose.yaml up --build -d
+#
+# Settings come from adapters/node/.env (compose reads .env from this file's folder; .gitignore keeps
+# it out of git). Two are required, and compose refuses to start without them:
+#
+#   PUBLIC_ORIGIN=https://embed.example.com           # what the cards say; a list is allowed, see the doc
+#   RESOLVER_SECRET=<openssl rand -hex 32>             # shared by both services
+#
+# Everything else is optional and listed in docs/SELF-HOSTING.md. An unset variable reaches the adapter
+# as "", which it reads as unset.
+#
+# NOT BUILT HERE: written on a host with no Docker. The adapter has run from the same files outside
+# a container (see the doc); this file and adapters/node/Dockerfile have not been built.
+
+name: mbedfx
+
+services:
+  resolver:
+    build:
+      context: ../../container
+    # container/Dockerfile downloads the x86_64 Deno build by name, so the image has to be amd64. On an
+    # ARM host this runs under emulation. Without the line, reading the Dockerfile, an arm64 build would
+    # boot and answer /health and fail only when a {page} resolve runs Deno. Not measured: nobody has
+    # built one.
+    platform: linux/amd64
+    environment:
+      RESOLVER_SECRET: ${RESOLVER_SECRET:?set RESOLVER_SECRET in adapters/node/.env}
+    # NO `ports:`. Only the adapter reaches the resolver, over this compose network. server.py fetches
+    # and downloads whatever it is asked to, so a published port is a remuxer for anyone who finds it.
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/health', timeout=5)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    restart: unless-stopped
+
+  adapter:
+    build:
+      context: ../..
+      dockerfile: adapters/node/Dockerfile
+    depends_on:
+      resolver:
+        condition: service_healthy
+    environment:
+      PUBLIC_ORIGIN: ${PUBLIC_ORIGIN:?set PUBLIC_ORIGIN in adapters/node/.env}
+      RESOLVER_SECRET: ${RESOLVER_SECRET:?set RESOLVER_SECRET in adapters/node/.env}
+      CONTAINER_URL: http://resolver:8080
+      OWN_HOSTS: ${OWN_HOSTS:-}
+      YT_PROMISE: ${YT_PROMISE:-}
+      TRANSLATE_GOOGLE: ${TRANSLATE_GOOGLE:-}
+      IMGUR_CLIENT_ID: ${IMGUR_CLIENT_ID:-}
+      IG_GRAPHQL_DOC_ID: ${IG_GRAPHQL_DOC_ID:-}
+      MUX_BUFFER_MAX: ${MUX_BUFFER_MAX:-}
+      X_ACCOUNTS: ${X_ACCOUNTS:-}
+      IG_ACCOUNTS: ${IG_ACCOUNTS:-}
+      YT_ACCOUNTS: ${YT_ACCOUNTS:-}
+      X_ACCOUNTS_2: ${X_ACCOUNTS_2:-}
+      X_ACCOUNTS_3: ${X_ACCOUNTS_3:-}
+      IG_ACCOUNTS_2: ${IG_ACCOUNTS_2:-}
+      IG_ACCOUNTS_3: ${IG_ACCOUNTS_3:-}
+      YT_ACCOUNTS_2: ${YT_ACCOUNTS_2:-}
+      YT_ACCOUNTS_3: ${YT_ACCOUNTS_3:-}
+      REDDIT_CLIENT_ID: ${REDDIT_CLIENT_ID:-}
+      REDDIT_CLIENT_SECRET: ${REDDIT_CLIENT_SECRET:-}
+      REDDIT_RELAY_URL: ${REDDIT_RELAY_URL:-}
+      REDDIT_RELAY_KEY: ${REDDIT_RELAY_KEY:-}
+      SMOKE_CRON: ${SMOKE_CRON:-}
+      ANALYTICS_LOG: ${ANALYTICS_LOG:-}
+    # Loopback only. Put the reverse proxy that terminates TLS for PUBLIC_ORIGIN in front of this port.
+    ports:
+      - "127.0.0.1:8787:8787"
+    volumes:
+      - media:/data/media
+    # Longer than the adapter's 25 s drain (DRAIN_MS), so SIGTERM lets cache writes and running muxes
+    # finish. Docker's own default is 10 s, after which it sends SIGKILL.
+    stop_grace_period: 40s
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8787/robots.txt').then(r => process.exit(r.ok ? 0 : 1), () => process.exit(1))"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    restart: unless-stopped
+
+volumes:
+  media:

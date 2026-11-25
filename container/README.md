@@ -244,7 +244,8 @@ Wrangler documents that as build-time only, and a value set there never reaches 
 instance.
 
 Running it anywhere else is [Running it standalone](#running-it-standalone) below.
-`docs/SELF-HOSTING.md` carries the wider plan, for the Worker half that has no adapter yet.
+`docs/SELF-HOSTING.md` covers the Worker half: the Node adapter in `adapters/node/` and a compose file
+that runs it beside this container.
 
 ### Warm instances
 

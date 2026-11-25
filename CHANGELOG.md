@@ -6,6 +6,25 @@ All notable changes to mbedfx are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- **mbedfx runs off Cloudflare, on Node.** `adapters/node/server.ts` serves the production handler from
+  `src/worker.ts` on Node's own HTTP server, with nothing under `src/` changed, and
+  `adapters/node/compose.yaml` runs it beside the `container/` resolver. Each Cloudflare binding has a
+  stand-in: `public/` for assets, a directory for R2, an in-process mux runner and scheduled check, a
+  `Map` for the cache, and a `waitUntil` that SIGTERM drains. On 2026-11-25, from a home connection,
+  Bluesky, Reddit, Mastodon and YouTube posts drew the same card through it as on mbedfx.app. Twitter's
+  lacked its repost count. The Docker image and the compose file haven't been built yet. See
+  `docs/SELF-HOSTING.md`.
+
+### Documentation
+
+- **Off Cloudflare, the scheduled check needs `SMOKE_RUNNER` bound.** `docs/SELF-HOSTING.md` (and the
+  1.17.0 entry below) said a self-hosted deploy could leave it unset. Without it the cron's fallback
+  reads `caches.default`, which Node doesn't have, so every tick would throw. The adapter binds a
+  stand-in. The same page now shows the current `Deps` and counts 24 `waitUntil` call sites, not
+  fifteen.
+
 ## [1.17.0] - 2026-11-24
 
 **Upgrading:** self-hosters run a full `wrangler deploy` so the container rebuilds (the `g17` `RESOLVER_GENERATION` bump in the code moves instances over), and set `YT_ACCOUNTS` to one or two throwaway YouTube accounts if YouTube asks their network to sign in. For API consumers, `still: true` with `muxing: false` can now also mean every mux attempt failed.

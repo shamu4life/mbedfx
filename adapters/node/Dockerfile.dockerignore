@@ -1,0 +1,8 @@
+# BuildKit reads <Dockerfile>.dockerignore beside the Dockerfile in place of a root .dockerignore, so
+# this narrows the adapter's build context without changing what any other image sees. Only what the
+# Dockerfile copies is sent: no node_modules, no .git, no local secrets.
+*
+!package.json
+!src
+!public
+!adapters/node
