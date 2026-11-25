@@ -357,16 +357,31 @@ YouTube's among them since 1.12.0. So read the rows below as what a host is refu
 
 | Platform / surface | Measured | Where |
 |---|---|---|
-| Reddit anonymous `.json` | Verified 2026-07-21: Workers egress gets a 403 "network security" block page. `embed.reddit.com` is not blocked, and is the primary credential-free path. | `src/platforms/reddit/fetch.ts` |
+| Reddit anonymous `.json` | Verified 2026-07-21: Workers egress gets a 403 "network security" block page. A residential host got the same 403 on 2026-11-25. `embed.reddit.com` refused Workers egress from 2026-10-22 (403, measured 2026-10-25), which is why the archive path and the relay exist. From a residential host it is refused to curl and served to Node's `fetch` (see below). | `src/platforms/reddit/fetch.ts` |
 | Reddit embed with a placeholder subreddit | Measured from Workers egress 2026-07-22: a placeholder sub gets a stripped render. The real subreddit has to be passed. | `src/platforms/reddit/fetch.ts` |
 | Facebook `/share/{code}` 302 | Measured on one share code: a browser-shaped request from a laptop gets `302 -> /posts/…`, the same request from Cloudflare's egress gets none. Confirmed by natural experiment against the live worker. | `src/platforms/metashare/fetch.ts` |
-| Instagram embed | From datacenter egress the embed returned an ~81 KB "unavailable" shell and a public post rendered as private. Residential egress never reproduced it, and it reached production. | `src/worker.ts:368` |
-| Threads video (`scontent*.cdninstagram.com`) | Meta blocks Cloudflare's datacenter egress for these bytes: "our container can't fetch it … that fetch is a datacenter IP; Discord's proxy is not". Threads video is a 302 to Discord's own proxy, never a remux or a byte proxy. | `src/platforms/threads/normalize.ts`, `src/mediaproxy.ts` |
+| Instagram embed | From datacenter egress the embed returned an ~81 KB "unavailable" shell and a public post rendered as private. Residential egress never reproduced it, and it reached production. The shell is about 183 KB as of 2026-11-25, so judge it with `hasEmbedPayload`, never by size. | `src/worker.ts` (the note near `fullpage_recovered`) |
+| Threads video (`scontent*.cdninstagram.com`) | Once blocked for the container's egress. A Worker fetch on 2026-08-09 got 200 `video/mp4` (8,990,730 bytes), and the Worker now serves those bytes itself. A residential host got the same file on 2026-11-25. | `src/platforms/threads/normalize.ts`, `src/mediaproxy.ts` |
 | Google translate endpoint | Measured 2026-07-31 from a Worker: answers in 13-16 ms and is not blocked from Cloudflare's egress. It does rate-limit bursts, and ~30 requests in a few seconds drew HTTP 429 on every one. | `src/translate.ts` |
 | Twitter guest endpoints | Byte-identical from residential and Cloudflare Workers egress in the 2026-07-19 recon; the activation and `TweetResultByRestId` were both measured working. On 2026-11-25 from a residential host, syndication (the primary path) answered `/jack/status/20` without `retweet_count`, while mbedfx.app's card for it showed a repost count. The Cloudflare side of that was not measured. | `src/platforms/twitter/fetch.ts`, `:129`, `:147` |
 | YouTube via yt-dlp | Not datacenter-IP-blocked, and measured PER PLAYER CLIENT since 2026-08-28. A `{page}` resolve returned a real ad-free MP4 from Cloudflare Container egress on 2026-07-22; it needed Deno for the signature challenge, not a different IP. `/_clients` then extracted one video with six clients on that egress and range-fetched each chosen format: `default`, `web_embedded`, `tv_simply`, `mweb` and `web_safari` all served bytes with NO PO token, and only `android_vr` was refused (`http-403`). `tv_simply` and `mweb` are the two clients yt-dlp's PO Token Guide says require one, so a token provider buys a self-hoster on datacenter egress nothing. Refusals are intermittent rather than absolute — worth one retry, not a verdict. | `src/worker.ts` (`/_clients`), `container/README.md` |
 | Instagram copyright recovery (`copyright_recovered`) | Unconfirmed from Cloudflare egress. Every measurement behind it is residential, and the recovery fails silently into a cover still. The counter exists so the failure is visible at all. | `src/analytics.ts` |
 | Instagram generally | Instagram's behaviour toward Cloudflare is PATH-DEPENDENT: a residential result does not transfer to Workers egress by itself. | `src/platforms/instagram/fetch.ts` |
+
+### Measured from a residential host, 2026-11-25
+
+The first probes from somewhere other than Cloudflare or a laptop: a Debian box on a home connection,
+curl 8.14.1 and Node's `fetch`, with the header sets the fetchers send. Each result was judged by the
+repo's own checks (`hasEmbedPayload`, `hasThreadsSSR`, the Reddit embed markers) rather than by status code.
+
+| Probe | Result | What it means |
+|---|---|---|
+| Reddit `.json` | 403 block page, for curl and for Node | Blocked from a home line too. Nothing uses it. |
+| Reddit embed | 403 to curl, 200 with the full post to Node, same IP and headers | Reddit's gate is keyed on the client. The address made no difference. A Node self-host on a home line gets the embed that Cloudflare's egress lost on 2026-10-22. Other runtimes were not measured. |
+| Facebook `/share/{code}` | Not sent | No live share code could be had without logging in. Still unmeasured. |
+| Instagram embed | 200 with a real payload for a normal post (`DaQ5CPTki4E`) | Works. The usual sample, `DZxLuleoEoC`, fails its embed from anywhere (a fake code gets the same page), so it is a poor egress probe. |
+| Threads SSR, then its `scontent` video | 200 SSR with one video; then 200 `video/mp4`, 8,990,784 bytes | Both work from a home line. |
+| Google translate | 200, the expected translation | No address block. The burst limit was not tested. |
 
 ### What changes on a different host
 
