@@ -564,6 +564,13 @@ export interface Env {
   YT_ACCOUNTS?: string
   // `"off"` turns YouTube's activity-document promise off (src/muxpolicy.ts ytPromiseOn). A var, not a secret.
   YT_PROMISE?: string
+  // Overflow pools, read after the main ones (credentials.ts OVERFLOW_SUFFIXES): one secret holds ~5.1 kB.
+  X_ACCOUNTS_2?: string
+  X_ACCOUNTS_3?: string
+  IG_ACCOUNTS_2?: string
+  IG_ACCOUNTS_3?: string
+  YT_ACCOUNTS_2?: string
+  YT_ACCOUNTS_3?: string
   // The Reddit OAuth app's credentials (a "script"/"web" app registered as shamu4life). Reddit
   // blocks anonymous access from datacenter IPs, so `rd` alone of the six needs a stored secret;
   // fetchReddit exchanges these for an app-only bearer token. Set with `wrangler secret put`. These

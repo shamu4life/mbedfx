@@ -50,6 +50,13 @@ export type CredentialEnv = {
   IG_ACCOUNTS?: string
   /** JSON array of Account. YouTube likewise — see container/server.py's cookie jar. */
   YT_ACCOUNTS?: string
+  /** Overflow pools, read after the main one (see OVERFLOW_SUFFIXES). Same shape. */
+  X_ACCOUNTS_2?: string
+  X_ACCOUNTS_3?: string
+  IG_ACCOUNTS_2?: string
+  IG_ACCOUNTS_3?: string
+  YT_ACCOUNTS_2?: string
+  YT_ACCOUNTS_3?: string
 }
 
 export type CredentialPlatform = 'x' | 'ig' | 'yt'
@@ -104,9 +111,19 @@ export function parseAccounts(raw: unknown): Account[] {
   return out
 }
 
-/** The pool for one platform, straight from the secret. Empty when unset or unparseable. */
+/**
+ * OVERFLOW SECRETS, because one secret cannot hold a pool. Cloudflare caps a Worker secret at about
+ * 5.1 kB ("Text binding ... exceeds the limit of 5.1 kB", code 10054, hit 2026-11-24). A YouTube cookie
+ * jar trimmed to its sign-in cookies is about 2.3 kB, so `YT_ACCOUNTS` holds two accounts at most; a
+ * third went into Bitwarden as a spare with nowhere to load it. `YT_ACCOUNTS_2` and `YT_ACCOUNTS_3`
+ * (and the same for `ig` and `x`) are read after the main secret and concatenated into one pool, each
+ * parsed on its own, so a malformed overflow secret empties only itself (parseAccounts never throws).
+ */
+export const OVERFLOW_SUFFIXES = ['', '_2', '_3'] as const
+
+/** The pool for one platform, from the secret and its overflows. Empty when unset or unparseable. */
 export const accountPool = (env: CredentialEnv, platform: CredentialPlatform): Account[] =>
-  parseAccounts(env[SECRET[platform]])
+  OVERFLOW_SUFFIXES.flatMap(suffix => parseAccounts(env[`${SECRET[platform]}${suffix}` as keyof CredentialEnv]))
 
 /**
  * PICK ONE, AT RANDOM PER REQUEST, which is the entire reason a pool is a pool.

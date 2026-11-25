@@ -90,6 +90,9 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- **More accounts than one secret can hold.** A Worker secret is capped at about 5.1 kB, so
+  `YT_ACCOUNTS` fits two YouTube accounts. `YT_ACCOUNTS_2` and `YT_ACCOUNTS_3` (and the same
+  for `IG_ACCOUNTS` and `X_ACCOUNTS`) now join the same pool. See `docs/CREDENTIALS.md`.
 - **`/_igprobe` asks Instagram's two GraphQL queries from the Worker and reports what each one got.**
   The fallback that rescued 43 to 70 Instagram cards a day stopped working on 2026-11-19, and
   videos started showing as stills the same day. yt-dlp has since moved to a different query. From a

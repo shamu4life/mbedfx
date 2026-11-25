@@ -763,3 +763,17 @@ test('THE COMMITTED EXAMPLE IS A POOL THE CODE ACTUALLY ACCEPTS, and carries no 
       'example cookie values must be self-evidently fake')
   }
 })
+
+test('OVERFLOW SECRETS JOIN THE POOL: YT_ACCOUNTS_2 and _3 are read after YT_ACCOUNTS, each parsed on its own', () => {
+  // 2026-11-24: one Worker secret is capped at ~5.1 kB and a trimmed YouTube jar is ~2.3 kB, so the main
+  // secret holds two accounts at most. The overflows are how a third (and more) gets in.
+  const jar = n => JSON.stringify([{ label: `yt${n}`, cookies: `# Netscape HTTP Cookie File\n.youtube.com\tTRUE\t/\tTRUE\t1\tSID\tEXAMPLE-NOT-A-REAL-VALUE-${n}\n` }])
+  const env = { YT_ACCOUNTS: jar(1), YT_ACCOUNTS_2: jar(2), YT_ACCOUNTS_3: jar(3) }
+  assert.deepEqual(accountPool(env, 'yt').map(a => a.label), ['yt1', 'yt2', 'yt3'])
+  assert.deepEqual(accountPool({ YT_ACCOUNTS: jar(1), YT_ACCOUNTS_2: '{not json' }, 'yt').map(a => a.label), ['yt1'],
+    'a malformed overflow empties only itself')
+  assert.deepEqual(accountPool({ YT_ACCOUNTS_2: jar(2) }, 'yt').map(a => a.label), ['yt2'],
+    'an overflow with no main secret still counts')
+  assert.deepEqual(accountPool({ IG_ACCOUNTS_2: jar(9) }, 'yt'), [], 'platforms stay separate')
+  assert.ok(cookiesFor(env, 'yt', () => 0.999).includes('VALUE-3'), 'the last account is reachable by the picker')
+})

@@ -222,6 +222,14 @@ jq . accounts.json    # if this errors, so did the Worker, just quietly
 
 ## Rotating
 
+### When one secret is not enough
+
+A Worker secret holds about 5.1 kB, and Cloudflare refuses a bigger one with code 10054. A YouTube
+jar trimmed to its sign-in cookies is about 2.3 kB, so `YT_ACCOUNTS` fits two accounts. Put the
+rest in `YT_ACCOUNTS_2` and `YT_ACCOUNTS_3`, same JSON shape. The Worker reads all three and joins
+them into one pool (`OVERFLOW_SUFFIXES`, `src/credentials.ts`), and a broken overflow empties only
+itself. `IG_ACCOUNTS_2`/`_3` and `X_ACCOUNTS_2`/`_3` work the same way.
+
 Replace the whole array and push it again. `wrangler secret put` has no partial update, so one dead
 account means re-pushing every entry, then bumping `META_GENERATION` per "Cached gate verdicts"
 above.
