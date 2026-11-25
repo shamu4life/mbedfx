@@ -1,0 +1,59 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  // THE WORKERS FREE VARIANT: wrangler.jsonc without the container. Deploy it with
+  //     npx wrangler deploy -c wrangler.free.jsonc
+  //
+  // UNTESTED ON THE FREE PLAN. Nobody has deployed this file or measured the Worker against Free's
+  // limits (10 ms of CPU and 50 subrequests per request, 100,000 requests a day; Cloudflare's limits
+  // page, read 2026-11-25). A card that fans out to several upstreams, a translation, or the
+  // half-hourly check rendering its whole list may exceed them. Whether a Free account must enable R2
+  // before the bucket can be created is unchecked too. Treat this file as a starting point, not a
+  // supported setup.
+  //
+  // WHAT IS MISSING, AND WHY THE REST STILL DEPLOYS. Workers Free has no Containers, so there is no
+  // `containers` block and no MEDIA_RESOLVER binding. The Worker checks for the binding before every
+  // container call (Env.MEDIA_RESOLVER is optional in src/analytics.ts), and with it unbound a video
+  // that needs muxing renders its cover still, YouTube gets YouTube's own player, and /_clients
+  // answers 503. The MediaResolver class stays exported and in migration v1: a Durable Object is only
+  // constructed when something addresses it, and with no binding nothing can, so the Container base
+  // class never reaches the check that throws without a container. Free allows SQLite-backed Durable
+  // Objects only, which all three classes are.
+  //
+  // Same Worker name and resource names as wrangler.jsonc, so moving to Workers Paid later is a deploy
+  // of that file onto this Worker, with its cache and workers.dev url kept. That upgrade path is
+  // untested as well.
+  //
+  // Everything else matches wrangler.jsonc; its comments explain each setting. Line comments only.
+  "name": "mbedfx-selfhost",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-07-01",
+  "observability": { "enabled": false },
+  "workers_dev": true,
+  "keep_vars": true,
+  "triggers": { "crons": ["*/30 * * * *"] },
+  "r2_buckets": [
+    //     npx wrangler r2 bucket lifecycle add mbedfx-selfhost-media expire-60d --expire-days 60
+    { "binding": "MEDIA_CACHE", "bucket_name": "mbedfx-selfhost-media" }
+  ],
+  "durable_objects": {
+    "bindings": [
+      { "name": "MUX_RUNNER", "class_name": "MuxRunner" },
+      { "name": "SMOKE_RUNNER", "class_name": "SmokeRunner" }
+    ]
+  },
+  "migrations": [
+    { "tag": "v1", "new_sqlite_classes": ["MediaResolver"] },
+    { "tag": "v2", "new_sqlite_classes": ["MuxRunner"] },
+    { "tag": "v3", "new_sqlite_classes": ["SmokeRunner"] }
+  ],
+  "assets": {
+    "directory": "./public",
+    "binding": "ASSETS",
+    "run_worker_first": true,
+    "not_found_handling": "none"
+  },
+  "ai": { "binding": "AI" },
+  "analytics_engine_datasets": [
+    { "binding": "AE", "dataset": "mbedfx_selfhost_counters" }
+  ]
+}

@@ -170,9 +170,26 @@ explains the defect it prevents.
 
 ## Deploying
 
-Do **not** run `wrangler deploy` by hand. Cloudflare Workers Builds watches `main`, and what you
-merge is what deploys. `npm run deploy` refuses on purpose. A hand deploy overwrites whatever the
-build shipped, and prod goes on looking healthy. That has cost this project real downtime.
+Production deploys from Cloudflare Workers Builds and nowhere else. It watches `main`, and what you
+merge is what deploys: `npx wrangler deploy -c wrangler.production.jsonc` on `main`, and
+`npx wrangler versions upload -c wrangler.production.jsonc` on other branches. **Never run either by
+hand.** A hand deploy overwrites whatever the build shipped, and prod goes on looking healthy. That
+has cost this project real downtime.
+
+There are three configs:
+
+| File | What it deploys |
+|---|---|
+| `wrangler.production.jsonc` | The public instance: the `mbedfx` Worker, its custom domains, the pinned container application, the production vars. The long history comments live here. |
+| `wrangler.jsonc` | The generic config, a separate `mbedfx-selfhost` Worker on workers.dev with its own bucket, dataset and container application. `npm run deploy`, a plain `npx wrangler deploy` and the Deploy to Cloudflare button all use it. |
+| `wrangler.free.jsonc` | The generic config without the container, for Workers Free. Nobody has run it on that plan. |
+
+`npm run deploy` from a checkout can't overwrite production any more, because the generic file uses
+a different Worker name. It still creates a real Worker in whatever account wrangler is logged into,
+and that Worker runs its own containers and gets its own bill. Self-hosters want that. The owner
+shouldn't do it by accident. `test/wrangler-configs.test.mjs` fails if the generic or free file names
+a production zone, guest host, bucket, dataset or container application, or if `npm run deploy`
+names the production file.
 
 `npm run build` (tests + typecheck) is the gate Workers Builds runs. A red suite ships nothing.
 

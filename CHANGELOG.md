@@ -6,6 +6,15 @@ All notable changes to mbedfx are documented here. The format follows
 
 ## [Unreleased]
 
+**Upgrading:** if you forked mbedfx and deploy the root `wrangler.jsonc`, your next deploy uses new
+names: Worker `mbedfx-selfhost`, R2 bucket `mbedfx-selfhost-media`, Analytics Engine dataset
+`mbedfx_selfhost_counters`, container application `mbedfx-selfhost-mediaresolver`. It creates a
+second Worker next to your old one, with an empty cache. To keep your Worker, put your own names back
+in `wrangler.jsonc`, or keep your old file and deploy it with `-c`. If you keep your old Worker name,
+keep its `containers[].name` too. A Durable Object class can belong to only one container
+application, so a new name fails the deploy with `DURABLE_OBJECT_ALREADY_HAS_APPLICATION`. Nobody
+else has anything to do.
+
 ### Added
 
 - **mbedfx runs off Cloudflare, on Node.** `adapters/node/server.ts` serves the production handler from
@@ -43,9 +52,26 @@ All notable changes to mbedfx are documented here. The format follows
   so a deployment that never set the var promised Discord an mp4 for a cold short video whenever
   it knew the video's length. On 2026-11-24 that promise made Discord's window one time in eight,
   and every miss left a player in the message that never plays. mbedfx.app already had
-  `YT_PROMISE: "off"` in `wrangler.jsonc`, so it renders the same cards as before. Self-hosters who
-  left the var out now get YouTube's own player on a first paste, as mbedfx.app does. To get the
-  promise back, set `YT_PROMISE=on`.
+  `YT_PROMISE: "off"` in its config (now `wrangler.production.jsonc`), so it renders the same cards
+  as before. Self-hosters who left the var out now get YouTube's own player on a first paste, as
+  mbedfx.app does. To get the promise back, set `YT_PROMISE=on`.
+- **The root `wrangler.jsonc` can be deployed to any account.** It has no routes, so the Worker
+  answers on `<name>.<your-subdomain>.workers.dev`. The Worker, its R2 bucket, its Analytics Engine
+  dataset and its container application all have their own names, so a deploy into the account that
+  runs mbedfx.app can't touch mbedfx.app's. The file sets no vars, and `keep_vars` stops a deploy
+  from deleting vars you set in the dashboard. Workers Logs stay off. For a domain of your own, add a
+  custom domain in the dashboard. Wrangler only publishes domains a config lists, so deploys leave it
+  alone. The file also has the one-time command that gives the bucket its 60-day expiry.
+- **mbedfx.app's settings live in `wrangler.production.jsonc`:** its domains, its pinned container
+  application, `YT_PROMISE: "off"`, and the comments explaining each setting. Workers Builds deploys
+  it with `-c`.
+- **`npm run deploy` now runs `wrangler deploy` on the generic config.** It creates or updates the
+  `mbedfx-selfhost` Worker in whatever account wrangler is logged into, containers and their bill
+  included. Until now the script refused to run.
+- **`wrangler.free.jsonc` is an untested starting point for Workers Free.** It's the generic config
+  minus the container, since Workers Free has no Containers. Videos that need muxing show their cover
+  still, and YouTube cards use YouTube's own player. Nobody has deployed it on the Free plan or
+  measured the Worker against Free's limits of 10 ms of CPU and 50 subrequests per request.
 
 ### Fixed
 
