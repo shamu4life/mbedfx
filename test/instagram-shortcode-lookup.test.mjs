@@ -68,6 +68,10 @@ function stub({ code, handleName, gql, feed }) {
     }
     if (url.includes('/embed/captioned/')) { seen.push('embed'); return new Response(brokenEmbed, { status: 200 }) }
     if (url.includes('instagram.com/p/')) { seen.push('page'); return new Response(fullPage(code, handleName), { status: 200 }) }
+    // ANY OTHER INSTAGRAM URL IS REFUSED HERE, never sent to the real network. Since 2026-11-24 the shortcode
+    // lookup also tries the logged-out query (homepage, ruling, /api/graphql); passing those through reached
+    // live Instagram from the test suite, which must run offline.
+    if (url.includes('instagram.com')) { seen.push('other-ig'); return new Response('', { status: 404 }) }
     return real(u, init)
   }
   return { seen, restore: () => { globalThis.fetch = real } }

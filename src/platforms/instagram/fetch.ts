@@ -591,7 +591,30 @@ export const IG_GRAPHQL_DOC_ID = '27128499623469141'
 /** The documented root as a key holding an object. See the content check at the end of the fetcher. */
 const GQL_ROOT_OBJECT = /"xdt_api__v1__media__shortcode__web_info"\s*:\s*\{/
 
+/**
+ * THE SHORTCODE GRAPHQL ANSWER, from whichever of the two queries still answers, or null.
+ *
+ * TWO QUERIES SINCE 2026-11-24. `graphql_recovered` fell from 43-70 a day to zero on 2026-11-19, and
+ * `/_igprobe` measured why from production: the query below (PolarisPostRootQuery) answers
+ * `"Rate limit exceeded"` to this egress, every time. yt-dlp 2026.11.23's logged-out query
+ * (fetchLoggedOutPostQuery) answered from the same egress with the post, its logged-out media and
+ * `video_versions`, once it sent the homepage's whole cookie jar. The old one is still asked first: it
+ * is one ~22 KB request and fails in about 100 ms, so if Instagram lifts the limit the cheap path comes
+ * back by itself.
+ *
+ * EITHER WAY THE CALLER GETS THE OLD ENVELOPE. The new answer's media object is the same v1 item
+ * (normalize.ts v1Item reads both), so it is re-wrapped as
+ * `{data:{xdt_api__v1__media__shortcode__web_info:{items:[item]}}}` and every parser and card
+ * downstream is unchanged.
+ */
 export async function fetchInstagramGraphQLMedia(
+  code: unknown, docId?: string,
+): Promise<string | null> {
+  if (typeof code !== 'string' || !SHORTCODE.test(code)) return null
+  return (await fetchPostRootQuery(code, docId)) ?? (await fetchLoggedOutPostQuery(code))
+}
+
+async function fetchPostRootQuery(
   code: unknown, docId?: string,
 ): Promise<string | null> {
   // Same shape check the embed path applies, and for the same reason: this reaches a url.
@@ -637,4 +660,117 @@ export async function fetchInstagramGraphQLMedia(
   } catch {
     return null
   }
+}
+
+/** yt-dlp 2026.11.23's logged-out post query (extractor/instagram.py). See fetchInstagramGraphQLMedia. */
+export const IG_LOGGED_OUT_DOC_ID = '27130156389949648'
+const IG_LOGGED_OUT_FRIENDLY = 'PolarisLoggedOutDesktopWWWPostRootContentQuery'
+const B64URL = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_'
+const BROWSER_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36'
+
+/** The media pk a shortcode encodes (base64url digits), as yt-dlp's _id_to_pk; "" for a bad code. */
+export function shortcodeToPk(code: string): string {
+  let n = 0n
+  for (const ch of code) {
+    const v = B64URL.indexOf(ch)
+    if (v < 0) return ''
+    n = n * 64n + BigInt(v)
+  }
+  return n.toString()
+}
+
+/** Every cookie a response set, as one Cookie header. Handles the comma inside `Expires`. */
+export function cookieHeaderOf(res: Response | null): string {
+  const h = res?.headers as (Headers & { getSetCookie?: () => string[] }) | undefined
+  const lines = h?.getSetCookie ? h.getSetCookie() : (h?.get('set-cookie') ?? '').split(/,(?=\s*[A-Za-z0-9_.-]+=)/)
+  return lines.map(l => l.split(';')[0].trim()).filter(kv => /^[A-Za-z0-9_.-]+=\S*$/.test(kv)).join('; ')
+}
+
+/**
+ * THE HOMEPAGE SESSION THE LOGGED-OUT QUERY NEEDS: the `lsd` token and the cookie jar. ISOLATE-LOCAL
+ * AND SHORT-LIVED. The homepage is ~540 KB, so fetching it per card would cost more than the full-page
+ * fallback this exists to spare; one session is reused for SESSION_TTL_MS and dropped the moment a
+ * query answers with anything but the documented root, so a session Instagram stopped honouring is
+ * never retried. No account and no credential is involved: these are the cookies any logged-out
+ * browser receives, and they never leave this isolate except to instagram.com.
+ */
+const SESSION_TTL_MS = 10 * 60 * 1000
+let igSession: { lsd: string; cookie: string; csrf: string; at: number } | null = null
+
+async function loggedOutSession(): Promise<typeof igSession> {
+  if (igSession && Date.now() - igSession.at < SESSION_TTL_MS) return igSession
+  igSession = null
+  try {
+    // NO-RETRY: deliberate. This is a ~540 KB page fetched once per SESSION_TTL_MS; a second ask on a
+    // refusal doubles the cost of the one fallback that exists to save bytes, and the caller already
+    // falls through to the full page when there is no session.
+    const res = await fetch('https://www.instagram.com/', { headers: { 'user-agent': BROWSER_UA, accept: 'text/html' } })
+    const html = await res.text()
+    const eqmc = /<script\b[^>]*\bid="__eqmc"[^>]*>(\{.*?\})<\/script>/s.exec(html)
+    let lsd = ''
+    if (eqmc) {
+      try { const l = (JSON.parse(eqmc[1]) as { l?: unknown }).l; if (typeof l === 'string') lsd = l } catch { /* older shape */ }
+    }
+    lsd ||= /\["LSD",\[\],\{"token":"([^"]+)"/.exec(html)?.[1] ?? ''
+    const cookie = cookieHeaderOf(res)
+    const csrf = /(?:^|;\s*)csrftoken=([^;]+)/.exec(cookie)?.[1] ?? ''
+    if (!lsd || !cookie) return null
+    igSession = { lsd, cookie, csrf, at: Date.now() }
+    return igSession
+  } catch {
+    return null
+  }
+}
+
+/** The root of the logged-out answer: a media object, publicly viewable while logged out. */
+const LOGGED_OUT_MEDIA = /"if_not_gated_logged_out"\s*:\s*\{/
+
+async function fetchLoggedOutPostQuery(code: string): Promise<string | null> {
+  const pk = shortcodeToPk(code)
+  if (!pk) return null
+  const s = await loggedOutSession()
+  if (!s) return null
+  const api = {
+    'x-ig-app-id': IG_WEB_APP_ID, 'x-asbd-id': '359341', 'x-ig-www-claim': '0',
+    origin: 'https://www.instagram.com', accept: '*/*', 'user-agent': BROWSER_UA,
+    'accept-language': 'en-US,en;q=0.9', 'sec-fetch-site': 'same-origin', 'sec-fetch-mode': 'cors', 'sec-fetch-dest': 'empty',
+    cookie: s.cookie,
+  }
+  try {
+    // THE RULING FIRST, as yt-dlp does: the csrf header is sent only once Instagram says this content is
+    // viewable. Measured from production 2026-11-24: 200 `{"status":"ok"}` in ~100 ms.
+    // NO-RETRY: deliberate. A failed ruling only withholds the csrf header from the query below; it
+    // decides nothing on its own, so asking it twice would buy no card.
+    const ruling = await fetch(`https://www.instagram.com/api/v1/web/get_ruling_for_content/?content_type=MEDIA&target_id=${pk}`,
+      { headers: api, redirect: 'manual' })
+    const rulingOk = /"status"\s*:\s*"ok"/.test(await ruling.text())
+    // NO-RETRY: deliberate. This is the second query of a fallback that already followed a failed one,
+    // and a refusal drops the session so the next card starts clean; the full page still runs after it.
+    const res = await fetch('https://www.instagram.com/api/graphql', {
+      method: 'POST', redirect: 'manual',
+      headers: { ...api, 'content-type': 'application/x-www-form-urlencoded', 'x-fb-friendly-name': IG_LOGGED_OUT_FRIENDLY,
+        'x-fb-lsd': s.lsd, 'x-requested-with': 'XMLHttpRequest', referer: `https://www.instagram.com/p/${code}/`,
+        ...(rulingOk && s.csrf ? { 'x-csrftoken': s.csrf } : {}) },
+      body: new URLSearchParams({ lsd: s.lsd, fb_api_caller_class: 'RelayModern', fb_api_req_friendly_name: IG_LOGGED_OUT_FRIENDLY,
+        server_timestamps: 'true', variables: JSON.stringify({ media_id: pk }), doc_id: IG_LOGGED_OUT_DOC_ID }),
+    })
+    const text = res.ok ? await res.text() : ''
+    // ASSERT ON CONTENT: the decoy is a 540 KB HTML page at 200 (measured with only csrftoken sent).
+    if (!LOGGED_OUT_MEDIA.test(text)) {
+      igSession = null
+      return null
+    }
+    const item = (JSON.parse(text) as { data?: { xig_polaris_media?: { if_not_gated_logged_out?: unknown } } })
+      ?.data?.xig_polaris_media?.if_not_gated_logged_out
+    if (!item || typeof item !== 'object' || (item as { code?: unknown }).code !== code) return null
+    return JSON.stringify({ data: { xdt_api__v1__media__shortcode__web_info: { items: [item] } } })
+  } catch {
+    igSession = null
+    return null
+  }
+}
+
+/** Test seam: forget the cached homepage session. */
+export function resetInstagramSessionForTests(): void {
+  igSession = null
 }

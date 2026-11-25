@@ -9,6 +9,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- **Instagram's shortcode lookup works again.** It rescued 43 to 70 Instagram cards a day until
+  2026-11-19, then none, and some reels started showing as stills. `/_igprobe` showed why from
+  production: Instagram answers this Worker's query with "Rate limit exceeded" every time. The
+  lookup now falls back to the logged-out query yt-dlp 2026.11.23 uses, which answered from the
+  same network with the post and its video once it sent the cookies Instagram's homepage sets.
+  The homepage session is kept for ten minutes, and the old query is still asked first.
 - **A video that can't be fetched now gets a final card instead of "still muxing" forever.** Found
   2026-11-24 on a YouTube ad, `zp8_bKhhnlw`: every container attempt failed for 25 minutes and the API
   kept answering `muxing: true`. The retry alarm did give up, but it forgot that it had, so the next

@@ -111,6 +111,8 @@ function stub({ gql, page }) {
     if (url.includes('/embed/captioned/')) { seen.push('embed'); return new Response(brokenEmbed, { status: 200 }) }
     if (url.includes('instagram.com/p/')) { seen.push('page'); return page() }
     if (url.includes('/api/v1/feed/user/')) { seen.push('feed'); return new Response('{"items":[]}', { status: 200 }) }
+    // The logged-out query's homepage load (2026-11-24): answered with no session, so that query declines.
+    if (url === 'https://www.instagram.com/') { seen.push('home'); return new Response('', { status: 404 }) }
     seen.push(`other ${url}`)
     return new Response('', { status: 404 })
   }
@@ -153,7 +155,7 @@ test('THE GATE CARDS ARE UNCHANGED: an age-gated post answers the query with no 
   const { seen, restore } = stub({ gql: AGE_ERROR, page: () => new Response(AGE_PAGE, { status: 200 }) })
   try {
     const { points } = await run(code)
-    assert.deepEqual(seen, ['embed', 'graphql', 'page'])
+    assert.deepEqual(seen, ['embed', 'graphql', 'home', 'page'], 'the logged-out query declines too (no session) before the page')
     assert.ok(outcomes(points).includes('age_restricted'))
     assert.ok(!outcomes(points).includes('graphql_recovered'))
   } finally { restore() }
