@@ -550,7 +550,8 @@ Status on 2026-11-25, against issue #27's Phase 1 list:
 - [x] `Deps` from the same export the default export builds on, `{ ...scheduledDeps(), cache }`, not a
   hand copy.
 - [x] A Dockerfile and a compose file, written in `adapters/node/` and not yet built.
-- [x] Acceptance against production on five posts: [What the first run measured](#what-the-first-run-measured).
+- [x] Acceptance against production on five posts: four drew the same card, and Twitter's lacked its
+  repost count. See [What the first run measured](#what-the-first-run-measured).
 
 Still open: the shared `CacheLike` (below), a first build of the image, and a public instance.
 
@@ -572,8 +573,8 @@ Still open:
 - An actual shared `CacheLike` implementation. Deliberately NOT in this repo: it would mean a client
   library and a dependency for one of two runtimes. The seam is two methods wide; the store is the
   operator's choice.
-- A public instance. The adapter has run privately on one host; none of these corrections has met
-  traffic off Cloudflare yet.
+- A public instance. The adapter has run privately on one host; none of these corrections has been
+  tested under real traffic off Cloudflare yet.
 
 ### Measuring the egress
 

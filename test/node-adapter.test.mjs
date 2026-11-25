@@ -378,12 +378,22 @@ test('/_clients reaches the container with the secret, and a container that neve
 test('the mux runner: first schedule wins, claim is check-and-set, the alarm disarms before it runs and never throws', async () => {
   const { ctx, drain } = trackingContext(() => {})
   const ran = []
+  // WAITS ON THE RUNS THEMSELVES, not on a sleep: this suite is the deploy gate, and a sleep that is
+  // long enough on a laptop is short on a loaded build machine. When run n starts, its alarm is
+  // already in the waitUntil set, so drain() then waits for it to finish.
+  let notify = () => {}
+  const reached = n => new Promise((resolve, reject) => {
+    if (ran.length >= n) return resolve()
+    const t = setTimeout(() => reject(new Error(`${ran.length} of ${n} alarm runs within 5 s`)), 5000)
+    notify = () => { if (ran.length >= n) { clearTimeout(t); resolve() } }
+  })
   let throwNext = true
   const policy = {
     first: () => 20,
     next: spent => (spent < 2 ? 20 : null),
     run: async (_env, job) => {
       ran.push(job.source.video)
+      notify()
       if (throwNext) { throwNext = false; throw new Error('container gone') }
       return true
     },
@@ -402,7 +412,7 @@ test('the mux runner: first schedule wins, claim is check-and-set, the alarm dis
 
   await stub.schedule({ key, slotKey: 'bs:runner-1', source: { video: 'first' } })
   await stub.schedule({ key, slotKey: 'bs:runner-1', source: { video: 'second' } })
-  await new Promise(r => setTimeout(r, 100))
+  await reached(2)
   assert.equal(await drain(5000), true)
   // The first attempt threw and was retried, not rethrown; the second succeeded and ended the job.
   assert.deepEqual(ran, ['first', 'first'])
@@ -411,7 +421,7 @@ test('the mux runner: first schedule wins, claim is check-and-set, the alarm dis
 
   // The armed flag was cleared when the alarm fired, so a later paste can arm it again.
   await stub.schedule({ key, slotKey: 'bs:runner-1', source: { video: 'third' } })
-  await new Promise(r => setTimeout(r, 60))
+  await reached(3)
   assert.equal(await drain(5000), true)
   assert.deepEqual(ran, ['first', 'first', 'third'])
 })
