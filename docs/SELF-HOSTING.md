@@ -359,7 +359,7 @@ YouTube's among them since 1.12.0. So read the rows below as what a host is refu
 |---|---|---|
 | Reddit anonymous `.json` | Verified 2026-07-21: Workers egress gets a 403 "network security" block page. A residential host got the same 403 on 2026-11-25. `embed.reddit.com` refused Workers egress from 2026-10-22 (403, measured 2026-10-25), which is why the archive path and the relay exist. From a residential host it is refused to curl and served to Node's `fetch` (see below). | `src/platforms/reddit/fetch.ts` |
 | Reddit embed with a placeholder subreddit | Measured from Workers egress 2026-07-22: a placeholder sub gets a stripped render. The real subreddit has to be passed. | `src/platforms/reddit/fetch.ts` |
-| Facebook `/share/{code}` 302 | Measured on one share code: a browser-shaped request from a laptop gets `302 -> /posts/…`, the same request from Cloudflare's egress gets none. Confirmed by natural experiment against the live worker. | `src/platforms/metashare/fetch.ts` |
+| Facebook `/share/{code}` 302 | Measured on one share code: a browser-shaped request from a laptop gets `302 -> /posts/…`, the same request from Cloudflare's egress gets none. Confirmed by natural experiment against the live worker. On 2026-11-25 a residential host got it too, for a reel's `/share/v/{code}` (to `/reel/{id}/`). | `src/platforms/metashare/fetch.ts` |
 | Instagram embed | From datacenter egress the embed returned an ~81 KB "unavailable" shell and a public post rendered as private. Residential egress never reproduced it, and it reached production. The shell is about 183 KB as of 2026-11-25, so judge it with `hasEmbedPayload`, never by size. | `src/worker.ts` (the note near `fullpage_recovered`) |
 | Threads video (`scontent*.cdninstagram.com`) | Once blocked for the container's egress. A Worker fetch on 2026-08-09 got 200 `video/mp4` (8,990,730 bytes), and the Worker now serves those bytes itself. A residential host got the same file on 2026-11-25. | `src/platforms/threads/normalize.ts`, `src/mediaproxy.ts` |
 | Google translate endpoint | Measured 2026-07-31 from a Worker: answers in 13-16 ms and is not blocked from Cloudflare's egress. It does rate-limit bursts, and ~30 requests in a few seconds drew HTTP 429 on every one. | `src/translate.ts` |
@@ -378,15 +378,16 @@ repo's own checks (`hasEmbedPayload`, `hasThreadsSSR`, the Reddit embed markers)
 |---|---|---|
 | Reddit `.json` | 403 block page, for curl and for Node | Blocked from a home line too. Nothing uses it. |
 | Reddit embed | 403 to curl, 200 with the full post to Node, same IP and headers | Reddit's gate is keyed on the client. The address made no difference. A Node self-host on a home line gets the embed that Cloudflare's egress lost on 2026-10-22. Other runtimes were not measured. |
-| Facebook `/share/{code}` | Not sent | No live share code could be had without logging in. Still unmeasured. |
+| Facebook `/share/v/{code}`, a public reel | 302 to `/reel/{id}/`, asked with the resolver's `SHARE_HEADERS` | A home line gets the redirect. Earlier that day mbedfx.app drew the share link as an image and the reel's own link as a video. By 19:20 UTC both drew a video, and that answer came from yt-dlp, which production asks first. Why the earlier paste drew an image wasn't recorded. The image card doesn't show whether Cloudflare's egress got the 302 for this code: production reads the share page before it asks for a redirect, and that read follows one if it comes. |
 | Instagram embed | 200 with a real payload for a normal post (`DaQ5CPTki4E`) | Works. The usual sample, `DZxLuleoEoC`, fails its embed from anywhere (a fake code gets the same page), so it is a poor egress probe. |
 | Threads SSR, then its `scontent` video | 200 SSR with one video; then 200 `video/mp4`, 8,990,784 bytes | Both work from a home line. |
 | Google translate | 200, the expected translation | No address block. The burst limit was not tested. |
 
 ### What changes on a different host
 
-A residential connection would probably get the Facebook `/share` 302 the public instance cannot,
-and avoid the ~81 KB Instagram shell. Threads video bytes may be fetchable directly, which mbedfx
+A residential connection gets the Facebook `/share` 302 that the public instance doesn't (measured
+above), though for a video it matters only after yt-dlp misses. It would probably also avoid the
+~81 KB Instagram shell. Threads video bytes may be fetchable directly, which mbedfx
 does not attempt. Reddit's anonymous `.json` would most likely stay blocked, that block looking as
 much like bot detection as datacenter detection, and nothing measures it either way. Google's limit
 is on burst rate and not on address. A move buys nothing there, and an instance with a cold cache
