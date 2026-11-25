@@ -416,7 +416,7 @@ the failure is otherwise silent (`src/analytics.ts`).
 | `AI` (Workers AI) | `Env`, `src/analytics.ts` | `ai.run(model, input)`, `FALLBACK_MODEL = '@cf/google/gemma-4-26b-a4b-it'` (`src/translate.ts:276`) | any model behind a `run(model, input)` shim | Optional. Translation falls back to Google's endpoint alone; if that is also refused from your egress, translation stops and every card renders untranslated. |
 | `caches.default` | `src/worker.ts`, behind `CacheLike` (`src/worker.ts`) | `match(url)` / `put(url, Response)` with a synthetic `https://cache.mbedfx.internal/…` key (`src/cache.ts`) | a `Map` (what the tests use), Redis, or a disk cache. **Not** a per-process `Map` across more than one process. The five promises an implementation makes (honour `cache-control: max-age`, hand back a readable body, be shared across processes, never reject, key on the exact string) are the `CacheLike` docstring in `src/worker.ts`; `test/selfhost.test.mjs` fails if the worker starts calling a third method | Required by the type, trivial to satisfy. With a weak one, every paste refetches upstream, and Discord fetches roughly three times per paste (`src/worker.ts`). Cloudflare's Cache API is itself only per-datacenter: a self-hosted shared cache is arguably better than what the public instance has ([Cloudflare docs: "the contents of the cache do not replicate outside of the originating data center"](https://developers.cloudflare.com/workers/runtime-apis/cache/)). |
 | `ExecutionContext` | parameter of `handle` | `ctx.waitUntil(p)` only, 24 sites in `src/worker.ts` | `{ waitUntil(p) { … } }` that tracks the promise and keeps the process alive until it settles | Required. `waitUntil` is what releases in-flight container slots, keeps a mux running past the response, and writes the response cache. A no-op silently cancels all three, and the symptom is "videos never appear". The adapter's is `trackingContext` in `adapters/node/bindings.ts`, drained on SIGTERM. |
-| `OWN_HOSTS` | `src/analytics.ts` | added to the built-in own-zone list in `src/platforms/fedihost.ts` | every domain you serve from, comma- or whitespace-separated, hostname or origin | **Set it.** Unset, the fediverse routes will fetch your own domain if somebody asks them to. Additive, so a wrong value can only make the guard stricter. |
+| `OWN_HOSTS` | `src/analytics.ts` | added to the built-in own-zone list in `src/platforms/fedihost.ts` | every domain you serve from, comma- or whitespace-separated, hostname or origin | **Set it.** Unset, a request on one of your domains can make the fediverse routes fetch another one. The domain the request came in on is refused either way. Additive, so a wrong value can only make the guard stricter. |
 | `RESOLVE_HOST` | `src/analytics.ts` | `blockedResolvedHost` in `src/netguard.ts`, before every fediverse fetch | `async (host) => (await dns.lookup(host, { all: true })).map(a => a.address)` | Optional, strongly recommended off Cloudflare. Without it the address guard is literal-only, which is all a Worker can ever do, so `evil.example.com IN A 127.0.0.1` is not caught. |
 | `MUX_BUFFER_MAX` | `src/analytics.ts` | `putMuxed` in `src/worker.ts` | bytes, as a string. Default 64 MB | Optional. Raise it if you have memory and no `putStream`; a video above it is not cached and its card degrades to the cover still. |
 | `cf: { cacheEverything, cacheTtl }` | `src/platforms/twitter/fetch.ts` | reuses one Twitter guest-token activation for `GUEST_TOKEN_TTL` = 7200 s | nothing to supply any more: a process-local memo with a shared in-flight promise does the same job on both runtimes | Was silently ignored off Cloudflare, so every cold card minted a fresh guest token. A token has roughly a 500-request budget, so the cost was one extra request to Twitter per cold card and a source of rate-limiting invisible from the code. Now bounded to one activation per process per two hours. |
@@ -452,9 +452,12 @@ const OWN_HOSTS = ['mbedfx.app', 'megapenispoopenfarten.sex', 'forsen.sex', 'wor
 through a service binding. They are refused for the same reason, and a self-hosted instance never sees
 a request on them.
 
-Serve on `embed.example.com` without declaring it, and `/…/embed.example.com/post/1` makes the
-service fetch itself. On Cloudflare that re-enters through the edge and bypasses the zone's own WAF;
-on a self-hosted box it is a self-request and, with the wrong DNS, an internal-service reach.
+The domain a request came in on is refused with no setting at all. On `embed.example.com`, or on
+`d.embed.example.com`, `/embed.example.com/post/1` fetches nothing. Your other domains are not covered
+that way. Serve on `embed.example.com` and `cards.example.net` without declaring either, and
+`/embed.example.com/post/1` requested on `cards.example.net` makes the service fetch itself. On
+Cloudflare that re-enters through the edge and bypasses the zone's own WAF; on a self-hosted box it is
+a self-request and, with the wrong DNS, an internal-service reach.
 
 Set `OWN_HOSTS` on the env to every domain you serve from, whitespace- or comma-separated, as
 hostnames or origins:
@@ -467,12 +470,14 @@ OWN_HOSTS="embed.example.com https://staging.embed.example.com"
   hostile one cannot un-block mbedfx's zones, so every way of getting this wrong is "too strict".
 - One apex entry covers every subdomain: the test is `host === h || host.endsWith('.' + h)`.
 - Unset is a **misconfiguration, not an open door**. The built-in list, the address guard below and
-  the response-shape assert all still stand; what is left reachable is your own public domain, which
-  resolves to your own public address, and the self-request lands on a path this Worker does not
+  the response-shape assert all still stand; what is left reachable is your other public domains,
+  which resolve to your own public address, and the self-request lands on a path this Worker does not
   serve as an API and renders "couldn't load".
-- `fetchableInstance` also takes an optional `self` origin, and the Worker still threads none in
-  (`src/worker.ts`). Doing so would make the guard depend on a request field every test stub would
-  then have to supply, for a host you can simply declare.
+- The domain a request came in on is read off the request itself. Since 2026-11-25 the Worker hands
+  each request's origin to `fetchableInstance` as `self` (`getPost` in `src/worker.ts`). On a `d.`
+  host the domain under it is refused as well, since a `d.` host is an alias of that domain. The Node
+  adapter also adds every `PUBLIC_ORIGIN` host to `OWN_HOSTS`, so there all your configured domains
+  are covered. A Cloudflare deploy has no such step, so list them here.
 
 ### DNS and private-range guarding in the Worker half
 

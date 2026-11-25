@@ -38,6 +38,17 @@ All notable changes to mbedfx are documented here. The format follows
   stand-in. The same page now shows the current `Deps` and counts 24 `waitUntil` call sites, not
   fifteen.
 
+### Security
+
+- **A self-hosted instance won't fetch the domain it's being asked on.** The fediverse routes take
+  the instance from the link's path. So `/embed.example.com/post/1`, requested on embed.example.com,
+  made the deployment fetch itself unless its operator had listed that domain in `OWN_HOSTS`. On
+  Cloudflare that request comes back in through the edge and skips the zone's WAF. Now the Worker
+  passes each request's domain to the guard, plus the domain under it on a `d.` host, and the request
+  is refused without any setting. A deployment with two or more domains still needs `OWN_HOSTS`,
+  because a request on one can name another. Nothing changes on mbedfx.app, whose domains were
+  already on the built-in list.
+
 ## [1.17.0] - 2026-11-24
 
 **Upgrading:** self-hosters run a full `wrangler deploy` so the container rebuilds (the `g17` `RESOLVER_GENERATION` bump in the code moves instances over), and set `YT_ACCOUNTS` to one or two throwaway YouTube accounts if YouTube asks their network to sign in. For API consumers, `still: true` with `muxing: false` can now also mean every mux attempt failed.

@@ -167,10 +167,16 @@ export interface Deps {
    * shipped — see META_TIMEOUT_API_MS for the measurement that made the single number wrong. Optional
    * and last for `report`'s reason: every existing stub declares fewer parameters, JS ignores the
    * extras, and a fetcher with no container upstream never reads it.
+   *
+   * `self` is the ORIGIN the request arrived on (`url.origin`), for the four fediverse fetchers, whose
+   * ref names the host they fetch. They refuse it the way they refuse OWN_HOSTS (fedihost.ts
+   * InstanceGuard.self), so a deployment cannot be made to fetch the domain it is being asked on even
+   * when its operator never set OWN_HOSTS. Optional and last for `report`'s reason, and absent means
+   * the guard has exactly what it had before this parameter existed, never less.
    */
   fetchPost(
     ref: PostRef, env: Env, client: ClientClass, report?: FetchReport, ctx?: ExecutionContext,
-    metaBudgetMs?: number,
+    metaBudgetMs?: number, self?: string,
   ): Promise<Post | null>
   /**
    * Resolve a /t/{code} short link. Separate from fetchPost because the INPUT is not a PostRef —
@@ -328,7 +334,7 @@ const BODY_OUTCOME = {
 
 export async function liveFetchPost(
   ref: PostRef, env: Env, client: ClientClass, report?: FetchReport, ctx?: ExecutionContext,
-  metaBudgetMs?: number,
+  metaBudgetMs?: number, self?: string,
 ): Promise<Post | null> {
   switch (ref.p) {
     case 'bs': {
@@ -1103,21 +1109,31 @@ export async function liveFetchPost(
     }
     case 'lm': {
       // LEMMY — the one platform whose ref names the ORIGIN we fetch, so fetchLemmy re-guards the
-      // host at the boundary (refkey.ts already shape-checked it) and refuses our own zone. It is
-      // refuses our own zone.
+      // host at the boundary (refkey.ts already shape-checked it) and refuses our own zone.
       //
       // A private instance answers with a typed `instance_is_private` error, which is a real WALL and
       // is reported as such; every other error — couldnt_find_post, a removed post, a bad id — is the
       // generic "couldn't load", because Lemmy does not distinguish them in a way we can trust.
       //
-      // `env` IS THREADED IN, `origin` IS NOT, and the asymmetry is deliberate. The own-zone refusal
-      // reads a module-level list of the hosts this Worker is served from PLUS `env.OWN_HOSTS`, which
-      // is how a self-hosted instance declares a domain this repo cannot know — env is already a
-      // parameter here, so nothing new has to reach the fetcher and every existing .mjs stub is
-      // untouched. The request's own origin is a different matter: threading it would make the guard
-      // depend on a request field every stub would then have to supply, for a host the operator can
-      // simply declare. `env.RESOLVE_HOST` rides the same object (see fedihost.ts clause 7).
-      const got = await fetchLemmy(ref, { env })
+      // THE GUARD GETS `env` AND THE REQUEST'S ORIGIN (`self`), and the same pair goes to all four
+      // fediverse arms below. The own-zone refusal reads a module-level list of the hosts this Worker
+      // is served from, plus `env.OWN_HOSTS`, which is how a self-hosted instance declares a domain
+      // this repo cannot know, plus `self`. `env.RESOLVE_HOST` rides the same object (fedihost.ts
+      // clause 7).
+      //
+      // `self` WAS LEFT OUT UNTIL 2026-11-25, on the argument that the operator can simply declare
+      // their host and that a stub would have to supply it. The first half did not hold: a self-hoster
+      // on Cloudflare serving embed.example.com who never set OWN_HOSTS left /embed.example.com/... open
+      // on embed.example.com itself, so this Worker fetched itself back through the edge, past the
+      // zone's own WAF. The Node adapter already covered it by folding PUBLIC_ORIGIN into OWN_HOSTS
+      // (adapters/node/bindings.ts envVars); a Cloudflare deploy has no such step. The second half
+      // never applied: `self` is optional, and absent (a test, a direct caller) is exactly the guard
+      // as it was. It can only ADD a refused host, so it cannot open anything the list closes.
+      //
+      // Production gains nothing from it: every hostname mbedfx.app is served on, d. and guest hosts
+      // included, is already in or under the built-in list. Removing `self` re-opens the self-fetch for
+      // every deployment that relies on it instead of OWN_HOSTS, and nothing fails when it does.
+      const got = await fetchLemmy(ref, { env, self })
       if (!got.ok) {
         count(env, 'lm', got.reason, client)
         if (got.reason === 'private' && report) report.reason = 'private'
@@ -1133,14 +1149,14 @@ export async function liveFetchPost(
        * THE MASTODON-API FAMILY — Mastodon, Pleroma, Akkoma, GoToSocial, Pixelfed, all through ONE
        * unauthenticated `GET /api/v1/statuses/{id}`. Like 'lm' this ref names the ORIGIN, so
        * fetchMasto re-guards the host at the boundary via the shared fedihost.ts contract, taking
-       * the same `{ env }` guard and no `origin`, for the reasons given above.
+       * the same `{ env, self }` guard, for the reasons given above.
        *
        * A 404/410 IS COUNTED AS 'notfound' RATHER THAN AS A FETCH FAILURE. Mastodon answers
        * `Record not found` for a deleted status and for one that never existed alike, so they cannot
        * be told apart — 'notfound' is the honest name for both, and keeps a deleted post from
        * inflating the assert_fail counter that exists to catch upstreams changing shape.
        */
-      const got = await fetchMasto(ref, { env })
+      const got = await fetchMasto(ref, { env, self })
       if (!got.ok) {
         count(env, 'ms', got.reason, client)
         return null
@@ -1154,7 +1170,7 @@ export async function liveFetchPost(
        * `NO_SUCH_NOTE` is a deleted note, and `SIGNIN_REQUIRED` is an author-level privacy setting
        * that is reported as 'private', the same as a Lemmy private instance.
        */
-      const got = await fetchMisskey(ref, { env })
+      const got = await fetchMisskey(ref, { env, self })
       if (!got.ok) {
         count(env, 'mk', got.reason, client)
         if (got.reason === 'private' && report) report.reason = 'private'
@@ -1170,7 +1186,7 @@ export async function liveFetchPost(
        * plain /_media/ 302 like Pinterest. A video with nothing inside the rendition ceilings, or a
        * live stream, degrades to its cover still rather than to a dead player.
        */
-      const got = await fetchPeerTube(ref, { env })
+      const got = await fetchPeerTube(ref, { env, self })
       if (!got.ok) {
         count(env, 'pt', got.reason, client)
         return null
@@ -1389,9 +1405,21 @@ export async function liveResolveRedditShare(
  * read from a constant. Every other budget in this file is `ceiling - elapsed`, computed by the route
  * that owns the ceiling; this one was a single module constant shaped by the CRAWLER's and spent
  * unchanged on /_card and /_api/v1, which have their own and a bigger one. Omitted means the crawler's.
+ *
+ * `origin` is the request's own (`url.origin`), handed to the fetcher as `self` so the fediverse guard
+ * refuses the domain this request is being served on (Deps.fetchPost). REQUIRED, and placed before the
+ * optional budget rather than after it, for `ctx`'s reason: every caller is in this file and has the
+ * request's origin in scope, and a forgotten one should fail the typecheck rather than quietly guard
+ * less. A string where a number belongs does not typecheck, so the two cannot be swapped silently.
+ *
+ * THE POST CACHE IS STILL KEYED ON THE REF ALONE, so a Post cached by a request on one origin is served
+ * on another without asking the guard again. That is correct: the guard exists to stop a FETCH, and a
+ * hit makes none. A refusal is a null, and a null is never cached, so a refusal on one origin cannot
+ * become a failure on another.
  */
 function getPost(
-  ref: PostRef, d: Deps, env: Env, client: ClientClass, ctx: ExecutionContext, metaBudgetMs?: number,
+  ref: PostRef, d: Deps, env: Env, client: ClientClass, ctx: ExecutionContext, origin: string,
+  metaBudgetMs?: number,
 ): Promise<{ post: Post | null; cached: boolean; failReason?: GateReason; incomplete: boolean }> {
   const report: FetchReport = {}
   // `ctx` rides through to the fetchers whose upstream is the container (fb, dm/st/im), which need it
@@ -1400,7 +1428,7 @@ function getPost(
   // future fourth one silently drop it. It stays optional at the Deps/liveFetchPost boundary, which is
   // the injected, .mjs-stubbed one.
   // An incomplete Post (FetchReport.incomplete) is served to this request and never written to the cache.
-  return loadPost(postCacheKey(ref), () => d.fetchPost(ref, env, client, report, ctx, metaBudgetMs), d,
+  return loadPost(postCacheKey(ref), () => d.fetchPost(ref, env, client, report, ctx, metaBudgetMs, origin), d,
     () => report.incomplete !== true)
     .then(r => ({
       post: r.post ? withResolver(r.post, env) : null, cached: r.cached, failReason: report.reason,
@@ -4989,7 +5017,7 @@ async function describeTarget(
    * to the ceiling and MUX_WAIT_FLOOR_MS is left, which is what settleMux floors at.
    */
   const metaBudget = Math.max(META_TIMEOUT_MS, META_TIMEOUT_API_MS - (Date.now() - started))
-  const got = await getPost(inner.ref, d, env, client, ctx, metaBudget)
+  const got = await getPost(inner.ref, d, env, client, ctx, origin, metaBudget)
   if (!got.post) {
     // renderGate is the ONE place the fetcher's gate vocabulary becomes render's, so a wall says the
     // same thing on the card, in the preview and in the API. `undefined` in, `undefined` out, and
@@ -5015,7 +5043,7 @@ async function describeTarget(
    */
   // A Reddit link post's media is the linked post's, settled as that post — the same composition the
   // head and the activity document make (linkedFor), so the preview and the API show the card Discord draws.
-  const link = await linkedFor(got.post, d, env, client, ctx, META_TIMEOUT_API_MS - (Date.now() - started))
+  const link = await linkedFor(got.post, d, env, client, ctx, origin, META_TIMEOUT_API_MS - (Date.now() - started))
   const media = link.linked ? tagLinked(link.linked) : got.post
   const [settled, xlate] = await Promise.all([
     settleMux(media, env, ctx, Math.max(MUX_WAIT_FLOOR_MS, CARD_DEADLINE_MS - (Date.now() - started)), client,
@@ -5332,9 +5360,14 @@ const LINK_COLD_LOAD_MS = 2700
  * dispatched a doomed mux (a live, age-gated or over-long video) on every one of their requests. The
  * linked mux is prewarmed once per Reddit post-cache miss instead, as soon as the embed page names the
  * link (liveFetchPost's rd arm), which is also earlier than anything here could start it.
+ *
+ * `origin` GUARDS NOTHING HERE TODAY, and is passed anyway. linkedRef cannot name a fediverse post (its
+ * host table leaves all four out, src/linkref.ts), so no linked load reaches a fetcher that reads `self`.
+ * It is threaded so that getPost has one signature with no "no origin" caller, and so a fediverse host
+ * added to that table later is guarded on the day it lands rather than after someone notices.
  */
 async function linkedFor(
-  post: Post, d: Deps, env: Env, client: ClientClass, ctx: ExecutionContext, budgetMs: number,
+  post: Post, d: Deps, env: Env, client: ClientClass, ctx: ExecutionContext, origin: string, budgetMs: number,
 ): Promise<{ linked: Post | null; pending: boolean; attempted: boolean }> {
   if (post.ref.p !== 'rd') return NO_LINK
   const ref = linkedRef(post.link)
@@ -5343,7 +5376,7 @@ async function linkedFor(
   // deadline fired first and our own timeout came back as a null, which read as a final link_fail.
   const budget = Math.max(MUX_WAIT_FLOOR_MS, budgetMs)
   // Kept alive past a lost deadline so the post cache is warm for the next render, which is then whole.
-  const work = getPost(ref, d, env, client, ctx, budget)
+  const work = getPost(ref, d, env, client, ctx, origin, budget)
   ctx.waitUntil(work.then(() => undefined, () => undefined))
   const got = await deadline(work, budget)
   if (!got) {
@@ -5441,7 +5474,7 @@ async function renderPostRoute(
     )
   }
 
-  const { post, failReason, incomplete } = await getPost(ref, d, env, client, ctx)
+  const { post, failReason, incomplete } = await getPost(ref, d, env, client, ctx, origin)
   if (!post) {
     count(env, ref.p, 'fetch_fail', client)
     return render(
@@ -5492,7 +5525,7 @@ async function renderPostRoute(
    */
   // A Reddit link post's media is the linked post's, settled as that post (see linkedFor). Its budget is
   // what is left of the whole response, less the floor the settle below still needs.
-  const link = await linkedFor(post, d, env, client, ctx, HTML_DEADLINE_MS - (Date.now() - started) - MUX_WAIT_FLOOR_MS)
+  const link = await linkedFor(post, d, env, client, ctx, origin, HTML_DEADLINE_MS - (Date.now() - started) - MUX_WAIT_FLOOR_MS)
   const media = link.linked ? tagLinked(link.linked) : post
   const [settled, xlate] = await Promise.all([
     // A PROMISABLE yt VIDEO TAKES THE FLOOR (1.15.0): a wait here could only ever degrade — 0 of 139
@@ -5585,14 +5618,14 @@ function directNotFound(why: string): Response {
 async function serveDirectMedia(
   ref: PostRef, d: Deps, env: Env, ctx: ExecutionContext, client: ClientClass, origin: string,
 ): Promise<Response> {
-  const got = await getPost(ref, d, env, client, ctx)
+  const got = await getPost(ref, d, env, client, ctx, origin)
   if (!got.post) {
     count(env, ref.p, 'fetch_fail', client)
     return directNotFound('this post could not be read')
   }
   // A Reddit link post's file is its linked post's: the redirect below names that post's /_media/ url
   // (Media.via), which owns the bytes, the mux and the range serving.
-  const link = await linkedFor(got.post, d, env, client, ctx, CARD_DEADLINE_MS)
+  const link = await linkedFor(got.post, d, env, client, ctx, origin, CARD_DEADLINE_MS)
   const post = link.linked ? withLinked(got.post, tagLinked(link.linked)) : got.post
   const list = mediaOf(post)
   const i = list.findIndex(m => usable(m))
@@ -6215,7 +6248,7 @@ async function serve(req: Request, env: Env, ctx: ExecutionContext, d: Deps): Pr
     case 'media': {
       // Deliberately does NOT branch on client class: every class gets the same 302.
       // That is what lets us skip detecting Discord's fake-Firefox media proxy.
-      const { post, cached } = await getPost(r.ref, d, env, client, ctx)
+      const { post, cached } = await getPost(r.ref, d, env, client, ctx, origin)
       // media_miss means "this cost an upstream fetch", not "404". The spec's alert
       // watches the miss/hit ratio to detect fetch amplification; keying it on 404s
       // would make that failure invisible.
@@ -6346,7 +6379,7 @@ async function serve(req: Request, env: Env, ctx: ExecutionContext, d: Deps): Pr
       // Taken before the post is loaded, so a composed Reddit card's budgets below are a deadline on the
       // whole document: a cold Reddit fetch here shrinks them instead of stacking on them.
       const armStarted = Date.now()
-      const { post, cached } = await getPost(r.ref, d, env, client, ctx)
+      const { post, cached } = await getPost(r.ref, d, env, client, ctx, origin)
       // Counted before the null check, like media: this measures whether the request cost an
       // upstream fetch, not whether it succeeded. Keying it on success would hide the very
       // amplification the counter exists to expose.
@@ -6464,7 +6497,7 @@ async function serve(req: Request, env: Env, ctx: ExecutionContext, d: Deps): Pr
       // left, a cold colo shipped a document with NO media, the very report this composition fixes, frozen in
       // the message (review, 2026-10-11). `left`, measured from the top, still bounds every arm after it.
       const link = r.kind === 'activity'
-        ? await linkedFor(post, d, env, client, ctx, Math.max(LINK_COLD_LOAD_MS, YT_META_BOT_MS - (Date.now() - armStarted)))
+        ? await linkedFor(post, d, env, client, ctx, origin, Math.max(LINK_COLD_LOAD_MS, YT_META_BOT_MS - (Date.now() - armStarted)))
         : NO_LINK
       const media = link.linked ? tagLinked(link.linked) : post
       const left = link.attempted ? Math.max(MUX_WAIT_FLOOR_MS, YT_MUX_BOT_MS - (Date.now() - armStarted)) : Infinity
