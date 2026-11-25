@@ -174,8 +174,8 @@ place an absent key carries meaning. With nothing to report: `title` is `null`, 
 ### `createdAt`
 
 `null` where a platform publishes no post date, and until a second, slower call brings one. A Post
-without one holds `new Date(0)`, which `/_card` draws as `"1970-01-01T00:00:00.000Z"` beside a
-`⚠ no upload date` note and `toApiPost` sends as `null`. Sort a `null` as unknown, never as old
+without one holds `new Date(0)` internally. `toApiPost` and `/_card` both send that as `null`, and
+the Discord card leaves the date out. Sort a `null` as unknown, never as old
 (`test/api.test.mjs:142`).
 
 ### `counts`
@@ -226,7 +226,7 @@ not the spoiler.
 
 `deserializePost` validates the ref, the canonical and the date, nothing else. `text` goes out
 through `str()` (`src/render/embed.ts`, applied in `toApiPost`): a cached value of the wrong type is
-published as `""`, never verbatim (`test/api.test.mjs:497`).
+published as `""`, never verbatim (`test/api.test.mjs:506`).
 
 ### `width` and `height`
 
@@ -250,7 +250,7 @@ measured to leave Discord drawing no picture (a YouTube poster, 2026-07-31; unme
 Entries with no servable url are dropped. The rest keep their position in the unfiltered array
 (`usableWithIndex`, `src/worker.ts`), which is the index `/_media/` resolves against. Taking the
 position after the filter publishes entry N at entry N+1's bytes, or a 404 past the end;
-`test/api.test.mjs:372` pins that off-by-one. A degraded still is addressed through its poster slot,
+`test/api.test.mjs:381` pins that off-by-one. A degraded still is addressed through its poster slot,
 never that bare number (`bytesIndex`, `src/render/embed.ts:74`), which goes on naming the video
 entry and answers `503`. `kind` collapses `Media.kind`'s three values (`src/types.ts`) to two,
 publishing a `gif` as `"image"` (`toApiPost`, `src/worker.ts`): the bytes at `url` are an animated .gif
@@ -443,7 +443,7 @@ no headers object, so no `cache-control` reaches the client and an intermediary 
 defaults to. A user agent classified as Discord gets an HTML embed at HTTP 200 on the same path,
 `og:title` `Not found`, minted by the `notfound` arm's `render()` call (`src/worker.ts`) and
 split from the human 404 at `src/render/index.ts:49-53`. `/_api` returns an HTML chooser page at
-HTTP 300 (`src/render/chooser.ts:72`). Pin the path exactly; `test/api.test.mjs:524` refuses to
+HTTP 300 (`src/render/chooser.ts:72`). Pin the path exactly; `test/api.test.mjs:533` refuses to
 serve `/_api/v2` as v1.
 
 ### An unhandled exception
@@ -484,7 +484,7 @@ if (!body.ok) { /* body.error.code */ }
 No timeout parameter, no per-step limit. One budget, taken at the top of the shared pipeline
 (`describeTarget`, `src/worker.ts`), bounds the whole response and leaves each step whatever is
 left. The converter preview (`/_card`) runs the same pipeline, the two differing only in
-serialisation (`test/api.test.mjs:325`).
+serialisation (`test/api.test.mjs:334`).
 
 | Constant | Value | What it bounds |
 |---|---|---|
@@ -522,7 +522,7 @@ two requests rather than one: `askTwice` (`src/fetchretry.ts`) asks a second tim
 refused with 408, 425, 429 or a 5xx, or threw, which is the shape of a Cloudflare-egress refusal
 rather than of a verdict. Every other status is an answer about the post, 404, 403 and 410 included,
 so a dead link still costs exactly one request. 1.12.0 widened it to the YouTube oembed leg, where a
-single refusal costs the vouch and dates the card 1 January 1970, and to both Threads fetches, which
+single refusal costs the vouch and leaves the card without a date, and to both Threads fetches, which
 the retry lint could not see because they are `fetch(…).then(…)` inside a `Promise.all`.
 
 Exactly one call in `src/` sets an `AbortSignal`, and it does not change that count: `fetchInnertube`
@@ -614,7 +614,7 @@ runs on `ctx.waitUntil`, which Cloudflare cancels 30 s after the response, while
 a Durable Object alarm (`MuxRunner`, `src/muxrunner.ts`) and gets fifteen minutes. That alarm is
 armed BEFORE the race rather than after it, because the videos needing longer than the `waitUntil`
 ceiling are exactly the ones it exists for. (This paragraph said `waitUntil` for both until
-2026-08-29, which is the mis-statement the alarm was written to fix.) `test/api.test.mjs:288`
+2026-08-29, which is the mis-statement the alarm was written to fix.) `test/api.test.mjs:297`
 asserts the `no-store`, `317` the `max-age=900`.
 
 ---
@@ -709,7 +709,7 @@ Measured offline 2026-08-04, re-driven 2026-08-05. Every row but the last two an
 | a bare handle: `?url=jack` | `["x","ig"]` | one path segment; both mint profiles at that shape |
 | a profile url: `?url=https://x.com/jack` | `["x","ig"]` | the host is ignored; same request as above |
 | a TikTok or Threads profile: `?url=https://www.tiktok.com/@charlidamelio` | `["tt","th"]` | the `@` narrows it to the two sites that use one |
-| junk: `?url=not a url at all`, `?url=:::not-a-url`, `?url=javascript:alert(1)` | `["x","ig"]` | one unrecognised segment each: `/not%20a%20url%20at%20all`, `/:::not-a-url`, `alert(1)` (`javascript:` parses fine as an absolute url). A source comment claimed `notfound` for the middle one until 2026-08-04 (`test/api.test.mjs:233-249`) |
+| junk: `?url=not a url at all`, `?url=:::not-a-url`, `?url=javascript:alert(1)` | `["x","ig"]` | one unrecognised segment each: `/not%20a%20url%20at%20all`, `/:::not-a-url`, `alert(1)` (`javascript:` parses fine as an absolute url). A source comment claimed `notfound` for the middle one until 2026-08-04 (`test/api.test.mjs:242-258`) |
 | an empty url: `?url=` | `400` `no_url` | the empty string is falsy and takes the missing-parameter branch |
 | a malformed absolute url: `?url=http://[` | `400` `unparseable` | `new URL` throws. `https://` and `http://:` are the other spellings that do |
 

@@ -6,7 +6,7 @@ import { render } from './render/index.ts'
 import { redirect } from './render/fail.ts'
 import { toMastodonStatus, toOEmbed } from './render/mastodon.ts'
 import { pickMedia, pickMediaEntry } from './media.ts'
-import { bytesIndex, byline, isSpoiler, mediaOf, mediaUrl, str, themeColor, usable } from './render/embed.ts'
+import { bytesIndex, byline, isSpoiler, knownDate, mediaOf, mediaUrl, str, themeColor, usable } from './render/embed.ts'
 import { clampText, statParts } from './render/text.ts'
 import { proxyableVideoUrl, serveDirectVideo } from './mediaproxy.ts'
 import { PIN_ID, parseRefKey, refKey } from './refkey.ts'
@@ -3956,25 +3956,27 @@ const META_WAIT_API_MS = 8000
  * exactly this reason. The claim still holds for the meta extract, which costs seconds, not minutes.
  *
  * THE COST, STATED EXACTLY, because the imprecise version of it is flattering. A first paste of a cold
- * video shows the card with its THUMBNAIL instead of an inline player, without the counts, and dated
- * THE EPOCH rather than undated -- createdAt is a Date and the Mastodon document always emits one, so
- * an unknown date renders as 1 January 1970. Every later view has the player, the counts and the real
- * date, from the records the abandoned calls wrote under ctx.waitUntil.
+ * video shows the card with its THUMBNAIL instead of an inline player, without the counts, and with
+ * no date. Until 2026-11-25 that last part read "dated THE EPOCH rather than undated": the Mastodon
+ * document always emitted a `created_at`, so an unknown date rendered as 1 January 1970. It now
+ * leaves the field out (toMastodonStatus has the measurement). Every later view has the player, the
+ * counts and the real date, from the records the abandoned calls wrote under ctx.waitUntil.
  *
- * That 1970 is the same sentinel Facebook cards already ship to Discord in production for every post
- * (facebook/normalize.ts argues it: an absent date beats a guessed one), so it is not a new shape --
- * but it IS a visible wrong-looking date, and CLAUDE.md records the YouTube epoch as a reported bug
- * once already. It is accepted here only because the alternative it replaces is NO CARD AT ALL. The
+ * That 1970 was the same sentinel Facebook cards shipped to Discord in production for every undated
+ * post (facebook/normalize.ts argues it: an absent date beats a guessed one), so it was not a new
+ * shape -- but it WAS a visible wrong-looking date, and CLAUDE.md records the YouTube epoch as a
+ * reported bug once already. It was accepted here only because the alternative it replaced is NO CARD AT ALL. The
  * clause that used to follow — "and because it lasts exactly one view" — IS FALSE, corrected
  * 2026-08-29: Discord stores the embed inside the message and never re-unfurls it
  * (discord-api-docs#1663, already cited by fetchretry.ts, twitter/fetch.ts, youtube/innertube.ts and
  * analytics.ts in this same tree), so the first paste is the only paste and a wrong date is frozen in
  * that message forever. That is the second claim this cut rested on, and it cuts both ways: it is why
  * these budgets are worth raising at all, and why losing the bet is permanent.
- * Suppressing the field when the date is unknown is the real fix
- * and is NOT done here: Discord is the consumer, a Mastodon document missing a required field may be
- * rejected outright, and rejecting it reintroduces precisely the bug this constant exists to remove.
- * That change wants its own measurement against a live unfurl.
+ * Suppressing the field when the date is unknown was the real fix, and it was held back for one
+ * reason: Discord is the consumer, a Mastodon document missing a required field might be rejected
+ * outright, and rejecting it would reintroduce precisely the bug this constant exists to remove. It
+ * got its live measurement on 2026-11-25 (Discord drew the full card without the field; see
+ * toMastodonStatus), and the renderer now leaves the field out for every platform. Nothing here changed.
  *
  * NOT APPLIED TO /_api/v1 OR /_card. Those are read by the converter page with a human watching a
  * spinner, and they are the surface that WARMS a link deliberately; shortening them would make the
@@ -5146,9 +5148,9 @@ async function describeTarget(
   /**
    * THE META WARM, AND IT IS NOT OPTIONAL ON EITHER SURFACE. The record is filled by the ACTIVITY
    * route — that is, by Discord unfurling the link — so it is cold for exactly the links somebody is
-   * about to ask about and has not sent yet. Skipping it here reports createdAt 1970, no duration, no
-   * counts and no age note on every fresh YouTube link, which is the bug that was reported as "it
-   * ALWAYS says no upload date".
+   * about to ask about and has not sent yet. Skipping it here reports no date (createdAt 1970 then,
+   * `null` since 2026-11-25), no duration, no counts and no age note on every fresh YouTube link, which
+   * is the bug that was reported as "it ALWAYS says no upload date".
    *
    * It adds no container call: the caller is about to paste this into Discord, which dispatches the
    * identical `yt-dlp -J`. It moves the one that was already coming a few seconds earlier, behind
@@ -5318,16 +5320,17 @@ function toApiPost(post: Post, origin: string) {
     platform: post.ref.p,
     canonical: post.canonical,
     /**
-     * THE EPOCH IS NOT A DATE, IT IS A HOLE, and this is the one place the API deliberately answers
-     * differently from the card. A Post with no known upload date carries `new Date(0)`, and /_card
-     * serialises that as "1970-01-01T00:00:00.000Z" because the page draws a "⚠ no upload date" note
-     * beside it and a reader can see what happened. An API consumer sees a plausible timestamp and
-     * sorts by it. So `null` — the same refusal to fill a hole with something that looks like an
-     * answer that the cards make in words.
+     * THE EPOCH IS NOT A DATE, IT IS A HOLE. A Post with no known upload date carries `new Date(0)`,
+     * and an API consumer handed "1970-01-01T00:00:00.000Z" sees a plausible timestamp and sorts by
+     * it. So `null`, the same refusal to fill a hole with something that looks like an answer.
+     *
+     * NO LONGER THE ONE SURFACE THAT REFUSES. Until 2026-11-25 /_card sent the epoch and the
+     * activity document printed it, and this was the deliberate exception. Since the paste recorded
+     * at toMastodonStatus, the document leaves the field out and /_card sends `null` too, all three
+     * through knownDate, so they can't disagree about which dates are unknown. The test is the
+     * same one this line used before, `instanceof Date` and not the epoch, plus a finite check.
      */
-    createdAt: post.createdAt instanceof Date && post.createdAt.getTime() !== 0
-      ? post.createdAt.toISOString()
-      : null,
+    createdAt: knownDate(post)?.toISOString() ?? null,
     title: str(post.title) || null,
     /**
      * `str()` ON THE TEXT TOO, and it was missing while `title` right beside it had it — which is what
@@ -5970,28 +5973,6 @@ async function serve(req: Request, env: Env, ctx: ExecutionContext, d: Deps): Pr
    *       UNFURL (it subtracts, and p/4/6 loses). Wait id `9` `5` nn mm + real id; code 5nnmm.
    *       `mediap` is a distinct slot so its urls never collide with m's — Discord caches a failed
    *       fetch per url for a while. p/0/0 is its positive control (a/0 and m/0 folded together).
-   *   `/_wait/d/{v}/{tag}/{facebook post path}` — THE DATELESS DOCUMENT (2026-11-25, issue #49).
-   *       Not a patience question, and the one surface that is not YouTube. Facebook's og: page
-   *       carries no post date, so production publishes the 1970 epoch as `created_at`. Leaving
-   *       the field out has waited on one caution, repeated in three places and never measured:
-   *       that Discord refuses a status without it. The head is the ORDINARY production head for
-   *       that path, rendered by re-entering handle() with the query kept (`/photo/?fbid=` names
-   *       its post there), and exactly one thing in it changes: the activity link's id becomes
-   *       `9` `6` `0{v}` + the real id. v=0 is the control: the document is today's, byte for
-   *       byte, under the wait id. v=1 is the variant: `created_at` and `account.created_at` are
-   *       deleted and nothing else is. Paste them in TWO SEPARATE messages: both cards carry the
-   *       same og:url and status url (the Facebook permalink), and Discord's client can fold
-   *       embeds that share a url into one gallery card, which would hide whether the variant drew
-   *       at all (review, 2026-11-25; the folding is reported, not measured here). And the post
-   *       may carry more than one image, so expect a picture per attachment. The control draws today's card
-   *       dated 1970. A variant that draws the same card with its picture and no date says the
-   *       field can go; one that draws the head-only card (this head has no og:image, so that one
-   *       shows no picture) says Discord needs it. The `wait_api` row (600 control, 601 variant)
-   *       separates "fetched and refused" from "never fetched". Unlike the YouTube surfaces, no
-   *       label goes into the head: the two heads differ by the id alone, so a difference between
-   *       the cards can only come from the document. The {tag} is required because the head url
-   *       is the only url a retry can change. The activity id is the same under every tag, so a
-   *       retry that leaves no new row was answered without fetching the document again.
    *
    * WHY THIS EXISTS (2026-08-31). The owner's verdict on 1.14.0's stock player: it re-wraps the
    * YouTube playback Discord already has, which is a stopgap and not the goal. The goal is the
@@ -6029,21 +6010,21 @@ async function serve(req: Request, env: Env, ctx: ExecutionContext, d: Deps): Pr
     // above the router, because the router would otherwise hand a `9…` id to decodeStatusId and
     // 404 it — and because the handle segment is decoration the router discards, which is why
     // the experiment cannot ride there if Discord rewrites onto /api/v1/.
-    // Surface 6 is d, and only with 00 or 01 after it (the lookahead): d is a control and one
-    // variant, not a number to sweep. Any other `96nn…` id is still not a wait id, so it reaches
-    // the router and 404s exactly as it did before d existed.
-    const wsid = /^\/(users\/[^/]+|api\/v1)\/statuses\/(9(?:([1-4]|6(?=0[01]))(\d\d)|(5)(\d\d)(\d\d))(1\d+))$/.exec(url.pathname)
+    // Digit 6 has no surface. For one day, 2026-11-25, it was d: a Facebook status pasted with and
+    // without `created_at` (issue #49, PR #137). That answered its question and was removed; the
+    // reading is recorded at toMastodonStatus. The `wait_api` rows coded 600 and 601 in the
+    // analytics are that test. A `96nn…` id is an ordinary bad status id again.
+    const wsid = /^\/(users\/[^/]+|api\/v1)\/statuses\/(9(?:([1-4])(\d\d)|(5)(\d\d)(\d\d))(1\d+))$/.exec(url.pathname)
     if (wsid) {
       const [, path, waitSid, sdigit4, ns4, sdigit5, nds, nms, realSid] = wsid
-      const surface = sdigit5 ? 'p' : ({ '1': 'a', '2': 'm', '3': 'b', '4': 'c', '6': 'd' } as const)[sdigit4 as '1' | '2' | '3' | '4' | '6']
+      const surface = sdigit5 ? 'p' : ({ '1': 'a', '2': 'm', '3': 'b', '4': 'c' } as const)[sdigit4 as '1' | '2' | '3' | '4']
       // p carries two holds, the document's and the video's; the others carry one, and for them
       // the document hold is the surface's own number (only a uses it).
       const n = Number(sdigit5 ? nms : ns4)
       const ndoc = Number(sdigit5 ? nds : ns4)
       if (n > 60 || ndoc > 60) return new Response('n is 0-60', { status: 400 })
       // The wait code is every digit between the `9` and the real id, as one number: 105 = a/5,
-      // 50406 = p/4/6, 601 = d's variant. One rule for every surface, so any row reads back to
-      // its url.
+      // 50406 = p/4/6. One rule for all six surfaces, so any row reads back to its url.
       const code = Number(waitSid.slice(1, waitSid.length - realSid.length))
       // Which path Discord fetches a status from was asserted in this codebase for months and
       // measured on 2026-09-02: /api/v1/ every time (5 of 5 real crawls), the advertised /users/
@@ -6061,34 +6042,6 @@ async function serve(req: Request, env: Env, ctx: ExecutionContext, d: Deps): Pr
       // as its first key, so this touches the top-level id and nothing else; the real id is a
       // 40-odd digit string that occurs nowhere else in the document.
       let body = (await real.text()).replace(`{"id":"${realSid}"`, `{"id":"${waitSid}"`)
-      if (surface === 'd') {
-        // No hold and no /_media/ rewrite: d asks about one field, so the media must be exactly
-        // the media production serves. The control (n = 0) stops at the id rewrite. The variant
-        // drops both dates, because toMastodonStatus writes the post's date into both, and a
-        // document that kept either one would still be carrying the 1970 value under test.
-        // Parsed and re-serialised rather than cut out with a regex: JSON.stringify of
-        // JSON.parse of Response.json's output is the same bytes less the deleted keys, and a
-        // regex over a caption that happens to contain `"created_at":` could cut the wrong one.
-        if (n === 1) {
-          let doc: Record<string, unknown>
-          try {
-            doc = JSON.parse(body) as Record<string, unknown>
-          } catch {
-            return new Response('the activity document was not JSON', { status: 502, headers: { 'cache-control': 'no-store' } })
-          }
-          delete doc.created_at
-          const account = doc.account
-          if (account && typeof account === 'object') delete (account as Record<string, unknown>).created_at
-          body = JSON.stringify(doc)
-        }
-        const heads = new Headers(real.headers)
-        heads.delete('content-length')
-        // no-store, like every experiment head: a cached answer would make a retry re-read the
-        // first crawl. Set on d alone, so the other surfaces keep the headers their recorded
-        // readings were taken with.
-        heads.set('cache-control', 'no-store')
-        return new Response(body, { status: 200, headers: heads })
-      }
       if (surface !== 'a') {
         // Only VIDEO urls (/_media/{key}/{digits}) carry the stall. Poster (/p0) and avatar
         // segments stay on the real route, so the card's imagery cannot confound the reading —
@@ -6215,47 +6168,6 @@ async function serve(req: Request, env: Env, ctx: ExecutionContext, d: Deps): Pr
       heads.delete('content-range')
       heads.delete('accept-ranges')
       return new Response(readable, { status: 200, headers: heads })
-    }
-    // d's HEAD: the production head for a Facebook post path, with only its activity id changed.
-    // See the block comment for the question it asks.
-    const wd = /^\/_wait\/d\/([01])\/[\w-]{1,24}(\/.*)$/.exec(url.pathname)
-    if (wd) {
-      const [, v, tail] = wd
-      const noStore = { 'cache-control': 'no-store' }
-      // Concatenated, never new URL(tail, origin): a tail spelled `//other.host/…` would be read as
-      // a host there, and every link in the head is built from the request's origin.
-      const target = `${url.origin}${tail}${url.search}`
-      // ONLY A FACEBOOK POST, checked before re-entering. handle() answers every route, and this
-      // reads a 200 into memory: an unchecked tail could buffer a whole video off /_media/, or
-      // nest /_wait/ surfaces inside each other. A gallery mode is refused because it moves the
-      // id's sentinel off `1`, and `direct` because that answer is a file, not a head.
-      const tr = route(new URL(target))
-      if (tr.kind !== 'post' || tr.ref.p !== 'fb' || tr.gallery || tr.direct) {
-        return new Response('the d surface takes a Facebook post path', { status: 404, headers: noStore })
-      }
-      const real = await handle(new Request(target, { headers: req.headers }), env, ctx, d)
-      // Unchanged when it is not a card: a human gets production's redirect to Facebook, and a
-      // failure answer is the measurement's to show, not this route's to hide.
-      if (real.status !== 200) return real
-      if (!(real.headers.get('content-type') || '').startsWith('text/html')) {
-        void real.body?.cancel()
-        return new Response('the post did not answer with a head', { status: 422, headers: noStore })
-      }
-      const head = await real.text()
-      // The link discord.ts emits for every Discord head except the stock one. EXACTLY ONE, with
-      // the `1` sentinel, or the experiment refuses: a head it cannot mark would come back as a
-      // second control, and two identical cards would read as "the field is not needed".
-      const act = /(type="application\/activity\+json" href="[^"]*\/statuses\/)(1\d+)"/g
-      if ((head.match(act) || []).length !== 1) {
-        return new Response('the head has no activity link this experiment can mark', { status: 422, headers: noStore })
-      }
-      // The /_oembed/ link keeps the real id. It carries no date, so both cards share it.
-      // A function, not `$1960…`: in a replacement string that reads as a request for group 19.
-      const body = head.replace(act, (_, pre: string, sid: string) => `${pre}960${v}${sid}"`)
-      const heads = new Headers(real.headers)
-      heads.delete('content-length')
-      heads.set('cache-control', 'no-store')
-      return new Response(body, { status: 200, headers: heads })
     }
     // p takes two holds (document, then video); the others one. Parsed into one shape so the head
     // below is the same head for all six surfaces, which is what makes their cards comparable.
@@ -7086,7 +6998,15 @@ async function serve(req: Request, env: Env, ctx: ExecutionContext, d: Deps): Pr
         sensitive: !!post.sensitive,
         // The page blurs the preview's media for this, as Discord is asked to blur the card's.
         spoiler: isSpoiler(post),
-        createdAt: post.createdAt instanceof Date ? post.createdAt.toISOString() : null,
+        /**
+         * `null` FOR AN UNKNOWN DATE, because that is what the card now shows: nothing. The page prints
+         * what we send (public/index.html footLine), and it used to get the epoch and print
+         * "12/31/1969 ⚠ no upload date" under a card Discord dated 12/31/69. Since 2026-11-25 the
+         * activity document leaves the date out (toMastodonStatus has the measurement) and Discord's
+         * footer reads just "mbedfx", which is exactly what footLine prints for `null`. Sending the
+         * epoch here again would preview a date the real card no longer shows.
+         */
+        createdAt: knownDate(post)?.toISOString() ?? null,
         media: own.map(({ m, i }) => ({
           // A 'gif' is drawn as an IMAGE, since 2026-10-05: the page draws an image from `url` and a video
           // from its poster, a GIF has no poster, and an <img> animates it, as Discord is expected to loop the

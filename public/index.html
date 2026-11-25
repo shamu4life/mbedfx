@@ -1868,12 +1868,17 @@ function mbedfxPrepResolved(asked, answer) {
    * THE FOOTER, WITH THE DATE — reported missing against a real card that shows one.
    *
    * IT PRINTS WHAT WE SEND, INCLUDING WHEN THAT IS WRONG. The YouTube card this was reported on
-   * carries createdAt 1970-01-01, and Discord draws that epoch to every viewer. Hiding a junk date
+   * carried createdAt 1970-01-01, and Discord drew that epoch to every viewer. Hiding a junk date
    * here would make the preview flatter the card instead of describing it, which is the one thing a
-   * preview must never do — so an implausible date is shown AND flagged.
+   * preview must never do, so an implausible date is shown AND flagged.
    *
    * "Implausible" is deliberately crude (before 2005, which predates YouTube itself) because the
    * only case that matters is a zero/absent timestamp becoming a real one.
+   *
+   * THE EPOCH NO LONGER ARRIVES HERE. Since 2026-11-25 the card leaves an unknown date out and
+   * Discord's footer reads just "mbedfx" (measured; src/render/mastodon.ts toMastodonStatus), so
+   * /_card sends `null` for it and the first line below prints the same "mbedfx". The flag stays
+   * for a real date before 2005, which the card would print as it is.
    */
   function footLine(j) {
     var t = j && j.createdAt ? new Date(j.createdAt) : null;

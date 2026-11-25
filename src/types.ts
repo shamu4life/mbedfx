@@ -579,6 +579,10 @@ export type Post = {
    * the two separately so neither is read as the other.
    */
   spoiler?: true
+  /**
+   * Required, so a post with no known date carries `new Date(0)`: the epoch means "unknown" here, never
+   * 1970. Read it through render/embed.ts knownDate, which every surface that publishes a date shares.
+   */
   createdAt: Date
   media: Media[]
   counts: { likes?: number; reposts?: number; replies?: number; views?: number }

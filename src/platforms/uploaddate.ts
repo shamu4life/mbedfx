@@ -92,7 +92,8 @@ export function uploadDateFrom(value: unknown, now: number = Date.now()): Date |
  * The same rule, for the many normalizers that must produce a Date no matter what: a validated instant,
  * or the epoch. The epoch is what every platform here already ships when upstream carries no date at
  * all (Post.createdAt is a required Date), so this changes nothing about the "no date" case — it only
- * stops a junk or out-of-range one from becoming an Invalid Date that throws when rendered.
+ * stops a junk or out-of-range one from becoming an Invalid Date that throws when rendered. The
+ * renderers read the epoch as "unknown" (render/embed.ts knownDate) and publish no date for it.
  */
 export function uploadDateOrEpoch(value: unknown, now?: number): Date {
   return uploadDateFrom(value, now) ?? new Date(0)

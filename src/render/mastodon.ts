@@ -2,7 +2,7 @@ import type { GalleryMode, Media, Platform, Post } from '../types.ts'
 import { mediaList } from '../media.ts'
 import { refKey } from '../refkey.ts'
 import { encodeStatusId } from '../statusid.ts'
-import { accountHandle, byline, bytesIndex, fudge, isSensitive, isSpoiler, mediaOf, mediaUrl, stockState, str, usable } from './embed.ts'
+import { accountHandle, byline, bytesIndex, fudge, isSensitive, isSpoiler, knownDate, mediaOf, mediaUrl, stockState, str, usable } from './embed.ts'
 import { buildContentHtml, statParts, withMoreInPostMarker, withVideoGalleryMarker } from './text.ts'
 
 /**
@@ -10,7 +10,7 @@ import { buildContentHtml, statParts, withMoreInPostMarker, withVideoGalleryMark
  * `author_name` supplies the embed's top line. Both are pure — no I/O, and no clock, so the
  * same Post always maps to the same bytes. `created_at` comes from post.createdAt, never
  * from Date.now(), because these responses are cached and a clock read would make two
- * identical requests differ.
+ * identical requests differ. When that date is unknown the field is absent (toMastodonStatus).
  *
  * Field names, and equally which fields are ABSENT, follow the wire spec's §6c/§6d — both
  * derived from live FxEmbed output, which ships to 100% of their Discord traffic and is
@@ -689,12 +689,35 @@ function contentWithMarker(post: Post, mode: GalleryMode): string {
 }
 
 export function toMastodonStatus(post: Post, origin: string, mode: GalleryMode): object {
-  // post.createdAt is a real Date on every path that reaches here: the normalizer rejects an
-  // unparseable date outright, and cache.ts's hasValidIdentity requires a string that
-  // Date.parse accepts before reviveDates turns it back into a Date. A value that parses can
-  // never make toISOString throw, so this needs no guard of its own — unlike the text fields,
-  // which that guard deliberately does not cover.
-  const created = post.createdAt.toISOString()
+  /**
+   * AN UNKNOWN DATE IS LEFT OUT, NOT PRINTED AS 1970. Measured 2026-11-25 by the owner in a real
+   * Discord client, with the one-day `/_wait/d` test (PR #137, removed once it had answered).
+   * The post was /NASA/posts/1600685561426814 on Facebook, whose og: page carries no date,
+   * pasted as two separate messages. The control was this document as it then stood, with the epoch
+   * in both `created_at` fields. The variant was the same bytes with those two keys deleted and
+   * nothing else changed. Discord drew BOTH as the full card with the picture. The control's footer
+   * read "mbedfx • 12/31/69, 7:00 PM" (the epoch, shown in the reader's own time zone); the
+   * variant's read "mbedfx". So Discord doesn't require the field, and leaving it out is what drops
+   * the bogus date. For an undated post this document is now byte for byte that variant, which
+   * test/mastodon.test.mjs pins.
+   *
+   * DON'T "SIMPLIFY" THIS BACK TO A DEFAULT DATE. This codebase assumed for months that Discord
+   * would refuse a status without the field, and kept the epoch because of it; the paste says it
+   * doesn't. Any value put here instead is printed in the footer of every undated card and frozen in
+   * the message for good, since Discord never re-unfurls. The epoch reads 12/31/69 or 1/1/70
+   * depending on the reader's zone, and "now" would be a confident wrong date. `null` or an empty
+   * string would be a third document, and nobody has pasted one.
+   *
+   * WHAT THE PASTE DIDN'T COVER. One Facebook post with one image. Every platform shares this
+   * document, so an undated YouTube video (before its meta lands), the yt-dlp tier, the fediverse
+   * tiers and the rest get the same omission, but no status without `created_at` carrying a VIDEO
+   * attachment has been pasted. If an undated video card ever loses its player, check this first.
+   *
+   * A known date is untouched, in value and in key position, so every dated card is the same bytes
+   * as before. knownDate (render/embed.ts) is the one test for "unknown", shared with /_api/v1 and
+   * /_card; it also keeps an unprintable date from reaching toISOString, which would throw.
+   */
+  const created = knownDate(post)?.toISOString()
   // Not author.handle directly: a Facebook post has none on purpose, and accountHandle reads the
   // account's vanity instead (issue #49). discord.ts's activity link reads the same function.
   const handle = accountHandle(post)
@@ -714,7 +737,9 @@ export function toMastodonStatus(post: Post, origin: string, mode: GalleryMode):
     id: encodeStatusId(refKey(post.ref)),
     url: post.canonical,
     uri: post.canonical,
-    created_at: created,
+    // A spread, so a dated status keeps the key in exactly the place it always had. See above.
+    ...(created ? { created_at: created } : {}),
+    // Not derived from the date, and the measured variant kept it: it stays null either way.
     edited_at: null,
     reblog: null,
     // Null even for a reply. The reply context is already drawn into `content` (§6e step 1),
@@ -754,8 +779,10 @@ export function toMastodonStatus(post: Post, origin: string, mode: GalleryMode):
       url: str(post.author?.url),
       uri: str(post.author?.url),
       // We have no join date. The post's own timestamp is a deterministic stand-in; the
-      // alternative is reading the clock, which would break this mapper's purity.
-      created_at: created,
+      // alternative is reading the clock, which would break this mapper's purity. With no post
+      // date either, the key goes too: the measured variant deleted both, and an account date
+      // left behind would still carry the epoch the status no longer shows.
+      ...(created ? { created_at: created } : {}),
       locked: false,
       bot: false,
       discoverable: true,

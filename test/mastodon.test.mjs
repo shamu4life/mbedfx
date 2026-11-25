@@ -134,6 +134,56 @@ test('created_at is a valid ISO string on both the status and the account', () =
   // alternative — reading the clock — would make the mapper impure and the response
   // uncacheable-by-value.
   assert.equal(s.account.created_at, s.created_at)
+  // And in the place it always had, so a dated document is the same bytes it was before undated
+  // ones started leaving the key out.
+  assert.deepEqual(Object.keys(s).slice(0, 5), ['id', 'url', 'uri', 'created_at', 'edited_at'])
+  const ak = Object.keys(s.account)
+  assert.deepEqual(ak.slice(ak.indexOf('uri'), ak.indexOf('uri') + 3), ['uri', 'created_at', 'locked'])
+})
+
+test('AN UNKNOWN DATE IS LEFT OUT of the status and the account, never printed as the epoch', () => {
+  /**
+   * Issue #49. `new Date(0)` is what every normalizer writes when upstream has no date (Post.createdAt
+   * is required), and this document used to print it, so Discord's footer said 12/31/69 under every
+   * undated card. Both keys go, the account's too: it was a copy of the post's date, and the paste
+   * that settled this (next test) deleted both.
+   */
+  const s = toMastodonStatus({ ...base, createdAt: new Date(0), media: [img(0)] }, ORIGIN)
+  assert.ok(!('created_at' in s), 'no created_at on the status')
+  assert.ok(!('created_at' in s.account), 'and none on the account')
+  assert.ok(!JSON.stringify(s).includes('1970'), 'the epoch reaches no field at all')
+  assert.equal(s.edited_at, null, 'edited_at is not derived from the date and stays exactly as it was')
+  // A cache record is not a normalizer's output. A date that cannot be printed is as unknown as a
+  // missing one, and toISOString would throw on it: a 500 on Discord's callback instead of a card.
+  for (const junk of [new Date(NaN), '2026-07-01T12:00:00.000Z', 0, null, undefined]) {
+    const j = toMastodonStatus({ ...base, createdAt: junk }, ORIGIN)
+    assert.ok(!('created_at' in j) && !('created_at' in j.account), `${String(junk)} publishes no date`)
+  }
+})
+
+test('THE UNDATED DOCUMENT IS THE ONE DISCORD WAS SHOWN ON 2026-11-25, minus nothing and plus nothing', () => {
+  /**
+   * THE MEASUREMENT, so nobody has to take it again. On 2026-11-25 the owner pasted
+   * https://mbedfx.app/_wait/d/{0|1}/t1/NASA/posts/1600685561426814 into a real Discord client as two
+   * separate messages: an undated Facebook post with one picture. `0` served the document exactly as
+   * production then built it, epoch in both `created_at` fields; `1` served those same bytes with the
+   * two keys deleted and nothing else changed. Discord drew BOTH as the full card with the picture.
+   * The control's footer read "mbedfx • 12/31/69, 7:00 PM", the variant's read "mbedfx". Discord does
+   * not need the field, and leaving it out is what removes the bogus date. (`/_wait/d` was removed
+   * once it had answered; the WAIT GUARDS test in pipeline.test.mjs keeps its ids dead.)
+   *
+   * WHAT THIS PINS is that the shipped document is that VARIANT and not something near it: the dated
+   * document of the same post with exactly those two keys deleted, compared as serialised bytes, so
+   * key order counts too. A `null`, an empty string or a moved key would be a document nobody pasted.
+   * The paste had one image and no video; a video status without the date is still unmeasured.
+   */
+  const post = { ...base, media: [img(0)] }
+  const dated = toMastodonStatus(post, ORIGIN)
+  const undated = toMastodonStatus({ ...post, createdAt: new Date(0) }, ORIGIN)
+  const variant = JSON.parse(JSON.stringify(dated))
+  delete variant.created_at
+  delete variant.account.created_at
+  assert.equal(JSON.stringify(undated), JSON.stringify(variant))
 })
 
 test('the mappers never read the clock', () => {
