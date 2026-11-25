@@ -199,6 +199,26 @@ export const MUX_TOTAL_HORIZON_MS =
  * survives the retreat. It heals nothing already pasted.
  */
 export const YT_PROMISE = true
+
+/**
+ * THE DEPLOYED SWITCH, read from the `YT_PROMISE` var (wrangler.jsonc): `"off"` turns the promise off
+ * without touching YT_PROMISE above, so the suite keeps testing promise mode exactly as it ships if it
+ * is turned back on, and the rollback is one line of config.
+ *
+ * TURNED OFF 2026-11-24, MEASURED. Eight fresh YouTube videos of 39-205 s, pasted one at a time the way
+ * Discord fetches a card (head, the activity document, then its video inside 10 s of the head): all
+ * eight documents promised a video and ONE had bytes in time (9.6 s); six timed out and one mux
+ * failed. Every one of those seven is a player frozen dead in the message. `stage_times` for the same
+ * muxes: the container's own run took 5-21 s, median ~11.7 s, with YouTube accounts loaded (the
+ * sign-in path costs extraction time the 1.15.0 measurement did not pay). The 2026-10-11 figure in
+ * worker.ts prewarmLinked agrees: 4 of 139 cold yt muxes finished within 5 s, 23 within 9 s. With the
+ * promise off a cold short video gets the stock gate, YouTube's own embed player, which plays at once;
+ * the next paste plays our mp4 from R2. Turn it back on when `stage_times` says most yt muxes land
+ * inside ~8 s.
+ */
+export function ytPromiseOn(env?: { YT_PROMISE?: unknown } | null): boolean {
+  return YT_PROMISE && env?.YT_PROMISE !== 'off'
+}
 export const YT_PROMISE_MAX_SECONDS = 240
 
 /**
@@ -216,8 +236,11 @@ export const YT_PROMISE_MAX_SECONDS = 240
  * slot measured answering HTTP 503 with zero bytes. Discord had been promised a video that no
  * amount of waiting could produce, and it froze that card.
  */
-export function promisable(m: { live?: true; gated?: true; duration?: number } | null | undefined): boolean {
-  if (!YT_PROMISE || !m || m.live || m.gated) return false
+export function promisable(
+  m: { live?: true; gated?: true; duration?: number } | null | undefined,
+  env?: { YT_PROMISE?: unknown } | null,
+): boolean {
+  if (!ytPromiseOn(env) || !m || m.live || m.gated) return false
   return typeof m.duration === 'number' && m.duration > 0 && m.duration <= YT_PROMISE_MAX_SECONDS
 }
 

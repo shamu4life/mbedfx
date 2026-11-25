@@ -123,6 +123,18 @@ test('A ROW THAT EXPECTS A VIDEO GOES RED ON A CARD WITH NO PLAYER', () => {
   // AND THE FAILURE CARD STILL WINS. "The upstream is gone" is a different repair from "the mux is
   // cold", and an expectation must not relabel the first as the second.
   assert.equal(cardVerdict(FAILURE_CARD, 'video'), 'failure-card')
+
+  // YOUTUBE'S OWN IFRAME IS NOT OUR VIDEO (2026-11-24). With `YT_PROMISE: "off"` a degraded yt head is
+  // the stock gate: og:video = youtube.com/embed, og:video:type text/html. It plays in Discord, but it
+  // says nothing about whether the mux works, so a row that asked for a video must go red on it.
+  const STOCK_IFRAME_CARD = '<html><head>'
+    + '<meta property="og:title" content="jawed (@jawed)"/>'
+    + '<meta property="og:video" content="https://www.youtube.com/embed/jNQXAC9IVRw"/>'
+    + '<meta property="og:video:type" content="text/html"/>'
+    + '<meta property="og:image" content="https://mbedfx.app/_media/yt%3AjNQXAC9IVRw/poster0"/>'
+    + '</head></html>'
+  assert.equal(cardVerdict(STOCK_IFRAME_CARD, 'video'), 'no-video')
+  assert.equal(cardVerdict(STOCK_IFRAME_CARD), 'ok', 'a row that only asks for a card is still satisfied')
   assert.equal(cardVerdict('', 'video'), 'no-card')
 
   /**

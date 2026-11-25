@@ -11,7 +11,7 @@ import { clampText, statParts } from './render/text.ts'
 import { proxyableVideoUrl, serveDirectVideo } from './mediaproxy.ts'
 import { parseRefKey, refKey } from './refkey.ts'
 import { count, countWait, countMux, countStage, type Env, type GateReason, type MuxOutcome, type MuxStage } from './analytics.ts'
-import { MUX_GAVE_UP_NOTE, YT_PROMISE, gaveUpIsFresh, muxFailKey, promisable } from './muxpolicy.ts'
+import { MUX_GAVE_UP_NOTE, gaveUpIsFresh, muxFailKey, promisable, ytPromiseOn } from './muxpolicy.ts'
 import { runSmoke, smokeOutcome, SMOKE_CHECKS, SMOKE_CLIENT, type SmokeResult } from './smoke.ts'
 import { cronColo, healthSummary, readHealth, recordSmoke } from './health.ts'
 import { cookiesFor, jarAvailable, poolSetButUnused, twitterAccounts, type CredentialPlatform } from './credentials.ts'
@@ -2775,7 +2775,7 @@ async function settleMux(
      * NEVER BLIND: promisable() requires a known duration under YT_PROMISE_MAX_SECONDS. A promise
      * Discord abandons is frozen in the message, and a live stream with no duration would be one.
      */
-    if (mode === 'promise' && post.ref.p === 'yt' && promisable(m)) {
+    if (mode === 'promise' && post.ref.p === 'yt' && promisable(m, env)) {
       count(env, post.ref.p, 'card_promised', client, Math.round(m.duration as number))
       promised = true
       return m
@@ -2785,7 +2785,7 @@ async function settleMux(
     const still = stillOf(m)
     // The HEAD's still carries the mark the spoof head reads to stand the stock player down and keep
     // the activity link — only when the document is going to promise, so the two seams agree.
-    return still && post.ref.p === 'yt' && promisable(m) ? { ...still, pendingMux: true as const } : still
+    return still && post.ref.p === 'yt' && promisable(m, env) ? { ...still, pendingMux: true as const } : still
   }))
 
   // `rewritten` is checked too, or the over-ceiling still is computed and discarded. `degraded` is
@@ -5484,7 +5484,7 @@ async function renderPostRoute(
     // fetch cannot land inside the head (0 of 139 inside 1500 ms), and Discord draws this card from the
     // activity document anyway. Measured on a stubbed harness: heads of 5.0 s fell to 3.0-4.6 s.
     settleMux(media, env, ctx,
-      link.linked || (media.ref.p === 'yt' && Array.isArray(media.media) && media.media.some(m => m?.remux?.page && promisable(m)))
+      link.linked || (media.ref.p === 'yt' && Array.isArray(media.media) && media.media.some(m => m?.remux?.page && promisable(m, env)))
         ? MUX_WAIT_FLOOR_MS
         : Math.max(MUX_WAIT_FLOOR_MS, Math.min(MUX_WAIT_BOT_MS, HTML_DEADLINE_MS - (Date.now() - started))),
       client, 'wait', link.linked ? post.ref.p : undefined),
@@ -6445,8 +6445,8 @@ async function serve(req: Request, env: Env, ctx: ExecutionContext, d: Deps): Pr
         : NO_LINK
       const media = link.linked ? tagLinked(link.linked) : post
       const left = link.attempted ? Math.max(MUX_WAIT_FLOOR_MS, YT_MUX_BOT_MS - (Date.now() - armStarted)) : Infinity
-      const promising = YT_PROMISE && r.kind === 'activity' && media.ref.p === 'yt'
-        && Array.isArray(media.media) && media.media.some(m => m?.remux?.page && promisable(m))
+      const promising = ytPromiseOn(env) && r.kind === 'activity' && media.ref.p === 'yt'
+        && Array.isArray(media.media) && media.media.some(m => m?.remux?.page && promisable(m, env))
       const muxBudget = Math.min(left,
         promising ? MUX_WAIT_FLOOR_MS : r.kind === 'activity' && media.ref.p === 'yt' ? YT_MUX_BOT_MS : botBudget)
       const [settledApi, meta, xlate] = await Promise.all([

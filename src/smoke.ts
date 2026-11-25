@@ -144,6 +144,9 @@ export const SMOKE_CHECKS: readonly SmokeCheck[] = [
    * and nobody noticed); since 1.15.0 a head whose mux the document will promise carries the activity
    * link and an og:image on the poster slot and NO og:video, while the no-verdict, live and
    * over-ceiling states keep the iframe. On the warm video this row checks, og:video is OUR mp4.
+   * SINCE 2026-11-24, with `YT_PROMISE: "off"` (wrangler.jsonc), every degraded yt head is the iframe
+   * again, and cardVerdict refuses an og:video whose og:video:type is text/html, so the iframe can
+   * no longer satisfy this row the way it did under 1.14.0.
    *
    * IT IS SAFE BECAUSE THE MUX IS DURABLE. Verified 2026-08-29 through production, Discordbot UA, the
    * same method as the rest of this list: the card answered 200 in 0.50s carrying
@@ -402,7 +405,16 @@ export function cardVerdict(html: unknown, expect?: SmokeExpect): 'ok' | 'failur
     || /<meta property="og:image"/.test(html)
     || /type="application\/activity\+json"/.test(html)
   if (!drawable) return 'failure-card'
-  return expect === 'video' && !hasVideo ? 'no-video' : 'ok'
+  /**
+   * A PLAYER IS NOT A VIDEO. YouTube's stock gate ships og:video = youtube.com/embed/{id} with
+   * og:video:type text/html, an iframe Discord can play without us. Accepting it is the 1.14.0 blindness
+   * the note on the yt row records, and it came back on 2026-11-24 when `YT_PROMISE: "off"` made the
+   * stock gate the degraded head for every cold yt video again: the row went green on the iframe whether
+   * or not the mux worked (a review reproduced it with an empty bucket and a silent container). So an
+   * `expect: 'video'` row needs a FILE, and an html player counts as no video, whichever way the var is.
+   */
+  const htmlPlayer = /<meta property="og:video:type" content="text\/html"/.test(html)
+  return expect === 'video' && (!hasVideo || htmlPlayer) ? 'no-video' : 'ok'
 }
 
 export type SmokeVerdict = 'ok' | 'failure-card' | 'no-card' | 'no-video' | 'threw' | 'timeout'
