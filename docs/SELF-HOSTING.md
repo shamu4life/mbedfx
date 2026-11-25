@@ -191,6 +191,7 @@ const liveDeps = (cache: CacheLike = caches.default as unknown as CacheLike): De
   fetchProfile: liveFetchProfile,
   resolveShortlink: liveResolveShortlink,
   resolveRedditShare: liveResolveRedditShare,
+  resolvePinShortlink: liveResolvePinShortlink,
   resolveMetaShare,
 })
 export const scheduledDeps = (): Deps => liveDeps(COLD_CACHE)
@@ -209,8 +210,9 @@ export default {
 is read only when `liveDeps()` is called without one. The Node adapter never makes that call. It spreads
 `scheduledDeps()` and swaps in its own cache, `{ ...scheduledDeps(), cache }`, so a fetcher added to
 `liveDeps` later reaches the adapter without anyone copying it. Every live dependency is exported:
-`liveFetchPost`, `liveFetchProfile`, `liveResolveShortlink` and `liveResolveRedditShare` from
-`src/worker.ts`, `resolveMetaShare` from `src/platforms/metashare/fetch.ts`.
+`liveFetchPost`, `liveFetchProfile`, `liveResolveShortlink`, `liveResolveRedditShare` and
+`liveResolvePinShortlink` from `src/worker.ts`, `resolveMetaShare` from
+`src/platforms/metashare/fetch.ts`.
 
 ### The eight Cloudflare surfaces
 

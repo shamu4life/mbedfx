@@ -136,6 +136,26 @@ export const LEMMY_ID = /^[1-9][0-9]{0,11}$/
 export const PIN_ID = /^[1-9][0-9]{4,21}$/
 
 /**
+ * A pin.it share code, the `{code}` in `pin.it/{code}`. It is HERE, beside PIN_ID, because the router
+ * and the resolver in platforms/pinterest/fetch.ts both need the one spelling. It NEVER enters a
+ * refKey: a share code names no pin until the shortener answers, so it rides the 'shortlink' Route
+ * and parseRefKey needs nothing for it.
+ *
+ * WHAT WAS OBSERVED, 2026-11-25, from the development host (not a Worker): the code in the owner's
+ * report is 9 alphanumerics, and two codes in a public test suite (gallery-dl's
+ * test/results/pinterest.py) are 7 and 9, both still answered by the shortener that day. Codes are
+ * CASE-SENSITIVE: the owner's code lowercased resolved to the homepage, not the pin. So nothing in
+ * this repo may lowercase one.
+ *
+ * WHY 6 TO 12. One under the shortest code seen and three over the longest, so a code Pinterest
+ * lengthens by a character or two still works. The bound has two jobs: refuse junk before it costs an
+ * upstream fetch, and keep anything but [A-Za-z0-9] out of the url path we ask. A real code outside it
+ * fails in the open (the converter shows its refusal, the router answers notfound), never as a wrong
+ * pin.
+ */
+export const PIN_SHORT_CODE = /^[A-Za-z0-9]{6,12}$/
+
+/**
  * A status id in the Mastodon-API family. DELIBERATELY LOOSER THAN LEMMY_ID, because this one id
  * space is shared by software that disagrees about what an id looks like:
  *

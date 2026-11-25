@@ -26,9 +26,24 @@ All notable changes to mbedfx are documented here. The format follows
   Discord refused apart from one it never fetched. The routes take only Facebook post paths, and every
   answer they build is `no-store`; an error from the post itself passes through as production sends it.
   No other response changes. Nobody has pasted the pair yet.
+- **pin.it share links work, and the converter swaps the share code out.** Following a pin.it link lands on
+  a URL with `sender=` in it, the sharer's Pinterest user id. The converter now turns
+  `pin.it/{code}` into `/pin.it/{code}` (the host stays in the path because a bare `/{code}` reads as
+  a profile handle), the Worker asks Pinterest's shortener which pin the code points to, and the
+  converter swaps the link for `/pin/{id}` once that answer arrives, usually within a second. A link
+  copied before then still carries the code, though the Worker itself never sends anyone through
+  pin.it: clicking either form opens the plain pin page. A code that doesn't point to a pin, like a board or a dead code, gets "Couldn't load this
+  Pinterest post" in Discord, and the converter shows its old pin.it warning. In `/_api/v1`, send it
+  as `?url=/pin.it/{code}`. The shortener was measured from a home connection on 2026-11-25. Nobody
+  has measured it from Cloudflare's network yet.
 
 ### Fixed
 
+- **Pinterest "shared with you" links convert to the bare pin.** The converter turned
+  `pinterest.com/pin/{id}/sent/?invite_code=…` into `/pin/{id}/sent`. Now it gives `/pin/{id}`, and
+  so do the `{slug}--{id}` spelling and links ending in `feedback` or `visual-search`. Cards were
+  already right, since the Worker ignores those endings; only the link changes. A `/pin/` link the
+  Worker doesn't read as a pin comes out unchanged.
 - **Facebook posts name their page in the document Discord reads.** The 2026-08-12 platform audit
   found the Mastodon-style document for `/WYFF4/posts/1596906778724399` with empty `id`, `username`
   and `acct` fields and a link to `/users/user/` (issue #49). Those fields now hold the page's name

@@ -132,6 +132,8 @@ test('AN OPAQUE SHARE CODE IS RESOLVED, NEVER ECHOED AS A POST', () => {
     ['meta bare /share/', '/share/Fixture08X',          'metashare'],
     ['meta bare /share/', '/share/_pqHlzmHj',           'metashare'],
     ['meta bare /share/', '/share/Fixture03X',          'metashare'],
+    // Added 2026-11-25. Its resolution carries `sender=`, the sharer's Pinterest user id.
+    ['pinterest pin.it',  '/pin.it/Rq7Lm3Zx9',          'shortlink'],
   ]) {
     const got = r(path)
     assert.equal(got.kind, kind, `${name} ${path} must resolve, not be attributed by shape`)

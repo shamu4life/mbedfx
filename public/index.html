@@ -690,7 +690,6 @@ footer .fine { font-size: 12px; opacity: .8; }
           <div class="chips">
             <div><code>vm.tiktok.com</code> and <code>vt.tiktok.com</code>. <code>tiktok.com/t/…</code> is fine.</div>
             <div><code>fb.watch</code></div>
-            <div><code>pin.it</code>. Full <code>/pin/…</code> links are fine.</div>
             <div>Instagram stories</div>
             <div>Twitch VODs and live channels. Only clips work.</div>
             <div>Facebook posts that carry no picture and no video.</div>
@@ -832,6 +831,37 @@ for (var _g = 0; _g < GUEST_HOSTS.length; _g++) {
   }
 }
 
+/**
+ * PINTEREST'S SHAPES, copies of the router's because this page cannot import it. test/landing-convert
+ * .test.mjs holds each equal to its source: PIN_SHORT_CODE to refkey.ts PIN_SHORT_CODE, and
+ * mbedfxPinId to router.ts pinterest() over every /pin/ spelling.
+ *
+ * PIN_IT_REFUSAL is shown twice: for a pin.it link whose code has the wrong shape, and when /_prep
+ * could not resolve one (prep() in the DOM half). The worker gives a human the same words.
+ */
+var PIN_SHORT_CODE = /^[A-Za-z0-9]{6,12}$/;
+var PIN_IT_REFUSAL = 'pin.it hides the pin behind a random code. Open it once and paste the full /pin/… link.';
+var PIN_TRAILING = ['sent', 'feedback', 'visual-search'];
+
+/**
+ * THE PIN ID OF A /pin/… PATH the router accepts, or null. `seg` is the path split on '/'.
+ *
+ * WHY: a "shared with you" link, pinterest.com/pin/{id}/sent/?invite_code=…&sender=…&sfo=1, came out as
+ * /pin/{id}/sent (reported 2026-11-25). The query was already dropped, and the worker already read the
+ * trailing segment as a UI hint, so the card was right, but the link handed out still said `sent`. Now
+ * /pin/{id}, /pin/{slug}--{id} and those three trailing segments all come out as the bare /pin/{id}.
+ *
+ * ONLY THE SHAPES router.ts pinterest() ACCEPTS. Anything else (a fourth segment, an unknown trailing
+ * one, a short or zero-led id) returns null and is passed through as it was pasted, because inventing a
+ * canonical form for a shape the worker does not read would hand out a link that means something else.
+ */
+function mbedfxPinId(seg) {
+  if (seg.length < 2 || seg.length > 3 || seg[0] !== 'pin' || !seg[1]) return null;
+  if (seg.length === 3 && PIN_TRAILING.indexOf(seg[2]) < 0) return null;
+  var m = /^(?:.*--)?([1-9][0-9]{4,21})$/.exec(seg[1]);
+  return m ? m[1] : null;
+}
+
 /** A guest host: another Worker owns the domain and hands this one its embed paths. */
 function mbedfxIsGuest(h) {
   return GUEST_HOSTS.indexOf(String(h == null ? '' : h).toLowerCase().replace(/\.$/, '')) >= 0;
@@ -912,6 +942,12 @@ function mbedfxConvert(input, host, gallery) {
     var tail = q < 0 ? '' : p.slice(q);
     if (/^\/t\/[^\/]+\/?$/.test(head)) return p;
     if (/^\/(bs\/)?profile\/[^\/]+\/?$/.test(head)) return p;
+    // pin.it's short link, for /t/'s reason: the router takes no mode on a short link, so
+    // /pin.it/{code}/p is notfound. It also keeps prep()'s resolvedTo key the same with the box ticked,
+    // or ticking it would put the share code back on screen. A pin is one picture or one video anyway.
+    // The forced twin /pn/pin.it/{code} is the same short link and takes no mode either (review,
+    // 2026-11-25: it came back as /pn/pin.it/{code}/p, which routes nowhere).
+    if (/^\/(pn\/)?pin\.it\/[^\/]+\/?$/.test(head)) return p;
     return head.replace(/\/+$/, '') + (gallery === 'stills' ? '/p' : '/v') + tail;
   };
 
@@ -958,6 +994,17 @@ function mbedfxConvert(input, host, gallery) {
      * `clip` (/embed), and `story_fbid` with `id` (/story.php, /permalink.php), which only name a post
      * as a pair, so one without the other is dropped rather than carried as noise.
      */
+    /**
+     * A PIN LINK PASTED BACK DROPS ITS UI SEGMENT TOO, the same /pin/{id} the direct-host branch emits.
+     * Without this, links the old converter handed out (/pin/{id}/sent on a guest host) and a link
+     * with only its host swapped by hand came back unchanged, `/sent` and all, as "already an mbedfx
+     * link" (review, 2026-11-25). mbedfxPinId is the router's own reading, so a shape the router does
+     * not take as a pin passes through untouched. The forced /pn/ twin keeps its token.
+     */
+    var pinSeg = stripped.replace(/^\/+|\/+$/g, '').split('/');
+    var pinForced = pinSeg[0] === 'pn' ? '/pn' : '';
+    var pinBack = mbedfxPinId(pinForced ? pinSeg.slice(1) : pinSeg);
+    if (pinBack) return out(pinForced + '/pin/' + pinBack, null, 'Already an mbedfx link. Re-pointed at the selected domain.');
     var keep = new URLSearchParams();
     ['v', 'fbid', 'clip'].forEach(function (k) { if (u.searchParams.get(k)) keep.set(k, u.searchParams.get(k)); });
     if (u.searchParams.get('story_fbid') && u.searchParams.get('id')) {
@@ -985,7 +1032,21 @@ function mbedfxConvert(input, host, gallery) {
     return no("TikTok's app shortener hides the post behind a random code. Open it once, then paste the /@user/video/… link it lands on. (tiktok.com/t/… links work fine.)");
   }
   if (bare === 'fb.watch') return no('fb.watch hides the post behind a random code with no site in the path. Open it once and paste where it lands.');
-  if (bare === 'pin.it') return no('pin.it hides the pin behind a random code. Open it once and paste the full /pin/… link.');
+  /**
+   * pin.it/{code} BECOMES /pin.it/{code}, THE HOST KEPT AS THE FIRST SEGMENT. Swapping the host alone
+   * would leave a bare /{code}, which is a handle and the ['x','ig'] chooser; router.ts pinShortlink()
+   * has why this spelling shadows nothing. The worker resolves the code, and prep() below swaps it for
+   * /pin/{id} as soon as /_prep answers, so the link that gets copied does not carry the code.
+   *
+   * THE CODE SHAPE IS THE ROUTER'S (refkey.ts PIN_SHORT_CODE), copied because this page has no build
+   * step, and test/landing-convert.test.mjs holds the two equal. The code is never lowercased: pin.it
+   * codes are case-sensitive. A code outside the shape keeps the refusal this branch used to give for
+   * every pin.it link, and so does a code /_prep could not resolve (see prep()).
+   */
+  if (bare === 'pin.it') {
+    if (seg.length === 1 && PIN_SHORT_CODE.test(seg[0])) return out('/pin.it/' + seg[0], 'Pinterest', '', 'pn');
+    return no(PIN_IT_REFUSAL);
+  }
 
   /* ---- direct hosts: swap the host, keep the path ---- */
 
@@ -1095,6 +1156,11 @@ function mbedfxConvert(input, host, gallery) {
       return out('/st/' + seg[0], 'Streamable', '', 'st');
     }
     if (platform === 'Dailymotion' && seg.length === 1) return out('/dm/' + seg[0], 'Dailymotion', '', 'dm');
+    // A pin comes out as the bare /pin/{id}, without `sent` or a slug. See mbedfxPinId.
+    if (platform === 'Pinterest') {
+      var pinId = mbedfxPinId(seg);
+      if (pinId) return out('/pin/' + pinId, 'Pinterest', '', 'pn');
+    }
 
     // YouTube is the one place a query parameter carries the id rather than tracking.
     if (platform === 'YouTube' && (seg[0] === 'watch' || qpath === '/watch')) {
@@ -1291,7 +1357,7 @@ function mbedfxPrepResolved(asked, answer) {
     { name: 'Twitch', host: 'twitch.tv · clips.twitch.tv', icon: 'twitch', rail: '#9146FF',
       paths: ['xqc/clip/DeliciousDelightfulPicklesWOOP', 'clip/DeliciousDelightfulPicklesWOOP'],
       note: 'Clips only. No VODs, no live channels.' },
-    { name: 'Pinterest', host: 'pinterest.com', icon: 'pinterest', rail: '#BD081C',
+    { name: 'Pinterest', host: 'pinterest.com · pin.it', icon: 'pinterest', rail: '#BD081C',
       paths: ['pin/66287425756772418'], note: 'Every regional domain works.' },
     { name: 'Dailymotion', host: 'dailymotion.com · dai.ly', icon: 'dailymotion', rail: MONO,
       // x8ocv9e is Fortune's, i.e. publisher-owned rather than a reupload, because the id this row
@@ -1461,6 +1527,7 @@ function mbedfxPrepResolved(asked, answer) {
       // "Ready to paste" over a resolved link loses the one fact the reader needed.
       note.innerHTML = known
         ? chip + '. Share link resolved to the real post.'
+        : pinUnresolved[r.path] ? chip + '. ' + esc(PIN_IT_REFUSAL)
         : chip + (r.note ? ' ' + esc(r.note) : (r.platform ? '. Ready to paste.' : ''));
       // The domain toggle reaches here without going through schedulePrep, so the already-drawn
       // preview would otherwise keep announcing the OTHER domain's link. Same card, same post — only
@@ -1520,6 +1587,9 @@ function mbedfxPrepResolved(asked, answer) {
    * expects the link to stay sanitised, not to quietly revert.
    */
   var resolvedTo = Object.create(null);
+  /** pin.it paths /_prep could not resolve, keyed like resolvedTo. See the reason === 'shortlink' branch. */
+  var pinUnresolved = Object.create(null);
+  function isPinShort(p) { return /^\/(pn\/)?pin\.it\/[^\/?]+\/?$/.test(p); }
   function prep(url) {
     var path = url.slice(url.indexOf('/', 8));
     if (prepped[path]) return;
@@ -1539,6 +1609,19 @@ function mbedfxPrepResolved(asked, answer) {
           note.textContent = "More than one site has that path, so mbedfx won't guess.";
           showPicker(j.candidates.map(function (c) { return { code: c.platform, name: c.name }; }),
             'Which site?');
+          return;
+        }
+        /**
+         * A pin.it CODE THAT DID NOT RESOLVE SAYS SO, in the words this page used to refuse every pin.it
+         * link with. The worker answers `shortlink` when no pin came back (a board, a dead code, a
+         * shortener that did not answer), and the card for that link is "Couldn't load this Pinterest
+         * post", so "Ready to paste" over it would be false. The link stays on screen: a shortener
+         * that refused once may answer Discord. Filed like resolvedTo, so a domain or media-only toggle
+         * keeps the warning instead of rebuilding "Ready to paste" from the input.
+         */
+        if (!j.ok && j.reason === 'shortlink' && isPinShort(path)) {
+          pinUnresolved[path] = true;
+          if (sentBase && sentBase.slice(sentBase.indexOf('/', 8)) === path) render();
           return;
         }
         if (!j.ok) return;

@@ -718,6 +718,11 @@ test('every canonical route() emits is a valid, header-safe URL', () => {
      */
     s => `/t/${s}`,                    // shortlink(), the code segment
     s => `/tt/t/${s}`,                 // shortlink() through the /tt/ escape hatch
+    // pinShortlink(). PIN_SHORT_CODE admits only [A-Za-z0-9], so every hostile segment should miss and
+    // fall to notfound; listed so a loosened code check cannot reach redirect() unseen.
+    s => `/pin.it/${s}`,
+    s => `/pn/pin.it/${s}`,
+    s => `/pin.it/Ab3dE5f${s}`,
     /**
      * instagram(), and it is now the widest post matcher in the file. The depth-3 arm sends
      * BOTH an arbitrary seg[0] (the username position) and an arbitrary seg[2] (the code) into
@@ -841,6 +846,27 @@ test('ACCEPTANCE: the ambiguity table is STILL unchanged by the shortlink route'
     assert.equal(got.kind, 'ambiguous', path)
     assert.deepEqual(got.candidates.slice().sort(), candidates.slice().sort(), path)
   }
+})
+
+test('ACCEPTANCE: the ambiguity table is unchanged by the pin.it route too', () => {
+  /**
+   * `/pin.it/{code}` is tried AFTER ambiguity(), so it cannot take a row. Two rows are in reach by shape:
+   * `followers` and `following` are nine letters, a valid pin.it code, and seg[1] is what those rows
+   * key on. A bare code is the bare-handle row, and stays it: the converter spells the short link with
+   * the host in the path precisely so it never lands there.
+   */
+  for (const [path, candidates] of [
+    ['/pin.it/followers', ['x', 'ig']],
+    ['/pin.it/following', ['x', 'ig']],
+    ['/pin.it', ['x', 'ig']],
+    ['/Rq7Lm3Zx9', ['x', 'ig']],
+    ['/gallery/Rq7Lm3Zx9', ['rd', 'ig', 'im']],
+  ]) {
+    const got = r(path)
+    assert.equal(got.kind, 'ambiguous', path)
+    assert.deepEqual(got.candidates.slice().sort(), candidates.slice().sort(), path)
+  }
+  assert.equal(r('/pin.it/Rq7Lm3Zx9').kind, 'shortlink', 'while a code beside them is the short link')
 })
 
 // ---------------------------------------------------------------------------
