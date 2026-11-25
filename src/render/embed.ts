@@ -1,5 +1,5 @@
 import type { Media, MediaIndex, Platform, Post } from '../types.ts'
-import { refKey } from '../refkey.ts'
+import { FB_OWNER, refKey } from '../refkey.ts'
 
 /**
  * Primitives every embed renderer needs. They live here rather than in whichever renderer
@@ -181,6 +181,83 @@ export function byline(author: unknown): string {
   const name = str(a?.name)
   const handle = str(a?.handle)
   return handle ? `${name} (@${handle})` : name
+}
+
+/**
+ * THE ACCOUNT'S HANDLE, for the two places that NAME the account rather than print a byline: the
+ * activity document's account.id, username and acct (mastodon.ts) and the {handle} segment of the
+ * head's activity link (discord.ts). ONE function for both, so the href and the acct cannot drift.
+ *
+ * WHY IT IS NOT author.handle ALONE (issue #49). The 2026-08-12 platform audit read the document for
+ * /WYFF4/posts/1596906778724399 and found id, username and acct all '' and the link /users/user/, with
+ * the byline "WYFF News 4" sitting right there. Facebook's og: and plugin surfaces leave the handle
+ * empty ON PURPOSE: fbAuthor records name-as-handle printing "Name (@Name)" on 17 of 17 measured
+ * cards, because byline() above prints `(@handle)` for any handle at all. So the handle stays empty,
+ * the byline is unchanged, and this reads the account's vanity from where Facebook actually wrote it:
+ *
+ *   1. the author's own handle, whenever a normalizer set one;
+ *   2. on a Facebook `post` ref, its owner half (`WYFF4_1596906778724399` -> `WYFF4`): the url the
+ *      reader pasted, checked again against the router's own FB_OWNER;
+ *   3. on any Facebook post, the first path segment of a facebook.com author.url: the page the
+ *      plugin's byline links to, or og:url with its permalink tail cut off, which also covers a share
+ *      link that resolved to a page post;
+ *   4. otherwise '', which is the floor both callers had before: empty account fields, and
+ *      handleSegment's 'user' in the link.
+ *
+ * WHAT IS REFUSED, and why each would be wrong rather than merely ugly. A segment naming a Facebook
+ * SECTION (`groups/…`, `photo/?fbid=`, `watch/?v=`, `share/v/…`, `people/…`, `pages/…`) or a script
+ * (`story.php`, `permalink.php`, `photo.php`, `profile.php`) is not an account, and publishing it as
+ * one is the invented value CLAUDE.md forbids. A NUMERIC segment is an account number, not a handle,
+ * and it is refused on BOTH steps: refusing it only on the url step would hand the same account a
+ * handle from a /{id}/posts/ link and none from a share link of the same post.
+ *
+ * NOT THE NAME, ever. A name has spaces, and name-as-handle is the defect above.
+ *
+ * EVERY OTHER PLATFORM gets str(author.handle) back, which is exactly what both call sites read
+ * before, so their documents are byte-identical (test/mastodon.test.mjs's Bluesky baseline pins that).
+ *
+ * UNMEASURED: what Discord draws from acct. Only a paste can confirm the card, and the ref's owner is
+ * the account whose page the url sits under, so a post somebody else wrote there would name that
+ * page rather than the poster.
+ */
+export function accountHandle(post: Post): string {
+  const own = str(post?.author?.handle)
+  const ref = post?.ref
+  if (own || ref?.p !== 'fb') return own
+  if (ref.kind === 'post') {
+    // The composite shape is checked, not assumed: a stored id with no '_' would otherwise hand its
+    // WHOLE value to split('_')[0], and parseRefKey bounds an fb id by length alone.
+    const id = str(ref.id)
+    const cut = id.indexOf('_')
+    const owner = cut > 0 && cut < id.length - 1 ? fbAccountSegment(id.slice(0, cut)) : ''
+    if (owner) return owner
+  }
+  return fbProfileSegment(str(post.author?.url))
+}
+
+/** First path segments of facebook.com that name a section of the site, never an account. */
+const FB_NOT_AN_ACCOUNT = new Set([
+  'groups', 'people', 'pages', 'pg', 'photo', 'photos', 'watch', 'reel', 'reels', 'share', 'story',
+  'stories', 'events', 'hashtag', 'marketplace', 'gaming', 'media', 'video', 'videos', 'permalink',
+  'profile', 'login', 'sharer', 'plugins',
+])
+function fbAccountSegment(seg: string): string {
+  if (!FB_OWNER.test(seg) || /^\d+$/.test(seg) || /\.php$/i.test(seg)) return ''
+  return FB_NOT_AN_ACCOUNT.has(seg.toLowerCase()) ? '' : seg
+}
+/** The account segment of a facebook.com url, or ''. The host rule is fbOwnsUrl's: apex or a subdomain. */
+function fbProfileSegment(url: string): string {
+  if (!url) return ''
+  try {
+    const u = new URL(url)
+    if (u.protocol !== 'https:' && u.protocol !== 'http:') return ''
+    const h = u.hostname.toLowerCase()
+    if (h !== 'facebook.com' && !h.endsWith('.facebook.com')) return ''
+    // The FIRST segment only, empty ones skipped: fbAuthor leaves a trailing slash (`/WYFF4/`).
+    return fbAccountSegment(u.pathname.split('/').find(Boolean) ?? '')
+  } catch {
+    return ''
+  }
 }
 
 export function usable(m: unknown): m is Media {

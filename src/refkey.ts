@@ -48,6 +48,20 @@ const YTDLP_ID: Record<'dm' | 'st' | 'im', RegExp> = { dm: DM_ID, st: ST_ID, im:
 export const TWITCH_SLUG = /^[A-Za-z0-9][A-Za-z0-9_-]{2,99}$/
 
 /**
+ * THE OWNER SEGMENT of a Facebook post permalink: a numeric page/profile id or a Facebook vanity name.
+ *
+ * Facebook vanities allow letters, digits and PERIODS, and NOT underscores, which is what makes the
+ * composite `{owner}_{post}` id router.ts mints unambiguous to split — the same argument the group ref
+ * already relies on.
+ *
+ * HERE RATHER THAN IN router.ts since 2026-11-24, because it gained a second reader: render/embed.ts's
+ * accountHandle reads the owner back out of a `post` ref to name the account in the activity document,
+ * and it has to accept exactly what the router accepts. NOT ENFORCED BY parseRefKey, which still bounds
+ * an fb id by length alone; a reader of a stored id re-checks it against this.
+ */
+export const FB_OWNER = /^[A-Za-z0-9.]{3,}$/
+
+/**
  * A FEDIVERSE INSTANCE HOSTNAME — the only ref field in this codebase that becomes the ORIGIN of a
  * request rather than a path component of a fixed one, and therefore the one that most needs this
  * function to be the boundary rather than the router.

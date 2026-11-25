@@ -693,6 +693,47 @@ test('the spoof callbacks route back to the post they advertise, handle or no ha
   }
 })
 
+test('A FACEBOOK POST’S ACTIVITY LINK NAMES THE PAGE, and the head’s byline does not grow a handle', async () => {
+  /**
+   * Issue #49: the audit found this link reading /users/user/statuses/{id} for
+   * /WYFF4/posts/1596906778724399, because the Facebook post surfaces leave author.handle empty on
+   * purpose and handleSegment turns '' into 'user'. The segment and the document's acct now come from
+   * ONE function (accountHandle), so they say the same name, and the link still has to route back.
+   *
+   * The byline is the other half. og:title must stay "WYFF News 4", not "WYFF News 4 (@WYFF4)":
+   * name-as-handle printed the doubled form on 17 of 17 measured cards, and a better handle in the
+   * same slot would bring the second half of that line back.
+   */
+  const post = {
+    ref: { p: 'fb', kind: 'post', id: 'WYFF4_1111111111111111' },
+    canonical: 'https://www.facebook.com/WYFF4/posts/1111111111111111',
+    author: { name: 'WYFF News 4', handle: '', url: 'https://www.facebook.com/WYFF4' },
+    text: 'caption', createdAt: new Date('2026-08-05T20:59:31Z'), counts: {}, sensitive: false,
+    // An image, because only a head with media carries the activity link at all.
+    media: [{ kind: 'image', url: 'https://scontent.xx.fbcdn.net/a.jpg', w: 552, h: 414 }],
+  }
+  const html = await body(render({ kind: 'post', post }, 'discord', ORIGIN))
+  const href = linksOf(html, ACTIVITY)[0]
+  assert.ok(href.startsWith(`${ORIGIN}/users/WYFF4/statuses/`), href)
+  const activity = route(new URL(href))
+  assert.equal(activity.kind, 'activity', `the href must still route: ${href}`)
+  assert.deepEqual(activity.ref, post.ref)
+  assert.equal(toMastodonStatus(post, ORIGIN).account.acct, 'WYFF4', 'the link and the acct agree')
+  assert.ok(!html.includes('(@'), 'no handle in any byline the head prints')
+  assert.deepEqual(tagsOf(html, 'og:title'), ['WYFF News 4'], 'the byline is the name alone')
+
+  // A group post has no vanity anywhere, so it keeps the old floor, and the floor still routes.
+  const group = {
+    ...post,
+    ref: { p: 'fb', kind: 'group', id: '123456789_1111111111111111' },
+    canonical: 'https://www.facebook.com/groups/123456789/posts/1111111111111111/',
+    author: { name: 'A Group', handle: '', url: 'https://www.facebook.com/groups/123456789/' },
+  }
+  const groupHref = linksOf(await body(render({ kind: 'post', post: group }, 'discord', ORIGIN)), ACTIVITY)[0]
+  assert.ok(groupHref.startsWith(`${ORIGIN}/users/user/statuses/`), groupHref)
+  assert.equal(route(new URL(groupHref)).kind, 'activity')
+})
+
 test('a lone surrogate in the handle degrades, it does not throw', async () => {
   // encodeURIComponent throws URIError on an unpaired surrogate, and str() blesses such a
   // value as a string, so nothing upstream stops it. worker.ts's 'post' case wraps only

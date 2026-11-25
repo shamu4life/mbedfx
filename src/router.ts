@@ -1,6 +1,7 @@
 import type { GalleryMode, Platform, PostRef, Route } from './types.ts'
 import {
-  BS_ACTOR, DM_ID, FEDI_HOST, IM_ID, LEMMY_ID, MASTO_ID, PEERTUBE_ID, PIN_ID, ST_ID, TWITCH_SLUG, parseRefKey,
+  BS_ACTOR, DM_ID, FB_OWNER, FEDI_HOST, IM_ID, LEMMY_ID, MASTO_ID, PEERTUBE_ID, PIN_ID, ST_ID, TWITCH_SLUG,
+  parseRefKey,
 } from './refkey.ts'
 import { decodeStatusId, statusIdMode } from './statusid.ts'
 
@@ -596,14 +597,8 @@ const SHARE_CODE = /^[A-Za-z0-9_-]{5,64}$/
  * share menu. Both name one post; which one you get depends on where you copied the link from.
  */
 const FB_POST_ID = /^(?:\d{5,}|pfbid[A-Za-z0-9]{10,})$/
-/**
- * THE OWNER SEGMENT — a numeric page/profile id or a Facebook vanity name.
- *
- * Facebook vanities allow letters, digits and PERIODS, and NOT underscores, which is what makes the
- * composite `{owner}_{post}` id below unambiguous to split — the same argument the group ref already
- * relies on.
- */
-const FB_OWNER = /^[A-Za-z0-9.]{3,}$/
+// FB_OWNER, the owner segment, is imported from refkey.ts: render/embed.ts reads it back out of a
+// stored `post` ref and must accept exactly what this file accepts. Its docstring is there.
 
 type FbKind = 'watch' | 'reel' | 'share' | 'group' | 'post' | 'photo'
 
