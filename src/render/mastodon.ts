@@ -2,7 +2,7 @@ import type { GalleryMode, Media, Platform, Post } from '../types.ts'
 import { mediaList } from '../media.ts'
 import { refKey } from '../refkey.ts'
 import { encodeStatusId } from '../statusid.ts'
-import { byline, bytesIndex, fudge, isSensitive, isSpoiler, mediaOf, mediaUrl, stockState, str, usable } from './embed.ts'
+import { accountHandle, byline, bytesIndex, fudge, isSensitive, isSpoiler, mediaOf, mediaUrl, stockState, str, usable } from './embed.ts'
 import { buildContentHtml, statParts, withMoreInPostMarker, withVideoGalleryMarker } from './text.ts'
 
 /**
@@ -695,7 +695,9 @@ export function toMastodonStatus(post: Post, origin: string, mode: GalleryMode):
   // never make toISOString throw, so this needs no guard of its own — unlike the text fields,
   // which that guard deliberately does not cover.
   const created = post.createdAt.toISOString()
-  const handle = str(post.author?.handle)
+  // Not author.handle directly: a Facebook post has none on purpose, and accountHandle reads the
+  // account's vanity instead (issue #49). discord.ts's activity link reads the same function.
+  const handle = accountHandle(post)
 
   // The avatar is emitted ONLY when the Post actually carries one. pickMedia returns null for
   // a missing avatar, so /_media/{key}/avatar would 404 — and a 404 image is worse than no

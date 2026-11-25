@@ -1,6 +1,7 @@
 /**
  * THE ONE RULE FOR TURNING AN UPSTREAM UPLOAD INSTANT INTO A Date, shared by every platform whose date
- * comes out of the container's `yt-dlp -J` dict — YouTube, Facebook, Dailymotion, Streamable, Imgur.
+ * comes out of the container's `yt-dlp -J` dict — YouTube, Facebook, Dailymotion, Streamable, Imgur —
+ * and, since 2026-11-24, the `data-utime` attribute of Facebook's embed-plugin fragment.
  *
  * IT LIVES IN ITS OWN FILE BECAUSE THE SECOND COPY WAS A 500 ON A PUBLIC ROUTE. platforms/ytdlp and
  * platforms/facebook each open-coded `new Date(meta.timestamp * 1000)` behind a Number.isFinite check,
@@ -19,6 +20,11 @@
  * youtube.com was registered — which is also before Dailymotion's launch (2005-03-15), Imgur's (2009)
  * and Streamable's (2013), so the earliest of the five bounds all five. Facebook predates it as a
  * SITE, but not as a video host (video shipped 2007), so no real record here can sit below it either.
+ *
+ * ONE CALLER IS NOT A VIDEO, and the argument above does not cover it. Since 2026-11-24 the Facebook
+ * plugin card reads a POST's `data-utime` through here (facebookPluginCard), and Facebook had posts
+ * before 2005-02-14. Such a post comes out as the epoch, the same "no date" every undated card already
+ * ships, and not as a wrong date. That is the safe direction, so the floor was left alone for it.
  *
  * A value under the floor is not a date any of these platforms produced — it is a unit mix-up
  * (milliseconds read as seconds land in 1970) or junk — and rejecting rather than rendering it matters

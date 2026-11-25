@@ -86,12 +86,50 @@ test('THE CANONICAL COMES FROM THE FRAGMENT’S OWN BACK-LINK, without Meta’s 
   assert.ok(!card.canonical.includes('ref=embed_post'), 'the marker is Meta’s, not part of the url')
 })
 
-test('A DATE IS NOT INVENTED — the plugin prints a relative age, which is not a timestamp', () => {
-  // The fragment says "on Wednesday", and turning that into a date needs the render time, which is
-  // not in the document. The epoch is what the other Facebook surfaces already use for absent; a
-  // guessed "now" would be a WRONG date rather than a missing one.
-  const card = facebookPluginCard(PLUGIN, REF)
-  assert.equal(card.createdAt.getTime(), 0)
+test('THE DATE IS THE PLUGIN’S OWN data-utime — the relative age beside it is never parsed', () => {
+  // REWRITTEN 2026-11-24 for issue #49. This test used to pin the epoch, on the claim that the plugin
+  // prints only a relative age. The visible text does say "on Wednesday", and turning THAT into a date
+  // would still need the render time. But the <abbr> around it carries data-utime="1785963571", and
+  // its tooltip ("Wednesday, August 5, 2026 at 1:59 PM") is the same instant in US Pacific time. The
+  // half of the old rule that mattered still holds: nothing is read from the text or the clock.
+  assert.equal(facebookPluginCard(PLUGIN, REF).createdAt.toISOString(), '2026-08-05T20:59:31.000Z')
+  // The unlinked-byline capture carries one too, beside "about 3 months ago" ("May 6, 2026 at 8:26 AM").
+  assert.equal(facebookPluginCard(UNLINKED, PHOTO_REF).createdAt.toISOString(), '2026-05-06T15:26:17.000Z')
+})
+
+test('NO data-utime KEEPS THE EPOCH — "May 5, 2025" and "3 days ago" in the text are not read', () => {
+  // Three real captures carry no attribute: two print an age or a calendar date as text, one has no
+  // <abbr> at all. "May 5, 2025" LOOKS absolute, but it has no time of day and no zone, so any instant
+  // made from it is a guess. The epoch is the "no date" every undated card ships, and /_api/v1
+  // publishes it as null.
+  for (const [html, what] of [[STYLE_DIMS, 'text "May 5, 2025"'], [MULTIPHOTO, 'text "3 days ago"'], [NOCAPTION, 'no <abbr>']]) {
+    assert.ok(!html.includes('data-utime'), `the fixture really has no attribute: ${what}`)
+    const card = facebookPluginCard(html, PHOTO_REF)
+    assert.ok(card, `still a card: ${what}`)
+    assert.equal(card.createdAt.getTime(), 0, what)
+  }
+})
+
+test('A JUNK data-utime IS THE EPOCH, never an Invalid Date — uploaddate.ts’s range check decides', () => {
+  // The attribute comes off a page we do not control, and render/mastodon.ts calls toISOString() on
+  // whatever this returns. An Invalid Date there throws on the activity route. Each of these is a
+  // value the shared rule refuses: the year 2286, the epoch itself, 2001 (under the 2005 floor), and
+  // an 11-digit value in the year 5138.
+  for (const v of ['9999999999', '0', '1000000000', '99999999999']) {
+    const html = PLUGIN.replace('data-utime="1785963571"', `data-utime="${v}"`)
+    assert.ok(html.includes(`data-utime="${v}"`), 'the replacement landed')
+    const card = facebookPluginCard(html, REF)
+    assert.equal(card.createdAt.getTime(), 0, `data-utime=${v}`)
+    assert.doesNotThrow(() => card.createdAt.toISOString())
+  }
+})
+
+test('ONLY THE FIRST <abbr> COUNTS — a later one is not the post’s date', () => {
+  // The header's <abbr> comes first in document order, inside the permalink anchor and ahead of the
+  // photos. If it has no attribute, the post has no date here, and a later <abbr> could belong to
+  // something else. Appending a dated one after the undated header must change nothing.
+  const html = `${STYLE_DIMS}<abbr data-utime="1785963571" class="timestamp">later</abbr>`
+  assert.equal(facebookPluginCard(html, PHOTO_REF).createdAt.getTime(), 0)
 })
 
 test('THE BYLINE FACEBOOK DOES NOT LINK is still a byline — the avatar carries its own label', () => {

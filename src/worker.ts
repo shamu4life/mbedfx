@@ -1779,6 +1779,14 @@ const RESOLVER_SLOTS = 4
 // has not been put to before and is worth naming so the next reader does not think the records were
 // suspect. If this recurs, the cheaper permanent answer is a shorter `sleepAfter` (see
 // src/container.ts, which already argues 3m is available), not another bump.
+//
+// (no bump, 2026-11-24): META_GENERATION stays g13 although resolveFacebookMeta now stores a date it
+// used to drop. It falls back to `upload_date` when `timestamp` is missing (issue #49). The test at the
+// head of this log is what a stale record would say, and an old Facebook record says nothing false. It
+// still holds `timestamp` in epoch seconds or no `timestamp` at all, which the normalizer reads as no
+// date, the same 1970 it rendered before. It is less complete than a new record, not wrong, and
+// FB_META_TTL_MS retires it within 24 hours. A bump would also throw away up to 30 days of correct
+// YouTube, Dailymotion, Streamable and Imgur records to fill that one day sooner.
 /**
  * THE CONTAINER-INSTANCE HALF. It names the Durable Objects (`resolver-{gen}-{slot}`) and nothing
  * else. Bumping it costs one cold boot per slot and invalidates NOTHING that is stored.
@@ -2954,7 +2962,18 @@ async function resolveFacebookMeta(ref: Extract<PostRef, { p: 'fb' }>, env: Env)
         title: j.title, poster: http(j.thumbnail),
         uploader: s(j.uploader), uploaderId: s(j.uploader_id), uploaderUrl: http(j.uploader_url),
         description: s(j.description), w: n(j.width), h: n(j.height),
-        duration: n(j.duration), timestamp: n(j.timestamp),
+        duration: n(j.duration),
+        /**
+         * `upload_date` IS THE FALLBACK, the way YouTube's record already does it (ytDateSeconds). The
+         * container has sent it on this same call all along (_meta_page in container/server.py), and
+         * this line used to keep only `timestamp`, so a video whose dict had `timestamp: null` and a
+         * good `upload_date` shipped the 1970 epoch (issue #49). A day-precision date becomes UTC
+         * midnight. `timestamp` still wins whenever it passes the range check.
+         *
+         * THE STORED SHAPE DID NOT CHANGE, which is why META_GENERATION was not bumped: the field is
+         * still `timestamp`, epoch seconds. See the "no bump, 2026-11-24" entry in the generation log.
+         */
+        timestamp: ytDateSeconds(j) ?? undefined,
       }
     } catch {
       return null
@@ -3734,6 +3753,10 @@ const ytMetaUsable = (env: Env) => (j: unknown): boolean => {
  * NOTE THE ASYMMETRY WITH ytMetaValid, which is deliberate and not an oversight: that one validates a
  * STORED record, which by construction always carries a numeric `timestamp` because this function is
  * what produced it. This one validates the WIRE dict, where the date arrives in two shapes.
+ *
+ * FACEBOOK VIDEO READS IT TOO, since 2026-11-24 (resolveFacebookMeta, issue #49). The dict there is the
+ * same `_meta_page` answer, so it can carry the same `timestamp: null` beside a good `upload_date`.
+ * The name stayed `yt…` because docs/CREDENTIALS.md cites it.
  */
 function ytDateSeconds(j: Record<string, unknown>): number | null {
   if (typeof j.timestamp === 'number' && uploadDateFrom(j.timestamp) !== null) return j.timestamp

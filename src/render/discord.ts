@@ -3,7 +3,7 @@ import { mediaList } from '../media.ts'
 import { refKey } from '../refkey.ts'
 import { encodeStatusId } from '../statusid.ts'
 import { esc, html } from './fail.ts'
-import { byline, bytesIndex, describe, dimTags, isSpoiler, mediaOf, mediaUrl, pendingMuxIndex, playableVideo, stockState, str, themeColor, usable } from './embed.ts'
+import { accountHandle, byline, bytesIndex, describe, dimTags, isSpoiler, mediaOf, mediaUrl, pendingMuxIndex, playableVideo, stockState, str, themeColor, usable } from './embed.ts'
 import { buildPlainText } from './text.ts'
 
 /**
@@ -389,7 +389,9 @@ function renderSpoof(post: Post, origin: string, mode?: GalleryMode): Response {
    * Discord caches a message's embed from its first crawl forever.
    */
   const id = encodeStatusId(refKey(post.ref), mode)
-  const handle = handleSegment(post.author?.handle)
+  // accountHandle, the same value the activity document puts in acct, so the href and the account it
+  // advertises cannot disagree. handleSegment still guards it: '' and the dot segments become 'user'.
+  const handle = handleSegment(accountHandle(post))
   const canonical = esc(str(post.canonical))
   const hasMedia = mediaList(post).some(usable)
   /**

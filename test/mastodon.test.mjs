@@ -10,6 +10,7 @@ import { buildContentHtml, buildPlainText } from '../src/render/text.ts'
 import { refKey } from '../src/refkey.ts'
 import { decodeStatusId } from '../src/statusid.ts'
 import { serializePost, deserializePost } from '../src/cache.ts'
+import { accountHandle, byline } from '../src/render/embed.ts'
 
 const ORIGIN = 'https://staging.megapenispoopenfarten.sex'
 
@@ -295,6 +296,108 @@ test('account.url and uri are the AUTHOR profile, not the post', () => {
   // The STATUS url/uri, by contrast, is the post.
   assert.equal(s.url, base.canonical)
   assert.equal(s.uri, base.canonical)
+})
+
+/**
+ * A Facebook page post as the plugin surface builds it: a byline, the page url, and NO handle, on
+ * purpose (see fbAuthor in src/platforms/facebook/normalize.ts for the "Name (@Name)" measurement).
+ * Values are the ones already in test/fixtures/facebook-plugin-post.html; the post id is a placeholder.
+ */
+const fbPagePost = (over = {}) => ({
+  ref: { p: 'fb', kind: 'post', id: 'WYFF4_1111111111111111' },
+  canonical: 'https://www.facebook.com/WYFF4/posts/1111111111111111',
+  author: { name: 'WYFF News 4', handle: '', url: 'https://www.facebook.com/WYFF4' },
+  text: 'caption', createdAt: new Date('2026-08-05T20:59:31Z'), counts: {}, sensitive: false,
+  media: [{ kind: 'image', url: 'https://scontent.xx.fbcdn.net/a.jpg', w: 552, h: 414 }],
+  ...over,
+})
+
+test('A FACEBOOK POST’S ACCOUNT IS NAMED, not hollow — the vanity, never the name (issue #49)', () => {
+  // The 2026-08-12 audit read this document for /WYFF4/posts/1596906778724399 and found id, username
+  // and acct all '' while the byline was known. The handle stays empty in the Post (name-as-handle
+  // printed "Name (@Name)" on 17 of 17 measured cards), and the account reads the page's vanity
+  // instead, from the ref the reader pasted.
+  const s = toMastodonStatus(fbPagePost(), ORIGIN)
+  assert.equal(s.account.id, 'WYFF4')
+  assert.equal(s.account.username, 'WYFF4')
+  assert.equal(s.account.acct, 'WYFF4')
+  assert.equal(s.account.display_name, 'WYFF News 4', 'the display name is the byline, untouched')
+  assert.equal(s.account.url, 'https://www.facebook.com/WYFF4')
+  // THE BYLINE DOES NOT MOVE. byline() still reads author.handle, so the card's top line is not
+  // "WYFF News 4 (@WYFF4)" — that would be the doubled-byline defect wearing a better handle.
+  assert.equal(byline(fbPagePost().author), 'WYFF News 4')
+})
+
+test('accountHandle: the ref’s owner first, then the facebook.com author url, then the old floor', () => {
+  // The ref wins over the url when both are usable.
+  assert.equal(accountHandle(fbPagePost({ author: { name: 'n', handle: '', url: 'https://www.facebook.com/Other' } })), 'WYFF4')
+  // A share link that resolved to a page post has no owner in its ref, but og:url named the page,
+  // and fbAuthor kept it with a trailing slash.
+  const share = { p: 'fb', kind: 'share', id: 'Fixture06X' }
+  assert.equal(accountHandle(fbPagePost({ ref: share, author: { name: 'InfoWars', handle: '', url: 'https://www.facebook.com/InfoWars/' } })), 'InfoWars')
+  // m. and web. are the same product, the host rule fbOwnsUrl uses.
+  assert.equal(accountHandle(fbPagePost({ ref: share, author: { name: 'n', handle: '', url: 'https://m.facebook.com/NASA' } })), 'NASA')
+  // A numeric owner is an account NUMBER, refused on both steps, so the url gets its turn.
+  assert.equal(accountHandle(fbPagePost({ ref: { p: 'fb', kind: 'post', id: '100064572234_1111111111111111' } })), 'WYFF4')
+  // An author's own handle always wins: the video path's name-as-handle is left exactly as it was.
+  assert.equal(accountHandle(fbPagePost({ ref: { p: 'fb', kind: 'watch', id: '10153231379946729' }, author: { name: 'PhillyBanana', handle: 'PhillyBanana', url: 'https://www.facebook.com/61554703834017' } })), 'PhillyBanana')
+})
+
+test('accountHandle REFUSES a section, a script, a number and a foreign host — the floor is kept', () => {
+  // Each url is one this repo can actually put in author.url: fbAuthor only strips /posts/ and
+  // /permalink/ tails, so the photo, watch, reel, share, story.php and permalink.php canonicals pass
+  // through whole, and a group post's is /groups/{gid}/. Publishing any of them as a handle would be
+  // an invented account. The floor is '' (handleSegment's 'user' in the link), what shipped before.
+  const share = { p: 'fb', kind: 'share', id: 'Fixture06X' }
+  for (const url of [
+    'https://www.facebook.com/groups/123456789/',
+    'https://www.facebook.com/photo/?fbid=3333333333333333',
+    'https://www.facebook.com/photo.php?fbid=3333333333333333',
+    'https://www.facebook.com/watch/?v=10153231379946729',
+    'https://www.facebook.com/reel/1234567890',
+    'https://www.facebook.com/share/v/Fixture03X',
+    'https://www.facebook.com/story.php?story_fbid=1&id=2',
+    'https://www.facebook.com/permalink.php?story_fbid=1&id=2',
+    'https://www.facebook.com/profile.php?id=100064572234',
+    'https://www.facebook.com/people/Someone/61554703834017/',
+    'https://www.facebook.com/pages/Something/123456/',
+    'https://www.facebook.com/61554703834017',
+    'https://www.facebook.com',
+    'https://www.facebook.com/',
+    'https://notfacebook.example.com/WYFF4',
+    'https://facebook.com.example.com/WYFF4',
+    'javascript:alert(1)',
+    'not a url',
+    '',
+  ]) {
+    const post = fbPagePost({ ref: share, author: { name: 'n', handle: '', url } })
+    assert.equal(accountHandle(post), '', url)
+    assert.equal(toMastodonStatus(post, ORIGIN).account.acct, '', url)
+  }
+  // A post ref whose owner is no owner: a group-shaped word, a script, too short, no '_' at all, or
+  // nothing after it. Each falls through to the url, which is unusable here too.
+  for (const id of ['groups_1111111111111111', 'story.php_1', 'ab_1111111111111111', 'WYFF4', 'WYFF4_', '_1111']) {
+    const post = fbPagePost({ ref: { p: 'fb', kind: 'post', id }, author: { name: 'n', handle: '', url: 'https://www.facebook.com' } })
+    assert.equal(accountHandle(post), '', id)
+  }
+})
+
+test('accountHandle CHANGES NOTHING OFF FACEBOOK — an empty handle stays empty', () => {
+  // The fallback is gated on ref.p, so a non-Facebook post whose handle is missing keeps the old
+  // empty account fields even when its author url happens to be a facebook.com page. The Bluesky
+  // byte-for-byte baseline below pins the ordinary case.
+  const noHandle = { ...base, author: { ...base.author, handle: '', url: 'https://www.facebook.com/WYFF4' } }
+  assert.equal(accountHandle(noHandle), '')
+  const s = toMastodonStatus(noHandle, ORIGIN)
+  assert.equal(s.account.id, '')
+  assert.equal(s.account.acct, '')
+  assert.equal(accountHandle(base), 'alice.bsky.social')
+  // And it is total over what a corrupt cache record can hold.
+  for (const author of [undefined, null, {}, { handle: 42 }, { url: 42 }]) {
+    assert.doesNotThrow(() => accountHandle({ ...fbPagePost(), author }))
+    assert.doesNotThrow(() => accountHandle({ ...base, author }))
+  }
+  assert.doesNotThrow(() => accountHandle({ ...fbPagePost(), ref: { p: 'fb', kind: 'post', id: 42 } }))
 })
 
 test('no count field is ever emitted on the status', () => {
