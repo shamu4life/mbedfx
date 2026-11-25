@@ -16,12 +16,13 @@ All notable changes to mbedfx are documented here. The format follows
   Bluesky, Reddit, Mastodon and YouTube posts drew the same card through it as on mbedfx.app. Twitter's
   lacked its repost count. The Docker image and the compose file haven't been built yet. See
   `docs/SELF-HOSTING.md`.
-- **pin.it share links work, without passing the share code on.** Following a pin.it link lands on
+- **pin.it share links work, and the converter swaps the share code out.** Following a pin.it link lands on
   a URL with `sender=` in it, the sharer's Pinterest user id. The converter now turns
   `pin.it/{code}` into `/pin.it/{code}` (the host stays in the path because a bare `/{code}` reads as
   a profile handle), the Worker asks Pinterest's shortener which pin the code points to, and the
-  converter swaps the link for `/pin/{id}` once that answer arrives. Clicking it opens the plain pin
-  page. A code that doesn't point to a pin, like a board or a dead code, gets "Couldn't load this
+  converter swaps the link for `/pin/{id}` once that answer arrives, usually within a second. A link
+  copied before then still carries the code, though the Worker itself never sends anyone through
+  pin.it: clicking either form opens the plain pin page. A code that doesn't point to a pin, like a board or a dead code, gets "Couldn't load this
   Pinterest post" in Discord, and the converter shows its old pin.it warning. In `/_api/v1`, send it
   as `?url=/pin.it/{code}`. The shortener was measured from a home connection on 2026-11-25. Nobody
   has measured it from Cloudflare's network yet.

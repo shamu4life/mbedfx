@@ -426,6 +426,40 @@ test('A /pin/ SHAPE THE ROUTER DOES NOT READ IS PASSED THROUGH AS IT WAS, never 
   }
 })
 
+test('A PIN LINK PASTED BACK FROM ONE OF OUR OWN HOSTS DROPS /sent TOO, not only one pasted from pinterest.com', () => {
+  /**
+   * Review, 2026-11-25: the canonicalisation ran only in the direct-host branch, so the links the old
+   * converter handed out (/pin/{id}/sent on a guest host), and a pinterest link with only its host
+   * swapped by hand, came back unchanged as "already an mbedfx link", /sent and all. That is the
+   * exact link the owner reported.
+   */
+  const id = '8800000000000000531'
+  for (const from of ['mbedfx.app', ...GUEST_HOSTS, `d.${GUEST_HOSTS[0]}`]) {
+    for (const p of [`/pin/${id}/sent`, `/pin/${id}/sent/?invite_code=feedfacecafe0000&sender=777000000000000123&sfo=1`,
+      `/pin/slug--${id}/feedback/`, `/pin/${id}/visual-search/p`, `/pin/${id}`]) {
+      const r = convert(`https://${from}${p}`, 'mbedfx.app')
+      assert.equal(r.path, `/pin/${id}`, `${from}${p}`)
+      assert.deepEqual(routed(r.path).ref, { p: 'pn', id })
+      assert.doesNotMatch(r.url, /sent|invite_code|sender|sfo/)
+    }
+  }
+  // The forced twin keeps its token, and a shape the router does not read still passes through.
+  assert.equal(convert(`https://mbedfx.app/pn/pin/${id}/sent`, 'mbedfx.app').path, `/pn/pin/${id}`)
+  assert.equal(convert(`https://mbedfx.app/pin/${id}/comments`, 'mbedfx.app').path, `/pin/${id}/comments`)
+  // And the gallery box still adds its mode afterwards.
+  assert.equal(convert(`https://mbedfx.app/pin/${id}/sent`, 'mbedfx.app', 'stills').path, `/pin/${id}/p`)
+})
+
+test('THE FORCED /pn/pin.it/{code} TWIN TAKES NO GALLERY MODE, like the plain short link', () => {
+  // Review, 2026-11-25: withGallery exempted /pin.it/{code} but not /pn/pin.it/{code}, so "all as
+  // stills" handed out /pn/pin.it/{code}/p, which the router reads as notfound on every host.
+  for (const gallery of ['stills', 'videos']) {
+    const r = convert('https://mbedfx.app/pn/pin.it/Zq7Wv3Kp9', 'mbedfx.app', gallery)
+    assert.equal(r.path, '/pn/pin.it/Zq7Wv3Kp9', gallery)
+    assert.notEqual(routed(r.path).kind, 'notfound')
+  }
+})
+
 test('mbedfxPinId READS EXACTLY THE /pin/ SHAPES router.ts pinterest() READS', () => {
   // The page keeps a copy of the router's rule (no build step). Held equal over a sweep of spellings.
   const ids = ['8800000000000000521', '12345', '1234', '0880000000000000522', '1'.repeat(23), 'abc']

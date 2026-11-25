@@ -945,7 +945,9 @@ function mbedfxConvert(input, host, gallery) {
     // pin.it's short link, for /t/'s reason: the router takes no mode on a short link, so
     // /pin.it/{code}/p is notfound. It also keeps prep()'s resolvedTo key the same with the box ticked,
     // or ticking it would put the share code back on screen. A pin is one picture or one video anyway.
-    if (/^\/pin\.it\/[^\/]+\/?$/.test(head)) return p;
+    // The forced twin /pn/pin.it/{code} is the same short link and takes no mode either (review,
+    // 2026-11-25: it came back as /pn/pin.it/{code}/p, which routes nowhere).
+    if (/^\/(pn\/)?pin\.it\/[^\/]+\/?$/.test(head)) return p;
     return head.replace(/\/+$/, '') + (gallery === 'stills' ? '/p' : '/v') + tail;
   };
 
@@ -992,6 +994,17 @@ function mbedfxConvert(input, host, gallery) {
      * `clip` (/embed), and `story_fbid` with `id` (/story.php, /permalink.php), which only name a post
      * as a pair, so one without the other is dropped rather than carried as noise.
      */
+    /**
+     * A PIN LINK PASTED BACK DROPS ITS UI SEGMENT TOO, the same /pin/{id} the direct-host branch emits.
+     * Without this, links the old converter handed out (/pin/{id}/sent on a guest host) and a link
+     * with only its host swapped by hand came back unchanged, `/sent` and all, as "already an mbedfx
+     * link" (review, 2026-11-25). mbedfxPinId is the router's own reading, so a shape the router does
+     * not take as a pin passes through untouched. The forced /pn/ twin keeps its token.
+     */
+    var pinSeg = stripped.replace(/^\/+|\/+$/g, '').split('/');
+    var pinForced = pinSeg[0] === 'pn' ? '/pn' : '';
+    var pinBack = mbedfxPinId(pinForced ? pinSeg.slice(1) : pinSeg);
+    if (pinBack) return out(pinForced + '/pin/' + pinBack, null, 'Already an mbedfx link. Re-pointed at the selected domain.');
     var keep = new URLSearchParams();
     ['v', 'fbid', 'clip'].forEach(function (k) { if (u.searchParams.get(k)) keep.set(k, u.searchParams.get(k)); });
     if (u.searchParams.get('story_fbid') && u.searchParams.get('id')) {
@@ -1576,7 +1589,7 @@ function mbedfxPrepResolved(asked, answer) {
   var resolvedTo = Object.create(null);
   /** pin.it paths /_prep could not resolve, keyed like resolvedTo. See the reason === 'shortlink' branch. */
   var pinUnresolved = Object.create(null);
-  function isPinShort(p) { return /^\/pin\.it\/[^\/?]+\/?$/.test(p); }
+  function isPinShort(p) { return /^\/(pn\/)?pin\.it\/[^\/?]+\/?$/.test(p); }
   function prep(url) {
     var path = url.slice(url.indexOf('/', 8));
     if (prepped[path]) return;
