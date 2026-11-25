@@ -160,6 +160,51 @@ test('THE OLD PRE-g3 DICT still renders: a non-atomic deploy degrades, never thr
   assert.deepEqual([...html.matchAll(/og:video:width" content="([^"]*)"/g)].map(m => m[1]), ['0'])
 })
 
+/**
+ * Renders one Facebook watch id through the real dispatcher with the container answering `dict`, then
+ * follows the head's own activity link the way Discord does. Returns the stored meta record and the
+ * activity document's created_at. Each caller passes its OWN id: metaOnce's in-flight map is
+ * module-level, so a shared id would hand one test's extract to the next.
+ */
+async function dateTrip(id, dict) {
+  const ref = { p: 'fb', kind: 'watch', id }
+  const r2 = fakeR2()
+  const { binding } = fakeResolver({ meta: () => Response.json(dict) })
+  const env = envWith(binding, r2)
+  const d = deps()
+  const html = await (await handle(req(`/watch?v=${id}`), env, ctx, d)).text()
+  const href = html.match(/type="application\/activity\+json" href="([^"]+)"/)?.[1]
+  assert.ok(href, 'the video head carries the activity link')
+  const doc = await (await handle(req(new URL(href).pathname), env, ctx, d)).json()
+  const stored = r2.store.get(metaCacheKey(ref))
+  assert.ok(stored, 'the extract was persisted')
+  return { record: JSON.parse(new TextDecoder().decode(stored.bytes)), createdAt: doc.created_at }
+}
+
+test('A FACEBOOK VIDEO WITH NO timestamp TAKES upload_date — the 1970 card had a date beside it', async () => {
+  /**
+   * Issue #49. The container's _meta_page sends `upload_date` on this same call, for the reason
+   * container/server.py records: yt-dlp builds `timestamp` only from a timezone-bearing source, so a
+   * dict can arrive complete except for `timestamp: null`. resolveFacebookMeta kept `timestamp` alone
+   * and the card shipped the epoch. YouTube's record has read the fallback since 2026-08-04; this is
+   * the same rule (ytDateSeconds), and a day-precision date becomes UTC midnight.
+   */
+  const { record, createdAt } = await dateTrip('10153231379946101', { ...META_JSON, timestamp: null, upload_date: '20260716' })
+  assert.equal(record.timestamp, Date.UTC(2026, 6, 16) / 1000, 'the stored field is still epoch seconds')
+  assert.equal(createdAt, '2026-07-16T00:00:00.000Z')
+})
+
+test('timestamp STILL WINS over upload_date, and a dict with neither keeps the epoch', async () => {
+  // The precise source first: `timestamp` carries a time of day and upload_date does not.
+  const both = await dateTrip('10153231379946102', { ...META_JSON, upload_date: '20260101' })
+  assert.equal(both.record.timestamp, META_JSON.timestamp)
+  assert.equal(both.createdAt, new Date(META_JSON.timestamp * 1000).toISOString())
+  // Junk in both fields is no date, and no date is still the epoch: nothing is made up to fill it.
+  const neither = await dateTrip('10153231379946103', { ...META_JSON, timestamp: null, upload_date: 'yesterday' })
+  assert.equal(neither.record.timestamp, undefined)
+  assert.equal(neither.createdAt, '1970-01-01T00:00:00.000Z')
+})
+
 test('a meta response with NO title is a null Post — the content assertion, not the status', async () => {
   /**
    * THE PAGE AND PLUGIN SURFACES ARE STUBBED, and until 2026-08-11 they were not — this test reached

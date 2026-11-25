@@ -6,6 +6,21 @@ All notable changes to mbedfx are documented here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+
+- **Facebook posts name their page in the document Discord reads.** The 2026-08-12 platform audit
+  found the Mastodon-style document for `/WYFF4/posts/1596906778724399` with empty `id`, `username`
+  and `acct` fields and a link to `/users/user/` (issue #49). Those fields now hold the page's name
+  (`WYFF4`), taken from the pasted link or from the page link Facebook prints on the post. The byline
+  stays as it was: the card reads `WYFF News 4`, with no `(@WYFF4)` after it. A post where neither
+  link names a page, such as a group post, keeps the empty fields.
+- **More Facebook cards show a real date instead of 1970.** Posts read from Facebook's embed plugin
+  use the time the plugin stores on the post (`data-utime`). A Facebook video whose container answer
+  has no `timestamp` uses its `upload_date`, as YouTube already does. Three kinds still have no date:
+  posts read from the og: page, plugin posts without that time, and videos with neither field. They
+  still show 1970 (`createdAt: null` in `/_api/v1`). Leaving the field out instead waits on a test
+  in Discord, which may refuse a document without it.
+
 ## [1.17.0] - 2026-11-24
 
 **Upgrading:** self-hosters run a full `wrangler deploy` so the container rebuilds (the `g17` `RESOLVER_GENERATION` bump in the code moves instances over), and set `YT_ACCOUNTS` to one or two throwaway YouTube accounts if YouTube asks their network to sign in. For API consumers, `still: true` with `muxing: false` can now also mean every mux attempt failed.

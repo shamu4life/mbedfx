@@ -735,6 +735,35 @@ const FB_PLUGIN_LABEL = /\saria-label="([^"]{1,120})"/
  * honest facebook.com fallback the caller already has, so that one is left unclaimed.
  */
 const FB_PLUGIN_PAGE = /href="(https:\/\/www\.facebook\.com\/[^"?]{1,80})\?ref=embed_post"/
+/**
+ * THE POST'S OWN TIMESTAMP. The plugin does print one, and until 2026-11-24 this file said it did not.
+ *
+ * The visible text is a relative age ("on Wednesday", "about 3 months ago"), and that cannot become a
+ * date without knowing when the fragment was rendered. The <abbr> around it is different: it carries
+ * `data-utime`, in unix seconds. Two of the real captures in test/fixtures have it. In
+ * facebook-plugin-post.html it is 1785963571 (2026-08-05T20:59:31Z), and the tooltip beside it reads
+ * "Wednesday, August 5, 2026 at 1:59 PM", the same instant in US Pacific time. Nothing read the
+ * attribute until issue #49's code map found it.
+ *
+ * WE READ THE ATTRIBUTE AND NEVER THE TEXT. Two other captures (multiphoto, style-dims) have a bare
+ * <abbr class="timestamp"> reading "3 days ago" or "May 5, 2025" with no data-utime. The repo can't
+ * tell whether Facebook left it out or the scrub took it. Those cards keep the epoch: "May 5, 2025"
+ * has no time of day and no zone, so turning it into an instant would mean guessing both.
+ *
+ * WE TAKE THE FIRST <abbr> AND NO OTHER. It sits in the header's permalink anchor, ahead of the photos.
+ * That is the same document-order argument FB_PLUGIN_AVATAR makes. If the first one has no attribute,
+ * the post has no date here. A later <abbr> could belong to something else, so we don't go looking.
+ *
+ * IT GOES THROUGH uploadDateOrEpoch, the one range check. A junk value, an out-of-range value or
+ * anything before that file's 2005 floor comes out as the epoch, which is what an undated card has
+ * always shipped.
+ */
+const FB_PLUGIN_ABBR = /<abbr\s[^>]{0,600}>/
+const FB_PLUGIN_UTIME = /\sdata-utime="(\d{1,12})"/
+function fbPluginDate(html: string): Date {
+  const utime = (html.match(FB_PLUGIN_ABBR)?.[0] ?? '').match(FB_PLUGIN_UTIME)?.[1]
+  return utime ? uploadDateOrEpoch(Number(utime)) : new Date(0)
+}
 
 export function facebookPluginCard(html: unknown, ref: PostRef): Post | null {
   if (ref.p !== 'fb') return null
@@ -802,13 +831,11 @@ export function facebookPluginCard(html: unknown, ref: PostRef): Post | null {
     ref: { p: 'fb', kind: ref.kind, id: ref.id },
     canonical: permalink ? permalink[1] : fbPageUrl(ref as Extract<PostRef, { p: 'fb' }>),
     // No @-handle on this surface, same as the og: one — the renderers omit an empty handle rather
-    // than printing "(@)".
+    // than printing "(@)". The activity document still names the account: render/embed.ts's
+    // accountHandle reads the page's vanity from the ref or this url instead (issue #49).
     author: { name, handle: '', url: page || 'https://www.facebook.com' },
     text,
-    // NO DATE HERE EITHER. The plugin prints a RELATIVE age ("2d"), and a relative age cannot become a
-    // timestamp without knowing when the fragment was rendered. The epoch is what the other Facebook
-    // surfaces already use for absent, rather than a guessed "now" that would be a WRONG date.
-    createdAt: new Date(0),
+    createdAt: fbPluginDate(html),
     media: [...byId.values()].map(m => ({ kind: 'image' as const, url: m.url, w: m.w, h: m.h })),
     counts: {},
     sensitive: false,
