@@ -9,7 +9,7 @@ import { pickMedia, pickMediaEntry } from './media.ts'
 import { bytesIndex, byline, isSpoiler, mediaOf, mediaUrl, str, themeColor, usable } from './render/embed.ts'
 import { clampText, statParts } from './render/text.ts'
 import { proxyableVideoUrl, serveDirectVideo } from './mediaproxy.ts'
-import { parseRefKey, refKey } from './refkey.ts'
+import { PIN_ID, parseRefKey, refKey } from './refkey.ts'
 import { count, countWait, countMux, countStage, type Env, type GateReason, type MuxOutcome, type MuxStage } from './analytics.ts'
 import { MUX_GAVE_UP_NOTE, gaveUpIsFresh, muxFailKey, promisable, ytPromiseOn } from './muxpolicy.ts'
 import { runSmoke, smokeOutcome, SMOKE_CHECKS, SMOKE_CLIENT, type SmokeResult } from './smoke.ts'
@@ -58,7 +58,7 @@ import {
   normalizeFacebook, type FacebookMeta,
 } from './platforms/facebook/normalize.ts'
 import { fetchFacebookPage, fetchFacebookPageUrl } from './platforms/facebook/fetch.ts'
-import { fetchPinterest } from './platforms/pinterest/fetch.ts'
+import { fetchPinterest, resolvePinShortlink } from './platforms/pinterest/fetch.ts'
 import { normalizePinterest } from './platforms/pinterest/normalize.ts'
 import { fetchLemmy } from './platforms/lemmy/fetch.ts'
 import { normalizeLemmy } from './platforms/lemmy/normalize.ts'
@@ -189,6 +189,16 @@ export interface Deps {
    * and none of them requests a shortlink path.
    */
   resolveShortlink(p: 'tt', code: string, env: Env, client: ClientClass): Promise<ShortlinkResolution>
+  /**
+   * Resolve a pin.it code to the pin id it names, or null. Separate from resolveShortlink because the
+   * answer is an ID, not a Post: the pin is then fetched by the ordinary Pinterest path, so a pin.it
+   * link and a pasted /pin/{id} share one cache entry and one render, the way redditshare does it.
+   * See liveResolvePinShortlink.
+   *
+   * REQUIRED for resolveShortlink's reason. Every caller wraps it in try/catch (resolvePinRoute), so a
+   * .mjs Deps stub that omits it degrades to the unresolved answer instead of a 500.
+   */
+  resolvePinShortlink(code: string, env: Env, client: ClientClass): Promise<string | null>
   /**
    * Resolve a Reddit /s/ share link to a post ref + canonical permalink. Separate from
    * resolveShortlink because the INPUT is a full share url (not a bare code), the resolution is a
@@ -1387,6 +1397,59 @@ export async function liveResolveRedditShare(
   }
   if (resolved.kind !== 'post' || resolved.ref.p !== 'rd') return null
   return { ref: resolved.ref, canonical: resolved.canonical }
+}
+
+/**
+ * Resolve a pin.it code to a pin id. resolvePinShortlink (platforms/pinterest/fetch.ts) does the one hop
+ * and pinIdFromShortLocation decides what counts as an answer; this adds the counter.
+ *
+ * assert_fail IS COUNTED, not_a_pin IS NOT. The first is the shortener not answering at all, which is
+ * the signal that Pinterest changed or Cloudflare's egress is refused. The second is the shortener
+ * working, on a code that names a board or nothing. The route counts fetch_fail on top of either, as the
+ * post route does.
+ */
+export async function liveResolvePinShortlink(code: string, env: Env, client: ClientClass): Promise<string | null> {
+  const got = await resolvePinShortlink(code)
+  if (got.ok) return got.id
+  if (got.reason === 'assert_fail') count(env, 'pn', 'assert_fail', client)
+  return null
+}
+
+/**
+ * A pin.it code -> the ordinary pin route, or null. TOTAL: a resolver that throws, is missing from an
+ * injected Deps, or answers something that is not a pin id is the same miss, never a 500.
+ *
+ * The id goes back through route() so the ref and canonical come from router.ts pinterest() and nowhere
+ * else. That is safe here and NOT for the shortener's Location (see pinIdFromShortLocation): this url
+ * is one we build from a checked id, so the router being host-blind costs nothing.
+ */
+async function resolvePinRoute(
+  code: string, d: Deps, env: Env, client: ClientClass,
+): Promise<Extract<Route, { kind: 'post' }> | null> {
+  let id: string | null = null
+  try {
+    id = await d.resolvePinShortlink(code, env, client)
+  } catch {
+    id = null
+  }
+  if (typeof id !== 'string' || !PIN_ID.test(id)) return null
+  const r = route(new URL(`https://www.pinterest.com/pin/${id}/`))
+  return r.kind === 'post' && r.ref.p === 'pn' ? r : null
+}
+
+/**
+ * WHAT A HUMAN GETS WHEN A pin.it CODE WILL NOT RESOLVE: a plain-text 404 that says what to do. NOT a
+ * redirect to pin.it, which is what the TikTok arm falls back to: following pin.it lands on a url
+ * carrying `sender=`, the sharer's Pinterest user id, and someone who swapped our host in asked for
+ * the link to be cleaned. Nor the homepage, which would look like it worked. The words are the
+ * converter's old refusal, which is still true of this link.
+ */
+function pinShortUnresolved(): Response {
+  return new Response(
+    'pin.it hides the pin behind a random code, and this one didn\'t resolve. '
+      + 'Open it once and paste the full /pin/… link.\n',
+    { status: 404, headers: { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' } },
+  )
 }
 
 /**
@@ -4853,6 +4916,12 @@ async function unwrapToPost(
   }
 
   if (inner.kind === 'shortlink') {
+    /**
+     * pin.it FIRST, AND NOTHING BELOW IS ITS BUSINESS. Everything after this branch is TikTok's: the
+     * ['tt','th'] candidates, the gate and gone vocabulary. A pin.it code names one platform, so a miss
+     * is a plain miss, `inner` comes back untouched, and describeTarget answers it as Pinterest's.
+     */
+    if (inner.p === 'pn') return (await resolvePinRoute(inner.code, d, env, client)) ?? inner
     let got: Awaited<ReturnType<Deps['resolveShortlink']>> | null = null
     try {
       got = await d.resolveShortlink(inner.p, inner.code, env, client)
@@ -4943,6 +5012,21 @@ async function describeTarget(
   inner = await unwrapToPost(inner, d, env, client, unwrapped)
 
   if (inner.kind !== 'post') {
+    /**
+     * A pin.it CODE THAT DID NOT RESOLVE IS fetch_fail ON PINTEREST, the answer that matches the card:
+     * the render arm draws "Couldn't load this Pinterest post" for it. Never the TikTok chooser, which
+     * the branches below would hand any shortlink with candidates set (unwrapToPost sets none for pn,
+     * and this returns first anyway).
+     *
+     * `canonical` IS THE SHARE URL, as on the TikTok rows below and for their reason: it is the only url
+     * that exists before a code resolves, and docs/API.md promises a real `canonical` on every
+     * fetch_fail. It is the url the caller sent, so handing it back tells them nothing new. What must
+     * never happen is US following it or sending a person through it (the render arm's pn branch);
+     * this is JSON, and /_card does not even carry it.
+     */
+    if (inner.kind === 'shortlink' && inner.p === 'pn') {
+      return { ok: false, reason: 'fetch_fail', platform: 'pn', canonical: inner.canonical }
+    }
     /**
      * A WALLED SHORT LINK IS A WALL, NOT A NON-POST — and this is the divergence the shared pipeline
      * was built to stop, found 2026-08-11 while writing the OpenAPI spec.
@@ -5886,6 +5970,28 @@ async function serve(req: Request, env: Env, ctx: ExecutionContext, d: Deps): Pr
    *       UNFURL (it subtracts, and p/4/6 loses). Wait id `9` `5` nn mm + real id; code 5nnmm.
    *       `mediap` is a distinct slot so its urls never collide with m's — Discord caches a failed
    *       fetch per url for a while. p/0/0 is its positive control (a/0 and m/0 folded together).
+   *   `/_wait/d/{v}/{tag}/{facebook post path}` — THE DATELESS DOCUMENT (2026-11-25, issue #49).
+   *       Not a patience question, and the one surface that is not YouTube. Facebook's og: page
+   *       carries no post date, so production publishes the 1970 epoch as `created_at`. Leaving
+   *       the field out has waited on one caution, repeated in three places and never measured:
+   *       that Discord refuses a status without it. The head is the ORDINARY production head for
+   *       that path, rendered by re-entering handle() with the query kept (`/photo/?fbid=` names
+   *       its post there), and exactly one thing in it changes: the activity link's id becomes
+   *       `9` `6` `0{v}` + the real id. v=0 is the control: the document is today's, byte for
+   *       byte, under the wait id. v=1 is the variant: `created_at` and `account.created_at` are
+   *       deleted and nothing else is. Paste them in TWO SEPARATE messages: both cards carry the
+   *       same og:url and status url (the Facebook permalink), and Discord's client can fold
+   *       embeds that share a url into one gallery card, which would hide whether the variant drew
+   *       at all (review, 2026-11-25; the folding is reported, not measured here). And the post
+   *       may carry more than one image, so expect a picture per attachment. The control draws today's card
+   *       dated 1970. A variant that draws the same card with its picture and no date says the
+   *       field can go; one that draws the head-only card (this head has no og:image, so that one
+   *       shows no picture) says Discord needs it. The `wait_api` row (600 control, 601 variant)
+   *       separates "fetched and refused" from "never fetched". Unlike the YouTube surfaces, no
+   *       label goes into the head: the two heads differ by the id alone, so a difference between
+   *       the cards can only come from the document. The {tag} is required because the head url
+   *       is the only url a retry can change. The activity id is the same under every tag, so a
+   *       retry that leaves no new row was answered without fetching the document again.
    *
    * WHY THIS EXISTS (2026-08-31). The owner's verdict on 1.14.0's stock player: it re-wraps the
    * YouTube playback Discord already has, which is a stopgap and not the goal. The goal is the
@@ -5923,17 +6029,21 @@ async function serve(req: Request, env: Env, ctx: ExecutionContext, d: Deps): Pr
     // above the router, because the router would otherwise hand a `9…` id to decodeStatusId and
     // 404 it — and because the handle segment is decoration the router discards, which is why
     // the experiment cannot ride there if Discord rewrites onto /api/v1/.
-    const wsid = /^\/(users\/[^/]+|api\/v1)\/statuses\/(9(?:([1-4])(\d\d)|(5)(\d\d)(\d\d))(1\d+))$/.exec(url.pathname)
+    // Surface 6 is d, and only with 00 or 01 after it (the lookahead): d is a control and one
+    // variant, not a number to sweep. Any other `96nn…` id is still not a wait id, so it reaches
+    // the router and 404s exactly as it did before d existed.
+    const wsid = /^\/(users\/[^/]+|api\/v1)\/statuses\/(9(?:([1-4]|6(?=0[01]))(\d\d)|(5)(\d\d)(\d\d))(1\d+))$/.exec(url.pathname)
     if (wsid) {
       const [, path, waitSid, sdigit4, ns4, sdigit5, nds, nms, realSid] = wsid
-      const surface = sdigit5 ? 'p' : ({ '1': 'a', '2': 'm', '3': 'b', '4': 'c' } as const)[sdigit4 as '1' | '2' | '3' | '4']
+      const surface = sdigit5 ? 'p' : ({ '1': 'a', '2': 'm', '3': 'b', '4': 'c', '6': 'd' } as const)[sdigit4 as '1' | '2' | '3' | '4' | '6']
       // p carries two holds, the document's and the video's; the others carry one, and for them
       // the document hold is the surface's own number (only a uses it).
       const n = Number(sdigit5 ? nms : ns4)
       const ndoc = Number(sdigit5 ? nds : ns4)
       if (n > 60 || ndoc > 60) return new Response('n is 0-60', { status: 400 })
       // The wait code is every digit between the `9` and the real id, as one number: 105 = a/5,
-      // 50406 = p/4/6. One rule for all six surfaces, so any row reads back to its url.
+      // 50406 = p/4/6, 601 = d's variant. One rule for every surface, so any row reads back to
+      // its url.
       const code = Number(waitSid.slice(1, waitSid.length - realSid.length))
       // Which path Discord fetches a status from was asserted in this codebase for months and
       // measured on 2026-09-02: /api/v1/ every time (5 of 5 real crawls), the advertised /users/
@@ -5951,6 +6061,34 @@ async function serve(req: Request, env: Env, ctx: ExecutionContext, d: Deps): Pr
       // as its first key, so this touches the top-level id and nothing else; the real id is a
       // 40-odd digit string that occurs nowhere else in the document.
       let body = (await real.text()).replace(`{"id":"${realSid}"`, `{"id":"${waitSid}"`)
+      if (surface === 'd') {
+        // No hold and no /_media/ rewrite: d asks about one field, so the media must be exactly
+        // the media production serves. The control (n = 0) stops at the id rewrite. The variant
+        // drops both dates, because toMastodonStatus writes the post's date into both, and a
+        // document that kept either one would still be carrying the 1970 value under test.
+        // Parsed and re-serialised rather than cut out with a regex: JSON.stringify of
+        // JSON.parse of Response.json's output is the same bytes less the deleted keys, and a
+        // regex over a caption that happens to contain `"created_at":` could cut the wrong one.
+        if (n === 1) {
+          let doc: Record<string, unknown>
+          try {
+            doc = JSON.parse(body) as Record<string, unknown>
+          } catch {
+            return new Response('the activity document was not JSON', { status: 502, headers: { 'cache-control': 'no-store' } })
+          }
+          delete doc.created_at
+          const account = doc.account
+          if (account && typeof account === 'object') delete (account as Record<string, unknown>).created_at
+          body = JSON.stringify(doc)
+        }
+        const heads = new Headers(real.headers)
+        heads.delete('content-length')
+        // no-store, like every experiment head: a cached answer would make a retry re-read the
+        // first crawl. Set on d alone, so the other surfaces keep the headers their recorded
+        // readings were taken with.
+        heads.set('cache-control', 'no-store')
+        return new Response(body, { status: 200, headers: heads })
+      }
       if (surface !== 'a') {
         // Only VIDEO urls (/_media/{key}/{digits}) carry the stall. Poster (/p0) and avatar
         // segments stay on the real route, so the card's imagery cannot confound the reading —
@@ -6077,6 +6215,47 @@ async function serve(req: Request, env: Env, ctx: ExecutionContext, d: Deps): Pr
       heads.delete('content-range')
       heads.delete('accept-ranges')
       return new Response(readable, { status: 200, headers: heads })
+    }
+    // d's HEAD: the production head for a Facebook post path, with only its activity id changed.
+    // See the block comment for the question it asks.
+    const wd = /^\/_wait\/d\/([01])\/[\w-]{1,24}(\/.*)$/.exec(url.pathname)
+    if (wd) {
+      const [, v, tail] = wd
+      const noStore = { 'cache-control': 'no-store' }
+      // Concatenated, never new URL(tail, origin): a tail spelled `//other.host/…` would be read as
+      // a host there, and every link in the head is built from the request's origin.
+      const target = `${url.origin}${tail}${url.search}`
+      // ONLY A FACEBOOK POST, checked before re-entering. handle() answers every route, and this
+      // reads a 200 into memory: an unchecked tail could buffer a whole video off /_media/, or
+      // nest /_wait/ surfaces inside each other. A gallery mode is refused because it moves the
+      // id's sentinel off `1`, and `direct` because that answer is a file, not a head.
+      const tr = route(new URL(target))
+      if (tr.kind !== 'post' || tr.ref.p !== 'fb' || tr.gallery || tr.direct) {
+        return new Response('the d surface takes a Facebook post path', { status: 404, headers: noStore })
+      }
+      const real = await handle(new Request(target, { headers: req.headers }), env, ctx, d)
+      // Unchanged when it is not a card: a human gets production's redirect to Facebook, and a
+      // failure answer is the measurement's to show, not this route's to hide.
+      if (real.status !== 200) return real
+      if (!(real.headers.get('content-type') || '').startsWith('text/html')) {
+        void real.body?.cancel()
+        return new Response('the post did not answer with a head', { status: 422, headers: noStore })
+      }
+      const head = await real.text()
+      // The link discord.ts emits for every Discord head except the stock one. EXACTLY ONE, with
+      // the `1` sentinel, or the experiment refuses: a head it cannot mark would come back as a
+      // second control, and two identical cards would read as "the field is not needed".
+      const act = /(type="application\/activity\+json" href="[^"]*\/statuses\/)(1\d+)"/g
+      if ((head.match(act) || []).length !== 1) {
+        return new Response('the head has no activity link this experiment can mark', { status: 422, headers: noStore })
+      }
+      // The /_oembed/ link keeps the real id. It carries no date, so both cards share it.
+      // A function, not `$1960…`: in a replacement string that reads as a request for group 19.
+      const body = head.replace(act, (_, pre: string, sid: string) => `${pre}960${v}${sid}"`)
+      const heads = new Headers(real.headers)
+      heads.delete('content-length')
+      heads.set('cache-control', 'no-store')
+      return new Response(body, { status: 200, headers: heads })
     }
     // p takes two holds (document, then video); the others one. Parsed into one shape so the head
     // below is the same head for all six surfaces, which is what makes their cards comparable.
@@ -7211,6 +7390,42 @@ async function serve(req: Request, env: Env, ctx: ExecutionContext, d: Deps): Pr
 
     case 'shortlink': {
       /**
+       * pin.it, `/pin.it/{code}`: RESOLVED FOR EVERY CLIENT, then the ordinary pin path. Branched off
+       * before a line of the TikTok arm below runs, because none of it applies: no ['tt','th'] chooser
+       * (the code names Pinterest outright), no short-code caches (the pin itself is cached by ref in
+       * renderPostRoute, so a pin.it link and a pasted /pin/{id} share one entry and draw one card), and
+       * no fallback to the share url for a human.
+       *
+       * THE HUMAN NEVER SEES pin.it. Resolved, they are sent to the bare pinterest.com/pin/{id}/;
+       * unresolved, they get a plain-text 404 saying what to do (pinShortUnresolved has why not a
+       * redirect). The TikTok arm falls back to the share url; this one must not, because the url pin.it
+       * lands on carries `sender=`, the sharer's Pinterest user id (measured 2026-11-25).
+       *
+       * THE d. HOST AND `.mp4` come through renderPostRoute's own short-circuit, the convergence its
+       * comment describes, since this arm ends there with the resolved ref. An unresolved direct request
+       * gets the plain-text 404 every direct miss gets. Guest hosts serve this route (guesthost.ts
+       * guestServes allows 'shortlink'), with no code of their own here.
+       *
+       * EACH RENDER COSTS ONE SHORTENER HOP, like redditshare and metashare, which also re-resolve on
+       * every render. The answer is ~256 bytes and the pin fetch behind it is cached.
+       */
+      if (r.p === 'pn') {
+        const pin = await resolvePinRoute(r.code, d, env, client)
+        if (!pin) {
+          count(env, 'pn', 'fetch_fail', client)
+          if (direct) return directNotFound('this pin.it link could not be resolved to a pin')
+          if (client === 'human') return pinShortUnresolved()
+          // canonical: null, so nothing on the card links back to pin.it. platform 'pn' makes it the calm
+          // "Couldn't load this Pinterest post" rather than the red "Not found" for a link we don't handle.
+          return render(
+            { kind: 'failure', canonical: null, platform: 'pn', reason: 'could not resolve this pin.it link' },
+            client, origin,
+          )
+        }
+        if (!direct && client === 'human') return redirect(pin.canonical)
+        return renderPostRoute(pin.ref, pin.canonical, d, env, ctx, client, origin, direct)
+      }
+      /**
        * A HUMAN IS RESOLVED, AND THE SHARE CODE IS NOT FORWARDED. Reversed 2026-07-30; the previous
        * reasoning is kept below because it was correct about cost and wrong about what it cost.
        *
@@ -7287,8 +7502,10 @@ async function serve(req: Request, env: Env, ctx: ExecutionContext, d: Deps): Pr
        * whatever the resolver returned. The indirection is what keeps the declared type honest.
        */
       const seen: { at: ShortlinkResolution } = { at: { kind: 'unresolved' } }
-      const { post } = await loadPost(shortPostCacheKey(r.p, r.code), async () => {
-        const got = await d.resolveShortlink(r.p, r.code, env, client)
+      // Copied out because the pn return above narrows `r.p` here but not inside the closure below.
+      const tt = r.p
+      const { post } = await loadPost(shortPostCacheKey(tt, r.code), async () => {
+        const got = await d.resolveShortlink(tt, r.code, env, client)
         seen.at = got
         // `got?.kind` rather than `got.kind`, and the ?. is not decoration: the TYPE says this is
         // always a ShortlinkResolution, but a Deps is injected and .mjs tests are never checked
@@ -7427,6 +7644,7 @@ const liveDeps = (cache: CacheLike = caches.default as unknown as CacheLike): De
   fetchProfile: liveFetchProfile,
   resolveShortlink: liveResolveShortlink,
   resolveRedditShare: liveResolveRedditShare,
+  resolvePinShortlink: liveResolvePinShortlink,
   resolveMetaShare,
 })
 

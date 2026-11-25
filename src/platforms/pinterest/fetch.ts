@@ -1,6 +1,7 @@
 import type { PostRef } from '../../types.ts'
-import { PIN_ID } from '../../refkey.ts'
+import { PIN_ID, PIN_SHORT_CODE } from '../../refkey.ts'
 import { askTwice } from '../../fetchretry.ts'
+import { pinIdFromShortLocation } from './normalize.ts'
 
 /**
  * I/O ONLY. Pinterest's own web-app resource endpoint, unauthenticated and cookie-free.
@@ -137,4 +138,57 @@ export async function fetchPinterest(ref: Extract<PostRef, { p: 'pn' }>): Promis
   // that carry no pin at all.
   if (!pin || typeof pin.id !== 'string') return { ok: false, reason: 'assert_fail' }
   return { ok: true, pin }
+}
+
+/**
+ * A pin.it RESOLUTION. `not_a_pin` is the shortener answering and naming something other than a pin (a
+ * board, or the homepage it sends every unknown code to); `assert_fail` is no usable answer at all (a
+ * 200 page, a 404, a block, a thrown fetch). The worker counts the second, because that one means WE
+ * are blind, not that the link names no pin.
+ */
+export type PinShortResolution =
+  | { ok: true; id: string }
+  | { ok: false; reason: 'not_a_pin' | 'assert_fail' }
+
+/**
+ * Resolve a pin.it code to the pin id it names. I/O ONLY: the reading is pinIdFromShortLocation's, in
+ * normalize.ts, where the accept and reject cases are tested without a network.
+ *
+ * ONE HOP, NOT TWO, by asking the shortener directly. Measured 2026-11-25 from the development host
+ * (not a Worker): `pin.it/{code}` answers 308 to `api.pinterest.com/url_shortener/{code}/redirect/` for
+ * ANY code, real or invented, so that first hop carries no information. The second answers 302 with the
+ * pin's url. Same answer with no user-agent, curl/8 and a desktop Chrome, and for HEAD as for GET.
+ *
+ * NOT MEASURED FROM CLOUDFLARE EGRESS. CLAUDE.md lists three upstreams that answered a laptop and did
+ * nothing from a Worker. If pin.it cards fail in production while this file's tests pass, measure this
+ * call from a Worker before blaming the code; `pn` assert_fail climbing is the sign.
+ *
+ * redirect: 'manual', because the Location IS the answer: following it would fetch the pin page, carry
+ * the sharer's `sender` id to Pinterest a second time, and still leave us reading a url. Through
+ * askTwice like every platform fetch: a 429 or a 5xx from the shortener is about this request, and a
+ * second ask can win it (see fetchretry.ts). A 302 comes back at once and is never asked twice.
+ *
+ * The user-agent is BROWSER_UA although every UA measured the same today, because PinResource above
+ * began refusing UA-less requests between two measurements, unannounced. Sending one costs nothing.
+ *
+ * The code is checked against PIN_SHORT_CODE before anything is sent. Only [A-Za-z0-9] passes it, so it
+ * goes into the path as it is. It is never lowercased: codes are case-sensitive.
+ */
+export async function resolvePinShortlink(code: string): Promise<PinShortResolution> {
+  if (!PIN_SHORT_CODE.test(code)) return { ok: false, reason: 'assert_fail' }
+  let res: Response
+  try {
+    res = await askTwice(`https://api.pinterest.com/url_shortener/${code}/redirect/`, {
+      headers: { 'user-agent': BROWSER_UA },
+      redirect: 'manual',
+    })
+  } catch {
+    return { ok: false, reason: 'assert_fail' }
+  }
+  // The body is never read: on every answer that matters it is a 256-byte "Redirecting" stub, and an
+  // unread, uncancelled body holds its stream open for the life of the request.
+  res.body?.cancel().catch(() => {})
+  if (res.status < 300 || res.status > 399) return { ok: false, reason: 'assert_fail' }
+  const id = pinIdFromShortLocation(res.headers.get('location'))
+  return id ? { ok: true, id } : { ok: false, reason: 'not_a_pin' }
 }

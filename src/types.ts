@@ -243,11 +243,12 @@ export type PostRef =
    * `/pin/{slug}--{id}/` (verified — an invented slug returns the same pin), and every regional
    * domain serves the same id, so neither belongs in the ref.
    *
-   * `pin.it/{code}` IS DELIBERATELY ABSENT. It is an opaque short code that names no pin until a
-   * network hop resolves it, and once the host is replaced it collapses to a BARE /{code} at depth 1
-   * — the shape the ambiguity chooser already owns. It would need the async-resolver treatment
-   * /t/{code} gets, and no live code could be captured to measure the success path, so it is an
-   * honest notfound rather than a guess.
+   * `pin.it/{code}` IS STILL ABSENT FROM THIS REF, though it routes now. It is an opaque short code
+   * that names no pin until a network hop resolves it, so it rides the 'shortlink' Route (spelled
+   * `/pin.it/{code}`, because a host swap alone collapses it to the bare /{code} the ambiguity chooser
+   * owns) and only the resolved numeric id ever reaches this arm. Until 2026-11-25 it was refused
+   * outright because no live code had been captured to measure the success path; the owner's report
+   * supplied one. See router.ts pinShortlink().
    */
   | { p: 'pn'; id: string }
 
@@ -720,8 +721,18 @@ export type Route =
    *
    * `canonical` is the short URL itself, so a human costs us zero upstream fetches — it resolves
    * in their browser exactly as it does in ours.
+   *
+   * 'pn' IS THE SECOND RESOLVER (2026-11-25): `/pin.it/{code}`, Pinterest's share link, which names
+   * one platform and needs no chooser. The two share a kind because they are the same thing to every
+   * consumer that only asks "does this name a post yet" (guesthost.ts, the router's suffix layer,
+   * /_prep). The worker branches on `p` FIRST, before any TikTok vocabulary (the ['tt','th']
+   * chooser, the short-code caches), and the pn arm never sends a human to `canonical`: following
+   * pin.it lands on a url carrying the sharer's Pinterest user id. See router.ts pinShortlink().
+   *
+   * ONE ARM WITH A UNION `p`, not one arm per platform: test/prep.test.mjs reads the kinds out of
+   * this union, and a second 'shortlink' arm would list the kind twice.
    */
-  | { kind: 'shortlink'; p: 'tt'; code: string; canonical: string; direct?: true }
+  | { kind: 'shortlink'; p: 'tt' | 'pn'; code: string; canonical: string; direct?: true }
   /**
    * Reddit's mobile-app "copy link" share form — /r/{sub}/s/{code} (or /user/{name}/s/{code}). Like
    * 'shortlink' the {code} is an OPAQUE token that names no post until a network hop resolves it, so

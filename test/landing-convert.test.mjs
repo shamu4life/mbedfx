@@ -44,6 +44,7 @@ function loadConverter() {
     convert: mbedfxConvert, defaultHost: mbedfxDefaultHost, mediaOnly: mbedfxMediaOnly,
     repoint: mbedfxRepoint, isGuest: mbedfxIsGuest, pageGuests: GUEST_HOSTS, publicHosts: PUBLIC_HOSTS,
     ourHosts: OUR_HOSTS, prepResolved: mbedfxPrepResolved,
+    pinId: mbedfxPinId, pinShortCode: PIN_SHORT_CODE, pinRefusal: PIN_IT_REFUSAL,
   }`)()
 }
 
@@ -56,7 +57,10 @@ function loadPlatformTable() {
   return new Function(`const MONO = 'var(--brand-mono)'; return ${m[1]}`)()
 }
 
-const { convert, defaultHost, mediaOnly, repoint, isGuest, pageGuests, publicHosts, ourHosts, prepResolved } = loadConverter()
+const {
+  convert, defaultHost, mediaOnly, repoint, isGuest, pageGuests, publicHosts, ourHosts, prepResolved,
+  pinId, pinShortCode, pinRefusal,
+} = loadConverter()
 const PLATFORMS = loadPlatformTable()
 
 /** Display name on the embed -> the platform code the router mints. */
@@ -359,16 +363,194 @@ test('THE UNSUPPORTED SHORTENERS ARE REFUSED WITH A REASON, NOT A BROKEN LINK', 
    * a site. Emitting a link anyway would produce a card that fails — worse than saying so up front.
    * Each refusal must explain what to do instead.
    */
+  /**
+   * REWRITTEN 2026-11-25. This listed `https://pin.it/3xK9dLm` as a link to refuse, because nothing in a
+   * pin.it path names a pin. The worker now resolves the code (router.ts pinShortlink(), the pn arm in
+   * worker.ts), so a well-shaped pin.it link converts and is pinned in the pin.it test below. What is
+   * still refused is a pin.it link whose code is not a code (PIN_SHORT_CODE), with the old explanation.
+   */
   for (const paste of [
     'https://vm.tiktok.com/ZMhqBqQFa/',
     'https://vt.tiktok.com/ZSMhqBqQF/',
     'https://fb.watch/x1Y2z3A4b/',
-    'https://pin.it/3xK9dLm',
+    'https://pin.it/3xK',
+    'https://pin.it/3xK9dLm/extra',
   ]) {
     const r = convert(paste, 'mbedfx.app')
     assert.equal(r.ok, false, `${paste} must be refused rather than mis-converted`)
     assert.ok(r.why && r.why.length > 30, `${paste} must explain itself, got: ${r.why}`)
   }
+})
+
+test('A PINTEREST "SHARED WITH YOU" LINK COMES OUT AS THE BARE /pin/{id}, without sent or the tracking', () => {
+  /**
+   * Reported 2026-11-25: pinterest.com/pin/{id}/sent/?invite_code=…&sender=…&sfo=1 converted to
+   * /pin/{id}/sent. The query was already gone and the worker already read `sent` as a UI hint, so the
+   * card was right, but the link handed out still carried the word. Every id here is invented.
+   */
+  const id = '8800000000000000501'
+  for (const paste of [
+    `https://www.pinterest.com/pin/${id}/sent/?invite_code=feedfacecafe0000&sender=777000000000000123&sfo=1`,
+    `https://www.pinterest.com/pin/${id}/sent`,
+    `https://www.pinterest.com/pin/${id}/`,
+    `https://pinterest.com/pin/${id}`,
+    `https://www.pinterest.com/pin/a-made-up-slug--${id}/`,
+    `https://www.pinterest.com/pin/${id}/feedback/`,
+    `https://www.pinterest.com/pin/${id}/visual-search/?x=1`,
+    `https://de.pinterest.com/pin/${id}/sent/`,
+    `https://www.pinterest.co.uk/pin/${id}/sent/`,
+    `https://www.pinterest.com.au/pin/${id}/sent/`,
+  ]) {
+    for (const host of ['mbedfx.app', ...GUEST_HOSTS]) {
+      const r = convert(paste, host)
+      assert.equal(r.url, `https://${host}/pin/${id}`, paste)
+      assert.equal(r.code, 'pn')
+      assert.deepEqual(routed(r.path).ref, { p: 'pn', id }, `${r.url} is the same pin`)
+    }
+  }
+  // The gallery box still adds its mode to a pin, as before.
+  assert.equal(convert(`https://www.pinterest.com/pin/${id}/sent/`, 'mbedfx.app', 'stills').path, `/pin/${id}/p`)
+})
+
+test('A /pin/ SHAPE THE ROUTER DOES NOT READ IS PASSED THROUGH AS IT WAS, never given an invented canonical', () => {
+  // These are not pins to the worker, so the converter must not rewrite them into one.
+  for (const p of [
+    '/pin/8800000000000000511/comments',      // an unknown trailing segment
+    '/pin/8800000000000000512/sent/extra',    // depth 4
+    '/pin/0880000000000000513/sent',          // a zero-led id
+    '/pin/1234/sent',                         // too short to be an id
+    '/pin/not-a-pin/sent',
+  ]) {
+    const r = convert(`https://www.pinterest.com${p}/`, 'mbedfx.app')
+    assert.equal(r.path, p, `${p} is left alone`)
+  }
+})
+
+test('A PIN LINK PASTED BACK FROM ONE OF OUR OWN HOSTS DROPS /sent TOO, not only one pasted from pinterest.com', () => {
+  /**
+   * Review, 2026-11-25: the canonicalisation ran only in the direct-host branch, so the links the old
+   * converter handed out (/pin/{id}/sent on a guest host), and a pinterest link with only its host
+   * swapped by hand, came back unchanged as "already an mbedfx link", /sent and all. That is the
+   * exact link the owner reported.
+   */
+  const id = '8800000000000000531'
+  for (const from of ['mbedfx.app', ...GUEST_HOSTS, `d.${GUEST_HOSTS[0]}`]) {
+    for (const p of [`/pin/${id}/sent`, `/pin/${id}/sent/?invite_code=feedfacecafe0000&sender=777000000000000123&sfo=1`,
+      `/pin/slug--${id}/feedback/`, `/pin/${id}/visual-search/p`, `/pin/${id}`]) {
+      const r = convert(`https://${from}${p}`, 'mbedfx.app')
+      assert.equal(r.path, `/pin/${id}`, `${from}${p}`)
+      assert.deepEqual(routed(r.path).ref, { p: 'pn', id })
+      assert.doesNotMatch(r.url, /sent|invite_code|sender|sfo/)
+    }
+  }
+  // The forced twin keeps its token, and a shape the router does not read still passes through.
+  assert.equal(convert(`https://mbedfx.app/pn/pin/${id}/sent`, 'mbedfx.app').path, `/pn/pin/${id}`)
+  assert.equal(convert(`https://mbedfx.app/pin/${id}/comments`, 'mbedfx.app').path, `/pin/${id}/comments`)
+  // And the gallery box still adds its mode afterwards.
+  assert.equal(convert(`https://mbedfx.app/pin/${id}/sent`, 'mbedfx.app', 'stills').path, `/pin/${id}/p`)
+})
+
+test('THE FORCED /pn/pin.it/{code} TWIN TAKES NO GALLERY MODE, like the plain short link', () => {
+  // Review, 2026-11-25: withGallery exempted /pin.it/{code} but not /pn/pin.it/{code}, so "all as
+  // stills" handed out /pn/pin.it/{code}/p, which the router reads as notfound on every host.
+  for (const gallery of ['stills', 'videos']) {
+    const r = convert('https://mbedfx.app/pn/pin.it/Zq7Wv3Kp9', 'mbedfx.app', gallery)
+    assert.equal(r.path, '/pn/pin.it/Zq7Wv3Kp9', gallery)
+    assert.notEqual(routed(r.path).kind, 'notfound')
+  }
+})
+
+test('mbedfxPinId READS EXACTLY THE /pin/ SHAPES router.ts pinterest() READS', () => {
+  // The page keeps a copy of the router's rule (no build step). Held equal over a sweep of spellings.
+  const ids = ['8800000000000000521', '12345', '1234', '0880000000000000522', '1'.repeat(23), 'abc']
+  const seconds = ids.flatMap(i => [i, `slug--${i}`, `a--b--${i}`, `${i}--slug`])
+  // Not 'p' or 'v': those are the router's gallery suffix, peeled before pinterest() runs. A pasted
+  // pinterest.com/pin/{id}/p is passed through unchanged, as it was before mbedfxPinId existed.
+  const thirds = [null, 'sent', 'feedback', 'visual-search', 'comments', 'clip', '']
+  for (const s of seconds) {
+    for (const t of thirds) {
+      const seg = t === null ? ['pin', s] : ['pin', s, t].filter(Boolean)
+      const r = routed('/' + seg.join('/'))
+      const want = r.kind === 'post' && r.ref.p === 'pn' ? r.ref.id : null
+      assert.equal(pinId(seg), want, seg.join('/'))
+    }
+  }
+})
+
+test('pin.it/{code} CONVERTS TO /pin.it/{code}, THE PINTEREST SHORT LINK, with its case kept and its tracking dropped', () => {
+  /**
+   * The code names no pin until the worker asks Pinterest's shortener, so "routes to a post" is the wrong
+   * assertion here, as for /t/{code}: it must reach the resolver, and prep() then swaps it for /pin/{id}.
+   * Codes are case-sensitive (measured 2026-11-25), so the code must come out exactly as pasted.
+   */
+  for (const [paste, code] of [
+    ['https://pin.it/Rq7Lm3Zx9', 'Rq7Lm3Zx9'],
+    ['pin.it/Rq7Lm3Zx9', 'Rq7Lm3Zx9'],
+    ['https://pin.it/Rq7Lm3Zx9/', 'Rq7Lm3Zx9'],
+    ['https://pin.it/Ab3dE5f?utm_source=share', 'Ab3dE5f'],
+    ['https://www.pin.it/AbCdEfG1', 'AbCdEfG1'],
+  ]) {
+    for (const host of ['mbedfx.app', ...GUEST_HOSTS]) {
+      for (const gallery of [undefined, 'stills']) {
+        const r = convert(paste, host, gallery)
+        assert.equal(r.ok, true, `${paste} converts`)
+        assert.equal(r.url, `https://${host}/pin.it/${code}`, `${paste} on ${host}${gallery ? ', all as stills' : ''}`)
+        assert.equal(r.code, 'pn')
+        const got = route(new URL(r.url))
+        assert.deepEqual([got.kind, got.p, got.code], ['shortlink', 'pn', code], `${r.url} reaches the pin.it resolver`)
+        assert.ok(guestServes(got), 'on every host the page offers')
+        assert.ok(!r.url.includes('utm_'), 'and the tracking is gone')
+      }
+    }
+  }
+  // A code that is not a code keeps the refusal this branch used to give every pin.it link.
+  for (const bad of ['https://pin.it/', 'https://pin.it/Ab3', 'https://pin.it/Ab3-dE5f', 'https://pin.it/a/b']) {
+    const r = convert(bad, 'mbedfx.app')
+    assert.equal(r.ok, false, bad)
+    assert.equal(r.why, pinRefusal, `${bad}: the old explanation`)
+  }
+})
+
+test('THE PAGE\'S PIN_SHORT_CODE IS refkey.ts\'s, character for character', () => {
+  const refkey = readFileSync(new URL('../src/refkey.ts', import.meta.url), 'utf8')
+  const src = (refkey.match(/export const PIN_SHORT_CODE = (\/.*\/)\n/) || [])[1]
+  assert.ok(src, 'refkey.ts still declares PIN_SHORT_CODE')
+  assert.equal(pinShortCode.source, src.slice(1, -1), 'the converter and the router accept the same codes')
+})
+
+test('A RESOLVED pin.it LINK STAYS RESOLVED ACROSS DOMAIN AND MEDIA-ONLY TOGGLES, the way a TikTok one does', () => {
+  /**
+   * resolvedTo is keyed on the BASE path the page asked about. For that to hold, the path must not change
+   * with any toggle: the domain moves the host, media only adds `d.` to the host, and all as stills adds
+   * nothing to a short link (withGallery). If any of them changed the path, render() would miss the
+   * entry and put the share code back on screen. The /_prep answer, re-pointed, must name the pin and be
+   * served on every host.
+   */
+  const asked = convert('https://pin.it/Rq7Lm3Zx9', 'mbedfx.app').url
+  const key = asked.slice(asked.indexOf('/', 8))
+  const answer = 'https://mbedfx.app/pin/8800000000000000531/'
+  assert.equal(prepResolved(asked, answer), true, 'the answer is filed as a resolution')
+  for (const host of [...publicHosts, 'forsen.sex']) {
+    for (const gallery of [undefined, 'stills']) {
+      const r = convert('https://pin.it/Rq7Lm3Zx9', host, gallery)
+      assert.equal(r.url.slice(r.url.indexOf('/', 8)), key, `${host}${gallery ? ' stills' : ''}: same key, so render() finds the answer`)
+    }
+    for (const on of [false, true]) {
+      const shown = repoint(answer, host, on)
+      assert.equal(shown, `https://${on ? 'd.' : ''}${host}/pin/8800000000000000531/`)
+      assert.deepEqual(route(new URL(shown)).ref, { p: 'pn', id: '8800000000000000531' })
+      assert.ok(!shown.includes('Rq7Lm3Zx9'), 'the code is not put back')
+    }
+  }
+})
+
+test('A pin.it CODE /_prep COULD NOT RESOLVE SHOWS THE OLD REFUSAL, and keeps showing it through the toggles', () => {
+  // The DOM half cannot run here, so its decision is pinned by text, as the resolvedTo tests above are.
+  assert.match(HTML, /if \(!j\.ok && j\.reason === 'shortlink' && isPinShort\(path\)\) \{\s+pinUnresolved\[path\] = true;/)
+  assert.match(HTML, /: pinUnresolved\[r\.path\] \? chip \+ '\. ' \+ esc\(PIN_IT_REFUSAL\)/,
+    'render() reads it back, so a domain or media-only click keeps the warning')
+  assert.equal((HTML.match(/pinUnresolved\[[^\]]+\] = /g) || []).length, 1, 'filed in one place')
+  assert.ok(pinRefusal.length > 30 && !/—|\byou\b/i.test(pinRefusal), 'visible copy, held to the page rules')
 })
 
 test('THE THINGS THE PAGE SAYS WON\'T WORK ARE ALSO REFUSED BY THE CONVERTER', () => {
@@ -1489,7 +1671,10 @@ test('AN ANSWER THAT RESOLVED NOTHING IS NOT FILED, so a domain click cannot cap
   assert.match(HTML, /var resolved = mbedfxPrepResolved\(url, j\.url\);\s+if \(resolved\) resolvedTo\[path\] = j\.url;/)
   assert.equal((HTML.match(/resolvedTo\[[^\]]+\] = /g) || []).length, 1, 'nothing else files an answer')
   assert.match(HTML, /var known = resolvedTo\[r\.url\.slice\(r\.url\.indexOf\('\/', 8\)\)\];/)
-  assert.match(HTML, /note\.innerHTML = known\s+\? chip \+ '\. Share link resolved to the real post\.'\s+: chip \+ \(r\.note \? ' ' \+ esc\(r\.note\) : \(r\.platform \? '\. Ready to paste\.' : ''\)\);/,
+  // REWRITTEN 2026-11-25: a middle arm now reads pinUnresolved, which only a pin.it path that /_prep
+  // could not resolve is filed in (pinned in its own test). For every other link it is empty, so the
+  // line still falls through to "Ready to paste." exactly as this pinned before.
+  assert.match(HTML, /note\.innerHTML = known\s+\? chip \+ '\. Share link resolved to the real post\.'\s+: pinUnresolved\[r\.path\] \? chip \+ '\. ' \+ esc\(PIN_IT_REFUSAL\)\s+: chip \+ \(r\.note \? ' ' \+ esc\(r\.note\) : \(r\.platform \? '\. Ready to paste\.' : ''\)\);/,
     'so with nothing filed the line reads "Ready to paste."')
 
   // The flow, with the page's own functions. A plain post is pasted on mbedfx.app and /_prep echoes

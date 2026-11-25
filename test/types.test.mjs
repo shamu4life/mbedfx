@@ -26,9 +26,11 @@ test('Platform covers exactly the supported platforms (six day-one, YouTube, Fac
    * instance therefore lives in the URL path, and refkey.ts shape-checks it because it becomes the
    * ORIGIN of a request rather than a path component of a fixed one.
    *
-   * 'pn' (2026-07-27) is Pinterest. `pin.it/{code}` is DELIBERATELY ABSENT: it is an opaque short
-   * code that collapses to a bare /{code} once the host is replaced — the shape the ambiguity chooser
-   * already owns — and no live code could be captured to measure its success path.
+   * 'pn' (2026-07-27) is Pinterest. `pin.it/{code}` gets no code of its own here: it is an opaque
+   * short code, routed since 2026-11-25 as a 'shortlink' with p 'pn' (spelled `/pin.it/{code}`,
+   * because a host swap alone collapses it to the bare /{code} the ambiguity chooser owns), and only
+   * the pin id it resolves to ever becomes a 'pn' ref. Until then it was refused, because no live
+   * code had been captured to measure its success path.
    */
   const m = src.match(/export type Platform =([^\n]+)/)
   assert.ok(m, 'Platform type must exist')

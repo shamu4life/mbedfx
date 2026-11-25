@@ -390,7 +390,7 @@ paste plays.
 | `yt` | YouTube | `youtube.com` · `youtu.be` |
 | `fb` | Facebook | `facebook.com` |
 | `tw` | **Twitch** | `twitch.tv` · `clips.twitch.tv` |
-| `pn` | Pinterest | `pinterest.com` |
+| `pn` | Pinterest | `pinterest.com` · `pin.it` |
 | `dm` | Dailymotion | `dailymotion.com` · `dai.ly` |
 | `st` | Streamable | `streamable.com` |
 | `im` | Imgur | `imgur.com` · `i.imgur.com` |
@@ -418,6 +418,11 @@ That column records where a link came from. Routing never reads it.
 - The ones that do work carry their own shape, each resolved with the hop a pasted link gets:
   `youtu.be/dQw4w9WgXcQ` (an 11-character segment is a YouTube id outright),
   `tiktok.com/t/ZTSw2mYwR`, `reddit.com/r/{sub}/s/{code}`, and Meta's `/share/…` codes.
+- `pin.it/{code}` sent whole is one of the bare ones: `?url=https://pin.it/{code}` loses its host,
+  becomes `/{code}`, and gets the `["x","ig"]` chooser. Send `?url=/pin.it/{code}` instead, with the
+  host moved into the path the way the fediverse sites need. That costs one hop to Pinterest's
+  shortener, and the answer is the pin, with `canonical` on `www.pinterest.com/pin/{id}/`. A code that
+  doesn't point to a pin answers `fetch_fail` with `platform: "pn"` and the share url as `canonical`.
 
 ---
 
@@ -641,7 +646,7 @@ platforms mbedfx reads answer `200` with a login wall, or `500` with a good JSON
 | `ambiguous` | 200 | The path belongs to more than one site. Carries `candidates`. A bare handle (`/{handle}`, `/@{handle}`) and an unrecognised one-segment path land here, because a handle names an account on more than one site and picking one would be a guess. |
 | `notfound` | 200 | A shape mbedfx routes for nobody, including a site prefix forced onto a path that site does not claim (`/x/jack`) and `/_prep` or `/_card` **without** their own `p` parameter. |
 | `bad_id` | 200 | A Mastodon-spoof-shaped path (`/users/{handle}/statuses/{id}`, `/api/v1/statuses/{id}`, `/_oembed/{id}`) whose id did not decode. Not reachable from an ordinary post url. |
-| `not_a_post` | 200 | Routes to something that is not a post: a site page (`/`, `/index.html`, `/robots.txt`), one of this service's own endpoints (`/_media/…`, `/_prep?p=…`, `/_card?p=…`, `/_api/v1`), a **profile** url (see below), or a **Meta or Reddit** share code that did not resolve to one. A TikTok `/t/{code}` never lands here; see below. |
+| `not_a_post` | 200 | Routes to something that is not a post: a site page (`/`, `/index.html`, `/robots.txt`), one of this service's own endpoints (`/_media/…`, `/_prep?p=…`, `/_card?p=…`, `/_api/v1`), a **profile** url (see below), or a **Meta or Reddit** share code that did not resolve to one. A TikTok `/t/{code}` never lands here (see below), and neither does a `/pin.it/{code}`, which answers `fetch_fail` when it names no pin. |
 | `no_url` | 400 | No `url` parameter, **or an empty one**. `?url=` and no `url=` at all are the same answer. |
 | `unparseable` | 400 | `new URL(target, origin)` threw, `origin` being the mbedfx origin. Only a malformed **absolute** url does that; anything readable as a path resolves against that origin and gets a 200 instead. |
 | `method_not_allowed` | 405 | This endpoint reads. Use `GET`. |

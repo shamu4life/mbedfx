@@ -95,7 +95,7 @@ The converter page has a **media only** checkbox next to the domain buttons. A `
 | <img src="https://www.google.com/s2/favicons?domain=youtube.com&sz=32" width="16" height="16" alt="" /> | YouTube | `youtube.com` · `youtu.be` |
 | <img src="https://www.google.com/s2/favicons?domain=facebook.com&sz=32" width="16" height="16" alt="" /> | Facebook | `facebook.com` |
 | <img src="https://www.google.com/s2/favicons?domain=twitch.tv&sz=32" width="16" height="16" alt="" /> | Twitch | `twitch.tv` · `clips.twitch.tv` |
-| <img src="https://www.google.com/s2/favicons?domain=pinterest.com&sz=32" width="16" height="16" alt="" /> | Pinterest | `pinterest.com` |
+| <img src="https://www.google.com/s2/favicons?domain=pinterest.com&sz=32" width="16" height="16" alt="" /> | Pinterest | `pinterest.com` · `pin.it` |
 | <img src="https://www.google.com/s2/favicons?domain=dailymotion.com&sz=32" width="16" height="16" alt="" /> | Dailymotion | `dailymotion.com` · `dai.ly` |
 | <img src="https://www.google.com/s2/favicons?domain=streamable.com&sz=32" width="16" height="16" alt="" /> | Streamable | `streamable.com` |
 | <img src="https://www.google.com/s2/favicons?domain=imgur.com&sz=32" width="16" height="16" alt="" /> | Imgur | `imgur.com` · `i.imgur.com` |
@@ -104,7 +104,7 @@ The converter page has a **media only** checkbox next to the domain buttons. A `
 | <img src="https://www.google.com/s2/favicons?domain=lemmy.world&sz=32" width="16" height="16" alt="" /> | Lemmy | any instance |
 | <img src="https://www.google.com/s2/favicons?domain=joinpeertube.org&sz=32" width="16" height="16" alt="" /> | PeerTube | any instance |
 
-A bare `dai.ly` or `redd.it` code names no site on its own, and the converter page rewrites those. The short links that do resolve as pasted are in [docs/API.md](docs/API.md#the-hosts-column).
+A bare `dai.ly`, `redd.it` or `pin.it` code names no site on its own, so the converter page rewrites those. The short links that do resolve as pasted are in [docs/API.md](docs/API.md#the-hosts-column).
 
 ## Features
 
@@ -173,7 +173,7 @@ Checked 2026-08-01 against each project's docs, source and live service. **?** m
 | Caption translation | ✅ automatic | opt-in `/en` | opt-in `/en`, undocumented | ❌ | ❌ | ❌ |
 | Card says *why* a post is missing | ✅ private / age / deleted | ? | ? | age only | ❌ redirects | one generic card |
 | Public JSON API | [✅ documented](docs/API.md) + [OpenAPI](public/openapi.json) | ✅ OpenAPI | ✅ documented | ❌ | ❌ | undocumented |
-| Self-host off Cloudflare | [Node adapter, image not built yet](docs/SELF-HOSTING.md#running-the-node-adapter) | ❌ Workers | ✅ Docker · systemd · Lambda | Docker, undocumented | ✅ Docker · K8s | ✅ Docker |
+| Self-host off Cloudflare | [Node adapter, Docker compose](docs/SELF-HOSTING.md#running-the-node-adapter) | ❌ Workers | ✅ Docker · systemd · Lambda | Docker, undocumented | ✅ Docker · K8s | ✅ Docker |
 | Operator metrics | [documented queries](docs/METRICS.md), no scrape endpoint | ? | ? | ✅ Prometheus | pprof | pprof |
 
 FxEmbed goes deeper on Twitter than mbedfx goes on any single site. The remux is a workaround: most of the seventeen won't hand a bot a playable file, and it buys nothing on Twitter or TikTok, which already serve one.

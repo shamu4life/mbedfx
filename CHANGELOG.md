@@ -14,8 +14,28 @@ All notable changes to mbedfx are documented here. The format follows
   stand-in: `public/` for assets, a directory for R2, an in-process mux runner and scheduled check, a
   `Map` for the cache, and a `waitUntil` that SIGTERM drains. On 2026-11-25, from a home connection,
   Bluesky, Reddit, Mastodon and YouTube posts drew the same card through it as on mbedfx.app. Twitter's
-  lacked its repost count. The Docker image and the compose file haven't been built yet. See
-  `docs/SELF-HOSTING.md`.
+  lacked its repost count. Later that day `docker compose` built both images on the same host and ran
+  them. The cards matched again, and the adapter image held no `.env`. See `docs/SELF-HOSTING.md`.
+- **A paste test for Facebook cards with no date (issue #49).** `/_wait/d/0/{tag}/{facebook post path}`
+  and `/_wait/d/1/{tag}/{facebook post path}` serve the post's normal Discord head, except that the
+  activity link's id carries an experiment code. Behind `0` is today's status, dated 1970. Behind `1`
+  is the same status without `created_at` and `account.created_at`. Pasting the two links in two
+  separate Discord messages shows whether Discord still draws the card when the date is missing. Two
+  messages, because both cards carry the same post url and Discord can fold embeds that share a url
+  into one card. Every fetch of either status writes a `wait_api` row (600 or 601), which tells a card
+  Discord refused apart from one it never fetched. The routes take only Facebook post paths, and every
+  answer they build is `no-store`; an error from the post itself passes through as production sends it.
+  No other response changes. Nobody has pasted the pair yet.
+- **pin.it share links work, and the converter swaps the share code out.** Following a pin.it link lands on
+  a URL with `sender=` in it, the sharer's Pinterest user id. The converter now turns
+  `pin.it/{code}` into `/pin.it/{code}` (the host stays in the path because a bare `/{code}` reads as
+  a profile handle), the Worker asks Pinterest's shortener which pin the code points to, and the
+  converter swaps the link for `/pin/{id}` once that answer arrives, usually within a second. A link
+  copied before then still carries the code, though the Worker itself never sends anyone through
+  pin.it: clicking either form opens the plain pin page. A code that doesn't point to a pin, like a board or a dead code, gets "Couldn't load this
+  Pinterest post" in Discord, and the converter shows its old pin.it warning. In `/_api/v1`, send it
+  as `?url=/pin.it/{code}`. The shortener was measured from a home connection on 2026-11-25. Nobody
+  has measured it from Cloudflare's network yet.
 
 ### Changed
 
@@ -29,6 +49,11 @@ All notable changes to mbedfx are documented here. The format follows
 
 ### Fixed
 
+- **Pinterest "shared with you" links convert to the bare pin.** The converter turned
+  `pinterest.com/pin/{id}/sent/?invite_code=…` into `/pin/{id}/sent`. Now it gives `/pin/{id}`, and
+  so do the `{slug}--{id}` spelling and links ending in `feedback` or `visual-search`. Cards were
+  already right, since the Worker ignores those endings; only the link changes. A `/pin/` link the
+  Worker doesn't read as a pin comes out unchanged.
 - **Facebook posts name their page in the document Discord reads.** The 2026-08-12 platform audit
   found the Mastodon-style document for `/WYFF4/posts/1596906778724399` with empty `id`, `username`
   and `acct` fields and a link to `/users/user/` (issue #49). Those fields now hold the page's name
@@ -40,8 +65,8 @@ All notable changes to mbedfx are documented here. The format follows
   use the time the plugin stores on the post (`data-utime`). A Facebook video whose container answer
   has no `timestamp` uses its `upload_date`, as YouTube already does. Three kinds still have no date:
   posts read from the og: page, plugin posts without that time, and videos with neither field. They
-  still show 1970 (`createdAt: null` in `/_api/v1`). Leaving the field out instead waits on a test
-  in Discord, which may refuse a document without it.
+  still show 1970 (`createdAt: null` in `/_api/v1`). Leaving the field out instead waits on the
+  `/_wait/d` test in Discord, which may refuse a document without it.
 - **Off Cloudflare, the scheduled check needs `SMOKE_RUNNER` bound.** `docs/SELF-HOSTING.md` (and the
   1.17.0 entry below) said a self-hosted deploy could leave it unset. Without it the cron's fallback
   reads `caches.default`, which Node doesn't have, so every tick would throw. The adapter binds a
