@@ -5777,7 +5777,7 @@ async function serve(req: Request, env: Env, ctx: ExecutionContext, d: Deps): Pr
    * `/_wait/mact/0/{sid}`) drew the playerless head fallback. The only difference was the url the
    * document was served from. So every a/m/b/c paste from 1.14.1 through 1.14.4 measured nothing,
    * and the "cliff just under 5s", "validator needs bytes" and "chunked is refused" readings
-   * recorded in those releases are void — see docs/CHANGELOG.md 1.14.5. The lesson, recorded so
+   * recorded in those releases are void — see CHANGELOG.md 1.14.5. The lesson, recorded so
    * it is not paid for twice: an experiment that can only produce the null result measures
    * nothing, and the n=0 positive control ships with the FIRST sweep, not the fifth.
    *
