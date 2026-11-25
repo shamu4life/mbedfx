@@ -11,8 +11,9 @@
 # Everything else is optional and listed in docs/SELF-HOSTING.md. An unset variable reaches the adapter
 # as "", which it reads as unset.
 #
-# NOT BUILT HERE: written on a host with no Docker. The adapter has run from the same files outside
-# a container (see the doc); this file and adapters/node/Dockerfile have not been built.
+# BUILT AND RUN BY HAND, NOT BY CI: on 2026-11-25 this file built both images and ran the pair on a
+# residential Linux host (docs/SELF-HOSTING.md, "The Docker run"). Nothing in CI builds it, so a later
+# change can break it without a red check.
 
 name: mbedfx
 

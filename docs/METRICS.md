@@ -96,7 +96,7 @@ env.AE?.writeDataPoint({ blobs: [platform, outcome, client], doubles: [1] })
 | `blob2` | outcome | one of the values in the `Outcome2` union (`src/analytics.ts`) |
 | `blob3` | client class | `discord` `telegram` `other-bot` `human`, or `none` on a `mux_*` row (`card_degraded` carries a real one — see below) |
 | `double1` | the literal `1` | always |
-| `double2` | elapsed milliseconds, a code, or a duration | `mux_*` rows carry milliseconds; `wait_users`/`wait_api` rows carry the digits between the wait id's `9` and the real id (`105` = a/5, `50406` = p/4/6); `wait_media` rows carry the slot digit × 100 + n (`206` = media/6, `506` = mediap/6); since 1.15.0 `card_promised` carries the video's duration in seconds, `video_wait` a join code (3 warm, 0 held here, 1 polling another isolate), `video_ok`/`video_fail` the milliseconds the client waited; `0` on every other row |
+| `double2` | elapsed milliseconds, a code, or a duration | `mux_*` rows carry milliseconds; `wait_users`/`wait_api` rows carry the digits between the wait id's `9` and the real id (`105` = a/5, `50406` = p/4/6, `600`/`601` = d's control and variant); `wait_media` rows carry the slot digit × 100 + n (`206` = media/6, `506` = mediap/6); since 1.15.0 `card_promised` carries the video's duration in seconds, `video_wait` a join code (3 warm, 0 held here, 1 polling another isolate), `video_ok`/`video_fail` the milliseconds the client waited; `0` on every other row |
 | `timestamp` | set by the runtime | `DateTime`, always UTC |
 
 Columns are 1-based: the first `blobs` element is `blob1`, and there is no `blob0`. `writeDataPoint`
