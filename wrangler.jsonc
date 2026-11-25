@@ -42,6 +42,10 @@
   // for all new Workers", so an absent block is not a reliable off - the same reason preview_urls is
   // spelled out below rather than left to a default.
   "observability": { "enabled": false },
+  // PLAIN VARS. `YT_PROMISE: "off"` keeps cold short YouTube videos on YouTube's own embed player
+  // instead of promising an mp4 that, measured 2026-11-24, reached Discord in time 1 time in 8
+  // (src/muxpolicy.ts ytPromiseOn). Delete the line, or set it to anything else, to promise again.
+  "vars": { "YT_PROMISE": "off" },
   "workers_dev": false,
   // PREVIEW URLS, kept on — but NOTHING SERVES AT THE PREVIEW HOSTNAMES, measured 2026-08-19. The
   // setting is not the problem and this key is not the fix; see the routes comment below for what was

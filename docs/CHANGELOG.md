@@ -216,6 +216,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Changed
 
+- **A cold short YouTube video gets YouTube's own player again, not a promise a player can't keep.**
+  Since 1.15.0 the card for a video under four minutes promised Discord our mp4 before it existed.
+  Eight fresh videos were tested on 2026-11-24, fetched the way Discord fetches a card: one got its
+  bytes inside Discord's ten seconds, and the other seven froze as dead players. The mux took 5 to
+  21 s. The `YT_PROMISE` var in `wrangler.jsonc` now turns the promise off, so the first paste shows
+  YouTube's embed player and later pastes play the cached mp4. Delete the var to turn it back on.
 - **The first paste of a Bluesky or Reddit video starts its mux while the card renders.** Until now the
   mux only started when Discord asked for the file, 2-3 s later, and a cold Reddit mux takes 8-11 s while
   Discord stops waiting at about 10 s. Two Reddit links pasted on 2026-11-14 and -16 froze without a
