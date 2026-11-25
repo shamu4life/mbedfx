@@ -183,3 +183,68 @@ test('npm run deploy does not name the production config', () => {
   assert.ok(pkg.scripts.deploy, 'the script exists')
   assert.ok(!pkg.scripts.deploy.includes(PROD_FILE), `npm run deploy must not deploy ${PROD_FILE}`)
 })
+
+/**
+ * THE OWNER'S RECIPES HAVE TO NAME PRODUCTION. Since phase 3 a wrangler command run from a checkout
+ * without `-c` reads the root file and acts on `mbedfx-selfhost`. For `secret put` the failure is quiet:
+ * wrangler 4.167.0 looks the Worker up, and when it is missing asks "create it?" through a prompt whose
+ * non-interactive answer is yes (createDraftWorker, `fallbackValue: true`; interactive needs stdin AND
+ * stdout on a TTY). So `secret put X < file` creates a stub mbedfx-selfhost, stores the secret on it
+ * and prints Success, and production keeps the old value.
+ *
+ * What counts as a command: an inline code span starting `npx wrangler`, and any line of a fenced
+ * block that runs wrangler, with backslash continuations joined. A bare inline `wrangler tail` is the
+ * docs naming the tool ("`wrangler tail` still works with Workers Logs off") and is not checked. That
+ * is the one hole: a recipe written that way slips through, so write recipes with `npx`.
+ */
+const OWNER_DOCS = ['CLAUDE.md', 'docs/CREDENTIALS.md', 'docs/METRICS.md', 'container/README.md', PROD_FILE]
+// The subcommands whose Worker is `args.name ?? config.name` (tail: its positional). `containers list`
+// and `containers info` are account-wide and read no Worker name; `deploy` is the tests above.
+const PICKS_BY_NAME = /^(?:npx\s+)?wrangler\s+(?:secret|tail|deployments|versions|rollback)\b/
+const esc = s => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+
+function wranglerCommands(text) {
+  const found = []
+  const prose = text.replace(/^```[^\n]*\n([\s\S]*?)^```/gm, (_, body) => {
+    for (const line of body.replace(/\\\n\s*/g, ' ').split('\n')) {
+      const m = line.match(/(?:npx\s+)?wrangler\s.*$/)
+      if (m) found.push(m[0].trim())
+    }
+    return ''
+  })
+  // Single-backtick spans are the odd segments. A span may wrap a line, and in a .jsonc comment the
+  // wrapped part starts with the next line's `//`.
+  prose.split('`').forEach((seg, i) => {
+    if (i % 2 === 1 && /^npx\s+wrangler\s/.test(seg)) found.push(seg.replace(/\s*\n\s*(?:\/\/)?\s*/g, ' ').trim())
+  })
+  return found
+}
+
+const reachesProduction = cmd =>
+  new RegExp(`(?:^|\\s)(?:-c|--config)(?:\\s+|=)${esc(PROD_FILE)}(?:\\s|$)`).test(cmd) ||
+  new RegExp(`(?:^|\\s)--name(?:\\s+|=)${esc(prod.name)}(?:\\s|$)`).test(cmd) ||
+  new RegExp(`^(?:npx\\s+)?wrangler\\s+tail\\s+${esc(prod.name)}(?:\\s|$)`).test(cmd)
+
+test('the owner-doc scan finds the recipes it checks, and tells a targeted command from a bare one', () => {
+  /**
+   * Without this, a parse that found nothing (a changed fence style, a renamed file) would leave the
+   * per-file tests below passing on an empty list.
+   */
+  const cmds = OWNER_DOCS.flatMap(f => wranglerCommands(raw(f))).filter(c => PICKS_BY_NAME.test(c))
+  assert.ok(cmds.length >= 6, `expected the owner docs' secret/tail/versions recipes, found ${JSON.stringify(cmds)}`)
+  assert.ok(!reachesProduction('npx wrangler secret put YT_ACCOUNTS < accounts.json'))
+  assert.ok(!reachesProduction('npx wrangler tail'))
+  assert.ok(!reachesProduction('npx wrangler secret put X -c wrangler.jsonc'))
+  assert.ok(reachesProduction(`npx wrangler secret put YT_ACCOUNTS -c ${PROD_FILE} < accounts.json`))
+  assert.ok(reachesProduction(`npx wrangler versions list --name ${prod.name}`))
+  assert.ok(reachesProduction(`npx wrangler tail ${prod.name} --format json`))
+})
+
+for (const file of OWNER_DOCS) {
+  test(`${file}: every wrangler command that takes its Worker from the config names production's config or Worker`, () => {
+    for (const cmd of wranglerCommands(raw(file)).filter(c => PICKS_BY_NAME.test(c))) {
+      assert.ok(reachesProduction(cmd),
+        `${file}: \`${cmd}\` reaches mbedfx-selfhost from a checkout. Add -c ${PROD_FILE}, or --name ${prod.name}`)
+    }
+  })
+}

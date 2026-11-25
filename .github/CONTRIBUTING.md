@@ -26,7 +26,15 @@ npx wrangler dev      # local worker
 
 `npm run build` runs the suite and a type check. Cloudflare Workers Builds, the only system that deploys this Worker, runs it before deploying, so a red suite ships nothing. GitHub Actions runs the same two steps on pushes to `main` and on every pull request; those checks do not gate the deploy.
 
-Do **not** deploy by hand. Workers Builds watches `main`, so merging is the deploy, and `npm run deploy` refuses on purpose. A hand deploy overwrites whatever the build shipped, and prod goes on looking healthy while the pipeline is broken. That has cost the project real downtime once already.
+Do **not** deploy mbedfx.app by hand. Workers Builds watches `main` and runs `npx wrangler deploy -c wrangler.production.jsonc` on each merge, so merging is the deploy. A hand deploy of that file overwrites whatever the build shipped, and prod goes on looking healthy while the pipeline is broken. That has cost the project real downtime once already.
+
+`npm run deploy` deploys something else: the root `wrangler.jsonc`, a generic config that makes a separate Worker called `mbedfx-selfhost` in whatever Cloudflare account wrangler is logged into. It gets its own container, R2 bucket and half-hourly cron, and Cloudflare bills it like any other Worker. Self-hosters want exactly that. As a contributor, don't run it by accident. To check that a config change still deploys, use a dry run, which uploads nothing and needs no login:
+
+```bash
+npx wrangler deploy --dry-run                             # builds the container image, so Docker must be running
+npx wrangler deploy --dry-run --containers-rollout=none   # without Docker
+npx wrangler deploy --dry-run -c wrangler.production.jsonc --containers-rollout=none   # mbedfx.app's config
+```
 
 ## What gets a PR sent back
 

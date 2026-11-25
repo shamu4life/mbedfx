@@ -88,7 +88,8 @@
   // PHASE-2 VIDEO PLAYBACK. The media-resolver container (ffmpeg + yt-dlp) and its R2 mux cache. A
   // `wrangler deploy` from here on builds the container image, so a Docker-compatible CLI (Docker
   // Desktop or Colima) must be running — see container/README.md. Optional shared secret:
-  // `wrangler secret put RESOLVER_SECRET` and set the same value on the container.
+  // `npx wrangler secret put RESOLVER_SECRET -c wrangler.production.jsonc` and set the same value on
+  // the container. Without the -c it lands on the root file's mbedfx-selfhost, not on this Worker.
   "r2_buckets": [
     // R2 BUCKETS CANNOT BE RENAMED. Pointing the binding at a new name does not move anything: the
     // old `fxeverything-media` keeps its objects and this one starts EMPTY. That is safe here and

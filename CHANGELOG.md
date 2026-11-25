@@ -13,9 +13,11 @@ as it is, it creates a second Worker with an empty cache, and the old one keeps 
 half-hourly check and its container bill until you delete it. To keep your existing Worker, save
 your old config under another name, such as `wrangler.mine.jsonc`, and deploy it with
 `npx wrangler deploy -c wrangler.mine.jsonc`. If Workers Builds deploys your fork, put the same `-c`
-in its deploy command. Don't copy the old names back into `wrangler.jsonc`: `npm run build` fails
-when that file uses mbedfx.app's names or sets `containers[].name`, and the old file did both unless
-you changed it. Nobody else has anything to do.
+in its deploy command. Pass it to `wrangler secret`, `wrangler tail`, `wrangler versions` and
+`wrangler deployments` as well. Without it they act on `mbedfx-selfhost`, and a `wrangler secret put`
+fed from a file or pipe creates that Worker to hold the secret. Don't copy the old names back into
+`wrangler.jsonc`: `npm run build` fails when that file uses mbedfx.app's names or sets
+`containers[].name`, and the old file did both unless you changed it. Nobody else has anything to do.
 
 ### Added
 

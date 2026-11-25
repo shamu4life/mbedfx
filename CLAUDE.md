@@ -191,6 +191,15 @@ shouldn't do it by accident. `test/wrangler-configs.test.mjs` fails if the gener
 a production zone, guest host, bucket, dataset or container application, or if `npm run deploy`
 names the production file.
 
+Every other wrangler command that picks its Worker from the config (`secret`, `tail`, `deployments`,
+`versions`, `rollback`) needs `-c wrangler.production.jsonc` to reach production. Without the `-c`
+they reach `mbedfx-selfhost`. A `secret put` fed from a pipe or file creates that Worker if it's
+missing and stores the secret there, and production keeps the old value. Naming the Worker also
+works (`--name mbedfx`, or `tail mbedfx`). `containers list` and `containers info` work account-wide
+and need neither. `test/wrangler-configs.test.mjs` fails when an `npx wrangler` command of that kind
+in this file, `docs/CREDENTIALS.md`, `docs/METRICS.md`, `container/README.md` or
+`wrangler.production.jsonc` does neither.
+
 `npm run build` (tests + typecheck) is the gate Workers Builds runs. A red suite ships nothing.
 
 Merging two PRs back-to-back races their builds, and the older commit can win. Wait for one deploy

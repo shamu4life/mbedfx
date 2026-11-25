@@ -573,11 +573,12 @@ export interface Env {
   YT_ACCOUNTS_3?: string
   // The Reddit OAuth app's credentials (a "script"/"web" app registered as shamu4life). Reddit
   // blocks anonymous access from datacenter IPs, so `rd` alone of the six needs a stored secret;
-  // fetchReddit exchanges these for an app-only bearer token. Set with `wrangler secret put`. These
-  // are DELIBERATE long-lived config, NOT the deletion-dated debug secret warned about below — and
-  // like every secret here they become PRODUCTION secrets on the Phase 3 apex cutover, which for
-  // Reddit is intended (prod needs them too). Optional so a deploy without them degrades `rd` to the
-  // generic failure rather than throwing.
+  // fetchReddit exchanges these for an app-only bearer token. Set with `wrangler secret put`, on
+  // mbedfx.app with `-c wrangler.production.jsonc`: without it the root config's Worker,
+  // mbedfx-selfhost, gets them and production does not. These are DELIBERATE long-lived config, NOT
+  // the deletion-dated debug secret warned about below — and like every secret here they become
+  // PRODUCTION secrets on the Phase 3 apex cutover, which for Reddit is intended (prod needs them
+  // too). Optional so a deploy without them degrades `rd` to the generic failure rather than throwing.
   REDDIT_CLIENT_ID?: string
   REDDIT_CLIENT_SECRET?: string
   // The owner's Reddit relay on Google Cloud Run (relay/server.mjs; deployed per relay/README.md, owner's
