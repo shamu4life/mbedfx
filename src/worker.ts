@@ -5862,7 +5862,11 @@ async function serve(req: Request, env: Env, ctx: ExecutionContext, d: Deps): Pr
    *       its post there), and exactly one thing in it changes: the activity link's id becomes
    *       `9` `6` `0{v}` + the real id. v=0 is the control: the document is today's, byte for
    *       byte, under the wait id. v=1 is the variant: `created_at` and `account.created_at` are
-   *       deleted and nothing else is. Paste both in one message. The control draws today's card
+   *       deleted and nothing else is. Paste them in TWO SEPARATE messages: both cards carry the
+   *       same og:url and status url (the Facebook permalink), and Discord's client can fold
+   *       embeds that share a url into one gallery card, which would hide whether the variant drew
+   *       at all (review, 2026-11-25; the folding is reported, not measured here). And the post
+   *       may carry more than one image, so expect a picture per attachment. The control draws today's card
    *       dated 1970. A variant that draws the same card with its picture and no date says the
    *       field can go; one that draws the head-only card (this head has no og:image, so that one
    *       shows no picture) says Discord needs it. The `wait_api` row (600 control, 601 variant)

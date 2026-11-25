@@ -14,16 +14,18 @@ All notable changes to mbedfx are documented here. The format follows
   stand-in: `public/` for assets, a directory for R2, an in-process mux runner and scheduled check, a
   `Map` for the cache, and a `waitUntil` that SIGTERM drains. On 2026-11-25, from a home connection,
   Bluesky, Reddit, Mastodon and YouTube posts drew the same card through it as on mbedfx.app. Twitter's
-  lacked its repost count. The Docker image and the compose file haven't been built yet. See
-  `docs/SELF-HOSTING.md`.
+  lacked its repost count. Later that day `docker compose` built both images on the same host and ran
+  them. The cards matched again, and the adapter image held no `.env`. See `docs/SELF-HOSTING.md`.
 - **A paste test for Facebook cards with no date (issue #49).** `/_wait/d/0/{tag}/{facebook post path}`
   and `/_wait/d/1/{tag}/{facebook post path}` serve the post's normal Discord head, except that the
   activity link's id carries an experiment code. Behind `0` is today's status, dated 1970. Behind `1`
-  is the same status without `created_at` and `account.created_at`. Pasting both links in one Discord
-  message shows whether Discord still draws the card when the date is missing. Every fetch of either
-  status writes a `wait_api` row (600 or 601), which tells a card Discord refused apart from one it
-  never fetched. The routes answer `no-store` and take only Facebook post paths. No other response
-  changes. Nobody has pasted the pair yet.
+  is the same status without `created_at` and `account.created_at`. Pasting the two links in two
+  separate Discord messages shows whether Discord still draws the card when the date is missing. Two
+  messages, because both cards carry the same post url and Discord can fold embeds that share a url
+  into one card. Every fetch of either status writes a `wait_api` row (600 or 601), which tells a card
+  Discord refused apart from one it never fetched. The routes take only Facebook post paths, and every
+  answer they build is `no-store`; an error from the post itself passes through as production sends it.
+  No other response changes. Nobody has pasted the pair yet.
 
 ### Fixed
 

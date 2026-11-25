@@ -4,8 +4,9 @@ mbedfx runs off Cloudflare now. `adapters/node/` serves the production handler, 
 `src/worker.ts`, from Node's own HTTP server with nothing under `src/` changed, and
 `adapters/node/compose.yaml` starts it beside the `container/` resolver. On 2026-11-25 it ran on a
 residential Linux host against a local `container/server.py`, and four of five posts drew the same card
-as on mbedfx.app. [What the first run measured](#what-the-first-run-measured) has the fifth. The Docker
-image and the compose file are written but not built, because that host had no Docker.
+as on mbedfx.app. [What the first run measured](#what-the-first-run-measured) has the fifth. Later the
+same day `docker compose` built both images there and ran the pair; [the Docker run](#the-docker-run)
+has what it showed.
 
 The corrections that make exposing an instance safe landed on 2026-08-12: the private-address guard the
 Worker half never had (`src/netguard.ts`), a configurable `OWN_HOSTS`, a guest-token cache that works on
@@ -133,6 +134,24 @@ between the two reads and are left out below.
 | Mastodon `/mstdn.social/@stux/116994812581955524` | Identical. |
 | Twitter `/jack/status/20` | Same head, but no repost count. From this host the syndication endpoint, the primary path, answered without `retweet_count` (checked by calling it directly), so `reposts` is absent. mbedfx.app shows 126.3K. Which path production's answer came from can't be seen from outside. |
 | YouTube `/jNQXAC9IVRw` | The first view differed. The video was cold here and warm on production, so the adapter drew the degraded card (YouTube's own player, never cached) while the mux ran, which took 3.6 s. On the second view the head and the activity document matched, `og:video` included. The two MP4s are different muxes of the same 19-second video: 629,172 bytes here, 633,710 there. |
+
+### The Docker run
+
+Later on 2026-11-25 Docker 26.1.5 and Compose 2.26.1 went onto the same host, and the stack was built
+from a clean checkout of `main` at `90fb2d8` with a throwaway `.env` holding only `PUBLIC_ORIGIN` and
+`RESOLVER_SECRET`.
+
+| Check | Result |
+|---|---|
+| `docker compose build` | Both images built in 50 s: `mbedfx-adapter` 226 MB, `mbedfx-resolver` 761 MB. |
+| `.env` kept out of the image | `adapters/node/.env` sat in the build context and is absent from the image. |
+| The resolver's port | Not published. The adapter answered on `127.0.0.1:8787`; nothing answered on the host's 8080. |
+| `/_clients` through the adapter | yt-dlp 2026.11.23, ffmpeg 7.1.5, four YouTube player clients served bytes (`default`, `web_embedded`, `tv_simply`, `mweb`), and the HLS playlist and segment probes passed. |
+| Cards against mbedfx.app | `og:title` and `og:description` matched for a Bluesky post, a Bluesky profile, Reddit and Mastodon. YouTube's first view was the degraded card again while the video was cold. |
+| A muxed video | `/_media/yt%3AjNQXAC9IVRw/0.mp4` served 629,172 bytes. |
+| `docker compose stop adapter` | Under a second, logging `SIGTERM: requests finished, 0 background task(s) pending at stop, all settled`. |
+
+Nothing builds or runs these images in CI, so a later change can break them without a red check.
 
 ---
 
