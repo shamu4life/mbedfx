@@ -99,7 +99,7 @@ are reversible: `container/server.py` argues that dropping the client override n
 production measurement, and Innertube is refused often enough from Cloudflare's egress that the
 container fallback is ordinary traffic (WEB answered 5 of 10 ids there on 2026-08-27). So keep using
 a free throwaway. The warning this section supersedes, that any cookie jar worsened the epoch bug,
-was never written here; the 1.9.0 entry in `docs/CHANGELOG.md` records its refutation at yt-dlp's
+was never written here; the 1.9.0 entry in `CHANGELOG.md` records its refutation at yt-dlp's
 source.
 
 ### Dead jars
@@ -176,7 +176,7 @@ split moved to `RESOLVER_GENERATION`, where it costs nothing stored. Each one pa
 paragraph weighs, so the pre-fill-day records it worries about are long gone. `ytMetaUsable`
 (`src/worker.ts`) refuses a gated record carrying no `jarred` flag while `jarAvailable(env, 'yt')`
 holds, and the next view re-extracts with the jar. That conditional shipped in 1.9.0 on 2026-08-04
-(its entry in `docs/CHANGELOG.md`) and adds no second bump. Without it, filling a secret heals none
+(its entry in `CHANGELOG.md`) and adds no second bump. Without it, filling a secret heals none
 of those records, and `pool_unused` reports the fresh accounts as dead.
 
 Rotating a dead pool leaves the cached verdicts in place. A record measured with a jar that still

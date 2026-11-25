@@ -63,7 +63,7 @@ Tests must not touch the network. If your test needs an upstream, stub `fetch`.
 - One concern per PR.
 - `npm run build` green.
 - If you changed behaviour, **rewrite the test that pinned the old behaviour instead of deleting it**, and say in the comment what changed and why. A deleted assertion leaves no trace of having been wrong.
-- Update `docs/CHANGELOG.md` for anything user-visible.
+- Update `CHANGELOG.md` for anything user-visible.
 
 There is no CLA. By opening a PR you agree your contribution is licensed under the [MIT License](../LICENSE).
 

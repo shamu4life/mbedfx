@@ -1,7 +1,7 @@
 # The JSON API
 
 `/_api/v1` serves the post data the cards are drawn from, as JSON. Shipped in 1.9.0
-(`docs/CHANGELOG.md`, 2026-08-04).
+(`CHANGELOG.md`, 2026-08-04).
 
 ```
 GET https://mbedfx.app/_api/v1?url=<the post url>

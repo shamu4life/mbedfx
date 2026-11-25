@@ -32,7 +32,7 @@
   (or N/A)
 
 ### Version & changelog
-- [ ] `docs/CHANGELOG.md` updated (or N/A, internal only)
+- [ ] `CHANGELOG.md` updated (or N/A, internal only)
 - [ ] `package.json` version bumped (or N/A)
 
 ### Documentation

@@ -207,7 +207,7 @@ test('EVERY DOMAIN THE WORKER SERVES IS ONE THE PAGE RECOGNISES AS OURS — the 
    * {id} — our own domain, answering notfound — and that is what og:url advertises and where a human
    * gets redirected.
    *
-   * docs/CHANGELOG.md 1.7.0 claimed this was already pinned ("All are pinned by tests now"), naming a
+   * CHANGELOG.md 1.7.0 claimed this was already pinned ("All are pinned by tests now"), naming a
    * symbol — OWN_HOSTS — that does not exist in public/index.html. It was never true for the page
    * half. This test is that claim made real, and it asserts the two things the bug broke separately:
    * a link from a served domain must be RE-POINTED, and a visitor arriving on one must be handed that

@@ -71,8 +71,24 @@ test('THE CHANGELOG HAS AN ENTRY FOR THE VERSION THIS IS — a release with no n
    * It asserts the heading exists, not that it says anything in particular. Judging the prose is
    * not a test's job; noticing there is none is.
    */
-  const changelog = read('../docs/CHANGELOG.md')
+  const changelog = read('../CHANGELOG.md')
   const heading = new RegExp(`^## \\[${PKG.version.replace(/\./g, '\\.')}\\] - \\d{4}-\\d{2}-\\d{2}$`, 'm')
   assert.match(changelog, heading,
-    `docs/CHANGELOG.md has a dated "## [${PKG.version}]" section for the version package.json is`)
+    `CHANGELOG.md has a dated "## [${PKG.version}]" section for the version package.json is`)
+})
+
+test('EVERY RELEASE OPENS WITH AN Upgrading LINE, and [Unreleased] stays on top', () => {
+  /**
+   * The owner's project standard (2026-11-24): the first line under a release heading tells the reader
+   * whether the release asks anything of them, `**Upgrading:** nothing to do.` or the steps. All 49
+   * sections up to 1.16.0 got one that day, each checked against its own section; this keeps the next
+   * release from shipping without one.
+   */
+  const changelog = read('../CHANGELOG.md')
+  const first = changelog.indexOf('\n## [')
+  assert.equal(changelog.slice(first + 1, first + 16), '## [Unreleased]', '[Unreleased] is the first section')
+  const sections = [...changelog.matchAll(/^## \[(\d+\.\d+\.\d+)\] - \d{4}-\d{2}-\d{2}\n\n([^\n]*)/gm)]
+  assert.ok(sections.length >= 49, `found ${sections.length} release sections`)
+  const without = sections.filter(m => !m[2].startsWith('**Upgrading:** ')).map(m => m[1])
+  assert.deepEqual(without, [], 'every release section opens with **Upgrading:**')
 })

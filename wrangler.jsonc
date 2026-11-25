@@ -261,7 +261,7 @@
     // SO THERE IS NO PRE-MERGE TEST FOR A container/ CHANGE on Cloudflare egress. `wrangler dev` runs
     // the container on your own machine, which is the wrong IP for anything YouTube gates. Merge it
     // and measure production, and confirm `wrangler containers info` shows a NEW image digest before
-    // believing the result. See the YouTube 403 entry in docs/CHANGELOG.md.
+    // believing the result. See the YouTube 403 entry in CHANGELOG.md.
     { "pattern": "mbedfx.app", "custom_domain": true },
     { "pattern": "megapenispoopenfarten.sex", "custom_domain": true },
     // forsen.sex, added 2026-08-03. IT WAS ALREADY LIVE and kept disappearing, which is the lesson
