@@ -1,0 +1,290 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  // RENAMED IN PLACE 2026-07-30, and the previous note here was WRONG: Cloudflare CAN rename a
+  // Worker. Verified against the account after the owner did it — same service tag
+  // <redacted> and same created_on (2026-07-17), new name. No second
+  // service, no route migration, no outage.
+  //
+  // THIS MUST MATCH THE LIVE SERVICE OR A DEPLOY FORKS IT. `wrangler deploy` creates the named
+  // Worker if it does not exist, so leaving this as the old name after the rename would stand up
+  // a SECOND, EMPTY service and hand it the four custom domains listed in `routes` — taking them
+  // off the one that is actually serving. That is an outage, not a warning.
+  // MERGING TWO PRs BACK TO BACK RACES THEIR DEPLOYS, and the OLDER one can win. Observed
+  // 2026-07-30: #11 and #12 were merged seconds apart, Workers Builds started a build for each
+  // (22:27:32 for the #11 commit, 22:27:35 for the #12 commit), BOTH reported success, and the
+  // script that ended up live was the earlier commit — verified by fetching the deployed bundle,
+  // which contained PeerTube but zero occurrences of `metashare`.
+  //
+  // Nothing fails loudly when this happens: main is correct, both checks are green, and the PR
+  // is merged. Only the deployed script is stale. WAIT FOR ONE DEPLOY TO FINISH BEFORE MERGING
+  // THE NEXT, and when a change must be live, verify against the deployed bundle rather than
+  // against a green build.
+  "name": "mbedfx",
+  // The deploy entry pairs the fetch handler with the container's Durable Object export. Tests still
+  // import src/worker.ts directly, which never imports @cloudflare/containers (see src/index.ts).
+  "main": "src/index.ts",
+  "compatibility_date": "2026-07-01",
+  // WORKERS LOGS ARE OFF ON PURPOSE, and this is a privacy boundary rather than a debugging
+  // preference. With it on, Cloudflare persisted one invocation log per request for seven days, and
+  // those records carry `event.request.url` - the WHOLE url, query string included, which on this
+  // Worker IS the post somebody pasted - plus the client IP, the user agent, the referer and the
+  // geolocation block. That is the exact thing src/analytics.ts refuses to put in a counter, and the
+  // reason it gives (TwitFix died over a public log of processed urls) does not stop applying because
+  // the log is Cloudflare's rather than ours.
+  //
+  // WHAT IT COSTS, stated so nobody turns it back on without knowing what they are buying: the five
+  // console.error calls in src/worker.ts still run, but nothing STORES them, so a mux failure that
+  // happens while nobody is tailing is no longer reconstructable afterwards. Live debugging is
+  // `npx wrangler tail mbedfx`; trends are the Analytics Engine counters in docs/METRICS.md; traffic,
+  // error rate and CPU are the dashboard metrics, which are a separate product and unaffected.
+  //
+  // THE KEY STAYS, SPELLED false, rather than the block being deleted. The field "Defaults to `true`
+  // for all new Workers", so an absent block is not a reliable off - the same reason preview_urls is
+  // spelled out below rather than left to a default.
+  "observability": { "enabled": false },
+  // PLAIN VARS. `YT_PROMISE: "off"` keeps cold short YouTube videos on YouTube's own embed player
+  // instead of promising an mp4 that, measured 2026-11-24, reached Discord in time 1 time in 8
+  // (src/muxpolicy.ts ytPromiseOn). Since 2026-11-25 the promise is opt-in, so deleting this line
+  // changes nothing: only "on" promises. It stays as the record of the decision, and
+  // test/yt-promise-off.test.mjs reads it. Set it to "on" to promise again.
+  "vars": { "YT_PROMISE": "off" },
+  "workers_dev": false,
+  // PREVIEW URLS, kept on — but NOTHING SERVES AT THE PREVIEW HOSTNAMES, measured 2026-08-19. The
+  // setting is not the problem and this key is not the fix; see the routes comment below for what was
+  // measured, and for why a branch build could not test a container change even if previews worked.
+  //
+  // Spelled here because ABSENT DOES NOT MEAN UNCHANGED: wrangler applies its own default on every
+  // deploy for any setting the config does not mention, so enabling this in the dashboard lasted only
+  // until the next merge. Same trap as the routes array below, and it presented the same way — a
+  // setting that "keeps getting reset" by nobody.
+  //
+  // Distinct from workers_dev above, which is the UNVERSIONED mbedfx.<subdomain>.workers.dev and stays
+  // off: a permanent second public hostname is not wanted, a per-version preview is.
+  //
+  // LINE COMMENTS ONLY IN THIS FILE. The smoke tests read it with a `//`-stripping regex, so a /* */
+  // block breaks their JSON parse and fails three unrelated assertions — which is exactly what a
+  // block comment here did before this line existed.
+  "preview_urls": true,
+  // THE OUTAGE DETECTOR'S SCHEDULE. Facebook embeds were broken for up to a week (Meta walled the post
+  // surfaces from datacenter egress between 2026-08-01 and 2026-08-08) and the way anyone found out
+  // was the owner pasting a link. src/smoke.ts renders a list of known posts through this worker's
+  // own handler and counts the verdict; see the smoke_ok / smoke_fail pair in src/analytics.ts and
+  // the query in docs/METRICS.md.
+  //
+  // EVERY 30 MINUTES, which is a deliberate floor rather than a shrug. The checks are sixteen serial
+  // renders that each may reach an upstream, and the thing being detected is a platform changing its
+  // rules — measured in DAYS, not seconds. Running it per-minute would spend real upstream requests
+  // to learn nothing new, and this project has already watched an unattended per-minute probe get
+  // pointed at YouTube. Half-hourly finds a break inside the hour, which is the difference that
+  // mattered.
+  //
+  // THE INTERVAL ALSO SETS THE CPU CEILING, which is not obvious and is worth knowing before anyone
+  // moves it: Cloudflare gives a Cron Trigger under an hour 30s of CPU and one at an hour or more 15
+  // minutes (limits page, read 2026-08-12). Waiting on a fetch is not CPU, and these checks are
+  // almost entirely waiting, so 30s is not close — but a future check that PARSES something large
+  // would feel it. The wall clock is 15 minutes either way, and src/smoke.ts bounds the run well
+  // under that on purpose.
+  "triggers": { "crons": ["*/30 * * * *"] },
+  // PHASE-2 VIDEO PLAYBACK. The media-resolver container (ffmpeg + yt-dlp) and its R2 mux cache. A
+  // `wrangler deploy` from here on builds the container image, so a Docker-compatible CLI (Docker
+  // Desktop or Colima) must be running — see container/README.md. Optional shared secret:
+  // `wrangler secret put RESOLVER_SECRET` and set the same value on the container.
+  "r2_buckets": [
+    // R2 BUCKETS CANNOT BE RENAMED. Pointing the binding at a new name does not move anything: the
+    // old `fxeverything-media` keeps its objects and this one starts EMPTY. That is safe here and
+    // only here, because every object in it is a regenerable mux artefact keyed by refKey — the cost
+    // of the switch is that each video is muxed once more, not that anything is lost. Delete the old
+    // bucket once traffic has moved, or it bills for storage nobody reads.
+    // THE 60-DAY EXPIRY LIVES ON THE BUCKET, NOT HERE, and that is worth writing down because it is
+    // invisible to this repo and was LOST ONCE. Nothing in wrangler.jsonc can express a lifecycle
+    // rule, so when the 2026-07-30 rename pointed the binding at a new bucket, the expiry silently
+    // did not come with it — and nothing failed, because the code never deletes anything itself:
+    //
+    //     "Old objects are simply never read again; R2 has no cost pressure to delete them
+    //      urgently and a lifecycle rule is the right eventual broom" — worker.ts, metaCacheKey
+    //
+    // Re-added 2026-07-30 as rule `expire-60d`, all prefixes:
+    //     wrangler r2 bucket lifecycle add mbedfx-media expire-60d --expire-days 60
+    //
+    // 60 CLEARS EVERY LOGICAL TTL IN THE CODE with room to spare — the longest is YT_META_TTL_MS at
+    // 30 days — so the sweep can only remove objects that were already dead to us. Both prefixes
+    // share this bucket (`mux/{refKey}/{i}` and `meta/{generation}/{refKey}.json`) and both are
+    // pure cache: everything here is regenerable from the platform it came from.
+    //
+    // IF THIS BUCKET IS EVER SWAPPED AGAIN, re-add the rule. A missing one costs no correctness,
+    // only unbounded storage — which is exactly why nobody would notice.
+    { "binding": "MEDIA_CACHE", "bucket_name": "mbedfx-media" }
+  ],
+  "containers": [
+    // max_instances is HEADROOM, not the concurrency plan: worker.ts pools every mux/meta call onto
+    // RESOLVER_SLOTS (4) stable instance names, so steady state needs 4. The extra room covers the
+    // overlap when a deploy resets instances ("Durable Object reset because its code was updated") or a
+    // previous generation is still sleeping out its `sleepAfter` — without it, those stragglers hold the
+    // whole cap and EVERY mux fails with "Maximum number of running container instances exceeded", which
+    // the media route can only degrade into a video-less card.
+    // INSTANCE TYPE: standard-2 (1 vCPU, 6 GiB, 12 GB), moved up from `basic` (1/4 vCPU, 1 GiB) on
+    // 2026-08-28. THE QUARTER CORE WAS COSTING US MOST OF A MUX BUDGET, and it had been read as
+    // YouTube throttling for weeks.
+    //
+    // MEASURED, same connection and video, only --cpus/--memory varying, median of 3 across two ids —
+    // yt-dlp EXTRACTION only, no media bytes, which is the phase that runs before any progress shows:
+    //     basic       1/4 vCPU   14.1s / 16.9s
+    //     standard-1  1/2 vCPU    9.1s /  9.3s
+    //     standard-2  1   vCPU    5.7s /  5.7s
+    //     standard-4  4   vCPU    5.4s /  5.4s
+    // The production `yt-dlp -J` extract has long been recorded at 15.9s "from Cloudflare egress".
+    // That matches `basic` almost exactly, RESIDENTIALLY, with no gate involved: it was our own CPU.
+    //
+    // DO NOT GO PAST standard-2. The gain stops dead at 1 vCPU because the work is single-threaded —
+    // 4 vCPU measured identical (5.4s vs 5.7s), and the same flat top shows in the two pure-CPU
+    // controls (ffmpeg -c copy remux 1.15 -> 0.55 -> 0.59s; a CPU-bound python loop 5.28 -> 1.56 ->
+    // 1.67s). standard-3/4 is provisioned memory billed for nothing.
+    //
+    // WHAT IT COSTS, so the bill is not a surprise: memory and disk bill on PROVISIONED size for the
+    // whole time an instance is alive, INCLUDING the sleepAfter idle window — only CPU bills on use.
+    // Modelled at 4 slots alive continuously: basic ~$29/mo, standard-2 ~$166/mo. `sleepAfter`
+    // (src/container.ts, 5m) is therefore the cost dial, and shortening it is the first lever to pull
+    // if this reads high.
+    //
+    // WHAT IT DOES NOT FIX: the egress. ~40-50% of Cloudflare-egress YouTube requests are refused
+    // where residential succeeds every time. This buys back seconds, not access.
+    //
+    // `name` IS PINNED TO THE OLD BRAND ON PURPOSE, and removing it breaks every deploy.
+    //
+    // Wrangler DERIVES a container application name from the Worker name when this is absent, so
+    // the 2026-07-30 rename made it ask Cloudflare for `mbedfx-mediaresolver` — and the deploy
+    // failed with DURABLE_OBJECT_ALREADY_HAS_APPLICATION, because the MediaResolver DO is already
+    // attached to the application created under the old name. A Durable Object class can own
+    // exactly one container application, so this is not a naming preference: it is the identity of
+    // a live resource, and the only way to keep updating it is to keep calling it what it is.
+    //
+    // Renaming it for tidiness means deleting the application and letting the DO re-attach, which
+    // re-provisions every container instance. Not worth it for a string only the dashboard shows.
+    { "name": "fxeverything-mediaresolver", "class_name": "MediaResolver", "image": "./container/Dockerfile", "max_instances": 10, "instance_type": "standard-2" }
+  ],
+  // MUX_RUNNER is a PLAIN Durable Object, not a container — it holds no image and runs no process. Its
+  // whole job is to own an ALARM, because an alarm handler gets 15 minutes of wall clock where
+  // `ctx.waitUntil` gets 30 seconds (both are Cloudflare's documented limits, and the 30 is shared
+  // across every waitUntil in one request). Until 2026-08-23 every mux in this service ran under
+  // waitUntil, so the container's own page-mux ceiling (180s then, MUX_PAGE_TIMEOUT = 360s since
+  // 2026-08-29) and the 1500s of video the duration filter admits were both unreachable — three
+  // ceilings, and only the smallest was ever real. A cancelled attempt
+  // also left nothing behind (the container buffers the whole file, writes to a fresh mkstemp and
+  // removes it), so every re-paste of a slow video restarted at byte zero. See src/muxrunner.ts.
+  //
+  // ONE OBJECT PER VIDEO, addressed by the mux key — which incidentally gives this path its first
+  // GLOBAL dedupe. muxInflight is isolate-local and says so; two isolates could always double-mux.
+  //
+  // SMOKE_RUNNER is the scheduled check's location and nothing else (src/smokerunner.ts). The cron
+  // runs wherever Cloudflare puts it, which for most of 2026-10-05..10-14 was Mumbai and Osaka, where
+  // TikTok and Instagram answer differently than they do for Discord's crawler. One object, created
+  // with locationHint "enam", makes the check's requests leave from eastern North America instead.
+  // See smokeWhereReadersAre in src/worker.ts for the measurement.
+  "durable_objects": {
+    "bindings": [
+      { "name": "MEDIA_RESOLVER", "class_name": "MediaResolver" },
+      { "name": "MUX_RUNNER", "class_name": "MuxRunner" },
+      { "name": "SMOKE_RUNNER", "class_name": "SmokeRunner" }
+    ]
+  },
+  // A NEW TAG, NEVER AN EDIT TO v1. Migrations are an append-only ledger: Cloudflare applies the tags
+  // it has not seen, so rewriting an applied one is either ignored or an error, and never the thing
+  // the editor meant. `new_sqlite_classes` matches MediaResolver's — the DO must have storage for
+  // setAlarm to exist at all, and SQLite-backed is the current default for new classes.
+  //
+  // v3 adds SmokeRunner. It stores nothing, but SQLite-backed is what Cloudflare recommends for every
+  // new class. A branch build cannot apply a migration (`versions upload` fails with 10211, so the PR
+  // shows a red X); the build from main runs `wrangler deploy`, which applies it, as it did for v2.
+  "migrations": [
+    { "tag": "v1", "new_sqlite_classes": ["MediaResolver"] },
+    { "tag": "v2", "new_sqlite_classes": ["MuxRunner"] },
+    { "tag": "v3", "new_sqlite_classes": ["SmokeRunner"] }
+  ],
+  // THE APEX CUTOVER (2026-07-25). fxeverything now serves megapenispoopenfarten.sex itself, not just
+  // its staging subdomain — the Phase 3 step this file used to describe as pending.
+  //
+  // COMPATIBILITY WAS VERIFIED BEFORE THE MOVE, not after: every url shape the live fxtiktok worker
+  // answered still resolves here. /t/{code} (its short form) and /@user/video/{id} both render the
+  // same card for the same post — checked against /t/ZTSw2mYwR/ on staging, which produced the
+  // identical og:title and a working og:video. fxeverything is a superset: same TikTok coverage plus
+  // Twitter, Instagram, Threads, Reddit, Bluesky, YouTube and Facebook.
+  //
+  // ONE DELIBERATE BEHAVIOUR CHANGE at the root: fxtiktok answered `/` with a 302 to its own GitHub
+  // repo. This worker serves the placeholder in public/ instead (the link converter is Phase 5).
+  //
+  // THERE IS NO LONGER A ROLLBACK TARGET. This said, for one day, that deleting the apex entry
+  // below would let fxtiktok resume — true then, false now: the owner DELETED the fxtiktok worker
+  // from the account on 2026-07-26, taking its apex custom domain and its
+  // `*.megapenispoopenfarten.sex/*` wildcard route with it. Removing the apex entry now would leave
+  // the apex serving NOTHING, not the old worker.
+  //
+  // Recorded because the stale version was the dangerous kind of comment: it would have talked a
+  // future reader into a "cheap, reversible" edit whose actual effect is an outage. If the apex ever
+  // does need to leave this worker, the replacement has to be stood up first — there is nothing
+  // behind it to fall back to. (The fxtiktok GitHub fork still exists and could be redeployed, but
+  // that is a deliberate rebuild, not a one-line revert.)
+  //
+  // TWO ZONES, DELIBERATELY. mbedfx.app is the project's domain as of 2026-07-30; the original zone
+  // is RETAINED rather than cut over, because every link already pasted into a Discord channel keeps
+  // resolving only while its host does. Retiring it is a later, separate decision — and a safe one
+  // once traffic has moved, which the AE counters can show.
+  //
+  // A NEW SERVING DOMAIN MUST ALSO BE ADDED TO src/platforms/fedihost.ts's OWN_HOSTS. Adding a route
+  // here alone is a silent SSRF hole: a fediverse ref names its own origin, so /{our-host}/post/1
+  // would induce the Worker to fetch itself through the edge. The two lists are coupled and nothing
+  // enforces it but this comment and the test that pins them together.
+  //
+  // TWO MORE HOSTS SERVE CARDS AND ARE DELIBERATELY NOT HERE: sorryifuckedyour.mom and
+  // hotsinglesnear.you (src/guesthost.ts, 2026-10-11), nor their d. names. All four are custom domains
+  // of the owner's you-stupid Worker (the d. ones since shamu4life/you-stupid#22), which keeps `/` and
+  // its own files and hands every other path to this Worker through a service binding. Listing them
+  // below would make the next deploy try to take the domains off you-stupid. They are in OWN_HOSTS like
+  // every serving domain, and test/guesthost.test.mjs fails if one, or any subdomain of one, is ever
+  // added to this array.
+  "routes": [
+    // The two staging.* custom domains that used to sit here were retired 2026-08-03 in favour of
+    // Workers Builds preview urls. THIS COMMENT USED TO SAY THAT IS WHERE TESTING HAPPENS. It is not,
+    // on two counts, and both cost a night on 2026-08-18.
+    //
+    // FIRST, THE PREVIEW HOSTNAMES SERVE NOTHING. Measured 2026-08-19: the versioned
+    // <version>-mbedfx.<subdomain>.workers.dev, the branch alias <branch>-mbedfx.<subdomain>, and the
+    // one belonging to the version LIVE IN PRODUCTION all return Cloudflare's "There is nothing here
+    // yet" page instead of this Worker. The settings read correct over the API — previews_enabled
+    // true, subdomain resolved, the aliased version present — so this is not a mistake in this file
+    // and flipping preview_urls does not fix it. Cause still unknown.
+    //
+    // SECOND, AND WORSE, A BRANCH BUILD CANNOT TEST A container/ CHANGE EVEN IF PREVIEWS WORKED.
+    // Workers Builds runs `wrangler versions upload` off a non-production branch, which ships the
+    // Worker script ALONE; only `wrangler deploy` — a merge to main — rebuilds the container image.
+    // A preview therefore always runs whatever image main last built. Promoting a branch version to
+    // production has the same hole: on 2026-08-19 that ran the new Worker against a two-day-old
+    // container and every measurement came back 503, which reads exactly like the fix failing.
+    //
+    // SO THERE IS NO PRE-MERGE TEST FOR A container/ CHANGE on Cloudflare egress. `wrangler dev` runs
+    // the container on your own machine, which is the wrong IP for anything YouTube gates. Merge it
+    // and measure production, and confirm `wrangler containers info` shows a NEW image digest before
+    // believing the result. See the YouTube 403 entry in CHANGELOG.md.
+    { "pattern": "mbedfx.app", "custom_domain": true },
+    { "pattern": "megapenispoopenfarten.sex", "custom_domain": true },
+    // forsen.sex, added 2026-08-03. IT WAS ALREADY LIVE and kept disappearing, which is the lesson
+    // worth recording: this array is the DESIRED STATE, not a starting point. Every deploy reconciles
+    // Cloudflare to match it, so a custom domain added in the dashboard survives exactly until the
+    // next merge — and merges are the deploy here. A domain that is not in this file does not exist.
+    { "pattern": "forsen.sex", "custom_domain": true }
+  ],
+  "assets": {
+    "directory": "./public",
+    "binding": "ASSETS",
+    "run_worker_first": true,
+    "not_found_handling": "none"
+  },
+  // WORKERS AI, for translating a foreign-script post into English beneath the original. The
+  // binding is OPTIONAL in code (Env.AI is `?`), so this line can be removed and every card still
+  // renders — translation simply stops happening. Added 2026-07-30.
+  "ai": { "binding": "AI" },
+  "analytics_engine_datasets": [
+    // A NEW DATASET STARTS AT ZERO. Historical counters stay in `fxeverything_counters` and are still
+    // queryable there; they do not migrate. Renaming was the owner's call, made knowing that.
+    { "binding": "AE", "dataset": "mbedfx_counters" }
+  ]
+}

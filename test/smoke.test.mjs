@@ -33,7 +33,7 @@ test('the only runtime dependency is the container helper, isolated from the fet
 })
 
 test('worker name matches repo name', () => {
-  const cfg = JSON.parse(readFileSync('wrangler.jsonc', 'utf8').replace(/^\s*\/\/.*$/gm, ''))
+  const cfg = JSON.parse(readFileSync('wrangler.production.jsonc', 'utf8').replace(/^\s*\/\/.*$/gm, ''))
   // MUST MATCH THE LIVE SERVICE. Cloudflare CAN rename a Worker in place (done 2026-07-30, same
   // service tag), and a mismatch here forks a second empty service that claims the routes.
   assert.equal(cfg.name, 'mbedfx')
@@ -57,7 +57,7 @@ test('routes are bare hostnames on our own zone — apex claimed, wildcard never
    *     here rather than something that slips in.
    *   - OUR ZONE ONLY. A route on a domain this project does not own is always a mistake.
    */
-  const cfg = JSON.parse(readFileSync('wrangler.jsonc', 'utf8').replace(/^\s*\/\/.*$/gm, ''))
+  const cfg = JSON.parse(readFileSync('wrangler.production.jsonc', 'utf8').replace(/^\s*\/\/.*$/gm, ''))
   const patterns = (cfg.routes ?? []).map(r => r.pattern)
   assert.ok(patterns.length > 0, 'the worker must claim at least one hostname')
   // THREE ZONES. mbedfx.app is the project's domain; megapenispoopenfarten.sex is the original, kept
@@ -166,7 +166,7 @@ test('EVERY DOMAIN THE PAGE OFFERS IS ONE THE WORKER SERVES — a subset, delibe
    * already use, and the subset rule is otherwise unchanged: a button must still name a domain that
    * reaches this Worker one way or the other.
    */
-  const cfg = JSON.parse(readFileSync('wrangler.jsonc', 'utf8').replace(/^\s*\/\/.*$/gm, ''))
+  const cfg = JSON.parse(readFileSync('wrangler.production.jsonc', 'utf8').replace(/^\s*\/\/.*$/gm, ''))
   const served = new Set([...(cfg.routes ?? []).map(r => r.pattern.split('/')[0]), ...GUEST_HOSTS])
   const page = readFileSync('public/index.html', 'utf8')
 
@@ -213,7 +213,7 @@ test('EVERY DOMAIN THE WORKER SERVES IS ONE THE PAGE RECOGNISES AS OURS — the 
    * a link from a served domain must be RE-POINTED, and a visitor arriving on one must be handed that
    * domain's own links.
    */
-  const cfg = JSON.parse(readFileSync('wrangler.jsonc', 'utf8').replace(/^\s*\/\/.*$/gm, ''))
+  const cfg = JSON.parse(readFileSync('wrangler.production.jsonc', 'utf8').replace(/^\s*\/\/.*$/gm, ''))
   // GUEST_HOSTS too (src/guesthost.ts): they serve cards through another Worker's binding rather than
   // a route here, and a link pasted from one is just as much ours as a link from forsen.sex.
   const served = [...new Set([...(cfg.routes ?? []).map(r => r.pattern.split('/')[0]), ...GUEST_HOSTS])]
@@ -265,7 +265,7 @@ test('EVERY SERVING ZONE IS REFUSED BY THE SSRF GUARD — the coupling wrangler.
    * Asserted through fetchableInstance rather than by reading the constant, so it pins the BEHAVIOUR
    * (including the subdomain rule) rather than the spelling of a private array.
    */
-  const cfg = JSON.parse(readFileSync('wrangler.jsonc', 'utf8').replace(/^\s*\/\/.*$/gm, ''))
+  const cfg = JSON.parse(readFileSync('wrangler.production.jsonc', 'utf8').replace(/^\s*\/\/.*$/gm, ''))
   // GUEST_HOSTS reach this Worker through you-stupid's service binding, not a route, and fetching one
   // would loop through that Worker and back here. They are serving zones for this rule.
   const hosts = [...(cfg.routes ?? []).map(r => r.pattern.split('/')[0]), ...GUEST_HOSTS]
