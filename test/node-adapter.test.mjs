@@ -4,7 +4,7 @@ import http from 'node:http'
 import { mkdtempSync, readFileSync, readdirSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { createAdapter, toRequest, writeResponse } from '../adapters/node/server.ts'
+import { createAdapter, gracefulStop, toRequest, writeResponse } from '../adapters/node/server.ts'
 import { DirBucket, keyFile } from '../adapters/node/r2dir.ts'
 import { ENV_VARS, envVars, inProcessMuxRunner, memoryCache, trackingContext } from '../adapters/node/bindings.ts'
 import { refKey } from '../src/refkey.ts'
@@ -373,6 +373,34 @@ test('/_clients reaches the container with the secret, and a container that neve
   assert.ok(Date.now() - t0 < 5000)
 })
 
+test('A STOP WAITS FOR THE REQUEST IN FLIGHT, not only for waitUntil work (review, 2026-11-25)', async () => {
+  // The reproduction: a container that answers after 1.5 s, a /_clients call in flight, then a stop
+  // 0.3 s in. The first version closed the server and drained only the waitUntil set, so the caller
+  // got an empty reply while the log said "all settled".
+  const slow = await fakeContainer((call, res) => setTimeout(() => {
+    res.writeHead(200, { 'content-type': 'application/json' })
+    res.end(JSON.stringify({ ok: true, serving: ['web_embedded'], clients: [] }))
+  }, 1500))
+  const { adapter, port } = await start({ containerUrl: slow.url })
+  let answeredAt = 0
+  const inFlight = raw(port, 'GET', '/_clients', { host: new URL(PRIMARY).host })
+    .then(res => { answeredAt = Date.now(); return res })
+  await new Promise(r => setTimeout(r, 300))
+  let stoppedAt = 0
+  const stopped = gracefulStop(adapter, 5000).then(r => { stoppedAt = Date.now(); return r })
+  const res = await inFlight
+  assert.equal(res.status, 200, 'the request in flight finished')
+  assert.deepEqual(JSON.parse(res.body.toString()).serving, ['web_embedded'])
+  const r = await stopped
+  // THE ORDER IS THE FIX: main() calls process.exit as soon as this resolves, so resolving before the
+  // answer went out is the empty reply the review reproduced.
+  assert.ok(answeredAt > 0 && stoppedAt >= answeredAt, `stop resolved after the answer (${stoppedAt - answeredAt} ms)`)
+  assert.equal(r.requestsDone, true, 'and the stop says so')
+  assert.equal(r.backgroundClean, true)
+  // A request after the stop is refused: the server no longer listens.
+  await assert.rejects(raw(port, 'GET', '/_clients', { host: new URL(PRIMARY).host }))
+})
+
 // ── MUX_RUNNER ─────────────────────────────────────────────────────────────────────────────────────
 
 test('the mux runner: first schedule wins, claim is check-and-set, the alarm disarms before it runs and never throws', async () => {
@@ -508,4 +536,17 @@ test('no environment variable can shadow a binding, AI stays unbound and RESOLVE
   assert.equal(typeof adapter.env.ASSETS.fetch, 'function')
   assert.equal(typeof adapter.env.RESOLVE_HOST, 'function')
   assert.equal(adapter.env.YT_PROMISE, 'off')
+})
+
+test('THE IMAGE NEVER CARRIES adapters/node/.env: the exclusion sits BELOW the re-include (review, 2026-11-25)', () => {
+  // BuildKit applies .dockerignore rules in order and the last match wins, so `!adapters/node` re-includes
+  // the operator's .env unless an exclusion for it comes after. Pinned as order, not as presence.
+  const lines = readFileSync(new URL('../adapters/node/Dockerfile.dockerignore', import.meta.url), 'utf8')
+    .split('\n').map(l => l.trim()).filter(l => l && !l.startsWith('#'))
+  const reinclude = lines.indexOf('!adapters/node')
+  assert.ok(reinclude >= 0, 'the adapter directory is re-included')
+  for (const rule of ['**/.env', '**/.env.*']) {
+    assert.ok(lines.indexOf(rule) > reinclude, `${rule} must come after !adapters/node`)
+  }
+  assert.ok(!lines.slice(reinclude + 1).some(l => /^!.*\.env/.test(l)), 'nothing re-includes an env file after it')
 })

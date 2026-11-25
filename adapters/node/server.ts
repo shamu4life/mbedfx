@@ -279,17 +279,49 @@ async function main(): Promise<void> {
     if (stopping) return
     stopping = true
     stopCron()
-    adapter.server.close()
-    adapter.server.closeIdleConnections()
-    const drainMs = Number(e.DRAIN_MS ?? 25_000)
-    const left = adapter.pending()
-    const clean = await adapter.drain(drainMs)
-    adapter.close()
-    console.log(`${signal}: ${left} pending at stop, ${clean ? 'all settled' : `gave up after ${drainMs} ms`}`)
+    const r = await gracefulStop(adapter, Number(e.DRAIN_MS ?? 25_000))
+    console.log(`${signal}: requests ${r.requestsDone ? 'finished' : 'cut off at the deadline'}, `
+      + `${r.backgroundPending} background task(s) pending at stop, ${r.backgroundClean ? 'all settled' : 'gave up at the deadline'}`)
     process.exit(0)
   }
   process.once('SIGTERM', () => void stop('SIGTERM'))
   process.once('SIGINT', () => void stop('SIGINT'))
+}
+
+/**
+ * STOP IN THE RIGHT ORDER, INSIDE ONE DEADLINE: requests in flight first, then the waitUntil set.
+ *
+ * `server.close()` stops taking connections but returns at once; its CALLBACK is what fires when every
+ * request still inside handle(), and every response body still streaming, has finished. The first
+ * version called close() and went straight to draining the waitUntil set, which does not hold those
+ * requests, so a review reproduced it (Node 22.18, a container answering after 3 s, SIGTERM 0.5 s into
+ * a /_clients call): curl got an empty reply while the log said "all settled". Under compose that is
+ * every unfurl mid-render on a recreate, and Discord never re-crawls a failed one (muxpolicy.ts).
+ *
+ * Both waits share `drainMs`, so the total stays under the compose stop_grace_period.
+ */
+export async function gracefulStop(
+  adapter: { server: http.Server; drain(ms: number): Promise<boolean>; pending(): number; close(): void },
+  drainMs: number,
+): Promise<{ requestsDone: boolean; backgroundPending: number; backgroundClean: boolean }> {
+  const deadline = Date.now() + drainMs
+  const closed = new Promise<boolean>(resolve => adapter.server.close(() => resolve(true)))
+  // closeIdleConnections() only closes what is idle WHEN it runs; a request that finishes after it
+  // leaves a keep-alive socket open, and close()'s callback would then wait out the keep-alive timeout
+  // (measured in the test below: the stop reported "cut off" with every request already answered).
+  // So keep closing idle sockets until the server reports it is closed.
+  adapter.server.closeIdleConnections()
+  const sweep = setInterval(() => adapter.server.closeIdleConnections(), 100)
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const timedOut = new Promise<boolean>(resolve => { timer = setTimeout(() => resolve(false), drainMs) })
+  const requestsDone = await Promise.race([closed, timedOut])
+  clearTimeout(timer)
+  clearInterval(sweep)
+  // A request that finished may have handed work to waitUntil on its way out, so count after it.
+  const backgroundPending = adapter.pending()
+  const backgroundClean = await adapter.drain(Math.max(0, deadline - Date.now()))
+  adapter.close()
+  return { requestsDone, backgroundPending, backgroundClean }
 }
 
 // `import.meta.main` is Node 22.18+; the argv test is the same question asked the older way.

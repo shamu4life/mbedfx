@@ -6,3 +6,14 @@
 !src
 !public
 !adapters/node
+# THE RE-INCLUDE ABOVE TAKES EVERYTHING UNDER adapters/node, the operator's .env with it, and the
+# Dockerfile copies that directory whole. A review (2026-11-25) caught it: docs/SELF-HOSTING.md has the
+# operator write RESOLVER_SECRET and any *_ACCOUNTS cookie jars into adapters/node/.env, so every image
+# built that way carried live secrets in a layer, one `docker push` from public. The last matching rule
+# wins, so these exclusions must stay BELOW the re-include. compose reads the file at run time
+# (env_file); the image never needs it.
+**/.env
+**/.env.*
+**/*.env
+adapters/node/data
+adapters/node/media
