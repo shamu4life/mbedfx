@@ -1,21 +1,19 @@
 # Self-hosting mbedfx
 
-Nothing here has been run outside Cloudflare Workers: no Node adapter, no Dockerfile for the Worker,
-no compose file. `container/` is the only piece that should run unchanged, in the three commands
-below, and nobody has run it that way.
+mbedfx runs off Cloudflare now. `adapters/node/` serves the production handler, `handle()` in
+`src/worker.ts`, from Node's own HTTP server with nothing under `src/` changed, and
+`adapters/node/compose.yaml` starts it beside the `container/` resolver. On 2026-11-25 it ran on a
+residential Linux host against a local `container/server.py`, and four of five posts drew the same card
+as on mbedfx.app. [What the first run measured](#what-the-first-run-measured) has the fifth. The Docker
+image and the compose file are written but not built, because that host had no Docker.
 
-What HAS landed, 2026-08-12, is the set of corrections that would make exposing a self-hosted
-instance safe rather than the adapter that would run one: the private-address guard the Worker half
-never had (`src/netguard.ts`), a configurable `OWN_HOSTS`, a guest-token cache that works on both
-runtimes, a bound on the mux buffering fallback, and the `CacheLike` contract written down. All of
-it is code with offline tests and none of it is a deployment report. See
-[Before a public deployment](#before-a-public-deployment).
+The corrections that make exposing an instance safe landed on 2026-08-12: the private-address guard the
+Worker half never had (`src/netguard.ts`), a configurable `OWN_HOSTS`, a guest-token cache that works on
+both runtimes, a bound on the mux buffering fallback, and the `CacheLike` contract written down. They
+are code with offline tests. See [Before a public deployment](#before-a-public-deployment).
 
-The audit reads the code and finds no *known* blocker in it: a claim about the code, not a
-demonstration of it, and not a claim that the port is small. Every claim cites its file. Whether a
-self-hosted instance draws the same cards is unmeasured. The egress table measures ten surfaces for
-whether the answer changes with the IP the fetch leaves from; three of the ten answer the same
-either way.
+Every claim below cites its file. The egress table measures ten surfaces for whether the answer
+changes with the IP the fetch leaves from; three of the ten answer the same either way.
 
 An earlier revision of this project's notes said self-hosting was not achievable, and the README
 comparison table said "Workers only". The README's `Self-host off Cloudflare` row now carries the
@@ -38,7 +36,7 @@ curl localhost:8080/health
 Unset, that second command is an unauthenticated remuxer that fetches and downloads whatever any
 caller names. Do not publish it or bind it to a public interface.
 
-`container/Dockerfile:16` installs an x86_64 Deno binary and `container/README.md:264` requires
+`container/Dockerfile` installs an x86_64 Deno binary and `container/README.md` requires
 linux/amd64, which `--platform` pins above. What an arm64 build produces is unrecorded; nobody has
 built or resolved on one.
 
@@ -50,6 +48,91 @@ dead at one vCPU, because the hot path is single-threaded Python and an `ffmpeg 
 four cores buy nothing over one. `wrangler.jsonc` now asks for `standard-2` (1 vCPU, 6 GiB memory,
 12 GB disk); a self-hoster wants at least one dedicated core and enough disk for `MAX_BYTES` plus the
 unmerged tracks.
+
+---
+
+## Running the Node adapter
+
+Node 22.18 or later runs the TypeScript as written. There is no build step and no `npm install`,
+because nothing `src/worker.ts` imports comes from `node_modules`. From the repository root, with the
+resolver from the section above listening on port 8080:
+
+```sh
+PUBLIC_ORIGIN=https://embed.example.com \
+RESOLVER_SECRET=<the container's secret> \
+MEDIA_CACHE_DIR=/var/lib/mbedfx \
+node adapters/node/server.ts
+```
+
+Or both halves with Docker Compose. Compose reads `adapters/node/.env`, which `.gitignore` already keeps
+out of git:
+
+```sh
+printf 'PUBLIC_ORIGIN=https://embed.example.com\nRESOLVER_SECRET=%s\n' "$(openssl rand -hex 32)" \
+  > adapters/node/.env
+docker compose -f adapters/node/compose.yaml up --build -d
+```
+
+Compose publishes the adapter on `127.0.0.1:8787` and the resolver not at all, so put the reverse proxy
+that terminates TLS for `PUBLIC_ORIGIN` in front of port 8787. The resolver image has to be
+`linux/amd64` even on an ARM host, and compose pins that: `container/Dockerfile` downloads the x86_64
+Deno build by name. On ARM it runs under emulation.
+
+| Variable | Default | What it does |
+|---|---|---|
+| `PUBLIC_ORIGIN` | `http://localhost:$PORT` | The origin every URL in a card is built on. Set it to your public `https://` origin. A list is allowed, space- or comma-separated: the first entry is the default, and another is used only when the `Host` header names it exactly, which is how `https://d.embed.example.com` serves direct media. The hosts are added to `OWN_HOSTS`. |
+| `PORT`, `HOST` | `8787`, `127.0.0.1` | Where the adapter listens. The image sets `HOST=0.0.0.0`. |
+| `CONTAINER_URL` | `http://127.0.0.1:8080` | The resolver. `off` leaves `MEDIA_RESOLVER` unbound, and remux videos show their cover still. |
+| `MEDIA_CACHE_DIR` | `mbedfx-media` in the system temp directory | The R2 stand-in, one file per key. `off` leaves `MEDIA_CACHE` unbound. |
+| `RESOLVER_TIMEOUT_MS` | `420000` | How long a call to the resolver may sit idle. It is above the container's 360 s `MUX_PAGE_TIMEOUT` because the container sends nothing until a mux is done. |
+| `DRAIN_MS` | `25000` | How long SIGTERM waits for `waitUntil` work before the process exits. |
+| `SMOKE_CRON` | on | The half-hourly scheduled check, as on Cloudflare. Each run renders 17 known posts from your egress. `off` stops it. |
+| `ANALYTICS_LOG` | off | `1` prints each Analytics Engine data point as one JSON line on stdout. |
+
+Every string variable and secret the Worker reads comes from the environment under its own name:
+`RESOLVER_SECRET`, `OWN_HOSTS`, `YT_PROMISE`, the `*_ACCOUNTS` pools and the rest of
+[the binding table](#what-replaces-each-binding-and-what-degrades-without-it). `YT_PROMISE` defaults to
+`off`, the value `wrangler.jsonc` sets on the public instance. An empty value counts as unset.
+
+### What each stand-in gives up
+
+The stand-ins are in `adapters/node/bindings.ts` and `adapters/node/r2dir.ts`, and each one's comment
+says what it replaces. The trade-offs:
+
+- Run one process. The response cache is a `Map` (5000 entries at most, `max-age` honoured), the
+  mux runner's alarms are timers, and `waitUntil` is a set of promises. A second process would hold a
+  second copy of each.
+- The mux runner forgets on restart. It is `MuxRunner` rebuilt from the functions that class uses,
+  so the retry schedule and the give-up rule are production's. An armed alarm is a `setTimeout`, though,
+  and the next paste of that video arms it again.
+- `waitUntil` has no 30-second ceiling. Work runs until it settles, so a long mux finishes inline
+  more often than it does on Cloudflare.
+- `SMOKE_RUNNER` is bound. Without it the cron falls back to `liveDeps()`, whose default argument
+  reads `caches.default`, and Node has no such global. The check runs from your host either way. The
+  colo `/_health` records is the Cloudflare data center nearest your egress, not your host.
+- There is no Workers AI, so translation uses Google's endpoint alone.
+- Cloudflare compresses `/`. The adapter sends it plain.
+- `RESOLVE_HOST` is wired to `dns.lookup`, so the address guard's DNS half is on.
+
+`test/node-adapter.test.mjs` starts the adapter on a random port against a fake container and runs
+offline with the rest of the suite.
+
+### What the first run measured
+
+On 2026-11-25 the adapter ran on a residential Linux host under Node 22.18.0, started from a copy of
+exactly the files the Dockerfile copies. Beside it ran `container/server.py` with yt-dlp 2026.11.23 (the
+image's pin), ffmpeg 7.1.5 and Deno 2.9.8. Each post was fetched with Discord's user agent through the
+adapter and through mbedfx.app, and `og:title`, `og:description`, `og:image`, `og:video`, the activity
+document and the `/_api/v1` JSON were compared with the origins stripped. Like and view counts moved
+between the two reads and are left out below.
+
+| Post | Result |
+|---|---|
+| Bluesky `/profile/bsky.app/post/3msqpuobiwk2t` | Identical: the head, the activity document and all 25 API fields. |
+| Reddit `/r/pics/comments/haucpf` | Identical, all 24 API fields, with no relay and no OAuth app configured. |
+| Mastodon `/mstdn.social/@stux/116994812581955524` | Identical. |
+| Twitter `/jack/status/20` | Same head, but no repost count. From this host the syndication endpoint, the primary path, answered without `retweet_count` (checked by calling it directly), so `reposts` is absent. mbedfx.app shows 126.3K. Which path production's answer came from can't be seen from outside. |
+| YouTube `/jNQXAC9IVRw` | The first view differed. The video was cold here and warm on production, so the adapter drew the degraded card (YouTube's own player, never cached) while the mux ran, which took 3.6 s. On the second view the head and the activity document matched, `og:video` included. The two MP4s are different muxes of the same 19-second video: 629,172 bytes here, 633,710 there. |
 
 ---
 
@@ -77,60 +160,71 @@ module graph loads and executes under Node, and nothing more.
 ### The adapter entry point
 
 `env`, `ctx` and `Deps` are ordinary parameters of `handle()` in `src/worker.ts`, and the
-Workers-specific default export is nine lines wrapped around it:
+Workers-specific default export is a thin wrapper around it:
 
 ```ts
 // src/worker.ts
 export async function handle(req: Request, env: Env, ctx: ExecutionContext, d: Deps): Promise<Response>
 
+const liveDeps = (cache: CacheLike = caches.default as unknown as CacheLike): Deps => ({
+  cache,
+  fetchPost: liveFetchPost,
+  fetchProfile: liveFetchProfile,
+  resolveShortlink: liveResolveShortlink,
+  resolveRedditShare: liveResolveRedditShare,
+  resolveMetaShare,
+})
+export const scheduledDeps = (): Deps => liveDeps(COLD_CACHE)
+
 export default {
   async fetch(req: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
-    return handle(req, env, ctx, {
-      cache: caches.default as unknown as CacheLike,
-      fetchPost: liveFetchPost,
-      resolveShortlink: liveResolveShortlink,
-      resolveRedditShare: liveResolveRedditShare,
-      resolveMetaShare,
-    })
+    return handle(req, env, ctx, liveDeps())
+  },
+  async scheduled(event: ScheduledController, env: Env, ctx: ExecutionContext): Promise<void> {
+    // smokeWhereReadersAre(env, ctx), then the week into MEDIA_CACHE
   },
 }
 ```
 
-The `caches.default` cast is the only Cloudflare-shaped thing in that block. All four live
-dependencies are already exported: `liveFetchPost`, `liveResolveShortlink` and
-`liveResolveRedditShare` from `src/worker.ts`, `resolveMetaShare` from
-`src/platforms/metashare/fetch.ts`.
+`caches.default` is the only Cloudflare-shaped thing in that block, and it is a default argument, so it
+is read only when `liveDeps()` is called without one. The Node adapter never makes that call. It spreads
+`scheduledDeps()` and swaps in its own cache, `{ ...scheduledDeps(), cache }`, so a fetcher added to
+`liveDeps` later reaches the adapter without anyone copying it. Every live dependency is exported:
+`liveFetchPost`, `liveFetchProfile`, `liveResolveShortlink` and `liveResolveRedditShare` from
+`src/worker.ts`, `resolveMetaShare` from `src/platforms/metashare/fetch.ts`.
 
 ### The eight Cloudflare surfaces
 
 Six of the eight need only an object literal: `AE`, `ASSETS`, `AI`, the `CacheLike`, the `ctx`, and
-the `cf` fetch option. `Env` lives in `src/analytics.ts`, where three of its five object-shaped
-bindings are interfaces hand-written in that file with no Cloudflare type in them:
+the `cf` fetch option. `Env` lives in `src/analytics.ts`, where three of its object-shaped bindings
+are interfaces hand-written in that file with no Cloudflare type in them. `MUX_RUNNER` and
+`SMOKE_RUNNER` are typed the same way, by their methods:
 
 ```ts
-AE?: { writeDataPoint(x: { blobs?: string[]; doubles?: number[]; indexes?: string[] }): void }  // :183
-ASSETS: { fetch(req: Request): Promise<Response> }                                              // :184
-AI?: { run(model: string, input: Record<string, unknown>): Promise<unknown> }                   // :195
+AE?: { writeDataPoint(x: { blobs?: string[]; doubles?: number[]; indexes?: string[] }): void }
+ASSETS: { fetch(req: Request): Promise<Response> }
+AI?: { run(model: string, input: Record<string, unknown>): Promise<unknown> }
 ```
 
-The other two are optional Cloudflare types, `MEDIA_RESOLVER?: DurableObjectNamespace` (`:188`) and
-`MEDIA_CACHE?: R2Bucket` (`:189`). The suite fakes both with object literals and runs the entire
+The other two are optional Cloudflare types, `MEDIA_RESOLVER?: DurableObjectNamespace` and
+`MEDIA_CACHE?: R2Bucket`. The suite fakes both with object literals and runs the entire
 `/_media/` mux path against them under Node: `MEDIA_RESOLVER: { getByName: () => ({ fetch: impl }) }`
 and a `fakeR2()` doing head / get / get-with-range / put over a `Map`
 (`test/media-resolver.test.mjs`).
 
 Outside `Env`, `caches.default` is reached only through the hand-written `CacheLike` injected via
-`Deps` (`src/worker.ts`). `ExecutionContext` is
-used for `ctx.waitUntil` and nothing else, across FIFTEEN call sites in `src/worker.ts`, with no
-`passThroughOnException`, `ctx.props` or `ctx.exports`. Reproduce it with
+`Deps` (`src/worker.ts`). `ExecutionContext` is used for `ctx.waitUntil` and nothing else, at 24 call
+sites in `src/worker.ts` (counted 2026-11-25), with no `passThroughOnException`, `ctx.props` or
+`ctx.exports`. Reproduce it with
 `grep -cE 'ctx\??\.waitUntil\(' src/worker.ts` — the `\??` matters, because one site is
 optional-chained and a literal grep for `ctx.waitUntil` misses it, and the `\(` matters because it
 is what separates the invocations from the prose.
 
-**Do not trust this number without re-running that.** It has been wrong twice: an early revision
-printed 13 (the literal grep, comments included), a later one said nine, and the count has only gone
-up since — every mux the alarm arms and every response-cache write adds one. Dropping the `\(`
-matches 25 lines today, ten of them prose inside comments.
+**Do not trust this number without re-running that.** It has been wrong three times: an early revision
+printed 13 (the literal grep, comments included), a later one said nine, and the next said fifteen
+while the code had 24. The count only goes up, because every mux the alarm arms and every
+response-cache write adds one. Dropping the `\(` matches 34 lines today, ten of them prose inside
+comments.
 
 ### Workers-only globals
 
@@ -263,16 +357,31 @@ YouTube's among them since 1.12.0. So read the rows below as what a host is refu
 
 | Platform / surface | Measured | Where |
 |---|---|---|
-| Reddit anonymous `.json` | Verified 2026-07-21: Workers egress gets a 403 "network security" block page. `embed.reddit.com` is not blocked, and is the primary credential-free path. | `src/platforms/reddit/fetch.ts` |
+| Reddit anonymous `.json` | Verified 2026-07-21: Workers egress gets a 403 "network security" block page. A residential host got the same 403 on 2026-11-25. `embed.reddit.com` refused Workers egress from 2026-10-22 (403, measured 2026-10-25), which is why the archive path and the relay exist. From a residential host it is refused to curl and served to Node's `fetch` (see below). | `src/platforms/reddit/fetch.ts` |
 | Reddit embed with a placeholder subreddit | Measured from Workers egress 2026-07-22: a placeholder sub gets a stripped render. The real subreddit has to be passed. | `src/platforms/reddit/fetch.ts` |
 | Facebook `/share/{code}` 302 | Measured on one share code: a browser-shaped request from a laptop gets `302 -> /posts/…`, the same request from Cloudflare's egress gets none. Confirmed by natural experiment against the live worker. | `src/platforms/metashare/fetch.ts` |
-| Instagram embed | From datacenter egress the embed returned an ~81 KB "unavailable" shell and a public post rendered as private. Residential egress never reproduced it, and it reached production. | `src/worker.ts:368` |
-| Threads video (`scontent*.cdninstagram.com`) | Meta blocks Cloudflare's datacenter egress for these bytes: "our container can't fetch it … that fetch is a datacenter IP; Discord's proxy is not". Threads video is a 302 to Discord's own proxy, never a remux or a byte proxy. | `src/platforms/threads/normalize.ts`, `src/mediaproxy.ts` |
+| Instagram embed | From datacenter egress the embed returned an ~81 KB "unavailable" shell and a public post rendered as private. Residential egress never reproduced it, and it reached production. The shell is about 183 KB as of 2026-11-25, so judge it with `hasEmbedPayload`, never by size. | `src/worker.ts` (the note near `fullpage_recovered`) |
+| Threads video (`scontent*.cdninstagram.com`) | Once blocked for the container's egress. A Worker fetch on 2026-08-09 got 200 `video/mp4` (8,990,730 bytes), and the Worker now serves those bytes itself. A residential host got the same file on 2026-11-25. | `src/platforms/threads/normalize.ts`, `src/mediaproxy.ts` |
 | Google translate endpoint | Measured 2026-07-31 from a Worker: answers in 13-16 ms and is not blocked from Cloudflare's egress. It does rate-limit bursts, and ~30 requests in a few seconds drew HTTP 429 on every one. | `src/translate.ts` |
-| Twitter guest endpoints | Byte-identical from residential and Cloudflare Workers egress in the 2026-07-19 recon; the activation and `TweetResultByRestId` were both measured working. | `src/platforms/twitter/fetch.ts`, `:129`, `:147` |
+| Twitter guest endpoints | Byte-identical from residential and Cloudflare Workers egress in the 2026-07-19 recon; the activation and `TweetResultByRestId` were both measured working. On 2026-11-25 from a residential host, syndication (the primary path) answered `/jack/status/20` without `retweet_count`, while mbedfx.app's card for it showed a repost count. The Cloudflare side of that was not measured. | `src/platforms/twitter/fetch.ts`, `:129`, `:147` |
 | YouTube via yt-dlp | Not datacenter-IP-blocked, and measured PER PLAYER CLIENT since 2026-08-28. A `{page}` resolve returned a real ad-free MP4 from Cloudflare Container egress on 2026-07-22; it needed Deno for the signature challenge, not a different IP. `/_clients` then extracted one video with six clients on that egress and range-fetched each chosen format: `default`, `web_embedded`, `tv_simply`, `mweb` and `web_safari` all served bytes with NO PO token, and only `android_vr` was refused (`http-403`). `tv_simply` and `mweb` are the two clients yt-dlp's PO Token Guide says require one, so a token provider buys a self-hoster on datacenter egress nothing. Refusals are intermittent rather than absolute — worth one retry, not a verdict. | `src/worker.ts` (`/_clients`), `container/README.md` |
 | Instagram copyright recovery (`copyright_recovered`) | Unconfirmed from Cloudflare egress. Every measurement behind it is residential, and the recovery fails silently into a cover still. The counter exists so the failure is visible at all. | `src/analytics.ts` |
 | Instagram generally | Instagram's behaviour toward Cloudflare is PATH-DEPENDENT: a residential result does not transfer to Workers egress by itself. | `src/platforms/instagram/fetch.ts` |
+
+### Measured from a residential host, 2026-11-25
+
+The first probes from somewhere other than Cloudflare or a laptop: a Debian box on a home connection,
+curl 8.14.1 and Node's `fetch`, with the header sets the fetchers send. Each result was judged by the
+repo's own checks (`hasEmbedPayload`, `hasThreadsSSR`, the Reddit embed markers) rather than by status code.
+
+| Probe | Result | What it means |
+|---|---|---|
+| Reddit `.json` | 403 block page, for curl and for Node | Blocked from a home line too. Nothing uses it. |
+| Reddit embed | 403 to curl, 200 with the full post to Node, same IP and headers | Reddit's gate is keyed on the client. The address made no difference. A Node self-host on a home line gets the embed that Cloudflare's egress lost on 2026-10-22. Other runtimes were not measured. |
+| Facebook `/share/{code}` | Not sent | No live share code could be had without logging in. Still unmeasured. |
+| Instagram embed | 200 with a real payload for a normal post (`DaQ5CPTki4E`) | Works. The usual sample, `DZxLuleoEoC`, fails its embed from anywhere (a fake code gets the same page), so it is a poor egress probe. |
+| Threads SSR, then its `scontent` video | 200 SSR with one video; then 200 `video/mp4`, 8,990,784 bytes | Both work from a home line. |
+| Google translate | 200, the expected translation | No address block. The burst limit was not tested. |
 
 ### What changes on a different host
 
@@ -301,11 +410,12 @@ the failure is otherwise silent (`src/analytics.ts`).
 | `ASSETS` | `Env`, `src/analytics.ts` | one call: `env.ASSETS.fetch(req)` (`src/worker.ts`) | any static file server over `public/`, taking a `Request` and returning a `Response` | Required, about six lines of Node. Only the landing and converter pages touch it; both throw without it. |
 | `MEDIA_CACHE` (R2) | `Env`, `src/analytics.ts` | `head(key)`, `get(key)`, `get(key, {range:{offset,length}})`, `put(key, stream\|ArrayBuffer\|string)`, and OPTIONALLY `putStream(key, stream, length\|null)` | any S3-compatible store, or a directory on disk. The test fake is a `Map` in 15 lines (`test/media-resolver.test.mjs`) | Optional. The mux is never cached: remux videos re-mux forever or get stripped, the card falls back to its cover still on every view, translations lose their cross-request cache, and yt-dlp metadata is re-extracted every time (2.4-3.1 s per Facebook video). Implement `putStream` if your store takes a stream. Without it, muxes are buffered in memory up to `MUX_BUFFER_MAX` and refused above it. |
 | `MEDIA_RESOLVER` (Durable Object) | `Env`, `src/analytics.ts` | `resolver.getByName(name).fetch(url, init)` and nothing else | an object whose `getByName(name)` returns `{ fetch }` pointed at the container. The name is a pooling slot (`resolver-{RESOLVER_GENERATION}-{0..N}` — that string names the instances and nothing stored; `META_GENERATION` is the one that scopes cached records), one container or several | Optional. Without it or without `MEDIA_CACHE`, `withResolver` strips every `remux` video and those platforms render a cover still (`src/worker.ts`). |
-| `SMOKE_RUNNER` (Durable Object) | `Env`, `src/analytics.ts` | `idFromName(name)`, then `get(id, { locationHint })` and its `run()` (`smokeWhereReadersAre`, `src/worker.ts`) | nothing: leave it unset | Optional. It exists only to move the scheduled check to eastern North America on Cloudflare, where the cron otherwise runs anywhere. Without it the check runs in place, on the one machine a self-hosted deploy has anyway. |
+| `SMOKE_RUNNER` (Durable Object) | `Env`, `src/analytics.ts` | `idFromName(name)`, then `get(id, { locationHint })` and its `run()` (`smokeWhereReadersAre`, `src/worker.ts`) | an object whose `get(id).run()` calls `scheduledSmoke(env, ctx, scheduledDeps())`, as `SmokeRunner` does. The adapter's is `inProcessSmokeRunner` in `adapters/node/bindings.ts` | Required off Cloudflare, though `Env` marks it optional. Without it the cron runs the check in place through `liveDeps()`, whose default argument reads `caches.default`, a global Node does not have, so every tick throws. On Cloudflare the binding moves the check to eastern North America; off it, the check runs from your host either way. |
+| `MUX_RUNNER` (Durable Object) | `Env`, `src/analytics.ts` | `getByName(key)`, then `schedule(job)`, and `claim()` / `release()` where present (`src/worker.ts`) | the in-process runner in `adapters/node/bindings.ts`, built from `runMuxJob`, `recordMuxGiveUp`, `clearMuxGiveUp` and the `src/muxpolicy.ts` helpers | Optional. The inline attempt is then the only one, with no retry schedule and no give-up mark, so a video whose mux fails keeps being retried by each new paste. |
 | `AE` (Analytics Engine) | `Env`, `src/analytics.ts` | one call: `env.AE?.writeDataPoint({ blobs: [platform, outcome, client], doubles: [1] })` (`src/analytics.ts`) | anything with a `writeDataPoint` method: a Prometheus counter, a StatsD client, a log line. The full schema is in `docs/METRICS.md` | Optional. Every card still renders, and the one signal that would report a refused egress is gone. |
 | `AI` (Workers AI) | `Env`, `src/analytics.ts` | `ai.run(model, input)`, `FALLBACK_MODEL = '@cf/google/gemma-4-26b-a4b-it'` (`src/translate.ts:276`) | any model behind a `run(model, input)` shim | Optional. Translation falls back to Google's endpoint alone; if that is also refused from your egress, translation stops and every card renders untranslated. |
 | `caches.default` | `src/worker.ts`, behind `CacheLike` (`src/worker.ts`) | `match(url)` / `put(url, Response)` with a synthetic `https://cache.mbedfx.internal/…` key (`src/cache.ts`) | a `Map` (what the tests use), Redis, or a disk cache. **Not** a per-process `Map` across more than one process. The five promises an implementation makes (honour `cache-control: max-age`, hand back a readable body, be shared across processes, never reject, key on the exact string) are the `CacheLike` docstring in `src/worker.ts`; `test/selfhost.test.mjs` fails if the worker starts calling a third method | Required by the type, trivial to satisfy. With a weak one, every paste refetches upstream, and Discord fetches roughly three times per paste (`src/worker.ts`). Cloudflare's Cache API is itself only per-datacenter: a self-hosted shared cache is arguably better than what the public instance has ([Cloudflare docs: "the contents of the cache do not replicate outside of the originating data center"](https://developers.cloudflare.com/workers/runtime-apis/cache/)). |
-| `ExecutionContext` | parameter of `handle` | `ctx.waitUntil(p)` only, fifteen sites in `src/worker.ts` | `{ waitUntil(p) { … } }` that tracks the promise and keeps the process alive until it settles | Required. `waitUntil` is what releases in-flight container slots, keeps a mux running past the response, and writes the response cache. A no-op silently cancels all three, and the symptom is "videos never appear". |
+| `ExecutionContext` | parameter of `handle` | `ctx.waitUntil(p)` only, 24 sites in `src/worker.ts` | `{ waitUntil(p) { … } }` that tracks the promise and keeps the process alive until it settles | Required. `waitUntil` is what releases in-flight container slots, keeps a mux running past the response, and writes the response cache. A no-op silently cancels all three, and the symptom is "videos never appear". The adapter's is `trackingContext` in `adapters/node/bindings.ts`, drained on SIGTERM. |
 | `OWN_HOSTS` | `src/analytics.ts` | added to the built-in own-zone list in `src/platforms/fedihost.ts` | every domain you serve from, comma- or whitespace-separated, hostname or origin | **Set it.** Unset, the fediverse routes will fetch your own domain if somebody asks them to. Additive, so a wrong value can only make the guard stricter. |
 | `RESOLVE_HOST` | `src/analytics.ts` | `blockedResolvedHost` in `src/netguard.ts`, before every fediverse fetch | `async (host) => (await dns.lookup(host, { all: true })).map(a => a.address)` | Optional, strongly recommended off Cloudflare. Without it the address guard is literal-only, which is all a Worker can ever do, so `evil.example.com IN A 127.0.0.1` is not caught. |
 | `MUX_BUFFER_MAX` | `src/analytics.ts` | `putMuxed` in `src/worker.ts` | bytes, as a string. Default 64 MB | Optional. Raise it if you have memory and no `putStream`; a video above it is not cached and its card degrades to the cover still. |
@@ -326,9 +436,8 @@ A private instance runs without any of this; a public one does not. Everything i
 code that is now in the tree. What is left is the settings you have to fill in and the one thing
 that still cannot be fixed from inside a Worker.
 
-Nothing below has been measured against a running self-hosted instance, because there is not one.
-It is code with offline tests (`test/netguard.test.mjs`, `test/selfhost.test.mjs`), not a deployment
-report.
+The adapter has run, privately, on one host. Nothing below has been tested on a public instance; it is
+code with offline tests (`test/netguard.test.mjs`, `test/selfhost.test.mjs`), not a deployment report.
 
 ### `OWN_HOSTS`, and setting it
 
@@ -379,9 +488,9 @@ IPv4-mapped/-compatible forms of all of the above. It also refuses `localhost`, 
 `.internal`, `.lan`, `.home.arpa` and `.arpa` names, which `FEDI_HOST` admits as soon as they carry
 a dot (`api.localhost` passes that regex; `localhost` does not).
 
-**The DNS half is yours to wire.** `env.RESOLVE_HOST` is a function, not a wrangler binding. A
-Worker has no resolver, so on Cloudflare it is permanently undefined and the literal check is the
-whole guard. In a Node adapter it is three lines:
+**The DNS half needs a resolver.** `env.RESOLVE_HOST` is a function, not a wrangler binding. A Worker
+has no resolver, so on Cloudflare it is permanently undefined and the literal check is the whole guard.
+The Node adapter sets it (`resolveHost` in `adapters/node/bindings.ts`):
 
 ```ts
 import dns from 'node:dns/promises'
@@ -444,18 +553,22 @@ No code required: the three commands above, with `RESOLVER_SECRET` set.
 
 ### A Node adapter, with no changes under `src/`
 
-One new file, plus packaging, against exports that already exist:
+Status on 2026-11-25, against issue #27's Phase 1 list:
 
-- an `env` object literal: `ASSETS` over `public/`, optional `AE` / `AI` / `MEDIA_CACHE` /
-  `MEDIA_RESOLVER`, secrets read from `process.env`;
-- a `ctx` whose `waitUntil` is the tracking one above, never a no-op;
-- a `CacheLike`: a `Map` to start, something shared before it is more than one process;
-- `Deps` copied verbatim from the default export;
-- HTTP glue: `IncomingMessage` → `Request`, `Response` → `ServerResponse`, streaming the body.
+- [x] `adapters/node/server.ts`: `IncomingMessage` to `Request` on the configured origin,
+  `Response` back to `ServerResponse`, bodies streamed, HEAD answered without one.
+- [x] The `env` literal: `ASSETS` over `public/`, `MEDIA_CACHE` as a directory, `MEDIA_RESOLVER` at
+  the container, `MUX_RUNNER` and `SMOKE_RUNNER` in process, `AE` off or on stdout, `AI` unbound,
+  secrets from the environment.
+- [x] A `waitUntil` that tracks every promise and is drained on SIGTERM.
+- [x] A `CacheLike`: a `Map` that honours `max-age`.
+- [x] `Deps` from the same export the default export builds on, `{ ...scheduledDeps(), cache }`, not a
+  hand copy.
+- [x] A Dockerfile and a compose file, written in `adapters/node/` and not yet built.
+- [x] Acceptance against production on five posts: four drew the same card, and Twitter's lacked its
+  repost count. See [What the first run measured](#what-the-first-run-measured).
 
-That lands as `adapters/node/server.ts`, a Dockerfile for it, and a compose file next to the resolver
-container. The adapter is finished when the same paste renders the same card from it as from
-production, on the platforms the egress table does not affect.
+Still open: the shared `CacheLike` (below), a first build of the image, and a public instance.
 
 ### The corrections that make it safe to expose
 
@@ -475,8 +588,8 @@ Still open:
 - An actual shared `CacheLike` implementation. Deliberately NOT in this repo: it would mean a client
   library and a dependency for one of two runtimes. The seam is two methods wide; the store is the
   operator's choice.
-- Everything here is code and tests, not a deployment. None of it has been exercised against a
-  running instance off Cloudflare, because there is not one yet.
+- A public instance. The adapter has run privately on one host; none of these corrections has been
+  tested under real traffic off Cloudflare yet.
 
 ### Measuring the egress
 

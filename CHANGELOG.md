@@ -6,6 +6,17 @@ All notable changes to mbedfx are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- **mbedfx runs off Cloudflare, on Node.** `adapters/node/server.ts` serves the production handler from
+  `src/worker.ts` on Node's own HTTP server, with nothing under `src/` changed, and
+  `adapters/node/compose.yaml` runs it beside the `container/` resolver. Each Cloudflare binding has a
+  stand-in: `public/` for assets, a directory for R2, an in-process mux runner and scheduled check, a
+  `Map` for the cache, and a `waitUntil` that SIGTERM drains. On 2026-11-25, from a home connection,
+  Bluesky, Reddit, Mastodon and YouTube posts drew the same card through it as on mbedfx.app. Twitter's
+  lacked its repost count. The Docker image and the compose file haven't been built yet. See
+  `docs/SELF-HOSTING.md`.
+
 ### Fixed
 
 - **Facebook posts name their page in the document Discord reads.** The 2026-08-12 platform audit
@@ -21,6 +32,11 @@ All notable changes to mbedfx are documented here. The format follows
   posts read from the og: page, plugin posts without that time, and videos with neither field. They
   still show 1970 (`createdAt: null` in `/_api/v1`). Leaving the field out instead waits on a test
   in Discord, which may refuse a document without it.
+- **Off Cloudflare, the scheduled check needs `SMOKE_RUNNER` bound.** `docs/SELF-HOSTING.md` (and the
+  1.17.0 entry below) said a self-hosted deploy could leave it unset. Without it the cron's fallback
+  reads `caches.default`, which Node doesn't have, so every tick would throw. The adapter binds a
+  stand-in. The same page now shows the current `Deps` and counts 24 `waitUntil` call sites, not
+  fifteen.
 
 ## [1.17.0] - 2026-11-24
 

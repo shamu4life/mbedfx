@@ -173,7 +173,7 @@ Checked 2026-08-01 against each project's docs, source and live service. **?** m
 | Caption translation | ✅ automatic | opt-in `/en` | opt-in `/en`, undocumented | ❌ | ❌ | ❌ |
 | Card says *why* a post is missing | ✅ private / age / deleted | ? | ? | age only | ❌ redirects | one generic card |
 | Public JSON API | [✅ documented](docs/API.md) + [OpenAPI](public/openapi.json) | ✅ OpenAPI | ✅ documented | ❌ | ❌ | undocumented |
-| Self-host off Cloudflare | [no blockers, no adapter yet](docs/SELF-HOSTING.md) | ❌ Workers | ✅ Docker · systemd · Lambda | Docker, undocumented | ✅ Docker · K8s | ✅ Docker |
+| Self-host off Cloudflare | [Node adapter, image not built yet](docs/SELF-HOSTING.md#running-the-node-adapter) | ❌ Workers | ✅ Docker · systemd · Lambda | Docker, undocumented | ✅ Docker · K8s | ✅ Docker |
 | Operator metrics | [documented queries](docs/METRICS.md), no scrape endpoint | ? | ? | ✅ Prometheus | pprof | pprof |
 
 FxEmbed goes deeper on Twitter than mbedfx goes on any single site. The remux is a workaround: most of the seventeen won't hand a bot a playable file, and it buys nothing on Twitter or TikTok, which already serve one.
