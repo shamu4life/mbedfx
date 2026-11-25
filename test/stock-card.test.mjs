@@ -33,9 +33,12 @@ function fakeR2(initial = {}) {
     async put(k, body) { store.set(k, typeof body === 'string' ? body : new TextDecoder().decode(body)) },
   }
 }
+// `YT_PROMISE: 'on'` since 2026-11-25, when the promise became opt-in (src/muxpolicy.ts ytPromiseOn).
+// The "pending" heads below are promise mode, which an env without the var used to be. The stock
+// heads do not depend on it: no duration verdict means no promise either way.
 const envWith = ({ resolver, r2 = fakeR2() } = {}) => ({
   AE: { writeDataPoint() {} }, ASSETS: { async fetch() { return new Response('a') } },
-  MEDIA_CACHE: r2, MEDIA_RESOLVER: resolver, TRANSLATE_GOOGLE: 'off',
+  MEDIA_CACHE: r2, MEDIA_RESOLVER: resolver, TRANSLATE_GOOGLE: 'off', YT_PROMISE: 'on',
 })
 const TITLE = 'driving in my car (ultra heavenly version)'
 const AUTHOR = { name: 'Іван2006', handle: 'VanyaYouTube2006', url: 'https://www.youtube.com/@VanyaYouTube2006' }

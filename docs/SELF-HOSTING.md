@@ -91,8 +91,9 @@ Deno build by name. On ARM it runs under emulation.
 
 Every string variable and secret the Worker reads comes from the environment under its own name:
 `RESOLVER_SECRET`, `OWN_HOSTS`, `YT_PROMISE`, the `*_ACCOUNTS` pools and the rest of
-[the binding table](#what-replaces-each-binding-and-what-degrades-without-it). `YT_PROMISE` defaults to
-`off`, the value `wrangler.jsonc` sets on the public instance. An empty value counts as unset.
+[the binding table](#what-replaces-each-binding-and-what-degrades-without-it). `YT_PROMISE` is off
+unless it is exactly `on`, which matches the public instance (its `wrangler.jsonc` sets `off`). An
+empty value counts as unset.
 
 ### What each stand-in gives up
 

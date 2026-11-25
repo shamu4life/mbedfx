@@ -75,6 +75,12 @@ const recordingRunner = () => {
   }
 }
 
+/**
+ * `YT_PROMISE: 'on'` since 2026-11-25, when the promise became opt-in (src/muxpolicy.ts ytPromiseOn).
+ * The "not a promised player" assertions below are only worth anything in promise mode: with the
+ * promise off nothing is promised whatever the mark says, and they would pass without the give-up gate.
+ * An env without the var used to be promise mode, so these tests are unchanged in what they exercise.
+ */
 const envWith = ({ r2 = fakeR2(), ae = recordingAE(), resolver = countingResolver(), runner = recordingRunner() } = {}) => ({
   AE: ae,
   ASSETS: { async fetch() { return new Response('a') } },
@@ -82,6 +88,7 @@ const envWith = ({ r2 = fakeR2(), ae = recordingAE(), resolver = countingResolve
   MEDIA_RESOLVER: resolver,
   MUX_RUNNER: runner,
   TRANSLATE_GOOGLE: 'off',
+  YT_PROMISE: 'on',
 })
 
 const ytPost = ref => ({

@@ -197,13 +197,31 @@ export const MUX_TOTAL_HORIZON_MS =
  * YT_PROMISE = false is the rollback: it restores the 1500ms head wait, the 4000ms document wait and
  * the stock gate in one build, and keeps every counter and the T0 dispatch so the instrument
  * survives the retreat. It heals nothing already pasted.
+ *
+ * KEPT AS A MASTER SWITCH since the var became opt-in (2026-11-25), and it still has a job the var
+ * cannot do: it overrides every deployment at once. With it false, a release turns the promise off on
+ * every instance whose operator set `YT_PROMISE=on`, with no config change on anyone's side, which is
+ * the lever wanted if the promise is ever found to freeze dead players in a way the counters missed.
+ * Flipping it to false is NOT how to make the promise opt-in: the var could then never turn it on,
+ * because ytPromiseOn needs both.
  */
 export const YT_PROMISE = true
 
 /**
- * THE DEPLOYED SWITCH, read from the `YT_PROMISE` var (wrangler.jsonc): `"off"` turns the promise off
- * without touching YT_PROMISE above, so the suite keeps testing promise mode exactly as it ships if it
- * is turned back on, and the rollback is one line of config.
+ * THE DEPLOYED SWITCH, read from the `YT_PROMISE` var. ON ONLY WHEN THE VAR IS EXACTLY `"on"`: unset,
+ * empty, `"off"`, `"ON"` and every other value leave it off. The test is strict, with no trim and no
+ * case folding, because a near miss should land on the safe side and the safe side is off.
+ *
+ * OPT-IN SINCE 2026-11-25. Until then the test was `!== 'off'`, so production, which sets
+ * `YT_PROMISE: "off"` in wrangler.jsonc, ran with it off, and every deployment that did NOT set the
+ * var ran with it on: a self-hoster who copied the Worker without that line got the worse default,
+ * measured below, and nothing told them. Production is unchanged, because "off" is still off, and its
+ * explicit "off" stays in wrangler.jsonc as the record of the decision. Removing `=== 'on'` for the
+ * old `!== 'off'` puts every deployment without the var back on a promise that reached Discord in time
+ * one time in eight.
+ *
+ * The suite still tests promise mode in full: card-promise.test.mjs and the others that need it set
+ * `YT_PROMISE: 'on'` on their env, which is exactly how an operator turns it back on.
  *
  * TURNED OFF 2026-11-24, MEASURED. Eight fresh YouTube videos of 39-205 s, pasted one at a time the way
  * Discord fetches a card (head, the activity document, then its video inside 10 s of the head): all
@@ -217,7 +235,7 @@ export const YT_PROMISE = true
  * inside ~8 s.
  */
 export function ytPromiseOn(env?: { YT_PROMISE?: unknown } | null): boolean {
-  return YT_PROMISE && env?.YT_PROMISE !== 'off'
+  return YT_PROMISE && env?.YT_PROMISE === 'on'
 }
 export const YT_PROMISE_MAX_SECONDS = 240
 

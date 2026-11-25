@@ -128,8 +128,11 @@ const fakeR2 = () => {
 }
 /** A container that never answers: a cold mux, honestly. */
 const silentResolver = () => ({ getByName: () => ({ fetch: () => new Promise(() => {}) }) })
+// `YT_PROMISE: 'on'` since 2026-11-25, when the promise became opt-in (src/muxpolicy.ts ytPromiseOn). The
+// linked-video test below pins the promised document, which an env without the var used to be.
 const envWith = ({ resolver } = {}) => ({
   AE: { writeDataPoint() {} }, ASSETS: { async fetch() { return new Response('a') } }, TRANSLATE_GOOGLE: 'off',
+  YT_PROMISE: 'on',
   ...(resolver ? { MEDIA_CACHE: fakeR2(), MEDIA_RESOLVER: resolver } : {}),
 })
 const depsOf = (byKey) => ({

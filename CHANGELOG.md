@@ -17,6 +17,16 @@ All notable changes to mbedfx are documented here. The format follows
   lacked its repost count. The Docker image and the compose file haven't been built yet. See
   `docs/SELF-HOSTING.md`.
 
+### Changed
+
+- **The YouTube promise is off unless `YT_PROMISE` is `on`.** Until now only `off` turned it off,
+  so a deployment that never set the var promised Discord an mp4 for a cold short video whenever
+  it knew the video's length. On 2026-11-24 that promise made Discord's window one time in eight,
+  and every miss left a player in the message that never plays. mbedfx.app already had
+  `YT_PROMISE: "off"` in `wrangler.jsonc`, so it renders the same cards as before. Self-hosters who
+  left the var out now get YouTube's own player on a first paste, as mbedfx.app does. To get the
+  promise back, set `YT_PROMISE=on`.
+
 ### Fixed
 
 - **Facebook posts name their page in the document Discord reads.** The 2026-08-12 platform audit

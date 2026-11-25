@@ -44,7 +44,9 @@
   "observability": { "enabled": false },
   // PLAIN VARS. `YT_PROMISE: "off"` keeps cold short YouTube videos on YouTube's own embed player
   // instead of promising an mp4 that, measured 2026-11-24, reached Discord in time 1 time in 8
-  // (src/muxpolicy.ts ytPromiseOn). Delete the line, or set it to anything else, to promise again.
+  // (src/muxpolicy.ts ytPromiseOn). Since 2026-11-25 the promise is opt-in, so deleting this line
+  // changes nothing: only "on" promises. It stays as the record of the decision, and
+  // test/yt-promise-off.test.mjs reads it. Set it to "on" to promise again.
   "vars": { "YT_PROMISE": "off" },
   "workers_dev": false,
   // PREVIEW URLS, kept on — but NOTHING SERVES AT THE PREVIEW HOSTNAMES, measured 2026-08-19. The
