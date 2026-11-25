@@ -1,7 +1,7 @@
 import type { GalleryMode, Platform, PostRef, Route } from './types.ts'
 import {
-  BS_ACTOR, DM_ID, FB_OWNER, FEDI_HOST, IM_ID, LEMMY_ID, MASTO_ID, PEERTUBE_ID, PIN_ID, ST_ID, TWITCH_SLUG,
-  parseRefKey,
+  BS_ACTOR, DM_ID, FB_OWNER, FEDI_HOST, IM_ID, LEMMY_ID, MASTO_ID, PEERTUBE_ID, PIN_ID, PIN_SHORT_CODE, ST_ID,
+  TWITCH_SLUG, parseRefKey,
 } from './refkey.ts'
 import { decodeStatusId, statusIdMode } from './statusid.ts'
 
@@ -1301,9 +1301,11 @@ function peertube(seg: string[]): Route | null {
  * (pinterest.de, de.pinterest.com, …) need no handling at all — this router never sees a host, and
  * every region serves the same numeric id.
  *
- * `/pin/{id}/sent/` is the "shared with you" spelling and carries `?invite_code=`/`?sender_id=`; the
- * trailing segment is a UI hint, not identity, so it maps to the same ref — the rule x() already
- * applies to `/photo/N`.
+ * `/pin/{id}/sent/` is the "shared with you" spelling and carries `?invite_code=…&sender=…&sfo=1`
+ * (measured 2026-11-25 on the Location a pin.it code resolves to; this said `?sender_id=` until then).
+ * The trailing segment is a UI hint, not identity, so it maps to the same ref — the rule x() already
+ * applies to `/photo/N`. The converter in public/index.html drops it, and the query with it, so the
+ * link it hands out is the bare `/pin/{id}`.
  *
  * NOTHING IS SHADOWED: every `/pin/...` shape was notfound before this existed, and `pin` is not a
  * token the ambiguity table names. A bare `/pin` stays the ['x','ig'] chooser it has always been.
@@ -1500,6 +1502,47 @@ function shortlink(seg: string[]): Route | null {
     // 500 (verified by mutation, with the rest of the suite green).
     canonical: canonical(`https://www.tiktok.com/t/${seg[1]}`),
   }
+}
+
+/**
+ * PINTEREST'S SHORT LINK, `pin.it/{code}`, spelled `/pin.it/{code}` here. Depth 2 ONLY, seg[0] exactly
+ * `pin.it`, and the code held to PIN_SHORT_CODE.
+ *
+ * WHY THE HOST GOES INTO THE PATH. Swapping the host of `pin.it/{code}` leaves `/{code}`, a bare
+ * `/{handle}`, which is the ['x','ig'] chooser and must stay one: a handle names an account on two
+ * sites. The converter therefore keeps the host as the first segment, the way it already spells every
+ * fediverse link (`/{host}/…`, see src/platforms/fedihost.ts), and a reader can type it by hand by
+ * putting `mbedfx.app/` in front of the link they were sent.
+ *
+ * WHAT IT COULD SHADOW, checked against each reader of a two-segment path:
+ *   - Every post matcher. None claims it today (`/pin.it/{code}` was notfound, measured with route()),
+ *     and this is tried AFTER matchPost anyway, so a matcher that claims it later still wins.
+ *   - The ambiguity table. Its depth-2 rows key on seg[0] being 'hashtag', 'i' or 'gallery', or on
+ *     seg[1] being 'followers' or 'following'. The last two are valid codes by shape (9 letters), so
+ *     this runs AFTER ambiguity(): `/pin.it/followers` stays the chooser it was.
+ *   - The KNOWN dead-end set. 'pin.it' is not in it; tried after it regardless.
+ *   - Fediverse host-in-path routing. FEDI_HOST accepts `pin.it`, so masto() and lemmy() read
+ *     `/pin.it/@{user}/{id}` and `/pin.it/post/{id}` as posts on a server called pin.it. Those are
+ *     depth 3 and this is depth 2, so neither is touched. And pin.it is Pinterest's own domain (it 308s
+ *     to Pinterest's shortener, measured 2026-11-25), so no fediverse server will ever live there.
+ *   - The bare `/{handle}` chooser is depth 1 and the spoof shapes start `_oembed`, `api` or `users`.
+ * So it is placed where it can only ever replace a notfound, which test/router.test.mjs checks.
+ *
+ * THE CODE IS NEVER LOWERCASED, here or anywhere: codes are case-sensitive (see PIN_SHORT_CODE). The
+ * host segment is matched exactly too, because the converter writes it lowercase and a hand-typed
+ * `/PIN.IT/…` costs nothing to refuse.
+ *
+ * `canonical` IS THE SHORT URL ITSELF and is NEVER sent to a human. worker.ts resolves the code for
+ * every client and redirects to the bare pin; following pin.it instead lands on a url carrying
+ * `sender=`, the sharer's Pinterest user id. The render arm never reads the field. /_api/v1 hands it
+ * back as the `canonical` of an unresolved code, the url the caller sent, as it does for /t/{code}.
+ * Built through canonical() like every other route.
+ *
+ * A FUNCTION, for shortlink()'s reason: the /pn/ escape hatch is its second caller.
+ */
+function pinShortlink(seg: string[]): Route | null {
+  if (seg.length !== 2 || seg[0] !== 'pin.it' || !PIN_SHORT_CODE.test(seg[1])) return null
+  return { kind: 'shortlink', p: 'pn', code: seg[1], canonical: canonical(`https://pin.it/${seg[1]}`) }
 }
 
 /** decodeURIComponent throws URIError on malformed escapes (/%ZZ, /%E0%A4%A). */
@@ -1943,6 +1986,13 @@ function routeInner(url: URL): Route {
       const forcedShort = shortlink(seg.slice(1))
       if (forcedShort) return forcedShort
     }
+    // /pn/pin.it/{code}, the same twin for Pinterest's short link, and for the converter's sake: forcing
+    // "Pinterest" from its site picker prefixes /pn/ onto whatever it converted. Unforced, this is a
+    // depth-3 path whose first segment is no host, so no matcher claims it and nothing is shadowed.
+    if (forced === 'pn') {
+      const forcedPin = pinShortlink(seg.slice(1))
+      if (forcedPin) return forcedPin
+    }
     // seg[0] may be a real handle rather than an escape token (e.g. x.com/x/status/…),
     // so fall through to the normal unforced interpretation instead of dead-ending.
   }
@@ -2053,6 +2103,11 @@ function routeInner(url: URL): Route {
   // A COPY, NEVER THE TABLE'S OWN ROW — the one place the spread happens, so a consumer that mutates
   // `candidates` cannot rewrite this isolate's routing table. See AMBIGUOUS.
   if (amb) return { kind: 'ambiguous', path, candidates: [...amb] }
+
+  // pin.it/{code}, AFTER the chooser and before the badid and notfound answers, so it only ever
+  // replaces a notfound. pinShortlink() has the shadowing argument.
+  const pinShort = pinShortlink(seg)
+  if (pinShort) return pinShort
 
   // Spoof-shaped, but the {id} did not decode — otherwise `spoof()` above would have
   // returned. Deliberately the LAST word, below matchPost / `known` / ambiguity, so it can

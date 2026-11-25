@@ -1,7 +1,65 @@
 import type { Media, Post, PostRef } from '../../types.ts'
+import { PIN_ID } from '../../refkey.ts'
 import { uploadDateOrEpoch } from '../uploaddate.ts'
 
-/** PURE: a Pinterest pin -> a Post. No I/O. */
+/** PURE: a Pinterest pin -> a Post, and a pin.it resolution -> a pin id. No I/O. */
+
+/**
+ * The hosts a pin.it resolution may land on: www.pinterest.com and the regional spellings (pinterest.de,
+ * www.pinterest.co.uk, www.pinterest.com.au, de.pinterest.com). Anchored at both ends, so
+ * `pinterest.com.example.net` and `notpinterest.com` are refused.
+ *
+ * REGIONAL HOSTS ARE ACCEPTED BECAUSE THE SHORTENER EMITS THEM, measured 2026-11-25: a code from a public
+ * test suite that names a board answered 302 to `www.pinterest.ru/{user}/{board}/`. Every pin resolution
+ * seen that day was on www.pinterest.com, but the host evidently follows the sharer's region, and the
+ * router already treats every region as serving the same numeric id. Nothing from the host survives into
+ * the answer anyway: only the id is kept, and the canonical is rebuilt on www.pinterest.com.
+ */
+const PIN_HOST = /^(?:www\.|[a-z]{2}\.)?pinterest\.(?:com|[a-z]{2}|co\.[a-z]{2}|com\.[a-z]{2})$/
+
+/** The router's slug rule (router.ts PIN_SLUG_ID): only the digits after the last `--` are identity. */
+const PIN_SLUG_ID = /^(?:.*--)?([1-9][0-9]{4,21})$/
+
+/**
+ * THE PIN ID OUT OF A pin.it RESOLUTION, or null. `location` is the shortener's Location header.
+ *
+ * WHAT IT IS READ FROM, measured 2026-11-25 from the development host (not a Worker; Cloudflare egress
+ * is unmeasured until this deploys): `api.pinterest.com/url_shortener/{code}/redirect/` answers
+ *
+ *     a pin       302  https://www.pinterest.com/pin/{id}/sent/?invite_code={hex}&sender={user id}&sfo=1
+ *     a board     302  https://www.pinterest.ru/{user}/{board}/?invite_code={hex}&sender={user id}
+ *     a bad code  302  https://www.pinterest.com          (the homepage; so is a mis-cased real code)
+ *
+ * So a 3xx proves nothing, and the only answer accepted is an https Pinterest host whose path starts
+ * `/pin/{id}`. Everything after the id (`/sent/`, the query) is dropped, which is the point: `sender` is
+ * the sharer's Pinterest user id and `invite_code` is minted per share.
+ *
+ * WHAT BREAKS IF THIS IS "SIMPLIFIED":
+ *   - Handing the Location to route() instead. route() never sees a host, so ANY host carrying
+ *     `/pin/{id}` would pass. Here only Pinterest's own hosts do.
+ *   - Accepting any redirect. Every bad code redirects, to the homepage, and a board code to a board;
+ *     neither names a pin.
+ *   - Reading "the long number" anywhere in the Location. A board link has no pin id at all, and its
+ *     only long numbers sit in `invite_code` and `sender`, the sharer's user id, so the card would draw
+ *     some other pin or none, and put a person's id into a url we hand out.
+ *   - Forwarding the Location, or its query, to anyone. That is the leak this whole resolver exists to
+ *     stop.
+ */
+export function pinIdFromShortLocation(location: string | null | undefined): string | null {
+  if (!location) return null
+  let u: URL
+  try {
+    u = new URL(location)
+  } catch {
+    return null
+  }
+  if (u.protocol !== 'https:' || u.username || u.password || u.port) return null
+  if (!PIN_HOST.test(u.hostname.toLowerCase())) return null
+  const seg = u.pathname.split('/').filter(Boolean)
+  if (seg[0] !== 'pin' || !seg[1]) return null
+  const m = PIN_SLUG_ID.exec(seg[1])
+  return m && PIN_ID.test(m[1]) ? m[1] : null
+}
 
 const obj = (v: unknown): Record<string, unknown> | null =>
   typeof v === 'object' && v !== null && !Array.isArray(v) ? (v as Record<string, unknown>) : null

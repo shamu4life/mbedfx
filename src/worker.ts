@@ -9,7 +9,7 @@ import { pickMedia, pickMediaEntry } from './media.ts'
 import { bytesIndex, byline, isSpoiler, mediaOf, mediaUrl, str, themeColor, usable } from './render/embed.ts'
 import { clampText, statParts } from './render/text.ts'
 import { proxyableVideoUrl, serveDirectVideo } from './mediaproxy.ts'
-import { parseRefKey, refKey } from './refkey.ts'
+import { PIN_ID, parseRefKey, refKey } from './refkey.ts'
 import { count, countWait, countMux, countStage, type Env, type GateReason, type MuxOutcome, type MuxStage } from './analytics.ts'
 import { MUX_GAVE_UP_NOTE, gaveUpIsFresh, muxFailKey, promisable, ytPromiseOn } from './muxpolicy.ts'
 import { runSmoke, smokeOutcome, SMOKE_CHECKS, SMOKE_CLIENT, type SmokeResult } from './smoke.ts'
@@ -58,7 +58,7 @@ import {
   normalizeFacebook, type FacebookMeta,
 } from './platforms/facebook/normalize.ts'
 import { fetchFacebookPage, fetchFacebookPageUrl } from './platforms/facebook/fetch.ts'
-import { fetchPinterest } from './platforms/pinterest/fetch.ts'
+import { fetchPinterest, resolvePinShortlink } from './platforms/pinterest/fetch.ts'
 import { normalizePinterest } from './platforms/pinterest/normalize.ts'
 import { fetchLemmy } from './platforms/lemmy/fetch.ts'
 import { normalizeLemmy } from './platforms/lemmy/normalize.ts'
@@ -183,6 +183,16 @@ export interface Deps {
    * and none of them requests a shortlink path.
    */
   resolveShortlink(p: 'tt', code: string, env: Env, client: ClientClass): Promise<ShortlinkResolution>
+  /**
+   * Resolve a pin.it code to the pin id it names, or null. Separate from resolveShortlink because the
+   * answer is an ID, not a Post: the pin is then fetched by the ordinary Pinterest path, so a pin.it
+   * link and a pasted /pin/{id} share one cache entry and one render, the way redditshare does it.
+   * See liveResolvePinShortlink.
+   *
+   * REQUIRED for resolveShortlink's reason. Every caller wraps it in try/catch (resolvePinRoute), so a
+   * .mjs Deps stub that omits it degrades to the unresolved answer instead of a 500.
+   */
+  resolvePinShortlink(code: string, env: Env, client: ClientClass): Promise<string | null>
   /**
    * Resolve a Reddit /s/ share link to a post ref + canonical permalink. Separate from
    * resolveShortlink because the INPUT is a full share url (not a bare code), the resolution is a
@@ -1371,6 +1381,59 @@ export async function liveResolveRedditShare(
   }
   if (resolved.kind !== 'post' || resolved.ref.p !== 'rd') return null
   return { ref: resolved.ref, canonical: resolved.canonical }
+}
+
+/**
+ * Resolve a pin.it code to a pin id. resolvePinShortlink (platforms/pinterest/fetch.ts) does the one hop
+ * and pinIdFromShortLocation decides what counts as an answer; this adds the counter.
+ *
+ * assert_fail IS COUNTED, not_a_pin IS NOT. The first is the shortener not answering at all, which is
+ * the signal that Pinterest changed or Cloudflare's egress is refused. The second is the shortener
+ * working, on a code that names a board or nothing. The route counts fetch_fail on top of either, as the
+ * post route does.
+ */
+export async function liveResolvePinShortlink(code: string, env: Env, client: ClientClass): Promise<string | null> {
+  const got = await resolvePinShortlink(code)
+  if (got.ok) return got.id
+  if (got.reason === 'assert_fail') count(env, 'pn', 'assert_fail', client)
+  return null
+}
+
+/**
+ * A pin.it code -> the ordinary pin route, or null. TOTAL: a resolver that throws, is missing from an
+ * injected Deps, or answers something that is not a pin id is the same miss, never a 500.
+ *
+ * The id goes back through route() so the ref and canonical come from router.ts pinterest() and nowhere
+ * else. That is safe here and NOT for the shortener's Location (see pinIdFromShortLocation): this url
+ * is one we build from a checked id, so the router being host-blind costs nothing.
+ */
+async function resolvePinRoute(
+  code: string, d: Deps, env: Env, client: ClientClass,
+): Promise<Extract<Route, { kind: 'post' }> | null> {
+  let id: string | null = null
+  try {
+    id = await d.resolvePinShortlink(code, env, client)
+  } catch {
+    id = null
+  }
+  if (typeof id !== 'string' || !PIN_ID.test(id)) return null
+  const r = route(new URL(`https://www.pinterest.com/pin/${id}/`))
+  return r.kind === 'post' && r.ref.p === 'pn' ? r : null
+}
+
+/**
+ * WHAT A HUMAN GETS WHEN A pin.it CODE WILL NOT RESOLVE: a plain-text 404 that says what to do. NOT a
+ * redirect to pin.it, which is what the TikTok arm falls back to: following pin.it lands on a url
+ * carrying `sender=`, the sharer's Pinterest user id, and someone who swapped our host in asked for
+ * the link to be cleaned. Nor the homepage, which would look like it worked. The words are the
+ * converter's old refusal, which is still true of this link.
+ */
+function pinShortUnresolved(): Response {
+  return new Response(
+    'pin.it hides the pin behind a random code, and this one didn\'t resolve. '
+      + 'Open it once and paste the full /pin/… link.\n',
+    { status: 404, headers: { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' } },
+  )
 }
 
 /**
@@ -4825,6 +4888,12 @@ async function unwrapToPost(
   }
 
   if (inner.kind === 'shortlink') {
+    /**
+     * pin.it FIRST, AND NOTHING BELOW IS ITS BUSINESS. Everything after this branch is TikTok's: the
+     * ['tt','th'] candidates, the gate and gone vocabulary. A pin.it code names one platform, so a miss
+     * is a plain miss, `inner` comes back untouched, and describeTarget answers it as Pinterest's.
+     */
+    if (inner.p === 'pn') return (await resolvePinRoute(inner.code, d, env, client)) ?? inner
     let got: Awaited<ReturnType<Deps['resolveShortlink']>> | null = null
     try {
       got = await d.resolveShortlink(inner.p, inner.code, env, client)
@@ -4915,6 +4984,21 @@ async function describeTarget(
   inner = await unwrapToPost(inner, d, env, client, unwrapped)
 
   if (inner.kind !== 'post') {
+    /**
+     * A pin.it CODE THAT DID NOT RESOLVE IS fetch_fail ON PINTEREST, the answer that matches the card:
+     * the render arm draws "Couldn't load this Pinterest post" for it. Never the TikTok chooser, which
+     * the branches below would hand any shortlink with candidates set (unwrapToPost sets none for pn,
+     * and this returns first anyway).
+     *
+     * `canonical` IS THE SHARE URL, as on the TikTok rows below and for their reason: it is the only url
+     * that exists before a code resolves, and docs/API.md promises a real `canonical` on every
+     * fetch_fail. It is the url the caller sent, so handing it back tells them nothing new. What must
+     * never happen is US following it or sending a person through it (the render arm's pn branch);
+     * this is JSON, and /_card does not even carry it.
+     */
+    if (inner.kind === 'shortlink' && inner.p === 'pn') {
+      return { ok: false, reason: 'fetch_fail', platform: 'pn', canonical: inner.canonical }
+    }
     /**
      * A WALLED SHORT LINK IS A WALL, NOT A NON-POST — and this is the divergence the shared pipeline
      * was built to stop, found 2026-08-11 while writing the OpenAPI spec.
@@ -7178,6 +7262,42 @@ async function serve(req: Request, env: Env, ctx: ExecutionContext, d: Deps): Pr
 
     case 'shortlink': {
       /**
+       * pin.it, `/pin.it/{code}`: RESOLVED FOR EVERY CLIENT, then the ordinary pin path. Branched off
+       * before a line of the TikTok arm below runs, because none of it applies: no ['tt','th'] chooser
+       * (the code names Pinterest outright), no short-code caches (the pin itself is cached by ref in
+       * renderPostRoute, so a pin.it link and a pasted /pin/{id} share one entry and draw one card), and
+       * no fallback to the share url for a human.
+       *
+       * THE HUMAN NEVER SEES pin.it. Resolved, they are sent to the bare pinterest.com/pin/{id}/;
+       * unresolved, they get a plain-text 404 saying what to do (pinShortUnresolved has why not a
+       * redirect). The TikTok arm falls back to the share url; this one must not, because the url pin.it
+       * lands on carries `sender=`, the sharer's Pinterest user id (measured 2026-11-25).
+       *
+       * THE d. HOST AND `.mp4` come through renderPostRoute's own short-circuit, the convergence its
+       * comment describes, since this arm ends there with the resolved ref. An unresolved direct request
+       * gets the plain-text 404 every direct miss gets. Guest hosts serve this route (guesthost.ts
+       * guestServes allows 'shortlink'), with no code of their own here.
+       *
+       * EACH RENDER COSTS ONE SHORTENER HOP, like redditshare and metashare, which also re-resolve on
+       * every render. The answer is ~256 bytes and the pin fetch behind it is cached.
+       */
+      if (r.p === 'pn') {
+        const pin = await resolvePinRoute(r.code, d, env, client)
+        if (!pin) {
+          count(env, 'pn', 'fetch_fail', client)
+          if (direct) return directNotFound('this pin.it link could not be resolved to a pin')
+          if (client === 'human') return pinShortUnresolved()
+          // canonical: null, so nothing on the card links back to pin.it. platform 'pn' makes it the calm
+          // "Couldn't load this Pinterest post" rather than the red "Not found" for a link we don't handle.
+          return render(
+            { kind: 'failure', canonical: null, platform: 'pn', reason: 'could not resolve this pin.it link' },
+            client, origin,
+          )
+        }
+        if (!direct && client === 'human') return redirect(pin.canonical)
+        return renderPostRoute(pin.ref, pin.canonical, d, env, ctx, client, origin, direct)
+      }
+      /**
        * A HUMAN IS RESOLVED, AND THE SHARE CODE IS NOT FORWARDED. Reversed 2026-07-30; the previous
        * reasoning is kept below because it was correct about cost and wrong about what it cost.
        *
@@ -7254,8 +7374,10 @@ async function serve(req: Request, env: Env, ctx: ExecutionContext, d: Deps): Pr
        * whatever the resolver returned. The indirection is what keeps the declared type honest.
        */
       const seen: { at: ShortlinkResolution } = { at: { kind: 'unresolved' } }
-      const { post } = await loadPost(shortPostCacheKey(r.p, r.code), async () => {
-        const got = await d.resolveShortlink(r.p, r.code, env, client)
+      // Copied out because the pn return above narrows `r.p` here but not inside the closure below.
+      const tt = r.p
+      const { post } = await loadPost(shortPostCacheKey(tt, r.code), async () => {
+        const got = await d.resolveShortlink(tt, r.code, env, client)
         seen.at = got
         // `got?.kind` rather than `got.kind`, and the ?. is not decoration: the TYPE says this is
         // always a ShortlinkResolution, but a Deps is injected and .mjs tests are never checked
@@ -7394,6 +7516,7 @@ const liveDeps = (cache: CacheLike = caches.default as unknown as CacheLike): De
   fetchProfile: liveFetchProfile,
   resolveShortlink: liveResolveShortlink,
   resolveRedditShare: liveResolveRedditShare,
+  resolvePinShortlink: liveResolvePinShortlink,
   resolveMetaShare,
 })
 
