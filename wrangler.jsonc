@@ -28,7 +28,10 @@
   "workers_dev": true,
   // NO `vars`, and dashboard vars survive deploys. Without keep_vars, wrangler treats this file as the
   // whole truth and deletes every plain var set in the dashboard on the next deploy. Every setting the
-  // Worker reads has a default (README, "Optional configuration"); secrets survive either way.
+  // Worker reads has a default (README, "Optional configuration"); secrets survive either way. Two
+  // worth setting there once you have a domain: PUBLIC_ORIGIN, your origin, which the half-hourly check
+  // renders on (unset, it renders on http://localhost) and the fediverse guard refuses; and GUEST_HOSTS,
+  // only if another Worker of yours hands this one its embed paths (src/guesthost.ts).
   "keep_vars": true,
   // The scheduled check: renders a fixed list of known posts through this Worker and keeps a week of
   // results at /_health. The repo's health workflow treats a run older than 120 minutes as stale, so

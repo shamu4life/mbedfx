@@ -4,7 +4,7 @@ import { readFileSync } from 'node:fs'
 import { handle, liveFetchPost } from '../src/worker.ts'
 import { refKey } from '../src/refkey.ts'
 import { encodeStatusId } from '../src/statusid.ts'
-import { GUEST_HOSTS } from '../src/guesthost.ts'
+import { guestHosts } from '../src/guesthost.ts'
 import { fetchableInstance, instanceFetchable, selfHosts } from '../src/platforms/fedihost.ts'
 import { fetchMasto } from '../src/platforms/mastoapi/fetch.ts'
 import { fetchLemmy } from '../src/platforms/lemmy/fetch.ts'
@@ -30,6 +30,10 @@ import { getGuestToken, resetGuestToken } from '../src/platforms/twitter/fetch.t
  */
 
 const ctx = { waitUntil() {} }
+// The public instance's vars. The guest hosts used to be imported as a constant from src/guesthost.ts;
+// since 2026-11-25 they are the GUEST_HOSTS var, read here the way the Worker reads it.
+const PROD_VARS = JSON.parse(readFileSync('wrangler.production.jsonc', 'utf8').replace(/^\s*\/\/.*$/gm, '')).vars
+const GUEST_HOSTS = guestHosts(PROD_VARS.GUEST_HOSTS)
 const fakeCache = () => {
   const m = new Map()
   return { async match(k) { const v = m.get(k); return v ? v.clone() : undefined }, async put(k, v) { m.set(k, v.clone()) } }
@@ -170,10 +174,14 @@ test('the request origin is refused by the pure gate, subdomains included, and a
   assert.equal(fetchableInstance('lemmy.com', 'https://d.com'), true, 'd.com does not refuse all of .com')
 })
 
-test('PRODUCTION IS UNCHANGED: on every host mbedfx.app is served from, the origin refuses nothing new', () => {
+test('PRODUCTION IS UNCHANGED: on every host mbedfx.app is served from, the origin and its vars refuse nothing new', () => {
   // Every production hostname is already in, or under, the built-in list, so `self` must add nothing
   // there. Compared against the gate with NO origin rather than against a list of expected answers, so
   // this fails if `self` ever changes a production answer in either direction.
+  //
+  // EXTENDED 2026-11-25 with production's vars. PUBLIC_ORIGIN and GUEST_HOSTS are refused by the guard
+  // since then, and wrangler.production.jsonc sets both; every host they name is already a built-in
+  // refusal, so with them the whole matrix must still equal the no-env, no-origin answers.
   const serving = [
     'mbedfx.app', 'd.mbedfx.app', 'megapenispoopenfarten.sex', 'd.megapenispoopenfarten.sex',
     'forsen.sex', 'd.forsen.sex', 'mbedfx.someone.workers.dev',
@@ -186,6 +194,8 @@ test('PRODUCTION IS UNCHANGED: on every host mbedfx.app is served from, the orig
   for (const host of serving) {
     for (const h of instances) {
       assert.equal(fetchableInstance(h, `https://${host}`), fetchableInstance(h), `${h} asked from ${host}`)
+      assert.equal(fetchableInstance(h, `https://${host}`, PROD_VARS), fetchableInstance(h),
+        `${h} asked from ${host} with production's vars`)
     }
   }
 })
@@ -253,13 +263,15 @@ test('the converter, the API, /_media/ and the activity document carry the origi
 })
 
 test('production and guest hosts behave as before: a real instance is fetched, their own zones are not', async () => {
+  // With production's vars since 2026-11-25, so the guest hosts go through the guest gate here as they
+  // do in production (a fediverse post is an embed route, so it is served there).
   for (const host of ['mbedfx.app', 'd.mbedfx.app', GUEST_HOSTS[0], `d.${GUEST_HOSTS[1]}`]) {
     const fetched = await hostsAskedDuring(() =>
-      handle(botReq(`https://${host}${fediPaths('lemmy.world', 13).lm}`), fediEnv(), ctx, liveDeps()))
+      handle(botReq(`https://${host}${fediPaths('lemmy.world', 13).lm}`), { ...fediEnv(), ...PROD_VARS }, ctx, liveDeps()))
     assert.ok(fetched.length > 0 && fetched.every(h => h === 'lemmy.world'), `${host}: ${JSON.stringify(fetched)}`)
     const apex = host.replace(/^d\./, '')
     const own = await hostsAskedDuring(() =>
-      handle(botReq(`https://${host}${fediPaths(apex, 14).lm}`), fediEnv(), ctx, liveDeps()))
+      handle(botReq(`https://${host}${fediPaths(apex, 14).lm}`), { ...fediEnv(), ...PROD_VARS }, ctx, liveDeps()))
     assert.deepEqual(own, [], `${apex} from ${host}, refused by the built-in list exactly as before`)
   }
 })
@@ -274,6 +286,59 @@ test('NO ORIGIN IS TODAY: a caller without a request gets exactly the guard it h
   const withOrigin = await hostsAskedDuring(() =>
     liveFetchPost({ ...ref, id: '9100016' }, fediEnv(), 'discord', undefined, undefined, undefined, 'https://embed.example.com'))
   assert.deepEqual(withOrigin, [])
+})
+
+// ── 1c. PUBLIC_ORIGIN and GUEST_HOSTS reach the guard too (self-hosting phase 4, 2026-11-25).
+//
+// A Cloudflare deployment had no way to tell the guard about a SIBLING domain short of OWN_HOSTS. It now
+// lists its origins in PUBLIC_ORIGIN for the scheduled check, and the guard refuses every host there, as
+// the Node adapter has always done by folding PUBLIC_ORIGIN into OWN_HOSTS. Additive, like OWN_HOSTS.
+
+test('every PUBLIC_ORIGIN host is refused, a d. origin refuses the domain under it, and the request origin is not needed', () => {
+  const env = { PUBLIC_ORIGIN: 'https://embed.example.com, https://d.cards.example.net http://localhost:8787' }
+  for (const h of ['embed.example.com', 'staging.embed.example.com', 'd.cards.example.net', 'cards.example.net']) {
+    assert.equal(fetchableInstance(h, undefined, env), false, `${h} is one of this deployment's origins`)
+  }
+  // The sibling case 1b leaves open: requested on embed.example.com, naming cards.example.net.
+  assert.equal(fetchableInstance('cards.example.net', 'https://embed.example.com', env), false)
+  assert.equal(fetchableInstance('cards.example.net', 'https://embed.example.com'), true, 'the control: without the var it is open')
+  assert.equal(fetchableInstance('lemmy.world', undefined, env), true)
+  assert.equal(fetchableInstance('example.net', undefined, env), true, 'the parent of an apex is somebody else')
+})
+
+test('PUBLIC_ORIGIN NEVER ADMITS A HOST: junk is ignored, and no value takes a built-in refusal away', () => {
+  /**
+   * The same safe-default argument as OWN_HOSTS. An entry that does not parse refuses nothing, and no
+   * value of the var, however wrong, can make a refused host fetchable.
+   */
+  const junk = ['', '   ', ',', 'https://', 'not an origin', 'ftp://x', '//', 'https://[::1', undefined]
+  for (const PUBLIC_ORIGIN of junk) {
+    for (const ours of ['mbedfx.app', 'd.mbedfx.app', 'forsen.sex', ...GUEST_HOSTS, 'x.workers.dev']) {
+      assert.equal(fetchableInstance(ours, undefined, { PUBLIC_ORIGIN }), false,
+        `${ours} must stay refused with PUBLIC_ORIGIN=${JSON.stringify(PUBLIC_ORIGIN)}`)
+    }
+    assert.equal(fetchableInstance('lemmy.world', undefined, { PUBLIC_ORIGIN }), true,
+      `junk refuses nothing extra: ${JSON.stringify(PUBLIC_ORIGIN)}`)
+  }
+  // A valid entry beside junk still counts.
+  assert.equal(fetchableInstance('embed.example.com', undefined, { PUBLIC_ORIGIN: 'not an origin https://embed.example.com' }), false)
+})
+
+test('the four fediverse fetchers read PUBLIC_ORIGIN and GUEST_HOSTS off the env: a sibling domain is fetched ZERO times', async () => {
+  /**
+   * Through handle() and the real liveFetchPost, for 1b's reason: the defect class here is a value that
+   * never reaches the gate, and only the whole path shows it does.
+   */
+  const env = { ...fediEnv(), PUBLIC_ORIGIN: 'https://embed.example.com https://cards.example.net', GUEST_HOSTS: 'guest.example' }
+  for (const sibling of ['cards.example.net', 'guest.example']) {
+    for (const [p, path] of Object.entries(fediPaths(sibling, 17))) {
+      const asked = await hostsAskedDuring(() => handle(botReq(`https://embed.example.com${path}`), env, ctx, liveDeps()))
+      assert.deepEqual(asked, [], `${p}: ${sibling} named on embed.example.com`)
+    }
+  }
+  const control = await hostsAskedDuring(() =>
+    handle(botReq(`https://embed.example.com${fediPaths('cards.example.net', 18).lm}`), fediEnv(), ctx, liveDeps()))
+  assert.ok(control.length > 0 && control.every(h => h === 'cards.example.net'), `without the vars: ${JSON.stringify(control)}`)
 })
 
 // ── 2. The DNS seam, at the boundary where it decides whether a request is made at all.

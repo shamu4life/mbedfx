@@ -805,8 +805,9 @@ footer .fine { font-size: 12px; opacity: .8; }
 var OUR_HOSTS = ['mbedfx.app', 'megapenispoopenfarten.sex', 'forsen.sex', 'sorryifuckedyour.mom', 'hotsinglesnear.you'];
 var PUBLIC_HOSTS = ['mbedfx.app', 'megapenispoopenfarten.sex', 'sorryifuckedyour.mom', 'hotsinglesnear.you'];
 /**
- * THE GUEST HOSTS, the same list as src/guesthost.ts GUEST_HOSTS (this page has no build step and
- * cannot import it, so test/landing-convert.test.mjs compares the two). What this list changes is a
+ * THE GUEST HOSTS, the same list as the Worker's GUEST_HOSTS var, which wrangler.production.jsonc sets
+ * (this page has no build step and cannot read it, so test/landing-convert.test.mjs compares the two;
+ * until 2026-11-25 the Worker's list was a constant in src/guesthost.ts). What this list changes is a
  * consequence of another Worker owning the domain: a narrower set of paths answered (drawCard's guest
  * line). It no longer changes media only, which is the d. host on every domain since 2026-10-11.
  */

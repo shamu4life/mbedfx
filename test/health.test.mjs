@@ -1,5 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
+import { readFileSync } from 'node:fs'
 import { foldSmoke, healthSummary, cronColo, recordSmoke, HEALTH_KEY, HEALTH_DAYS } from '../src/health.ts'
 import { SMOKE_CHECKS } from '../src/smoke.ts'
 import worker, { handle, smokeWhereReadersAre, SMOKE_RUNNER_NAME } from '../src/worker.ts'
@@ -209,7 +210,9 @@ test('/_health WITH NO BUCKET SAYS SO, and a guest domain declines it like every
   const deps = { cache: { async match() {}, async put() {} }, fetchPost: async () => null, resolveShortlink: async () => ({}), resolveRedditShare: async () => null }
   const none = await handle(new Request('https://mbedfx.app/_health'), { AE: { writeDataPoint() {} } }, { waitUntil() {} }, deps)
   assert.equal(none.status, 503)
-  const guest = await handle(new Request('https://hotsinglesnear.you/_health'), { AE: { writeDataPoint() {} }, MEDIA_CACHE: fakeR2() }, { waitUntil() {} }, deps)
+  // The guest hosts are wrangler.production.jsonc's GUEST_HOSTS var since 2026-11-25, so the env carries it.
+  const { GUEST_HOSTS } = JSON.parse(readFileSync('wrangler.production.jsonc', 'utf8').replace(/^\s*\/\/.*$/gm, '')).vars
+  const guest = await handle(new Request('https://hotsinglesnear.you/_health'), { AE: { writeDataPoint() {} }, MEDIA_CACHE: fakeR2(), GUEST_HOSTS }, { waitUntil() {} }, deps)
   assert.equal(guest.status, 404)
   assert.equal(guest.headers.get('x-mbedfx-guest'), null, 'unmarked, so you-stupid serves its own page')
 })

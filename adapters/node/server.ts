@@ -162,9 +162,8 @@ export function createAdapter(cfg: AdapterConfig) {
   const log = cfg.log ?? console.error
   const tracker = trackingContext(log)
   const ctx = tracker.ctx
-  const hosts = cfg.origins.map(o => new URL(o).hostname)
   // String vars first, bindings after, so no environment variable can land on a binding's name.
-  const env = { ...envVars(cfg.vars ?? {}, hosts) } as Env
+  const env = { ...envVars(cfg.vars ?? {}, cfg.origins) } as Env
   env.ASSETS = publicAssets(cfg.publicDir ?? join(REPO, 'public'))
   if (cfg.mediaDir) env.MEDIA_CACHE = new DirBucket(cfg.mediaDir) as unknown as R2Bucket
   if (cfg.containerUrl) {

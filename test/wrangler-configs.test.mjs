@@ -1,7 +1,8 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
-import { GUEST_HOSTS } from '../src/guesthost.ts'
+import { guestHosts } from '../src/guesthost.ts'
+import { cronOrigin } from '../src/worker.ts'
 
 /**
  * THE THREE WRANGLER CONFIGS (self-hosting phase 3, 2026-11-25).
@@ -38,6 +39,8 @@ const raw = file => readFileSync(file, 'utf8')
 const PROD_FILE = 'wrangler.production.jsonc'
 const prod = read(PROD_FILE)
 const GENERIC = ['wrangler.jsonc', 'wrangler.free.jsonc']
+// Production's guest hosts, from its own GUEST_HOSTS var (a constant in src/guesthost.ts until 2026-11-25).
+const GUEST_HOSTS = guestHosts(prod.vars?.GUEST_HOSTS)
 
 // Production's zones, from its routes (`mbedfx.app/*` and `mbedfx.app` both reduce to the host).
 const prodZones = (prod.routes ?? []).map(r => (typeof r === 'string' ? r : r.pattern).split('/')[0].replace(/^\*\.?/, ''))
@@ -79,7 +82,7 @@ for (const file of GENERIC) {
      */
     const text = raw(file).toLowerCase()
     for (const name of [...prodZones, ...GUEST_HOSTS, ...prodResources]) {
-      assert.ok(!text.includes(name.toLowerCase()), `${file} mentions ${name}, which belongs to ${PROD_FILE} or src/guesthost.ts`)
+      assert.ok(!text.includes(name.toLowerCase()), `${file} mentions ${name}, which belongs to ${PROD_FILE}`)
     }
   })
 
@@ -359,3 +362,68 @@ test('THE PREVIEWS BLOCK NEVER NAMES PRODUCTION\'S BUCKET OR DATASET, and mirror
   assert.equal(pv.routes, undefined)
   assert.equal(pv.triggers, undefined)
 })
+
+/**
+ * PUBLIC_ORIGIN AND GUEST_HOSTS (self-hosting phase 4, 2026-11-25). Both were constants in src/ until
+ * then: the scheduled check rendered on 'https://mbedfx.app' (src/worker.ts scheduledSmoke) and the guest
+ * hosts were a list in src/guesthost.ts. The production file now sets them, and these tests are the
+ * evidence that the values reproduce the constants. The generic files set neither: a self-hoster sets them
+ * in the dashboard, and keep_vars keeps them there.
+ */
+test('production\'s PUBLIC_ORIGIN and GUEST_HOSTS reproduce the two constants they replaced', () => {
+  assert.equal(cronOrigin(prod.vars), 'https://mbedfx.app', 'the scheduled check renders on the apex, as the constant did')
+  assert.deepEqual(GUEST_HOSTS, ['sorryifuckedyour.mom', 'hotsinglesnear.you'], 'src/guesthost.ts\'s old list, in its order')
+})
+
+test('production\'s PUBLIC_ORIGIN is bare https origins on its own zones, and names what the converter offers, no more', () => {
+  /**
+   * Every entry must be an origin the scheduled check could use (scheme and host, nothing else), so a
+   * typo cannot silently move the primary down the list. Every host must be one of production's zones or
+   * the `d.` name of one. And the non-`d.` hosts, with the guest hosts, must be exactly the domains the
+   * converter page offers (its PUBLIC_HOSTS): forsen.sex is served and refused but not advertised
+   * (owner's call, 2026-09-11), and the page is meant to take this list from the Worker (phase 5), so a
+   * forsen.sex entry here would start advertising it.
+   */
+  const entries = prod.vars.PUBLIC_ORIGIN.split(/[\s,]+/).filter(Boolean)
+  assert.ok(entries.length > 0)
+  for (const e of entries) {
+    const u = new URL(e)
+    assert.equal(u.origin, e, `${e} is a bare origin, written as one`)
+    assert.equal(u.protocol, 'https:', `${e} is https`)
+    const apex = u.hostname.replace(/^d\./, '')
+    assert.ok(prodZones.includes(apex), `${e} is on a production zone`)
+  }
+  const page = readFileSync('public/index.html', 'utf8').match(/var PUBLIC_HOSTS = \[([^\]]*)\]/)
+  assert.ok(page, 'the page declares PUBLIC_HOSTS')
+  const offered = page[1].split(',').map(x => x.trim().replace(/^'|'$/g, '')).filter(Boolean)
+  const published = entries.map(e => new URL(e).hostname).filter(h => !h.startsWith('d.'))
+  assert.deepEqual([...published, ...GUEST_HOSTS].sort(), [...offered].sort())
+  for (const e of entries.filter(x => new URL(x).hostname.startsWith('d.'))) {
+    assert.ok(published.includes(new URL(e).hostname.slice(2)), `${e} is the d. name of a published origin`)
+  }
+})
+
+test('a Preview runs production\'s vars, all of them', () => {
+  /**
+   * A Preview is how a branch is measured before it merges, so a var that differs is something measured
+   * there that production will not run. The production file's comment on `previews` says why the two
+   * vars that change nothing in a Preview today are kept anyway.
+   */
+  assert.deepEqual(prod.previews.vars, prod.vars)
+})
+
+for (const file of GENERIC) {
+  test(`${file} sets neither PUBLIC_ORIGIN nor GUEST_HOSTS, at the top level or for Previews`, () => {
+    /**
+     * Either one in a generic file is a deploy that names somebody's domain: an origin the scheduled check
+     * renders on and the guard refuses, or a host whose front page this Worker declines. The scan above
+     * keeps production's own values out; this keeps out any value, because the right one is per
+     * deployment and goes in the dashboard, where keep_vars leaves it alone.
+     */
+    const cfg = read(file)
+    for (const vars of [cfg.vars, cfg.previews?.vars]) {
+      for (const k of ['PUBLIC_ORIGIN', 'GUEST_HOSTS']) assert.equal(vars?.[k], undefined, `${file} sets ${k}`)
+    }
+    assert.equal(cfg.keep_vars, true, 'dashboard vars must survive a deploy of this file')
+  })
+}

@@ -495,33 +495,42 @@ export const resolveHost = async (host: string): Promise<string[]> =>
  * src/analytics.ts and fails when a string field is added there and not here.
  */
 export const ENV_VARS = [
-  'RESOLVER_SECRET', 'OWN_HOSTS', 'MUX_BUFFER_MAX', 'IMGUR_CLIENT_ID', 'TRANSLATE_GOOGLE', 'IG_GRAPHQL_DOC_ID',
+  'RESOLVER_SECRET', 'OWN_HOSTS', 'MUX_BUFFER_MAX', 'PUBLIC_ORIGIN', 'GUEST_HOSTS',
+  'IMGUR_CLIENT_ID', 'TRANSLATE_GOOGLE', 'IG_GRAPHQL_DOC_ID',
   'X_ACCOUNTS', 'IG_ACCOUNTS', 'YT_ACCOUNTS', 'YT_PROMISE',
   'X_ACCOUNTS_2', 'X_ACCOUNTS_3', 'IG_ACCOUNTS_2', 'IG_ACCOUNTS_3', 'YT_ACCOUNTS_2', 'YT_ACCOUNTS_3',
   'REDDIT_CLIENT_ID', 'REDDIT_CLIENT_SECRET', 'REDDIT_RELAY_URL', 'REDDIT_RELAY_KEY',
 ] as const
 
 /**
- * The string half of `Env`. Two values are not passed through as given:
+ * The string half of `Env`. Three values are not passed through as given:
  *   - YT_PROMISE defaults to "off", which is what wrangler.production.jsonc sets on the public instance. Until
  *     2026-11-25 an unset var meant the YouTube activity-document promise was ON, so without this the
  *     same paste drew a different card here than there. The code now reads unset as off by itself
  *     (src/muxpolicy.ts ytPromiseOn), so this changes nothing that renders today. It stays as the
  *     second lock: if that predicate ever slides back to "anything but off", this adapter still runs
  *     the value production measured, and test/node-adapter.test.mjs still sees "off" on the env.
+ *   - PUBLIC_ORIGIN is `origins`, the list main() parsed (adapters/node/server.ts parseOrigins), not the
+ *     variable's raw text. The two agree whenever the variable is set, since that list was parsed from
+ *     it. When it is unset they do not: the adapter serves on its default, `http://localhost:$PORT`, and
+ *     the Worker reads PUBLIC_ORIGIN for the scheduled check's origin (cronOrigin in src/worker.ts), so
+ *     the cron renders on the origin this process actually serves rather than on the Worker's fallback.
  *   - OWN_HOSTS gains the hosts of PUBLIC_ORIGIN. The value is additive (src/platforms/fedihost.ts),
  *     so this can only make the guard stricter, and it means the domain this adapter serves is
- *     refused as a fediverse instance even when the operator forgets to list it.
+ *     refused as a fediverse instance even when the operator forgets to list it. Since 2026-11-25 the
+ *     guard also reads PUBLIC_ORIGIN itself, on both runtimes, so this fold is the second of two locks.
  * An empty string is treated as unset. Compose writes `${VAR:-}` as "", and "" is not "off".
  */
-export function envVars(source: Record<string, string | undefined>, publicHosts: string[]): Partial<Env> {
+export function envVars(source: Record<string, string | undefined>, origins: string[]): Partial<Env> {
   const out: Record<string, string> = {}
   for (const name of ENV_VARS) {
     const v = source[name]
     if (typeof v === 'string' && v !== '') out[name] = v
   }
   out.YT_PROMISE ??= 'off'
-  const own = [out.OWN_HOSTS, ...publicHosts].filter(Boolean).join(' ')
+  if (origins.length) out.PUBLIC_ORIGIN = origins.join(' ')
+  else delete out.PUBLIC_ORIGIN
+  const own = [out.OWN_HOSTS, ...origins.map(o => new URL(o).hostname)].filter(Boolean).join(' ')
   if (own) out.OWN_HOSTS = own
   return out as Partial<Env>
 }

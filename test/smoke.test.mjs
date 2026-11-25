@@ -2,7 +2,15 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync, existsSync } from 'node:fs'
 import { fetchableInstance } from '../src/platforms/fedihost.ts'
-import { GUEST_HOSTS } from '../src/guesthost.ts'
+import { guestHosts } from '../src/guesthost.ts'
+
+/**
+ * The guest hosts, from wrangler.production.jsonc's GUEST_HOSTS var, read with the Worker's own parser.
+ * Until 2026-11-25 this was a constant imported from src/guesthost.ts; the three tests below that use it
+ * assert what they always did.
+ */
+const PROD_VARS = JSON.parse(readFileSync('wrangler.production.jsonc', 'utf8').replace(/^\s*\/\/.*$/gm, '')).vars
+const GUEST_HOSTS = guestHosts(PROD_VARS.GUEST_HOSTS)
 
 /**
  * The zones this project owns and serves. All three are live; see wrangler.production.jsonc's routes comment.
@@ -175,7 +183,7 @@ test('EVERY DOMAIN THE PAGE OFFERS IS ONE THE WORKER SERVES — a subset, delibe
   const offered = m[1].split(',').map(x => x.trim().replace(/^'|'$/g, '')).filter(Boolean)
   assert.ok(offered.length > 0, 'and it offers at least one domain')
   for (const host of offered) {
-    assert.ok(served.has(host), `the page offers ${host}, which neither wrangler.production.jsonc nor GUEST_HOSTS serves`)
+    assert.ok(served.has(host), `the page offers ${host}, which neither wrangler.production.jsonc's routes nor its GUEST_HOSTS serves`)
   }
 
   // Every offered domain needs a button, or the toggle cannot reach it. The reverse is checked too:
@@ -214,8 +222,8 @@ test('EVERY DOMAIN THE WORKER SERVES IS ONE THE PAGE RECOGNISES AS OURS — the 
    * domain's own links.
    */
   const cfg = JSON.parse(readFileSync('wrangler.production.jsonc', 'utf8').replace(/^\s*\/\/.*$/gm, ''))
-  // GUEST_HOSTS too (src/guesthost.ts): they serve cards through another Worker's binding rather than
-  // a route here, and a link pasted from one is just as much ours as a link from forsen.sex.
+  // GUEST_HOSTS too (the var; src/guesthost.ts): they serve cards through another Worker's binding
+  // rather than a route here, and a link pasted from one is just as much ours as a link from forsen.sex.
   const served = [...new Set([...(cfg.routes ?? []).map(r => r.pattern.split('/')[0]), ...GUEST_HOSTS])]
   const page = readFileSync('public/index.html', 'utf8')
 
@@ -264,18 +272,24 @@ test('EVERY SERVING ZONE IS REFUSED BY THE SSRF GUARD — the coupling wrangler.
    *
    * Asserted through fetchableInstance rather than by reading the constant, so it pins the BEHAVIOUR
    * (including the subdomain rule) rather than the spelling of a private array.
+   *
+   * TWICE SINCE 2026-11-25: with no env, which is the built-in list alone and what makes the coupling
+   * hold even if production's vars are lost, and with production's vars, which is how it runs. The
+   * PUBLIC_ORIGIN and GUEST_HOSTS vars are refused by the guard too, so they must refuse nothing less.
    */
   const cfg = JSON.parse(readFileSync('wrangler.production.jsonc', 'utf8').replace(/^\s*\/\/.*$/gm, ''))
   // GUEST_HOSTS reach this Worker through you-stupid's service binding, not a route, and fetching one
   // would loop through that Worker and back here. They are serving zones for this rule.
   const hosts = [...(cfg.routes ?? []).map(r => r.pattern.split('/')[0]), ...GUEST_HOSTS]
-  for (const host of hosts) {
-    assert.equal(fetchableInstance(host), false, `${host} serves this Worker and must never be fetchable`)
-    assert.equal(fetchableInstance(`sub.${host}`), false, 'and neither may a subdomain of it')
+  for (const env of [undefined, PROD_VARS]) {
+    for (const host of hosts) {
+      assert.equal(fetchableInstance(host, undefined, env), false, `${host} serves this Worker and must never be fetchable`)
+      assert.equal(fetchableInstance(`sub.${host}`, undefined, env), false, 'and neither may a subdomain of it')
+    }
+    // The guard must still admit ordinary instances, or it would refuse the whole fediverse.
+    assert.equal(fetchableInstance('lemmy.world', undefined, env), true)
+    assert.equal(fetchableInstance('mstdn.social', undefined, env), true)
   }
-  // The guard must still admit ordinary instances, or it would refuse the whole fediverse.
-  assert.equal(fetchableInstance('lemmy.world'), true)
-  assert.equal(fetchableInstance('mstdn.social'), true)
 })
 
 test('.node-version pins a Node new enough to IMPORT the .ts sources directly', () => {
