@@ -492,7 +492,7 @@ test('THE SERVERS ARE HOSTS THIS WORKER IS ROUTED TO', () => {
    * array is the DESIRED STATE — every deploy reconciles Cloudflare to it — which makes it the right
    * thing to check against; that it is not an observation of the live edge is the limit of this test.
    */
-  const cfg = JSON.parse(readFileSync('wrangler.jsonc', 'utf8').replace(/^\s*\/\/.*$/gm, ''))
+  const cfg = JSON.parse(readFileSync('wrangler.production.jsonc', 'utf8').replace(/^\s*\/\/.*$/gm, ''))
   const routed = cfg.routes.map(r => r.pattern)
   for (const s of SPEC.servers) {
     assert.ok(routed.includes(new URL(s.url).hostname),

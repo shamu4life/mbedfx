@@ -159,9 +159,9 @@ test('UNSET: the head of a cold short video keeps YouTube\'s own embed player, e
     'the stock gate, with no var set')
 })
 
-test('production ships with the promise off (wrangler.jsonc vars)', () => {
+test('production ships with the promise off (wrangler.production.jsonc vars)', () => {
   // Parsed, the way the other config tests read it, so a commented-out line or a second var is read right.
-  const cfg = JSON.parse(readFileSync(new URL('../wrangler.jsonc', import.meta.url), 'utf8').replace(/^\s*\/\/.*$/gm, ''))
+  const cfg = JSON.parse(readFileSync(new URL('../wrangler.production.jsonc', import.meta.url), 'utf8').replace(/^\s*\/\/.*$/gm, ''))
   assert.equal(cfg.vars?.YT_PROMISE, 'off',
     'turning it back on is a decision: change this test with the config and say why in the commit')
 })

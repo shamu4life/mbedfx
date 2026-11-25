@@ -199,7 +199,7 @@ test('a guest host is never claimed as a route here, because another Worker owns
    * every deploy. Listing a guest host there would try to move the domain off you-stupid, taking the
    * owner's site down with it. The binding is how these hosts reach this Worker, and the only way.
    */
-  const cfg = JSON.parse(readFileSync('wrangler.jsonc', 'utf8').replace(/^\s*\/\/.*$/gm, ''))
+  const cfg = JSON.parse(readFileSync('wrangler.production.jsonc', 'utf8').replace(/^\s*\/\/.*$/gm, ''))
   const claimed = (cfg.routes ?? []).map(r => r.pattern.split('/')[0])
   for (const g of GUEST_HOSTS) {
     assert.ok(!claimed.some(h => h === g || h.endsWith(`.${g}`)), `${g} belongs to you-stupid, not to wrangler.jsonc`)
