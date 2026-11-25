@@ -190,7 +190,7 @@ Two more domains serve the same cards as guests: `sorryifuckedyour.mom` and `hot
 
 ### Optional configuration
 
-Every setting below has a working default, and a fresh deploy needs none of them. Set one with `npx wrangler secret put <NAME>`.
+Every setting below has a working default, and a fresh deploy needs none of them. On your own deployment, set one with `npx wrangler secret put <NAME>`, which reaches the Worker your `wrangler.jsonc` names. For mbedfx.app itself, add `-c wrangler.production.jsonc`.
 
 `RESOLVER_SECRET` · `IMGUR_CLIENT_ID` · `IG_GRAPHQL_DOC_ID` · `TRANSLATE_GOOGLE` · `REDDIT_CLIENT_ID` / `REDDIT_CLIENT_SECRET` · `YT_ACCOUNTS` · `IG_ACCOUNTS` · `X_ACCOUNTS`
 
@@ -219,7 +219,7 @@ Both heads need the same fix, or half the posts stay broken. For a post with med
 - `src/translate.ts` holds detection, translation and the marker.
 - `public/index.html` is the converter page: one file, no framework.
 
-[CONTRIBUTING.md](.github/CONTRIBUTING.md) has the rest of the layout, the commands, the test count and why `npm run deploy` refuses on purpose. [docs/SELF-HOSTING.md](docs/SELF-HOSTING.md) walks `handle()` in `src/worker.ts`, the eight Cloudflare surfaces behind it and `container/server.py`.
+[CONTRIBUTING.md](.github/CONTRIBUTING.md) has the rest of the layout, the commands and the test count. It also explains why mbedfx.app deploys only from Workers Builds, and what `npm run deploy` does instead: it makes a separate Worker in your own account. [docs/SELF-HOSTING.md](docs/SELF-HOSTING.md) walks `handle()` in `src/worker.ts`, the eight Cloudflare surfaces behind it and `container/server.py`.
 
 ## Contributing
 

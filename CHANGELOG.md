@@ -6,6 +6,20 @@ All notable changes to mbedfx are documented here. The format follows
 
 ## [Unreleased]
 
+**Upgrading:** if you forked mbedfx and deploy the root `wrangler.jsonc`, it now names a different
+Worker (`mbedfx-selfhost`), R2 bucket (`mbedfx-selfhost-media`), Analytics Engine dataset
+(`mbedfx_selfhost_counters`) and container application (`mbedfx-selfhost-mediaresolver`). Deployed
+as it is, it creates a second Worker with an empty cache, and the old one keeps its domains, its
+half-hourly check and its container bill until you delete it. To keep your existing Worker, save
+your old config under another name, such as `wrangler.mine.jsonc`, and deploy it with
+`npx wrangler deploy -c wrangler.mine.jsonc`. If Workers Builds deploys your fork, put the same `-c`
+in its deploy command. Pass it to `wrangler secret`, `wrangler tail`, `wrangler versions`,
+`wrangler deployments` and `wrangler rollback` as well. Without it they act on `mbedfx-selfhost`,
+and a `wrangler secret put` fed from a file or pipe creates that Worker to hold the secret. Don't
+copy the old names back into `wrangler.jsonc`: `npm run build` fails when that file uses
+mbedfx.app's names or sets `containers[].name`, and the old file did both unless you changed it.
+Nobody else has anything to do.
+
 ### Added
 
 - **mbedfx runs off Cloudflare, on Node.** `adapters/node/server.ts` serves the production handler from
@@ -33,9 +47,34 @@ All notable changes to mbedfx are documented here. The format follows
   so a deployment that never set the var promised Discord an mp4 for a cold short video whenever
   it knew the video's length. On 2026-11-24 that promise made Discord's window one time in eight,
   and every miss left a player in the message that never plays. mbedfx.app already had
-  `YT_PROMISE: "off"` in `wrangler.jsonc`, so it renders the same cards as before. Self-hosters who
-  left the var out now get YouTube's own player on a first paste, as mbedfx.app does. To get the
-  promise back, set `YT_PROMISE=on`.
+  `YT_PROMISE: "off"` in its config (now `wrangler.production.jsonc`), so it renders the same cards
+  as before. Self-hosters who left the var out now get YouTube's own player on a first paste, as
+  mbedfx.app does. To get the promise back, set `YT_PROMISE=on`.
+- **The root `wrangler.jsonc` can be deployed to any account.** It has no routes, so the Worker
+  answers on `<name>.<your-subdomain>.workers.dev`. The Worker, its R2 bucket, its Analytics Engine
+  dataset and its container application all have their own names, so a deploy into the account that
+  runs mbedfx.app can't touch mbedfx.app's. The file sets no vars, and `keep_vars` stops a deploy
+  from deleting vars you set in the dashboard. Workers Logs stay off. For a domain of your own, add a
+  custom domain in the dashboard. Wrangler only publishes domains a config lists, so deploys leave it
+  alone. The file also has the one-time command that gives the bucket its 60-day expiry.
+- **mbedfx.app's settings live in `wrangler.production.jsonc`:** its domains, its pinned container
+  application, `YT_PROMISE: "off"`, and the comments explaining each setting. Workers Builds deploys
+  it with `-c`.
+- **`npm run deploy` now runs `wrangler deploy` on the generic config.** It creates or updates the
+  `mbedfx-selfhost` Worker in whatever account wrangler is logged into, containers and their bill
+  included. Until now the script refused to run.
+- **`wrangler.free.jsonc` is an untested starting point for Workers Free.** It's the generic config
+  minus the container, since Workers Free has no Containers. Videos that need muxing show their cover
+  still, and YouTube cards use YouTube's own player. Nobody has deployed it on the Free plan or
+  measured the Worker against Free's limits of 10 ms of CPU and 50 subrequests per request.
+- **Both generic configs have a `previews` block.** New Workers, including the ones the Deploy to
+  Cloudflare button makes, build every branch other than `main` as a Worker Preview, and
+  `wrangler preview` stops with an error when the config has no such block. Each Preview gets Workers
+  AI, the Durable Objects, the container (not on Free) and an Analytics Engine dataset of its own. It
+  gets no R2 bucket, because a Preview's bucket has to be created by hand first. In a Preview, then,
+  a video that needs muxing shows its cover still, and translations and post records are fetched
+  again on every view. The comment in `wrangler.jsonc` shows how to add a bucket. Nobody has built a
+  Preview from either file yet.
 
 ### Fixed
 

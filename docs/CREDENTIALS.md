@@ -143,9 +143,16 @@ invented.
 ## Pushing it
 
 ```sh
-npx wrangler secret put YT_ACCOUNTS < accounts.json
+npx wrangler secret put YT_ACCOUNTS -c wrangler.production.jsonc < accounts.json
 rm accounts.json
 ```
+
+The `-c` is what sends this to mbedfx.app. Leave it off and wrangler reads the root
+`wrangler.jsonc`, the generic config, whose Worker is `mbedfx-selfhost`. If that Worker doesn't
+exist yet, wrangler would normally ask before creating it. With the value coming from a file there
+is no prompt, and the answer defaults to yes. Either way the pool lands on `mbedfx-selfhost` and
+wrangler prints `Success!`. Only the line naming the Worker gives it away, and mbedfx.app keeps the
+old pool. On your own deployment of the generic file, drop the `-c`.
 
 `IG_ACCOUNTS` takes the same command. Twitter entries hold a session pair:
 

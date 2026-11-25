@@ -7,7 +7,7 @@ import { refKey } from '../src/refkey.ts'
 import { encodeStatusId } from '../src/statusid.ts'
 
 /**
- * `YT_PROMISE: "off"` (wrangler.jsonc, 2026-11-24): a cold short YouTube video keeps YouTube's own embed
+ * `YT_PROMISE: "off"` (wrangler.production.jsonc, 2026-11-24): a cold short YouTube video keeps YouTube's own embed
  * player instead of a promised mp4. Measured that day: the promise reached Discord in time 1 time in 8.
  *
  * REWRITTEN 2026-11-25, WHEN THE PROMISE BECAME OPT-IN. This file used to pin "off is off, anything else

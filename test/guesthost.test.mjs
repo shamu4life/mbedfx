@@ -195,14 +195,14 @@ test('a guest host is matched on whole labels, so a lookalike domain is not one'
 
 test('a guest host is never claimed as a route here, because another Worker owns it', () => {
   /**
-   * A hostname is a custom domain of exactly one Worker, and wrangler.jsonc's routes are reconciled on
+   * A hostname is a custom domain of exactly one Worker, and wrangler.production.jsonc's routes are reconciled on
    * every deploy. Listing a guest host there would try to move the domain off you-stupid, taking the
    * owner's site down with it. The binding is how these hosts reach this Worker, and the only way.
    */
   const cfg = JSON.parse(readFileSync('wrangler.production.jsonc', 'utf8').replace(/^\s*\/\/.*$/gm, ''))
   const claimed = (cfg.routes ?? []).map(r => r.pattern.split('/')[0])
   for (const g of GUEST_HOSTS) {
-    assert.ok(!claimed.some(h => h === g || h.endsWith(`.${g}`)), `${g} belongs to you-stupid, not to wrangler.jsonc`)
+    assert.ok(!claimed.some(h => h === g || h.endsWith(`.${g}`)), `${g} belongs to you-stupid, not to wrangler.production.jsonc`)
   }
 })
 

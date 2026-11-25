@@ -30,7 +30,7 @@ import { RESP_TTL } from '../src/cache.ts'
  *   - The timing figures in the endpoint description, which live in docs/API.md too.
  *   - Which platform actually emits which count, and which platforms carry a `title`.
  *   - Anything about the LIVE service: this suite never touches the network, so "mbedfx.app answers
- *     this" is out of reach here. The servers block is checked against wrangler.jsonc's routes,
+ *     this" is out of reach here. The servers block is checked against wrangler.production.jsonc's routes,
  *     which is the desired state rather than an observation.
  *
  * NO NETWORK ANYWHERE. Every post is injected through deps.fetchPost, like test/api.test.mjs.
@@ -488,7 +488,7 @@ test('EVERY SOURCE CITATION IN docs/API.md STILL NAMES SOMETHING THAT EXISTS', (
 test('THE SERVERS ARE HOSTS THIS WORKER IS ROUTED TO', () => {
   /**
    * A servers block is where a consumer points a generated client, so a host listed here that the
-   * worker does not answer on is a spec that hands somebody a dead base url. wrangler.jsonc's routes
+   * worker does not answer on is a spec that hands somebody a dead base url. wrangler.production.jsonc's routes
    * array is the DESIRED STATE — every deploy reconciles Cloudflare to it — which makes it the right
    * thing to check against; that it is not an observation of the live edge is the limit of this test.
    */
@@ -496,7 +496,7 @@ test('THE SERVERS ARE HOSTS THIS WORKER IS ROUTED TO', () => {
   const routed = cfg.routes.map(r => r.pattern)
   for (const s of SPEC.servers) {
     assert.ok(routed.includes(new URL(s.url).hostname),
-      `${s.url} is not in wrangler.jsonc's routes — a base url nothing serves`)
+      `${s.url} is not in wrangler.production.jsonc's routes — a base url nothing serves`)
     assert.ok(s.description, 'each server needs a line saying what it is')
   }
 })

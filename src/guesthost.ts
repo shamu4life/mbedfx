@@ -9,11 +9,11 @@ import type { Route } from './types.ts'
  * site function from you-stupid". So a post link with the host swapped for one of these unfurls as
  * the post, and the dating page stays where it is.
  *
- * HOW A REQUEST GETS HERE. Not through wrangler.jsonc: a hostname can be a custom domain of exactly
+ * HOW A REQUEST GETS HERE. Not through wrangler.production.jsonc: a hostname can be a custom domain of exactly
  * one Worker, and these belong to you-stupid. That Worker serves `/`, `/whoami`, `/favicon.ico` and
  * every file in its own public/ first, and hands anything left over to this one through a service
  * binding (`env.MBEDFX.fetch(request)`), which keeps the request's url and so its hostname. That is
- * the only way a guest hostname reaches handle(). Do not add these to wrangler.jsonc's routes: a
+ * the only way a guest hostname reaches handle(). Do not add these to wrangler.production.jsonc's routes: a
  * deploy reconciles that array, so claiming them there would try to take the domains off you-stupid.
  * test/guesthost.test.mjs fails if one appears.
  *

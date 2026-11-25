@@ -8,7 +8,7 @@ import { pipeline } from 'node:stream/promises'
 /**
  * MEDIA_CACHE AS A DIRECTORY. It stands in for the R2 bucket, one file per key.
  *
- * WHAT IT REPLACES: the `mbedfx-media` R2 bucket (wrangler.jsonc). The worker keeps six kinds of thing
+ * WHAT IT REPLACES: the `mbedfx-media` R2 bucket (wrangler.production.jsonc). The worker keeps six kinds of thing
  * there: muxed mp4s (`mux/…`), container metadata records (`meta/…`), translations (`xlate/…`), the
  * Reddit archive copy (`rd-archive/…`), the alarm's give-up marks (`muxfail/…`) and the scheduled
  * check's week (`health/smoke.json`).

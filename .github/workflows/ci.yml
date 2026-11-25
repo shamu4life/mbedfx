@@ -7,13 +7,20 @@
 # the same commit: they race on the container image and on which version ends up live, and the loser
 # silently overwrites the winner. One deployer, always.
 #
-# WHAT THAT COSTS, AND HOW TO GET IT BACK. When this file owned the deploy, tests ran BEFORE any
-# Cloudflare credential was used, so a red suite could not ship. Cloudflare Workers Builds runs its
-# own build command instead, and this workflow reports a failure without being able to BLOCK a
-# deploy. To restore the gate, set the build command in the Cloudflare dashboard to run the suite
-# first:
+# WHAT THAT COST, AND HOW IT CAME BACK. When this file owned the deploy, tests ran BEFORE any
+# Cloudflare credential was used, so a red suite could not ship. This workflow reports a failure
+# without being able to BLOCK a deploy, so the gate now lives in Workers Builds itself. As set in the
+# Cloudflare dashboard (2026-11-25):
 #
-#     npm ci && npm test && npx wrangler deploy
+#     build command:   npm run build                                       (tests + typecheck)
+#     deploy command:  npx wrangler deploy -c wrangler.production.jsonc    (main)
+#     preview command: npx wrangler preview -c wrangler.production.jsonc   (other branches)
+#
+# THE -c IS LOAD-BEARING. The root wrangler.jsonc is the generic self-host config. Workers Builds
+# replaces a config's Worker name with the connected Worker's, so a deploy command without -c puts the
+# generic file onto the production Worker: workers.dev turns on, the bindings point at the generic
+# bucket and dataset, and the container application name it derives is not the one MediaResolver is
+# attached to, which fails the container half of the deploy.
 #
 # That matters more here than on a typical worker: this one is the origin for og:video urls that
 # Discord CACHES on first fetch, keyed by a url that does not change. A bad deploy is not "revert and

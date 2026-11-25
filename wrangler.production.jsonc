@@ -88,7 +88,8 @@
   // PHASE-2 VIDEO PLAYBACK. The media-resolver container (ffmpeg + yt-dlp) and its R2 mux cache. A
   // `wrangler deploy` from here on builds the container image, so a Docker-compatible CLI (Docker
   // Desktop or Colima) must be running — see container/README.md. Optional shared secret:
-  // `wrangler secret put RESOLVER_SECRET` and set the same value on the container.
+  // `npx wrangler secret put RESOLVER_SECRET -c wrangler.production.jsonc` and set the same value on
+  // the container. Without the -c it lands on the root file's mbedfx-selfhost, not on this Worker.
   "r2_buckets": [
     // R2 BUCKETS CANNOT BE RENAMED. Pointing the binding at a new name does not move anything: the
     // old `fxeverything-media` keeps its objects and this one starts EMPTY. That is safe here and
@@ -195,6 +196,8 @@
   // v3 adds SmokeRunner. It stores nothing, but SQLite-backed is what Cloudflare recommends for every
   // new class. A branch build cannot apply a migration (`versions upload` fails with 10211, so the PR
   // shows a red X); the build from main runs `wrangler deploy`, which applies it, as it did for v2.
+  // (That was the old `versions upload` branch build. Since 2026-11-25 branches run Worker Previews,
+  // and each Preview gets its own Durable Object namespace; see the previews block at the end.)
   "migrations": [
     { "tag": "v1", "new_sqlite_classes": ["MediaResolver"] },
     { "tag": "v2", "new_sqlite_classes": ["MuxRunner"] },
@@ -264,6 +267,14 @@
     // the container on your own machine, which is the wrong IP for anything YouTube gates. Merge it
     // and measure production, and confirm `wrangler containers info` shows a NEW image digest before
     // believing the result. See the YouTube 403 entry in CHANGELOG.md.
+  //
+  // UPDATE 2026-11-25, and only half an answer yet. Workers Builds now runs Worker Previews
+  // (`npx wrangler preview -c wrangler.production.jsonc`, #143), and that DOES build the branch's
+  // container image into a container app of its own: the first preview build made
+  // mbedfx_ci-worker-previews_MediaResolver. The Preview URL sits behind Cloudflare Access. Whether a
+  // Preview's container actually serves a mux from Cloudflare's network has not been measured, and
+  // Cloudflare calls container support in Previews partial. Until someone measures it, the rule
+  // above stands.
     { "pattern": "mbedfx.app", "custom_domain": true },
     { "pattern": "megapenispoopenfarten.sex", "custom_domain": true },
     // forsen.sex, added 2026-08-03. IT WAS ALREADY LIVE and kept disappearing, which is the lesson

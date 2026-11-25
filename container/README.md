@@ -203,14 +203,17 @@ trip was being paid on every render of a permanently-live channel, forever.
 
 ## Deploying it
 
-Merging to `main` builds this image and deploys it. Do **not** run `wrangler deploy` by hand: a hand
-deploy overwrites whatever Workers Builds shipped while the dashboard still reports a healthy
-Worker.
+Merging to `main` builds this image and deploys it. Do **not** run
+`npx wrangler deploy -c wrangler.production.jsonc` by hand: a hand deploy overwrites whatever Workers
+Builds shipped while the dashboard still reports a healthy Worker. A plain `npx wrangler deploy`
+deploys the generic `wrangler.jsonc`, which is a separate Worker with its own container application.
 
-`wrangler.jsonc` gives `image` a Dockerfile path, `./container/Dockerfile`. Cloudflare's docs say a
-Dockerfile `image` makes `wrangler deploy` build it and push it to Cloudflare's registry, and
-Workers Builds runs `npx wrangler deploy`. A merge to `main` shows the whole job in the build log,
-measured on this repo's own builds:
+Every wrangler config gives `image` a Dockerfile path, `./container/Dockerfile`. Cloudflare's docs say
+a Dockerfile `image` makes `wrangler deploy` build it and push it to Cloudflare's registry, and
+Workers Builds runs `npx wrangler deploy -c wrangler.production.jsonc`. A merge to `main` shows the
+whole job in the build log. This log is from mbedfx.app's builds before the deploy command gained
+`-c`. The application name in it is production's pinned one; a generic deploy shows
+`mbedfx-selfhost-mediaresolver` instead:
 
 ```
 Executing user deploy command: npx wrangler deploy
@@ -222,26 +225,37 @@ digest: sha256:…
 SUCCESS  Modified application fxeverything-mediaresolver
 ```
 
-None of it needs Docker, a registry login or a dashboard step on your machine.
+Workers Builds does all of this on Cloudflare's side, with no Docker, registry login or dashboard
+step on your machine. Run `wrangler deploy` on your own machine and the image builds there, which
+needs a running Docker-compatible CLI.
 
 If a change here didn't take effect, check the build log for `Building image` and
 `Modified application`. If neither line is there, the image never shipped.
 
-A preview build, meaning any branch that isn't `main`, runs `npx wrangler versions upload` instead
-and doesn't build the image at all. A container change lands only on merge, untested until then. See
-[Warm instances](#warm-instances).
+A branch other than `main` gets a Worker Preview instead, built by
+`npx wrangler preview -c wrangler.production.jsonc` since 2026-11-25. Before then it ran
+`versions upload`, which never built the image, so a container change went untested until it
+merged. The `previews` block in that file gives each Preview its own bucket and its own container
+application, built from the branch's `container/Dockerfile`. See [Warm instances](#warm-instances).
 
 The Worker side is already committed: the `@cloudflare/containers` dependency, `src/container.ts`
-(the `MediaResolver` DO class), the deploy entry `src/index.ts`, the R2 bucket `mbedfx-media` and
-the `containers` / `durable_objects` / `migrations` / `r2_buckets` blocks in `wrangler.jsonc`. Once
-the container is live, `/_media/` serves muxed video for posts carrying a `remux` source. The Worker
+(the `MediaResolver` DO class), the deploy entry `src/index.ts`, and the `containers` /
+`durable_objects` / `migrations` / `r2_buckets` blocks in `wrangler.production.jsonc` (bucket
+`mbedfx-media`) and the generic `wrangler.jsonc` (bucket `mbedfx-selfhost-media`). Once the
+container is live, `/_media/` serves muxed video for posts carrying a `remux` source. The Worker
 checks the bindings first, so before provisioning finishes, or with no container, those videos
 render the cover still.
 
-To require the shared-secret header, run `npx wrangler secret put RESOLVER_SECRET` and set the same
-`RESOLVER_SECRET` on the container as a container secret. Do not use `containers[].image_vars`.
-Wrangler documents that as build-time only, and a value set there never reaches the running
-instance.
+To require the shared-secret header on mbedfx.app, run
+`npx wrangler secret put RESOLVER_SECRET -c wrangler.production.jsonc` and set the same
+`RESOLVER_SECRET` on the container as a container secret. Forget the `-c` and the secret goes to
+`mbedfx-selfhost`, the root config's Worker. If that Worker doesn't exist, wrangler asks whether to
+create it with yes as the default, and when the value comes in on a pipe it creates it without
+asking. "Pushing it" in `docs/CREDENTIALS.md` shows how little wrangler says about that. A
+deployment of the generic file leaves the `-c` off.
+
+Do not use `containers[].image_vars` for the secret. Wrangler documents that as build-time only, and
+a value set there never reaches the running instance.
 
 Running it anywhere else is [Running it standalone](#running-it-standalone) below.
 `docs/SELF-HOSTING.md` covers the Worker half: the Node adapter in `adapters/node/` and a compose file

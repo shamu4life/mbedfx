@@ -10,8 +10,9 @@ those pages reading `Last updated Apr 23, 2026`) and were first run against the 
 2026-08-29. Three things that page could not tell us, learned that day and now folded in above and
 below:
 
-- the table is `mbedfx_counters`, matching the binding in `wrangler.jsonc`. Every query here said
-  `FROM mbedfx` and errored;
+- the table is `mbedfx_counters`, matching the binding in `wrangler.production.jsonc`. Every query
+  here said `FROM mbedfx` and errored. A deployment of the generic `wrangler.jsonc` writes to
+  `mbedfx_selfhost_counters` instead, so put that name in the `FROM` clauses;
 - a backslash in a string literal is rejected outright (HTTP 422), so `LIKE 'mux\_%'` never ran;
 - **the data is sampled.** `_sample_interval` took values from 1 to 12 in the first window read, so
   a bare `COUNT()` under-reports badly. Every query below weights by it, and a ratio of two such
@@ -31,7 +32,7 @@ nowhere.
 
 - **Workers Logs** (stored, per-request, off): one invocation log per request plus every
   `console.log`/`console.error`, indexed and queryable in the dashboard for 7 days. The only surface
-  `observability.enabled` (`wrangler.jsonc:44`) controls.
+  `observability.enabled` (`wrangler.production.jsonc:44`) controls.
 - **Real-time logs / `wrangler tail`** (streamed, per-request, always available, no setting): the
   same events in a terminal or the dashboard's Live tab, stored nowhere. Four of the five
   `console.error` calls in `worker.ts` were written for it, each commented `SERVER-SIDE ONLY`, three
@@ -40,7 +41,7 @@ nowhere.
   Worker's dashboard page. No per-request detail, three months of history, no configuration, no
   price.
 - **Analytics Engine** (stored, aggregate, on): the `mbedfx_counters` dataset `src/analytics.ts`
-  writes into (`wrangler.jsonc:262`). Own config key, own write and read APIs, three months of
+  writes into (`wrangler.production.jsonc:288`). Own config key, own write and read APIs, three months of
   retention, out of `observability.enabled`'s reach.
 - **Workers Logpush** (export, off, own flag): the same trace events shipped off Cloudflare to R2, S3
   or a log vendor.
@@ -54,7 +55,7 @@ Logs under Observability, real-time logs under Logs → Live. Analytics Engine h
 
 ### Why Workers Logs are off
 
-`observability: { enabled: false }` sits at `wrangler.jsonc:44` for privacy, and read `true` until
+`observability: { enabled: false }` sits at `wrangler.production.jsonc:44` for privacy, and read `true` until
 2026-08-04 (`398f971`). Measured against this account that day, a stored invocation log carries the
 full request URL including query string, the client IP (`cf-connecting-ip`), the verbatim user agent,
 the referer, and Cloudflare's geolocation block (city, latitude/longitude, ASN, timezone). On this
@@ -460,7 +461,7 @@ agreement can stop holding without the written data changing.
 migrate rows. As of 2026-08-03 `mbedfx_counters` holds at most about two days of data, so every
 `INTERVAL '7' DAY` example below returns a partial window that looks like a traffic collapse.
 
-`wrangler.jsonc:260` records that the historical counters "stay in `fxeverything_counters` and are
+`wrangler.production.jsonc:286` records that the historical counters "stay in `fxeverything_counters` and are
 still queryable there". Neither table has been confirmed to exist; `SHOW TABLES` settles both in one
 call. The Worker was renamed in the same commit, and the repo has no evidence the old script ever
 deployed and wrote a point. Retention is three months either way: anything before 2026-05-03 is gone
@@ -536,7 +537,7 @@ Most mean nothing as an absolute number, and several mislead alone.
   `env.AE?.writeDataPoint` is optional-chained inside `count()` and `countMux()`
   (`src/analytics.ts`): a deploy without it writes nothing and neither throws nor logs, and
   "zero rows" means "no traffic" or "no binding".
-  `wrangler.jsonc:262` declares it, prod can diverge from `main` here, and the deployed bundle has
+  `wrangler.production.jsonc:288` declares it, prod can diverge from `main` here, and the deployed bundle has
   not been checked.
 
 ### Known defects in the write shape
