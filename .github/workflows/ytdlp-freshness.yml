@@ -121,6 +121,10 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           CURRENT: ${{ steps.v.outputs.current }}
           LATEST: ${{ steps.v.outputs.latest }}
+          # The instance to verify on, from the repo variable the health check reads too (set on
+          # shamu4life/mbedfx to https://mbedfx.app on 2026-11-25). A fork without it gets a placeholder
+          # in the PR body instead of a command aimed at the owner's instance.
+          INSTANCE: ${{ vars.HEALTH_BASE }}
         run: |
           set -euo pipefail
           branch="chore/ytdlp-${LATEST}"
@@ -159,7 +163,7 @@ jobs:
             printf '%s\n' '```'
             printf '%s\n' "curl -s -o /dev/null -w '%{http_code}\\n' \\"
             printf '%s\n' "  -H 'User-Agent: Mozilla/5.0 (compatible; Discordbot/2.0)' \\"
-            printf '%s\n' "  'https://mbedfx.app/_media/yt%3A<NEVER_FETCHED_ID>/0.mp4'"
+            printf '%s\n' "  '${INSTANCE:-https://YOUR-INSTANCE}/_media/yt%3A<NEVER_FETCHED_ID>/0.mp4'"
             printf '%s\n' '```'
             printf '%s\n' ""
             printf '%s\n' "\`200\` with bytes is a working mux. \`503\` means the mux still fails and this bump was not the answer."
