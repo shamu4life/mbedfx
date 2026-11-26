@@ -2,6 +2,7 @@ import type { Profile } from '../types.ts'
 import { esc, html } from './fail.ts'
 import { themeOf } from './embed.ts'
 import { abbrev } from './text.ts'
+import { siteLabel } from '../instance.ts'
 
 /**
  * THE PROFILE CARD — ONE head, for every bot client, and that is a decision rather than an
@@ -106,7 +107,7 @@ export function profileDescription(p: Profile): string {
  *   og:title        `Name (@handle)` — the account, named the way the platform names it now.
  *   og:description  bio + counts.
  *   og:url          the canonical the NORMALIZER built, so a DID url shows the current handle.
- *   og:site_name    'mbedfx', matching both post heads.
+ *   og:site_name    the instance's name (SITE_NAME, default 'mbedfx'), matching both post heads.
  *   og:image        the avatar, as an ORIGIN url — the one place in this codebase that emits one,
  *                   admitted only under the CDN allowlist in the normalizer, which is what makes
  *                   the "no signed url reaches Discord's cache" rule structural. ABSENT rather
@@ -124,14 +125,14 @@ export function profileDescription(p: Profile): string {
  * anything extra for it. An unsupported type with unfillable required properties is markup that
  * claims a shape it does not have.
  */
-export function renderProfile(p: Profile, _origin: string): Response {
+export function renderProfile(p: Profile, _origin: string, site: string): Response {
   const colour = themeOf(p?.ref?.p)
   const avatar = typeof p?.avatar === 'string' ? p.avatar : ''
   return html(
     `<meta property="og:title" content="${esc(profileTitle(p))}"/>` +
     `<meta property="og:description" content="${esc(profileDescription(p))}"/>` +
     `<meta property="og:url" content="${esc(typeof p?.canonical === 'string' ? p.canonical : '')}"/>` +
-    `<meta property="og:site_name" content="mbedfx"/>` +
+    `<meta property="og:site_name" content="${esc(siteLabel(site))}"/>` +
     (avatar ? `<meta property="og:image" content="${esc(avatar)}"/>` : '') +
     `<meta name="twitter:card" content="summary"/>` +
     `<meta name="theme-color" content="${colour}"/>` +

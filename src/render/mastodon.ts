@@ -4,6 +4,7 @@ import { refKey } from '../refkey.ts'
 import { encodeStatusId } from '../statusid.ts'
 import { accountHandle, byline, bytesIndex, fudge, isSensitive, isSpoiler, knownDate, mediaOf, mediaUrl, stockState, str, usable } from './embed.ts'
 import { buildContentHtml, statParts, withMoreInPostMarker, withVideoGalleryMarker } from './text.ts'
+import { siteLabel } from '../instance.ts'
 
 /**
  * The Mastodon-spoof payloads: a Mastodon API v1 `Status` and the oEmbed document whose
@@ -622,9 +623,11 @@ const APPLICATION: Record<Platform, string> = {
  * rather than a live crash — but it is one line, and the sibling lookup in this file has the
  * scar to show what skipping it costs.
  */
-function applicationName(post: Post): string {
+function applicationName(post: Post, site: string): string {
   const v: unknown = APPLICATION[(post?.ref as { p?: Platform } | undefined)?.p as Platform]
-  return typeof v === 'string' ? v : 'mbedfx'
+  // The fallback is the instance's name (SITE_NAME) rather than a literal, so a renamed instance has no
+  // surface left that says 'mbedfx'. Only a record with an unknown platform reaches it.
+  return typeof v === 'string' ? v : siteLabel(site)
 }
 
 /**
@@ -688,7 +691,13 @@ function contentWithMarker(post: Post, mode: GalleryMode): string {
   return body ? `[sensitive] ${body}` : '[sensitive]'
 }
 
-export function toMastodonStatus(post: Post, origin: string, mode: GalleryMode): object {
+/**
+ * `site` is the instance's name (SITE_NAME). This document prints it nowhere a valid post reaches:
+ * `application.name` is the platform's, and the name only stands in for an unknown one. It is a
+ * parameter, required as render()'s is, so that fallback cannot be the one place a renamed instance
+ * still says 'mbedfx'.
+ */
+export function toMastodonStatus(post: Post, origin: string, mode: GalleryMode, site: string): object {
   /**
    * AN UNKNOWN DATE IS LEFT OUT, NOT PRINTED AS 1970. Measured 2026-11-25 by the owner in a real
    * Discord client, with the one-day `/_wait/d` test (PR #137, removed once it had answered).
@@ -767,7 +776,7 @@ export function toMastodonStatus(post: Post, origin: string, mode: GalleryMode):
     // Phase 3a landed TikTok, so this IS the per-ref.p lookup the Phase 2 comment promised
     // here. `website` stays null for every platform: it is the application's OWN homepage, and
     // we have no verified evidence any Discord surface reads it.
-    application: { name: applicationName(post), website: null },
+    application: { name: applicationName(post, site), website: null },
     media_attachments: attachments(post, origin, mode),
     account: {
       id: handle,
@@ -836,7 +845,14 @@ function authorName(post: Post): string {
   return 'Embed'
 }
 
-export function toOEmbed(post: Post, origin: string): object {
+/**
+ * `site` is the instance's name (SITE_NAME), for provider_name. Discord's footer on the activity card read
+ * "mbedfx" when the owner measured it (toMastodonStatus, 2026-11-25), and which field it took that from,
+ * this one or the head's og:site_name, was not recorded, so both carry the same name. REQUIRED, as
+ * render()'s is. Read through siteLabel, so a call without it, which only the untypechecked tests make,
+ * says 'mbedfx' rather than leaving the field out.
+ */
+export function toOEmbed(post: Post, origin: string, site: string): object {
   // Exactly seven fields. html/width/height are omitted despite type:'rich' because Discord
   // reads only these, and an `html` payload is a second body it could decide to render.
   // ON THE STOCK CARD THE AUTHOR SLOT IS THE CHANNEL (2026-09-04). The activity card, which draws
@@ -849,7 +865,7 @@ export function toOEmbed(post: Post, origin: string): object {
     // the oEmbed author line links to the thing being embedded. On the stock card it links the
     // channel, which is what the slot now names.
     author_url: stock ? (str(post.author?.url) || post.canonical) : post.canonical,
-    provider_name: 'mbedfx',
+    provider_name: siteLabel(site),
     // From the request, never a constant: a hardcoded origin would point a staging embed's
     // footer at prod.
     provider_url: origin,

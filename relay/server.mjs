@@ -130,25 +130,49 @@ async function relayFetch(request, env, fetchImpl) {
   return new Response(body, { status: got.res.status, headers: out })
 }
 
+/**
+ * THE ARCHIVE'S USER AGENT ON THE SELF-TEST, which must be the one the Worker sends, or /selftest
+ * measures a request mbedfx never makes. The Worker builds it from its primary PUBLIC_ORIGIN host
+ * (archiveUserAgent in src/instance.ts), and the relay cannot read the Worker's vars, so
+ * the operator sets ARCHIVE_USER_AGENT here to the same string. Unset, it is the public instance's,
+ * which is what this relay sent before the variable existed: the owner's relay keeps measuring the
+ * owner's request without a new setting. Only the self-test reads it. /fetch forwards whatever user
+ * agent the Worker sent.
+ */
+export const DEFAULT_ARCHIVE_USER_AGENT = 'mbedfx.app (embed fixer; +https://github.com/shamu4life/mbedfx)'
+
+/** ARCHIVE_USER_AGENT, trimmed, or the default when it is unset, empty or blank. */
+export function archiveUserAgent(env) {
+  const v = typeof env?.ARCHIVE_USER_AGENT === 'string' ? env.ARCHIVE_USER_AGENT.trim() : ''
+  return v || DEFAULT_ARCHIVE_USER_AGENT
+}
+
 /** The three fixed requests mbedfx depends on, made from this egress, so a person can see what it gets. */
 const SELFTEST = {
   embed: { url: 'https://embed.reddit.com/r/aww/comments/bh1r38/', redirect: 'follow',
     ua: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36', accept: 'text/html' },
   crawler: { url: 'https://www.reddit.com/r/aww/comments/bh1r38/', redirect: 'manual',
     ua: 'Mozilla/5.0 (compatible; Discordbot/2.0; +https://discordapp.com)', accept: 'text/html' },
+  // `ua` is filled from ARCHIVE_USER_AGENT when the self-test runs (archiveUserAgent, above).
   archive: { url: 'https://arctic-shift.photon-reddit.com/api/posts/ids?ids=bh1r38', redirect: 'follow',
-    ua: 'mbedfx.app (embed fixer; +https://github.com/shamu4life/mbedfx)', accept: 'application/json' },
+    ua: null, accept: 'application/json' },
 }
 
 let selftestCache = null
 
-export async function selftest(fetchImpl = fetch, now = Date.now()) {
+/**
+ * `env` is optional and last, so a caller that passes only the first two (the tests did) still runs, on
+ * the default archive user agent. The answer is kept for a minute whatever the user agent was: it
+ * changes only when the relay is redeployed, which starts a new process and an empty cache.
+ */
+export async function selftest(fetchImpl = fetch, now = Date.now(), env = {}) {
   if (selftestCache && now - selftestCache.at < SELFTEST_TTL_MS) return selftestCache.value
   const value = { at: new Date(now).toISOString() }
   for (const [name, t] of Object.entries(SELFTEST)) {
     const t0 = Date.now()
     try {
-      const got = await ask(new URL(t.url), { 'user-agent': t.ua, accept: t.accept }, t.redirect === 'follow', fetchImpl)
+      const ua = t.ua ?? archiveUserAgent(env)
+      const got = await ask(new URL(t.url), { 'user-agent': ua, accept: t.accept }, t.redirect === 'follow', fetchImpl)
       if (!got.res) { value[name] = { error: got.off ? 'redirect off the allowlist' : 'too many redirects' }; continue }
       const text = new TextDecoder().decode((await readCapped(got.res)) ?? new Uint8Array(0))
       value[name] = {
@@ -174,7 +198,7 @@ export async function handle(request, env, fetchImpl = fetch) {
   if (request.method !== 'GET') return own(405, 'GET only\n')
   if (pathname === '/') return new Response('mbedfx relay\n', { headers: { 'content-type': 'text/plain; charset=utf-8' } })
   if (pathname === '/selftest') {
-    return new Response(JSON.stringify(await selftest(fetchImpl), null, 1), {
+    return new Response(JSON.stringify(await selftest(fetchImpl, Date.now(), env), null, 1), {
       headers: { 'content-type': 'application/json', 'cache-control': 'no-store' },
     })
   }
