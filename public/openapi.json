@@ -8,9 +8,7 @@
     "license": { "name": "MIT", "identifier": "MIT" }
   },
   "servers": [
-    { "url": "https://mbedfx.app", "description": "The project's own domain." },
-    { "url": "https://megapenispoopenfarten.sex", "description": "The original zone, retained so links already pasted keep resolving." },
-    { "url": "https://forsen.sex", "description": "A third serving domain on the same worker." }
+    { "url": "/", "description": "Whichever host served this document. Every mbedfx deployment serves its own copy, so a relative base points a generated client at the deployment it was read from." }
   ],
   "externalDocs": {
     "url": "https://github.com/shamu4life/mbedfx/blob/main/docs/API.md",
