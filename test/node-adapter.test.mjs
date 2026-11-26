@@ -134,13 +134,28 @@ test('a SITE_PATH is served from public/ byte for byte, and /index.html redirect
   // Measured against mbedfx.app 2026-11-25: `/` is index.html, `/index.html` is a 307 to `/`. The bytes
   // are compared with the file, because an assets stand-in that answers 200 with the wrong file (or an
   // empty one) is the failure a status check passes.
+  //
+  // `/` IS THE FILE PLUS THE WORKER'S BLOCK since self-hosting phase 5 (src/sitepage.ts), on this
+  // runtime as on Cloudflare: one script element naming this adapter's own origins, and the head's three
+  // self-links pointed at its primary, because the primary here is embed.example.test and not
+  // mbedfx.app. Taking those two changes back out must leave the file exactly, so the stand-in is still
+  // held to serving the right bytes. test/sitepage.test.mjs has the rest.
   const { base } = await start()
   const robots = await fetch(`${base}/robots.txt`)
   assert.equal(robots.status, 200)
   assert.equal(robots.headers.get('content-type'), 'text/plain')
   assert.deepEqual(Buffer.from(await robots.arrayBuffer()), readFileSync(new URL('../public/robots.txt', import.meta.url)))
   const home = await fetch(`${base}/`)
-  assert.deepEqual(Buffer.from(await home.arrayBuffer()), readFileSync(new URL('../public/index.html', import.meta.url)))
+  const page = Buffer.from(await home.arrayBuffer()).toString('utf8')
+  const block = /<script id="mbedfx-config">var MBEDFX_CONFIG = ([^\n]*);<\/script>\n/
+  const cfg = JSON.parse(page.match(block)[1])
+  assert.deepEqual(cfg, {
+    primary: PRIMARY, host: new URL(PRIMARY).host, ours: [new URL(PRIMARY).host], public: [new URL(PRIMARY).host],
+    guests: [], direct: [new URL(DIRECT).host],
+  }, 'the adapter\'s origins, read by the Worker as on Cloudflare')
+  const unsubstituted = page.replace(block, '').split(`content="${PRIMARY}/`).join('content="https://mbedfx.app/')
+  assert.deepEqual(Buffer.from(unsubstituted, 'utf8'), readFileSync(new URL('../public/index.html', import.meta.url)))
+  assert.equal(page.split(`content="${PRIMARY}/`).length - 1, 3, 'og:url, og:image and twitter:image, and nothing else')
   const moved = await fetch(`${base}/index.html`, { redirect: 'manual' })
   assert.equal(moved.status, 307)
   assert.equal(moved.headers.get('location'), '/')

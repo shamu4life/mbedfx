@@ -3,6 +3,7 @@ import assert from 'node:assert/strict'
 import { readFileSync, existsSync } from 'node:fs'
 import { fetchableInstance } from '../src/platforms/fedihost.ts'
 import { guestHosts } from '../src/guesthost.ts'
+import { pageConfig } from '../src/sitepage.ts'
 
 /**
  * The guest hosts, from wrangler.production.jsonc's GUEST_HOSTS var, read with the Worker's own parser.
@@ -255,6 +256,44 @@ test('EVERY DOMAIN THE WORKER SERVES IS ONE THE PAGE RECOGNISES AS OURS — the 
   const list = m2 => m2[1].split(',').map(x => x.trim().replace(/^'|'$/g, '')).filter(Boolean)
   for (const h of list(pub)) {
     assert.ok(list(ours).includes(h), `PUBLIC_HOSTS must be a subset of OUR_HOSTS; ${h} is not in it`)
+  }
+})
+
+test('THE LISTS THE WORKER SERVES THE PAGE WITH keep both directions, on production and on every generic config', () => {
+  /**
+   * The two tests above read the page's literal arrays, which since self-hosting phase 5 are only the
+   * fallback: the page served by the Worker takes its lists from the block src/sitepage.ts builds from
+   * the deployment's vars and the request. So both directions are checked again on what is SERVED.
+   *
+   *   - Production, on every routed hostname: the served lists must be the literals exactly (otherwise
+   *     the page behaves differently with and without its block), every domain offered must be served,
+   *     and every served domain must be recognised as ours, forsen.sex and the guest hosts included.
+   *   - A generic config (wrangler.jsonc, wrangler.free.jsonc), which a fork deploys with whatever vars
+   *     it sets in the dashboard and usually none: the domain the page is served on must be recognised
+   *     and offered, so at least one domain works, and it is the one the reader is on.
+   */
+  const cfg = JSON.parse(readFileSync('wrangler.production.jsonc', 'utf8').replace(/^\s*\/\/.*$/gm, ''))
+  const routed = (cfg.routes ?? []).map(r => r.pattern.split('/')[0])
+  const served = new Set([...routed, ...GUEST_HOSTS])
+  const page = readFileSync('public/index.html', 'utf8')
+  const list = name => page.match(new RegExp(`var ${name} = \\[([^\\]]*)\\]`))[1]
+    .split(',').map(x => x.trim().replace(/^'|'$/g, '')).filter(Boolean)
+  for (const host of routed) {
+    const c = pageConfig(PROD_VARS, new URL(`https://${host}/`))
+    assert.deepEqual(c.ours, list('OUR_HOSTS'), `${host}: the served OUR_HOSTS is the literal`)
+    assert.deepEqual(c.public, list('PUBLIC_HOSTS'), `${host}: the served PUBLIC_HOSTS is the literal`)
+    for (const h of c.public) assert.ok(served.has(h), `${host}: the page offers ${h}, which nothing serves`)
+    for (const h of served) assert.ok(c.ours.includes(h), `${host}: ${h} is served and must be recognised as ours`)
+    for (const h of c.public) assert.ok(c.ours.includes(h), `${host}: PUBLIC_HOSTS must be a subset of OUR_HOSTS`)
+  }
+  for (const file of ['wrangler.jsonc', 'wrangler.free.jsonc']) {
+    const vars = JSON.parse(readFileSync(file, 'utf8').replace(/^\s*\/\/.*$/gm, '')).vars ?? {}
+    for (const host of ['embed.example.com', 'mbedfx-selfhost.someone.workers.dev']) {
+      const c = pageConfig(vars, new URL(`https://${host}/`))
+      assert.ok(c.ours.length >= 1 && c.ours.includes(host), `${file} on ${host}: the served host is recognised`)
+      assert.ok(c.public.includes(host), `${file} on ${host}: and offered`)
+      assert.equal(c.primary, `https://${host}`, `${file} on ${host}: and its links go there, not to mbedfx.app`)
+    }
   }
 })
 

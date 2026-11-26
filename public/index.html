@@ -548,7 +548,7 @@ footer .fine { font-size: 12px; opacity: .8; }
         <div>
           <div class="who"><span class="name">mbedfx</span><span class="bot">BOT</span><span class="ts">today</span></div>
           <p>Paste a social link and get back one Discord can actually draw. Swap the site's domain
-             for mbedfx.app and the link still points at the same post. The post is fetched
+             for <span data-primary-host>mbedfx.app</span> and the link still points at the same post. The post is fetched
              here, not by another fixer.</p>
 
           <div class="tool">
@@ -626,10 +626,13 @@ footer .fine { font-size: 12px; opacity: .8; }
           <p class="sub">A post id is meaningless without its server. About one in five bare id
              lookups against a default server returns a real post, just not the right one, so
              there's no default here. Any server's links work.</p>
-          <p style="margin-top:10px">Put mbedfx.app after <code>https://</code>:</p>
-<pre>https://<b>mbedfx.app</b>/mstdn.social/@stux/116994812581955524</pre>
-          <p>Or just type mbedfx.app/ in front of the whole link, one <kbd>Home</kbd> keypress:</p>
-<pre>https://<b>mbedfx.app/</b>https://mstdn.social/@stux/116994812581955524</pre>
+          <!-- The domain in these four spots is the deployment's primary (PRIMARY_HOST), filled in by the
+               DOM half from the worker's block. The text written here is what a copy with no block shows,
+               and what the block says on mbedfx.app. -->
+          <p style="margin-top:10px">Put <span data-primary-host>mbedfx.app</span> after <code>https://</code>:</p>
+<pre>https://<b data-primary-host>mbedfx.app</b>/mstdn.social/@stux/116994812581955524</pre>
+          <p>Or just type <span data-primary-host>mbedfx.app</span>/ in front of the whole link, one <kbd>Home</kbd> keypress:</p>
+<pre>https://<b><span data-primary-host>mbedfx.app</span>/</b>https://mstdn.social/@stux/116994812581955524</pre>
           <p class="sub">Works for Mastodon, Pleroma, Akkoma, Iceshrimp, Misskey, Sharkey, Lemmy,
              PieFed and PeerTube.</p>
         </div>
@@ -736,8 +739,9 @@ footer .fine { font-size: 12px; opacity: .8; }
  * Workers Builds previews (*-mbedfx.<account>.workers.dev) took over, so the same rule is applied to
  * those instead. The `prefix` field survives as '' so the domain toggle needs no special case.
  *
- * Anything unrecognised (localhost, a file:// open, a future hostname) still falls back to mbedfx.app
- * rather than emitting links to a host that is not us.
+ * Anything unrecognised (localhost, a file:// open, a future hostname) still falls back to the primary
+ * domain rather than emitting links to a host that is not us. The primary is the worker's own
+ * (PRIMARY_HOST, from the block it serves this page with), and mbedfx.app on a copy without one.
  *
  * Returns { host, prefix, family }: `host` is what to emit now, `family` is which toggle button
  * should read as pressed, `prefix` is what a toggle click must preserve.
@@ -793,25 +797,76 @@ footer .fine { font-size: 12px; opacity: .8; }
  * This page is never SERVED on a guest host (it declines `/`), so mbedfxDefaultHost never returns one
  * in practice; arriving there is the dating page, not this one.
  *
- * A visitor on a host in NEITHER list is handed mbedfx.app links, which is the same fallback localhost
- * and a file:// open have always had, and they work — see the unrecognised-host test, which exists
- * because emitting links to a host that may not be ours is the one outcome worth ruling out. A visitor
- * on an OUR_HOSTS domain is handed THAT domain's links, per the owner's ask recorded above.
+ * A visitor on a host in NEITHER list is handed the primary's links (mbedfx.app's on the public
+ * instance), which is the same fallback localhost and a file:// open have always had, and they work —
+ * see the unrecognised-host test, which exists because emitting links to a host that may not be ours is
+ * the one outcome worth ruling out. A visitor on an OUR_HOSTS domain is handed THAT domain's links, per
+ * the owner's ask recorded above.
  *
  * DO NOT REPLACE EITHER LIST WITH location.hostname. Tried and reverted 2026-08-03 (baff668):
  * "*.mbedfx.app is a wildcard, so d.mbedfx.app would have read as its own domain and media-only would
- * compose a second prefix onto it: d.d.mbedfx.app."
+ * compose a second prefix onto it: d.d.mbedfx.app." Since 2026-11-25 the WORKER supplies all three lists
+ * and the arrived-on host, from its own vars, with one leading d. already taken off (src/sitepage.ts,
+ * MBEDFX_CONFIG below). The literals here are what a copy with no block falls back to, and they are
+ * exactly what the worker sends on mbedfx.app.
  */
 var OUR_HOSTS = ['mbedfx.app', 'megapenispoopenfarten.sex', 'forsen.sex', 'sorryifuckedyour.mom', 'hotsinglesnear.you'];
 var PUBLIC_HOSTS = ['mbedfx.app', 'megapenispoopenfarten.sex', 'sorryifuckedyour.mom', 'hotsinglesnear.you'];
 /**
  * THE GUEST HOSTS, the same list as the Worker's GUEST_HOSTS var, which wrangler.production.jsonc sets
- * (this page has no build step and cannot read it, so test/landing-convert.test.mjs compares the two;
- * until 2026-11-25 the Worker's list was a constant in src/guesthost.ts). What this list changes is a
- * consequence of another Worker owning the domain: a narrower set of paths answered (drawCard's guest
- * line). It no longer changes media only, which is the d. host on every domain since 2026-10-11.
+ * (until 2026-11-25 the Worker's list was a constant in src/guesthost.ts). The worker now sends its own
+ * reading of the var in the block below; this literal is the fallback, and test/landing-convert.test.mjs
+ * holds it equal to production's var. What this list changes is a consequence of another Worker owning
+ * the domain: a narrower set of paths answered (drawCard's guest line). It no longer changes media only,
+ * which is the d. host wherever one is declared (mbedfxHasMediaOnly).
  */
 var GUEST_HOSTS = ['sorryifuckedyour.mom', 'hotsinglesnear.you'];
+
+/**
+ * THE DEPLOYMENT'S OWN VALUES, WHEN THE WORKER SENT THEM (self-hosting phase 5, 2026-11-25).
+ *
+ * The worker serves this page with one more script element (id mbedfx-config) in front of this block,
+ * setting MBEDFX_CONFIG (src/sitepage.ts builds it from PUBLIC_ORIGIN, OWN_HOSTS, GUEST_HOSTS and the
+ * request). Its opening tag is not spelled out here, so nothing scanning for it can match this comment.
+ * Before that every copy of this page carried mbedfx.app's domains, so a fork's converter handed out
+ * https://mbedfx.app/... links and sent its readers to somebody else's instance.
+ *
+ * THE LITERALS ABOVE ARE THE FALLBACK, for every copy with no block: a file:// open, an old cached copy,
+ * and the tests that lift this block. They are deliberately what the worker sends on mbedfx.app, so the
+ * public instance behaves the same with or without it. A block that is not the shape below is ignored
+ * whole rather than half-applied, because a partial list is the 2026-09-11 forsen.sex defect again.
+ *
+ * Read through typeof, never through the DOM: this block stays DOM-free (the test lifts it), and the
+ * block is a plain global, so a test supplies one by passing MBEDFX_CONFIG in.
+ */
+function mbedfxReadConfig(c) {
+  var hosts = function (v) {
+    if (!Array.isArray(v)) return false;
+    for (var i = 0; i < v.length; i++) if (typeof v[i] !== 'string' || !v[i]) return false;
+    return true;
+  };
+  if (!c || typeof c !== 'object') return null;
+  if (typeof c.primary !== 'string' || !/^https?:\/\/[^\/?#]+$/.test(c.primary)) return null;
+  if (typeof c.host !== 'string' || !hosts(c.ours) || !hosts(c.public) || !c.public.length) return null;
+  if (!hosts(c.guests) || !hosts(c.direct)) return null;
+  return c;
+}
+var MBEDFX_CFG = mbedfxReadConfig(typeof MBEDFX_CONFIG === 'undefined' ? null : MBEDFX_CONFIG);
+if (MBEDFX_CFG) {
+  OUR_HOSTS = MBEDFX_CFG.ours.slice();
+  PUBLIC_HOSTS = MBEDFX_CFG.public.slice();
+  GUEST_HOSTS = MBEDFX_CFG.guests.slice();
+}
+/**
+ * PRIMARY_HOST is where a link goes when nothing else decides (an unrecognised visitor, mbedfxConvert
+ * with no host) and the domain the visible copy names. ARRIVED_HOST is the host the worker saw, d.
+ * already off, or null with no block, in which case the DOM half reads location.hostname as before.
+ * DIRECT_HOSTS is every declared d. name; null means the page cannot know, and then media only is
+ * offered everywhere, which is what this page did before it could know.
+ */
+var PRIMARY_HOST = MBEDFX_CFG ? MBEDFX_CFG.primary.replace(/^https?:\/\//, '') : 'mbedfx.app';
+var ARRIVED_HOST = MBEDFX_CFG ? MBEDFX_CFG.host : null;
+var DIRECT_HOSTS = MBEDFX_CFG ? MBEDFX_CFG.direct.slice() : null;
 
 /**
  * The nesting invariant, asserted where it cannot rot rather than in a comment. A name in
@@ -877,23 +932,23 @@ function mbedfxDefaultHost(hostname) {
   var served = String(hostname == null ? '' : hostname).toLowerCase().replace(/\.$/, '');
   // A Workers preview. Emitted as-is so a link pasted from it reaches the build under test.
   if (/(^|\.)workers\.dev$/.test(served)) {
-    return { host: served, prefix: '', family: 'mbedfx.app', preview: true };
+    return { host: served, prefix: '', family: PUBLIC_HOSTS[0], preview: true };
   }
   /**
    * OUR_HOSTS, not PUBLIC_HOSTS: arriving on a served-but-unadvertised domain must still hand out
    * THAT domain's links. `family` is which toggle button reads as pressed, and an unadvertised host
-   * has no button — so it falls back to mbedfx.app's, leaving the pair (host: forsen.sex,
-   * family: mbedfx.app). That is deliberate and is what the toggle needs: no button can claim to be
+   * has no button — so it falls back to the first button's (mbedfx.app's), leaving the pair
+   * (host: forsen.sex, family: mbedfx.app). That is deliberate and is what the toggle needs: no button can claim to be
    * pressed for a domain that is not on screen, and clicking any button moves you off forsen.sex
    * onto the domain you clicked, which is the only thing a one-of-several toggle can mean.
    */
   return OUR_HOSTS.indexOf(served) >= 0
-    ? { host: served, prefix: '', family: PUBLIC_HOSTS.indexOf(served) >= 0 ? served : 'mbedfx.app' }
-    : { host: 'mbedfx.app', prefix: '', family: 'mbedfx.app' };
+    ? { host: served, prefix: '', family: PUBLIC_HOSTS.indexOf(served) >= 0 ? served : PUBLIC_HOSTS[0] }
+    : { host: PRIMARY_HOST, prefix: '', family: PUBLIC_HOSTS[0] };
 }
 
 function mbedfxConvert(input, host, gallery) {
-  host = host || 'mbedfx.app';
+  host = host || PRIMARY_HOST;
   var raw = String(input == null ? '' : input).trim();
   if (!raw) return { ok: false, kind: 'empty' };
 
@@ -1208,6 +1263,19 @@ function mbedfxMediaOnly(url) {
 }
 
 /**
+ * WHETHER MEDIA ONLY CAN BE OFFERED ON A DOMAIN: only when its d. name is declared (DIRECT_HOSTS, from
+ * the worker's vars). A d. name works only once somebody has pointed DNS at it, and a fork that never did
+ * would otherwise be handed d. links that resolve nowhere, from the one control whose whole promise is a
+ * link straight to the file. With no block DIRECT_HOSTS is null and every domain counts, which is what
+ * this page assumed before it could know and what holds on the public instance, where all five domains
+ * have one. The DOM half disables the box on a domain without one (syncMediaOnlyHost).
+ */
+function mbedfxHasMediaOnly(h) {
+  if (DIRECT_HOSTS === null) return true;
+  return DIRECT_HOSTS.indexOf('d.' + String(h == null ? '' : h).toLowerCase().replace(/\.$/, '')) >= 0;
+}
+
+/**
  * RE-POINT A WORKER-SUPPLIED URL AT THE HOST THE READER CHOSE, with media only in that host's spelling.
  * See onChosenHost in the DOM half for the bug this exists for. Kept here, pure, so the test can check
  * that a /_prep answer comes out exactly as a fresh conversion does on every host.
@@ -1243,10 +1311,22 @@ function mbedfxPrepResolved(asked, answer) {
 (function () {
   var $ = function (id) { return document.getElementById(id); };
   var input = $('url'), out = $('out'), result = $('result'), note = $('note'), copy = $('copy');
-  // The domain you arrived on leads — see mbedfxDefaultHost, which also keeps a Workers preview
-  // deployment emitting its own links rather than production ones.
-  var origin = mbedfxDefaultHost(location.hostname);
+  // The domain the visitor arrived on leads — see mbedfxDefaultHost, which also keeps a Workers preview
+  // deployment emitting its own links rather than production ones. ARRIVED_HOST is that host as the
+  // worker saw it, with one leading d. taken off, which is what keeps d.mbedfx.app from becoming a
+  // domain of its own and media only from composing d.d. (see OUR_HOSTS). A copy with no block reads
+  // location.hostname, as it always did.
+  var origin = mbedfxDefaultHost(ARRIVED_HOST !== null ? ARRIVED_HOST : location.hostname);
   var host = origin.host;
+
+  /**
+   * THE VISIBLE COPY NAMES THE PRIMARY. "Swap the site's domain for mbedfx.app" sent a fork's readers to
+   * mbedfx.app. Each spot is marked data-primary-host and holds mbedfx.app as written, which is also
+   * PRIMARY_HOST on the public instance, so there nothing changes on screen.
+   */
+  Array.prototype.forEach.call(document.querySelectorAll('[data-primary-host]'), function (el) {
+    el.textContent = PRIMARY_HOST;
+  });
   /**
    * MEDIA-ONLY emits a link that answers with the post's BYTES instead of a card: the d. host, on every
    * domain (mbedfxMediaOnly has why the guest hosts are included since 2026-10-11). Composes with the
@@ -2016,18 +2096,58 @@ function mbedfxPrepResolved(asked, answer) {
     // A video still being prepared counts, the same exception drawMediaOnly makes: a posterless one comes
     // back with its entry dropped until the mux lands, and disabling the box then unticked it and quietly
     // dropped the reader's `d.` while the caption said the file was on its way (round-four review).
-    var has = !!(j && j.ok && ((j.media || []).length || j.muxing || j.muxSlow));
-    var lab = box.parentNode;
-    box.disabled = !has;
-    if (lab && lab.setAttribute) {
-      lab.setAttribute('title', has ? 'Link straight to the file' : 'This post has no media to link to');
-      lab.style.opacity = has ? '' : '.5';
-      lab.style.cursor = has ? '' : 'not-allowed';
-    }
-    if (!has && box.checked) {
+    postHasMedia = !!(j && j.ok && ((j.media || []).length || j.muxing || j.muxSlow));
+    if (paintMediaOnly()) {
       box.checked = false;
       mediaOnly = false;
       render();
+    }
+  }
+
+  /**
+   * TWO THINGS DECIDE THE BOX NOW, and either one disables it: the post has media (above), and the chosen
+   * domain has a d. name (mbedfxHasMediaOnly, since 2026-11-25). They are kept apart so that switching
+   * domain does not forget what the card said, and switching back re-enables the box for the same post.
+   * paintMediaOnly draws the combined state and says whether a ticked box has to be unticked.
+   */
+  var postHasMedia = true;
+  var hostHasMedia = true;
+  function paintMediaOnly() {
+    var box = $('mediaOnly');
+    if (!box) return false;
+    var has = postHasMedia && hostHasMedia;
+    var lab = box.parentNode;
+    box.disabled = !has;
+    if (lab && lab.setAttribute) {
+      lab.setAttribute('title', !hostHasMedia ? 'This domain has no d. name, so no direct file link'
+        : (has ? 'Link straight to the file' : 'This post has no media to link to'));
+      lab.style.opacity = has ? '' : '.5';
+      lab.style.cursor = has ? '' : 'not-allowed';
+    }
+    return !has && box.checked;
+  }
+
+  /**
+   * THE DOMAIN HALF. Called once at load and on every domain click. A ticked box on a domain without a
+   * d. name is unticked through its own change handler, so the preview is redrawn as a card exactly as a
+   * reader's own untick would redraw it, with no second copy of that logic here.
+   *
+   * HIDDEN, NOT DISABLED, WHEN NO DOMAIN HERE HAS ONE. The rule above is "disabled, not hidden", because
+   * a control that vanishes reads as a bug. That holds when another domain or another post would enable
+   * it. On a deployment that declares no d. name at all nothing ever will, and a box that is always grey
+   * is noise.
+   */
+  function syncMediaOnlyHost() {
+    var box = $('mediaOnly');
+    if (!box) return;
+    hostHasMedia = mbedfxHasMediaOnly(host);
+    var lab = box.parentNode;
+    if (lab && lab.style) {
+      lab.style.display = hostHasMedia || PUBLIC_HOSTS.some(mbedfxHasMediaOnly) ? '' : 'none';
+    }
+    if (paintMediaOnly()) {
+      box.checked = false;
+      box.dispatchEvent(new Event('change'));
     }
   }
 
@@ -2319,6 +2439,8 @@ function mbedfxPrepResolved(asked, answer) {
       schedulePrep();
     });
   }
+  // After the handler above exists, so an untick at load goes through it.
+  syncMediaOnlyHost();
 
   /**
    * THE STILLS TOGGLE. Same behavioural contract as media only above, for the same reasons — see its
@@ -2375,6 +2497,31 @@ function mbedfxPrepResolved(asked, answer) {
     }
   }
 
+  /**
+   * THE DOMAIN BUTTONS ARE PUBLIC_HOSTS. The markup carries mbedfx.app's four, which is what the block
+   * says there, so on the public instance they are left exactly as written. Anywhere else (a fork, a
+   * deployment that offers one domain or six) they are rebuilt from the list, in its order, before the
+   * handlers below are attached. Built with textContent and setAttribute, never markup, though every
+   * name in the list is a host the worker parsed.
+   */
+  (function () {
+    var seg = document.querySelector('.seg');
+    if (!seg) return;
+    var have = Array.prototype.map.call(seg.querySelectorAll('button'), function (b) {
+      return b.getAttribute('data-host');
+    });
+    if (have.join(' ') === PUBLIC_HOSTS.join(' ')) return;
+    seg.textContent = '';
+    PUBLIC_HOSTS.forEach(function (h) {
+      var b = document.createElement('button');
+      b.type = 'button';
+      b.setAttribute('data-host', h);
+      b.setAttribute('aria-pressed', 'false');
+      b.textContent = h;
+      seg.appendChild(b);
+    });
+  })();
+
   var segs = document.querySelectorAll('.seg button');
   Array.prototype.forEach.call(segs, function (b) {
 
@@ -2386,6 +2533,9 @@ function mbedfxPrepResolved(asked, answer) {
       Array.prototype.forEach.call(segs, function (o) {
         o.setAttribute('aria-pressed', String(o === b));
       });
+      // Before render(): a domain with no d. name unticks media only, and the link drawn below must not
+      // carry a d. that domain does not have.
+      syncMediaOnlyHost();
       render();
       /**
        * THE ONE DRAWING THAT DEPENDS ON THE HOST is the answer for a path a guest host turns away: it

@@ -2,6 +2,7 @@ import type { ClientClass, GalleryMode, Media, MuxJob, Platform, Post, PostRef, 
 import { classify } from './classify.ts'
 import { route } from './router.ts'
 import { GUEST_MARK, guestDeclined, guestServes, isGuestHost } from './guesthost.ts'
+import { declaredOrigins, pageResponse } from './sitepage.ts'
 import { render } from './render/index.ts'
 import { redirect } from './render/fail.ts'
 import { toMastodonStatus, toOEmbed } from './render/mastodon.ts'
@@ -6318,8 +6319,10 @@ async function serve(req: Request, env: Env, ctx: ExecutionContext, d: Deps): Pr
   const direct = DIRECT_MEDIA_HOST.test(url.hostname) || ('direct' in r && r.direct === true)
 
   switch (r.kind) {
+    // `/` is the converter page with this deployment's host lists added (src/sitepage.ts); the other
+    // site paths are ASSETS' answer as it was.
     case 'site':
-      return env.ASSETS.fetch(req)
+      return pageResponse(req, env)
 
     case 'notfound':
       count(env, 'none', 'notfound', client)
@@ -7616,19 +7619,9 @@ export const CRON_FALLBACK_ORIGIN = 'http://localhost'
  * reason to admit a host anywhere.
  */
 export function cronOrigin(env: Pick<Env, 'PUBLIC_ORIGIN'>): string {
-  for (const raw of (env.PUBLIC_ORIGIN ?? '').split(/[\s,]+/)) {
-    if (!raw) continue
-    try {
-      const u = new URL(raw)
-      if ((u.protocol === 'https:' || u.protocol === 'http:') && u.pathname === '/' && !u.search && !u.hash
-        && !u.username && !u.password) {
-        return u.origin
-      }
-    } catch {
-      // Not a url: skipped, like every other entry that is not an origin.
-    }
-  }
-  return CRON_FALLBACK_ORIGIN
+  // declaredOrigins is the one reading of the var, shared with the converter page's primary
+  // (src/sitepage.ts), so the check and the page cannot disagree about which origin comes first.
+  return declaredOrigins(env.PUBLIC_ORIGIN)[0]?.origin ?? CRON_FALLBACK_ORIGIN
 }
 
 /** ONE SCHEDULED RUN, rendered through this Worker's own front door, and where it ran. */
