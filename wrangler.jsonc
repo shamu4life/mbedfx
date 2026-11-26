@@ -23,7 +23,7 @@
   "main": "src/index.ts",
   "compatibility_date": "2026-07-01",
   // OFF, AND SPELLED OUT. Workers Logs would store every request url for days, and on this Worker the
-  // url IS the post somebody pasted (.github/SECURITY.md: no user data at rest). An absent block is not off:
+  // url IS the post somebody pasted (.github/SECURITY.md: no reader data at rest). An absent block is not off:
   // the field defaults to true for new Workers. Live debugging is `npx wrangler tail`.
   "observability": { "enabled": false },
   // NO ROUTES, so the Worker answers on <name>.<your-subdomain>.workers.dev. To serve your own domain,

@@ -41,7 +41,7 @@ nowhere.
   Worker's dashboard page. No per-request detail, three months of history, no configuration, no
   price.
 - **Analytics Engine** (stored, aggregate, on): the `mbedfx_counters` dataset `src/analytics.ts`
-  writes into (`wrangler.production.jsonc:288`). Own config key, own write and read APIs, three months of
+  writes into (`analytics_engine_datasets` in `wrangler.production.jsonc`). Own config key, own write and read APIs, three months of
   retention, out of `observability.enabled`'s reach.
 - **Workers Logpush** (export, off, own flag): the same trace events shipped off Cloudflare to R2, S3
   or a log vendor.
@@ -461,7 +461,7 @@ agreement can stop holding without the written data changing.
 migrate rows. As of 2026-08-03 `mbedfx_counters` holds at most about two days of data, so every
 `INTERVAL '7' DAY` example below returns a partial window that looks like a traffic collapse.
 
-`wrangler.production.jsonc:286` records that the historical counters "stay in `fxeverything_counters` and are
+The comment on `analytics_engine_datasets` in `wrangler.production.jsonc` records that the historical counters "stay in `fxeverything_counters` and are
 still queryable there". Neither table has been confirmed to exist; `SHOW TABLES` settles both in one
 call. The Worker was renamed in the same commit, and the repo has no evidence the old script ever
 deployed and wrote a point. Retention is three months either way: anything before 2026-05-03 is gone
@@ -531,13 +531,13 @@ Most mean nothing as an absolute number, and several mislead alone.
 - `rd`/`private` only fires on the Reddit OAuth fallback, which runs only when `REDDIT_CLIENT_ID` and
   `REDDIT_CLIENT_SECRET` are set.
 - `pool_unused` needs a non-empty matching account secret, and for `x` an entry carrying both
-  `auth_token` and `ct0` (`src/credentials.ts:146`). An unparseable secret counts as an empty pool.
+  `auth_token` and `ct0` (`twitterAccounts`, `src/credentials.ts:162`). An unparseable secret counts as an empty pool.
 - `copyright_gql` depends on a `doc_id` Meta rotates.
 - Every counter is zero if the `AE` binding is absent from the deployed bundle.
   `env.AE?.writeDataPoint` is optional-chained inside `count()` and `countMux()`
   (`src/analytics.ts`): a deploy without it writes nothing and neither throws nor logs, and
   "zero rows" means "no traffic" or "no binding".
-  `wrangler.production.jsonc:288` declares it, prod can diverge from `main` here, and the deployed bundle has
+  `analytics_engine_datasets` in `wrangler.production.jsonc` declares it, prod can diverge from `main` here, and the deployed bundle has
   not been checked.
 
 ### Known defects in the write shape
@@ -926,8 +926,8 @@ which is the pool working, or any reading under
 
 ### Is the Instagram copyright recovery still alive
 
-Emitted at `src/worker.ts:423` and `:550` (`copyright_gql`), `:558` (`copyright_recovered`) and
-`:576` (`copyright_remux`).
+Emitted by the `count(env, 'ig', …)` calls in `src/worker.ts` that name `copyright_gql` (two of
+them), `copyright_recovered` and `copyright_remux`.
 
 ```sql
 SELECT SUM(_sample_interval * (blob2 = 'copyright_gql')) AS gql,
@@ -960,7 +960,7 @@ WHERE timestamp > NOW() - INTERVAL '7' DAY
 ```
 
 `google` at zero while `workers_ai` climbs means the weaker fallback model (`FALLBACK_MODEL`,
-`@cf/google/gemma-4-26b-a4b-it`, `src/translate.ts:276`) is carrying the feature. Nothing on the card
+`@cf/google/gemma-4-26b-a4b-it`, `FALLBACK_MODEL` in `src/translate.ts`) is carrying the feature. Nothing on the card
 changes when it takes over.
 
 ### Is any of this being sampled
@@ -1034,7 +1034,7 @@ token already pulls this data from a laptop, where it is not exposed. The `Env` 
 in `src/analytics.ts` forbids the addition by name and records the precedent: the last secret-gated endpoint mounted here
 fetched a caller-supplied shortcode from the Worker's egress, and was deleted with its module, its
 mount in `worker.ts` and its wrangler secret. Its path stays unspelled in the source; a test fails
-the suite for any comment naming it (`test/pipeline.test.mjs:2621`).
+the suite for any comment naming it ("THE PROBE IS GONE" in `test/pipeline.test.mjs`).
 
 Three tests read the tree. `:1515` and `:2656` fail if the route returns; `:2621` fails if a comment
 outlives the file it names, which is what catches a half-finished deletion. `:1515` is named
@@ -1047,7 +1047,7 @@ rejected anything failing `/^[A-Za-z0-9_-]{5,32}$/` with a 400 before emitting a
 shorter code would pass against a live mounted probe.
 
 An ungated route leaks, worst at `pool_unused`. `poolSetButUnused` is literally
-`accountPool(env, platform).length > 0` (`src/credentials.ts:182`), so publishing it publishes that
+`accountPool(env, platform).length > 0` (`src/credentials.ts:200`), so publishing it publishes that
 mbedfx has logged-in IG/YT/X accounts loaded, and the `yt` arm reports whether they still pass the
 age gate. The audience is the platform's enforcement team, and it turns a ban wave into an experiment
 they run against mbedfx's own endpoint. The Instagram copyright trio is the same shape for Meta, the

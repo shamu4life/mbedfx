@@ -4,7 +4,7 @@
     "title": "mbedfx JSON API",
     "version": "v1",
     "summary": "The post data the embed cards are drawn from, as JSON.",
-    "description": "Swap a social-media host for an mbedfx one and the post unfurls as an embed card. `/_api/v1` serves the same post the card is drawn from, as data.\n\nThe contract is versioned by path. Within `v1` fields are added, never removed or retyped; `error.code` values are added and existing ones keep their meaning; `error.message` wording may change, so match on `code`. `/_api/v2` is never answered with `v1`.\n\nNo key, no signup, no required headers, no rate limit in the source. Prose, measurements and the reasoning behind every rule are in `docs/API.md`; this document is the machine-readable half of it and `test/openapi.test.mjs` fails when the two drift from the code.",
+    "description": "Swap a social-media host for an mbedfx one and the post unfurls as an embed card. `/_api/v1` serves the same post the card is drawn from, as data.\n\nThe contract is versioned by path. Within `v1` fields are added, never removed or retyped; `error.code` values are added and existing ones keep their meaning; `error.message` wording may change, so match on `code`. `/_api/v2` is never answered with `v1`.\n\nNo key, no signup, no required headers, no rate limit in the source. Prose, measurements and the reasoning behind every rule are in `docs/API.md`; this document is the machine-readable half of it. `test/openapi.test.mjs` fails when its schemas drift from the code. The prose here and in `docs/API.md` is not checked.",
     "license": { "name": "MIT", "identifier": "MIT" }
   },
   "servers": [
@@ -227,7 +227,7 @@
       "get": {
         "operationId": "getOpenapiDocument",
         "summary": "This document.",
-        "description": "Served as a static asset. It takes no input, reaches no upstream and costs the worker nothing.",
+        "description": "Served from the static assets through the Worker: one invocation, no input, no upstream, no container.",
         "responses": {
           "200": {
             "description": "The OpenAPI document.",
@@ -246,7 +246,7 @@
           "ok": { "const": true, "description": "The discriminator. `true` on this shape." },
           "muxing": {
             "type": "boolean",
-            "description": "A video is still being remuxed into the progressive MP4 this service serves, and what arrived is its poster still (`media[].still` is `true`). A re-request a few seconds later carries the `video` for every mux that finishes inline, which is most of them. One that does not is retried on an alarm — first at 35s, or 140s where the source is separate tracks rather than a page, then at +2min and +20min — so a cold long video is minutes away, not seconds."
+            "description": "A video is still being remuxed into the progressive MP4 this service serves, and what arrived is its poster still (`media[].still` is `true`). A re-request a few seconds later carries the `video` for every mux that finishes inline, which is most of them. One that does not is retried on an alarm (first at 35s, or 140s where the source is separate tracks rather than a page, then at +2min and +20min), so a cold long video is minutes away, not seconds."
           },
           "pending": {
             "type": "boolean",
@@ -289,10 +289,10 @@
               "age_restricted": { "status": 200, "means": "The post exists behind an age gate. Also reached by a TikTok share code whose resolution reports the gate." },
               "private": { "status": 200, "means": "The post exists behind a private account or a login wall. Also reached by a TikTok share code whose resolution reports the gate." },
               "fetch_fail": { "status": 200, "means": "Not loadable: deleted, or the platform did not answer. Several platforms answer HTTP 200 with a login wall or 500 with a good JSON error, so this is a judgement about content rather than about a status. Also reached by a TikTok share code TikTok claims and cannot serve, where `platform` and `canonical` are populated because the page proved whose post it is, and by a `/pin.it/{code}` that names no pin, with `platform` `pn` and the share url as `canonical`." },
-              "ambiguous": { "status": 200, "means": "The path belongs to more than one site; `candidates` names them. Every profile url, bare handle and unrecognised one-segment path lands here, including a short link whose code is a bare single segment such as `redd.it/haucpf`, and a `/t/{code}` that TikTok did not claim, since `tiktok.com/t/` and `threads.com/t/` are the same path on two products." },
+              "ambiguous": { "status": 200, "means": "The path belongs to more than one site; `candidates` names them. Every profile url except Bluesky's `/profile/{handle}`, every bare handle and every unrecognised one-segment path lands here, including a short link whose code is a bare single segment such as `redd.it/haucpf`, and a `/t/{code}` that TikTok did not claim, since `tiktok.com/t/` and `threads.com/t/` are the same path on two products." },
               "notfound": { "status": 200, "means": "A shape this service routes for nobody, including a site prefix forced onto a path that site does not claim (`/x/jack`) and `/_prep` or `/_card` without their own parameter." },
               "bad_id": { "status": 200, "means": "A path shaped like one of this service's own JSON endpoints (`/users/{handle}/statuses/{id}`, `/api/v1/statuses/{id}`, `/_oembed/{id}`) whose id did not decode. Not reachable from an ordinary post url." },
-              "not_a_post": { "status": 200, "means": "Routes to something that is not a post: a site page (`/`, `/index.html`, `/robots.txt`), this service's own `/_media/`, `/_prep?p=`, `/_card?p=` or `/_api/v1`, or a Meta or Reddit share code that could not be resolved to a post. A TikTok `/t/{code}` never lands here: its three non-post resolutions answer `age_restricted`, `private`, `fetch_fail` or `ambiguous`, matching what the same code renders as a card. Neither does a `/pin.it/{code}`, which answers `fetch_fail` when it names no pin." },
+              "not_a_post": { "status": 200, "means": "Routes to something that is not a post: a site page (`/`, `/index.html`, `/robots.txt`), this service's own `/_media/`, `/_prep?p=`, `/_card?p=` or `/_api/v1`, a Bluesky `/profile/{handle}` url (an account, not a post), or a Meta or Reddit share code that could not be resolved to a post. A TikTok `/t/{code}` never lands here: its three non-post resolutions answer `age_restricted`, `private`, `fetch_fail` or `ambiguous`, matching what the same code renders as a card. Neither does a `/pin.it/{code}`, which answers `fetch_fail` when it names no pin." },
               "no_url": { "status": 400, "means": "No `url` parameter, or an empty one. `?url=` and no `url=` at all are the same answer." },
               "unparseable": { "status": 400, "means": "`new URL(value, origin)` threw. Only a malformed absolute url does that; anything readable as a path resolves against this origin and gets a 200 instead." },
               "method_not_allowed": { "status": 405, "means": "This endpoint reads. Use GET." }
@@ -391,7 +391,7 @@
       },
       "Media": {
         "type": "object",
-        "description": "One picture or video. Every url is on this origin, never the platform's CDN, which hands out signed, short-lived and sometimes IP-locked urls. Remuxed video is served from storage and answers range requests; images, avatars, posters and already-progressive video are a 302 to the CDN; Instagram, Twitch and Threads video is proxied rather than redirected.",
+        "description": "One picture or video. Every url is on this origin, never the platform's CDN, which hands out signed, short-lived and sometimes IP-locked urls. Remuxed video, where the deployment has a container and a bucket, is served from storage and answers range requests; images, avatars, posters and already-progressive video are a 302 to the CDN; Instagram, Twitch and Threads video is proxied rather than redirected.",
         "properties": {
           "kind": {
             "type": "string",
@@ -416,7 +416,7 @@
           },
           "still": {
             "type": "boolean",
-            "description": "This picture is standing in for a video. Read it with the envelope's `muxing`: `still` false with `muxing` false is an ordinary picture; `still` true with `muxing` true means a video is still muxing, so ask again; `still` true with `muxing` false means a video exists that cannot be served — it is longer than the remux ceiling, or it is a live or scheduled broadcast with no finished file behind it — and that is final for as long as this card is cached. It also means every scheduled attempt to mux the video failed; that verdict holds for six hours, after which the next request tries again. Without this flag the last case is indistinguishable from a photograph except by reading the English in `text`."
+            "description": "This picture is standing in for a video. Read it with the envelope's `muxing`: `still` false with `muxing` false is an ordinary picture; `still` true with `muxing` true means a video is still muxing, so ask again; `still` true with `muxing` false means a video exists that cannot be served (it is longer than the remux ceiling, or it is a live or scheduled broadcast with no finished file behind it), and that is final for as long as this card is cached. It also means every scheduled attempt to mux the video failed; that verdict holds for six hours, after which the next request tries again. Without this flag the last case is indistinguishable from a photograph except by reading the English in `text`. On a deployment with no video container or no media bucket (the Free config, a Worker Preview with no bucket, a Node adapter with no container), a video that needs muxing is published as an ordinary picture with `still` false. That comes from reading the code, not from a measurement."
           }
         },
         "required": ["kind", "url", "poster", "width", "height", "still"],

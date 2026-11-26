@@ -24,6 +24,8 @@
 
 ### Code
 - [ ] `npm run build` passes (tests + typecheck)
+- [ ] `npm run test:container` passes, if `container/` changed
+- [ ] `docker compose -f adapters/node/compose.yaml build` succeeds, if `adapters/node/` or `container/` changed (CI doesn't build the images)
 - [ ] No new network calls in tests
 - [ ] Assertions are on response **content**, not on status
 
@@ -33,7 +35,8 @@
 
 ### Version & changelog
 - [ ] `CHANGELOG.md` updated (or N/A, internal only)
-- [ ] `package.json` version bumped (or N/A)
+- [ ] Version bumped in `package.json`, both fields of `package-lock.json` and the `Version:` line in `CLAUDE.md` (or N/A)
 
 ### Documentation
 - [ ] README / site table updated for a new site (or N/A)
+- [ ] A new setting is in the README's Configuration table and docs/SELF-HOSTING.md (or N/A)
