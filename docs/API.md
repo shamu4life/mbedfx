@@ -7,6 +7,8 @@
 GET https://mbedfx.app/_api/v1?url=<the post url>
 ```
 
+On another deployment, use its own origin. Every url in an answer is minted from it.
+
 No key, no signup, no required headers. Every answer carries `access-control-allow-origin: *` and
 `x-content-type-options: nosniff` (`apiHeaders`, `src/worker.ts`).
 
@@ -36,7 +38,9 @@ or what a rule costs.
 Source citations below name symbols rather than lines. The line numbers were right when 1.9.0
 shipped on 2026-08-04 and every one of them pointed into the wrong part of `src/worker.ts` by
 2026-08-11, the file having grown around 140 lines underneath them. A name survives a merge, and
-`test/openapi.test.mjs` fails when a cited one stops existing.
+`test/openapi.test.mjs` fails when a symbol cited beside its `src/` file stops existing.
+Citations into `test/` and `public/` are not checked, so they name the test or the list instead of
+a line.
 
 `GET` and `HEAD` are answered. `OPTIONS` returns `204` with
 `access-control-allow-methods: GET, HEAD, OPTIONS`, `access-control-allow-headers: *` and
@@ -76,7 +80,7 @@ Move the instance into the path and drop the scheme:
 
 `test/link-hygiene.test.mjs:71-74` drives those four through the router, with the Lemmy, Misskey and
 PeerTube ids from `test/fixtures/` and the Mastodon one from the converter page's example list
-(`public/index.html:1020`). The cards mint the same shape:
+(the Mastodon entry of `PLATFORMS` in `public/index.html`). The cards mint the same shape:
 `https://mbedfx.app/lemmy.world/post/49966212`.
 
 ---
@@ -148,7 +152,7 @@ again 2026-08-11 against every shape in `public/openapi.json`.
 | `author.name` | string | **yes** |
 | `author.handle` | string | **yes** |
 | `author.url` | string | **yes** |
-| `author.avatar` | string, absolute url on the mbedfx origin | **yes** |
+| `author.avatar` | string, absolute url on the answering origin | **yes** |
 | `counts` | object | no |
 | `counts.likes` | integer > 0 | no |
 | `counts.reposts` | integer > 0 | no |
@@ -156,8 +160,8 @@ again 2026-08-11 against every shape in `public/openapi.json`.
 | `counts.views` | integer > 0 | no |
 | `media` | array of objects | no |
 | `media[].kind` | string, `"video"` or `"image"` | no |
-| `media[].url` | string, absolute url on the mbedfx origin | no |
-| `media[].poster` | string, absolute url on the mbedfx origin | **yes** |
+| `media[].url` | string, absolute url on the answering origin | no |
+| `media[].poster` | string, absolute url on the answering origin | **yes** |
 | `media[].width` | number | **yes** |
 | `media[].height` | number | **yes** |
 | `media[].still` | boolean | no |
@@ -178,7 +182,7 @@ place an absent key carries meaning. With nothing to report: `title` is `null`, 
 `null` where a platform publishes no post date, and until a second, slower call brings one. A Post
 without one holds `new Date(0)` internally. `toApiPost` and `/_card` both send that as `null`, and
 the Discord card leaves the date out. Sort a `null` as unknown, never as old
-(`test/api.test.mjs:142`).
+(the test "AN UNKNOWN UPLOAD DATE IS null, NOT THE EPOCH" in `test/api.test.mjs`).
 
 ### `counts`
 
@@ -228,7 +232,7 @@ not the spoiler.
 
 `deserializePost` validates the ref, the canonical and the date, nothing else. `text` goes out
 through `str()` (`src/render/embed.ts`, applied in `toApiPost`): a cached value of the wrong type is
-published as `""`, never verbatim (`test/api.test.mjs:506`).
+published as `""`, never verbatim (the test "A CACHED RECORD OF THE WRONG TYPE IS PUBLISHED AS null, NEVER VERBATIM" in `test/api.test.mjs`).
 
 ### `width` and `height`
 
@@ -252,7 +256,7 @@ measured to leave Discord drawing no picture (a YouTube poster, 2026-07-31; unme
 Entries with no servable url are dropped. The rest keep their position in the unfiltered array
 (`usableWithIndex`, `src/worker.ts`), which is the index `/_media/` resolves against. Taking the
 position after the filter publishes entry N at entry N+1's bytes, or a 404 past the end;
-`test/api.test.mjs:381` pins that off-by-one. A degraded still is addressed through its poster slot,
+The test "A PUBLISHED MEDIA URL RESOLVES TO THAT ENTRY'S BYTES" in `test/api.test.mjs` pins that off-by-one. A degraded still is addressed through its poster slot,
 never that bare number (`bytesIndex`, `src/render/embed.ts:74`), which goes on naming the video
 entry and answers `503`. `kind` collapses `Media.kind`'s three values (`src/types.ts`) to two,
 publishing a `gif` as `"image"` (`toApiPost`, `src/worker.ts`): the bytes at `url` are an animated .gif
@@ -277,6 +281,12 @@ are both the poster frame, where the bytes are. Read it with the top-level `muxi
 Without `still`, that last row is indistinguishable from an ordinary photo except by reading the
 English in `text`.
 
+On a deployment with no video container or no media bucket (the Free config, a Worker Preview with
+no bucket, or the Node adapter with no container), a video that needs muxing is published as an
+ordinary picture: `kind: "image"`, `still: false`, `poster: null` (`withResolver`, `src/worker.ts`).
+That comes from reading the code and has not been measured. Nothing in v1 tells it apart from a
+photo.
+
 ### `quote`
 
 `null` unless the quoted post carries an author object (`toApiPost`, `src/worker.ts`). The
@@ -286,7 +296,7 @@ getting that arithmetic wrong publishes urls that resolve to the wrong bytes.
 
 ### Media urls
 
-Every url in the payload is on `mbedfx.app`, never the platform's CDN, which hands out signed,
+Every url in the payload is on the origin that answered (`mbedfx.app` on the public instance), never the platform's CDN, which hands out signed,
 short-lived and sometimes IP-locked urls. An mbedfx url carries no expiry, stays valid as its
 destination changes, and is safe to store. Past a redirect, range support and reachability belong to
 the platform.
@@ -348,8 +358,9 @@ which routing does not trim.
 
 `d.` in front of any of the three official hosts serves the file itself, video or image, at its own
 url: `https://d.mbedfx.app/jack/status/20`, `https://d.megapenispoopenfarten.sex/jack/status/20`,
-`https://d.forsen.sex/jack/status/20`. It does the same on the two guest domains, which serve post
-links only (`https://d.hotsinglesnear.you/jack/status/20`, `https://d.sorryifuckedyour.mom/…`). Those
+`https://d.forsen.sex/jack/status/20`. It does the same on mbedfx.app's two guest domains
+(`GUEST_HOSTS` in `wrangler.production.jsonc`), which serve post links only
+(`https://d.hotsinglesnear.you/jack/status/20`, `https://d.sorryifuckedyour.mom/…`). Those
 bytes answer range requests, and a client seeks and resumes properly. A `d.` url renders no card,
 and it serves crawlers and people the same bytes.
 
@@ -357,6 +368,12 @@ With nothing to serve, `d.` answers a plain-text 404; an HTML body there leaves 
 a file full of markup. `media_miss` on this host means the post has no usable media at all, a second
 meaning `docs/METRICS.md` records under "Known defects in the write shape" (`serveDirectMedia`,
 `src/worker.ts`).
+
+On another deployment, `d.` works on any domain it serves (`DIRECT_MEDIA_HOST`, `src/worker.ts`) once
+that name reaches it. On Cloudflare, add `d.<your domain>` as a custom domain. On the Node adapter,
+list `https://d.<your domain>` in `PUBLIC_ORIGIN`, because the adapter answers an unlisted host as its
+first origin. Listing it there also shows the converter page's media-only box. The `.mp4` suffix
+below needs neither.
 
 A trailing `.mp4` on the post url's path does the same on any host, the spelling fxtwitter users
 already type: `https://mbedfx.app/jack/status/20.mp4`. It is read off the path (`DIRECT_SUFFIX`,
@@ -402,10 +419,10 @@ paste plays.
 | `pt` | PeerTube | any instance |
 
 The codes are the seventeen in `Platform` (`src/types.ts:1`), in the README's order. The canonical
-url the router rebuilds fixes which site each one means (`src/router.ts`: `bs` 197, `x` 205/210,
-`tt` 240, `th` 357, `rd` 387, `ig` 414, `yt` 435, `fb` 489-499, `dm` 651, `st` 672, `im` 698-700,
-`tw` 845/852/858, `pn` 1078; the four fediverse arms at 895/971/1011/1038 take their host from the
-path instead).
+url the router rebuilds fixes which site each one means (`src/router.ts`: `bluesky`, `x`, `tiktok`,
+`threads`, `reddit`, `instagram`, `ytPost`, `fbCanonical`, `dmPost`, `stPost`, `IM_CANONICAL`,
+`twPost`, `pnPost`; the four fediverse arms, `lmPost`, `msPost`, `mkPost` and `ptPost`, take their
+host from the path instead).
 
 ### The Hosts column
 
@@ -445,8 +462,8 @@ no headers object, so no `cache-control` reaches the client and an intermediary 
 defaults to. A user agent classified as Discord gets an HTML embed at HTTP 200 on the same path,
 `og:title` `Not found`, minted by the `notfound` arm's `render()` call (`src/worker.ts`) and
 split from the human 404 at `src/render/index.ts:87-89`. `/_api` returns an HTML chooser page at
-HTTP 300 (`src/render/chooser.ts:72`). Pin the path exactly; `test/api.test.mjs:533` refuses to
-serve `/_api/v2` as v1.
+HTTP 300 (`src/render/chooser.ts:72`). Pin the path exactly; the test "/_api/v2 IS NOT SILENTLY SERVED AS v1" in
+`test/api.test.mjs` refuses to serve `/_api/v2` as v1.
 
 ### An unhandled exception
 
@@ -463,6 +480,10 @@ A throw in that last group leaves the Worker for Cloudflare's own error page: Er
 threw a JavaScript exception", HTML with a 5xx status ([Cloudflare Workers
 errors](https://developers.cloudflare.com/workers/observability/errors/)). Error 1102, "Worker
 exceeded CPU time limit", is the other runtime code that appears. Neither is JSON.
+
+On the Node adapter (`adapters/node/server.ts`) the same throw is HTTP 500 with a `text/plain` body,
+`internal error`, and the 502 and 504 pages come from the reverse proxy in front of it. Neither is
+JSON either, and the guard below covers both.
 
 ### Guarding the parse
 
@@ -486,7 +507,7 @@ if (!body.ok) { /* body.error.code */ }
 No timeout parameter, no per-step limit. One budget, taken at the top of the shared pipeline
 (`describeTarget`, `src/worker.ts`), bounds the whole response and leaves each step whatever is
 left. The converter preview (`/_card`) runs the same pipeline, the two differing only in
-serialisation (`test/api.test.mjs:334`).
+serialisation (the test "THE API AND THE CARD DESCRIBE THE SAME POST" in `test/api.test.mjs`).
 
 | Constant | Value | What it bounds |
 |---|---|---|
@@ -512,12 +533,13 @@ so nobody sizes a client timeout against the wrong table.
 |---|---|---|
 | `HTML_DEADLINE_MS` | **5000 ms** | the whole crawler-facing HTML head |
 | `MUX_WAIT_BOT_MS` | **1500 ms** | the mux wait on the head, on the `/_oembed` callback, and on every non-YouTube activity document |
-| `YT_META_BOT_MS` | **2800 ms** | **YouTube only**: the metadata arm of the activity document |
+| `YT_META_BOT_MS` | **4000 ms** | **YouTube only**: the metadata arm of the activity document |
 | `YT_MUX_BOT_MS` | **4000 ms** | **YouTube only**: the mux arm of the activity document, which is where a player is won or lost |
 | `META_TIMEOUT_MS` | **4700 ms** (derived) | the container metadata extract on the head, `HTML_DEADLINE_MS − MUX_WAIT_FLOOR_MS` |
 
 The three activity-document budgets race in one `Promise.all`, so that response ends at the largest
-of them plus its own serialisation, not at their sum.
+of them plus its own serialisation, not at their sum. Both YouTube arms are 4000 ms, so YouTube's
+activity document ends at about 4 s plus serialisation.
 
 The upstream fetch is unbounded on fourteen of the seventeen platforms, and since 1.11.0 it can be
 two requests rather than one: `askTwice` (`src/fetchretry.ts`) asks a second time when the first was
@@ -527,17 +549,25 @@ so a dead link still costs exactly one request. 1.12.0 widened it to the YouTube
 single refusal costs the vouch and leaves the card without a date, and to both Threads fetches, which
 the retry lint could not see because they are `fetch(…).then(…)` inside a `Promise.all`.
 
-Exactly one call in `src/` sets an `AbortSignal`, and it does not change that count: `fetchInnertube`
+Several calls in `src/` set an `AbortSignal`, and none of them changes that count, because each
+bounds one optional leg rather than the post fetch. `fetchInnertube`
 (`src/platforms/youtube/innertube.ts`) caps its YouTube player-API request at
 `INNERTUBE_TIMEOUT_MS`, 2500 ms shared across the two clients it tries in turn, because a metadata
 answer arriving after the card is drawn has nobody to take it and the connection is better released
 than left holding the isolate. That bounds one leg, not the fetch: `fetchYouTube`
 (`src/platforms/youtube/fetch.ts`) races Innertube against the oembed call in one `Promise.all`,
 oembed carries no signal, and the Innertube arm is total, so a timeout there returns null and the
-card is built without the date. Every other `AbortSignal` in `src/` is a comment recording why that
-code deliberately has none. Cloudflare places no wall-clock limit on an HTTP-triggered Worker
-([Workers limits](https://developers.cloudflare.com/workers/platform/limits/): "No limit … as long
-as the client remains connected"). Only CPU time is capped, and this endpoint spends almost none.
+card is built without the date. `src/platforms/reddit/fetch.ts` bounds four optional legs: the GIF
+size read (`GIF_HEAD_TIMEOUT_MS`, 1000 ms), the caption sources (`CAPTION_BUDGET_MS`, 2000 ms), the
+archive path (`ARCHIVE_PATH_BUDGET_MS`, 3000 ms) and crosspost slides (`PARENT_BUDGET_MS`, 2000 ms).
+The Reddit relay call stops at `RELAY_TIMEOUT_MS`, 2500 ms (`src/platforms/reddit/relay.ts`),
+Instagram's oEmbed ask for a reel's audience gate at `IG_GATE_MS`, 1500 ms
+(`fetchInstagramAudienceGate` in `src/platforms/instagram/fetch.ts`), and the scheduled check's
+location lookup at 2 s (`cronColo` in `src/health.ts`). Reddit's own embed page fetch carries none,
+except through the relay when `REDDIT_RELAY_URL` is set. Cloudflare places no wall-clock limit on an
+HTTP-triggered Worker ([Workers limits](https://developers.cloudflare.com/workers/platform/limits/):
+"No limit … as long as the client remains connected"). Only CPU time is capped, and this endpoint
+spends almost none.
 
 Dailymotion and Streamable are the two exceptions, and they are exceptions because their
 "upstream fetch" is a `yt-dlp` extract inside our own container rather than a request to the site.
@@ -616,8 +646,14 @@ runs on `ctx.waitUntil`, which Cloudflare cancels 30 s after the response, while
 a Durable Object alarm (`MuxRunner`, `src/muxrunner.ts`) and gets fifteen minutes. That alarm is
 armed BEFORE the race rather than after it, because the videos needing longer than the `waitUntil`
 ceiling are exactly the ones it exists for. (This paragraph said `waitUntil` for both until
-2026-08-29, which is the mis-statement the alarm was written to fix.) `test/api.test.mjs:297`
-asserts the `no-store`, `317` the `max-age=900`.
+2026-08-29, which is the mis-statement the alarm was written to fix.) The test
+"AN INCOMPLETE ANSWER IS NEVER CACHED" in `test/api.test.mjs` asserts the `no-store` on an incomplete
+answer and a `public, max-age` on a complete one. The 900 itself is `RESP_TTL`, which
+`test/openapi.test.mjs` derives.
+
+These are Cloudflare's limits. On the Node adapter, `waitUntil` work runs until it settles and the mux
+alarm is a timer in the adapter's own process (`docs/SELF-HOSTING.md`). The flags mean the same thing,
+and the horizon can be longer or shorter.
 
 ---
 
@@ -650,7 +686,7 @@ platforms mbedfx reads answer `200` with a login wall, or `500` with a good JSON
 | `bad_id` | 200 | A Mastodon-spoof-shaped path (`/users/{handle}/statuses/{id}`, `/api/v1/statuses/{id}`, `/_oembed/{id}`) whose id did not decode. Not reachable from an ordinary post url. |
 | `not_a_post` | 200 | Routes to something that is not a post: a site page (`/`, `/index.html`, `/robots.txt`), one of this service's own endpoints (`/_media/…`, `/_prep?p=…`, `/_card?p=…`, `/_api/v1`), a **profile** url (see below), or a **Meta or Reddit** share code that did not resolve to one. A TikTok `/t/{code}` never lands here (see below), and neither does a `/pin.it/{code}`, which answers `fetch_fail` when it names no pin. |
 | `no_url` | 400 | No `url` parameter, **or an empty one**. `?url=` and no `url=` at all are the same answer. |
-| `unparseable` | 400 | `new URL(target, origin)` threw, `origin` being the mbedfx origin. Only a malformed **absolute** url does that; anything readable as a path resolves against that origin and gets a 200 instead. |
+| `unparseable` | 400 | `new URL(target, origin)` threw, `origin` being the origin the request arrived on. Only a malformed **absolute** url does that; anything readable as a path resolves against that origin and gets a 200 instead. |
 | `method_not_allowed` | 405 | This endpoint reads. Use `GET`. |
 
 #### A TikTok `/t/{code}` answers what it renders
@@ -711,7 +747,7 @@ Measured offline 2026-08-04, re-driven 2026-08-05. Every row but the last two an
 | a bare handle: `?url=jack` | `["x","ig"]` | one path segment; both mint profiles at that shape |
 | a profile url: `?url=https://x.com/jack` | `["x","ig"]` | the host is ignored; same request as above |
 | a TikTok or Threads profile: `?url=https://www.tiktok.com/@charlidamelio` | `["tt","th"]` | the `@` narrows it to the two sites that use one |
-| junk: `?url=not a url at all`, `?url=:::not-a-url`, `?url=javascript:alert(1)` | `["x","ig"]` | one unrecognised segment each: `/not%20a%20url%20at%20all`, `/:::not-a-url`, `alert(1)` (`javascript:` parses fine as an absolute url). A source comment claimed `notfound` for the middle one until 2026-08-04 (`test/api.test.mjs:242-258`) |
+| junk: `?url=not a url at all`, `?url=:::not-a-url`, `?url=javascript:alert(1)` | `["x","ig"]` | one unrecognised segment each: `/not%20a%20url%20at%20all`, `/:::not-a-url`, `alert(1)` (`javascript:` parses fine as an absolute url). A source comment claimed `notfound` for the middle one until 2026-08-04 (the test "EVERY ANSWER ABOUT A POST IS 200, INCLUDING THE GATES" in `test/api.test.mjs`) |
 | an empty url: `?url=` | `400` `no_url` | the empty string is falsy and takes the missing-parameter branch |
 | a malformed absolute url: `?url=http://[` | `400` `unparseable` | `new URL` throws. `https://` and `http://:` are the other spellings that do |
 

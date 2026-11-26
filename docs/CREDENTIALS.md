@@ -5,7 +5,7 @@ Twitter answers a `TweetTombstone`, Instagram `"failure_reason":"MA"` beside
 laptop and from the Worker's own egress: Twitter on 2026-07-19, `yt:G0sORVBL4kM` on 2026-07-30. That
 video returns a title, thumbnail, `duration=177` and `timestamp=1605871096` with `formats: 0`.
 Unfilled, those posts render `🔞 This post is age-restricted` over "Can't preview age-restricted
-posts." in `#657786` (`src/render/index.ts:87`), the correct answer without accounts. A filled
+posts." in `#657786` (`src/render/index.ts:99`), the correct answer without accounts. A filled
 secret turns them into ordinary cards and changes nothing else.
 
 **A pool is for the gate and for nothing else, and a PO token is not one of these.** An operator
@@ -51,7 +51,7 @@ often than the repo root. `test/credentials.test.mjs` asserts each path is ignor
 `TweetResultByRestId` call that would spend it. The seam stays empty on purpose: a half-built path
 returns *something*, and a wrong answer from a logged-in request is what gets a pool flagged. A
 gated tweet still fails once the secret is set, and each one increments `x`/`pool_unused`
-(`src/worker.ts`) through `twitterAccounts()` (`src/credentials.ts:146`), which keeps only
+(`src/worker.ts`) through `twitterAccounts()` (`src/credentials.ts:162`), which keeps only
 entries holding both `auth_token` and `ct0`; a cookie jar alone counts nothing there.
 
 The `MA` verdict comes off the Worker's own page fetch, which carries no jar (`instagramAgeGate`,
@@ -198,7 +198,7 @@ value alone.
 
 ## When something is wrong
 
-`parseAccounts` (`src/credentials.ts:76`) never throws, and every malformed secret becomes an empty
+`parseAccounts` (`src/credentials.ts:83`) never throws, and every malformed secret becomes an empty
 pool with nothing reported. It runs on the request path for ordinary posts too, where a stray comma
 in a credential nobody has looked at for a month would otherwise 500 every card on that platform. If
 filling a pool changes nothing, check the JSON first:
@@ -207,8 +207,8 @@ filling a pool changes nothing, check the JSON first:
 jq . accounts.json    # if this errors, so did the Worker, just quietly
 ```
 
-- A non-array is not coerced: a bare `{…}` object is an empty pool (`src/credentials.ts:84`).
-- An entry carrying neither `cookies` nor `auth_token` is dropped (`src/credentials.ts:102`), so
+- A non-array is not coerced: a bare `{…}` object is an empty pool (`src/credentials.ts:91`).
+- An entry carrying neither `cookies` nor `auth_token` is dropped (`src/credentials.ts:109`), so
   `{"label":"alt1"}` is not an account. A pool of two with one bad entry runs as a pool of one, at
   twice the load on the survivor.
 - yt-dlp rejects a jar whose first line is not `# Netscape HTTP Cookie File`, answering `does not
@@ -241,7 +241,7 @@ Replace the whole array and push it again. `wrangler secret put` has no partial 
 account means re-pushing every entry, then bumping `META_GENERATION` per "Cached gate verdicts"
 above.
 
-`pickAccount` (`src/credentials.ts:121`) picks per request at random. Round-robin needs state the
+`pickAccount` (`src/credentials.ts:138`) picks per request at random. Round-robin needs state the
 edge does not share between isolates, and taking the first entry puts the whole load on one account.
 
 `label` is operator-facing and the only field here safe to write down, for telling one throwaway

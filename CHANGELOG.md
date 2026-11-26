@@ -20,10 +20,18 @@ copy the old names back into `wrangler.jsonc`: `npm run build` fails when that f
 mbedfx.app's names or sets `containers[].name`, and the old file did both unless you changed it.
 If your fork's converter page should keep its media-only box, list your `d.` origin in
 `PUBLIC_ORIGIN`: the box now shows only for a domain whose `d.` name is listed there or in
-`OWN_HOSTS`. Nobody else has anything to do.
+`OWN_HOSTS`. If your fork sets `REDDIT_CLIENT_ID` and `REDDIT_CLIENT_SECRET`, set `REDDIT_USER_AGENT`
+too, in Reddit's `web:<host>:<version> (by /u/<you>)` form: the default user agent no longer names
+mbedfx.app's Reddit app and account, and it names no account at all. Nobody else has anything to do.
 
 ### Added
 
+- **A self-hosting guide and a Deploy to Cloudflare button.** `docs/SELF-HOSTING.md` now opens with
+  a table of the four ways to run mbedfx (the button, Cloudflare from a checkout, Docker Compose, and
+  Node without Docker) and gives each one copy-paste steps, followed by every setting in one place.
+  The README has the button and a short "Host your own" section. Nobody has pressed the button on a
+  real account or deployed on Workers Free yet, and the guide says so at each step. `package.json`
+  describes each binding for the button's setup page.
 - **mbedfx runs off Cloudflare, on Node.** `adapters/node/server.ts` serves the production handler from
   `src/worker.ts` on Node's own HTTP server, with nothing under `src/` changed, and
   `adapters/node/compose.yaml` runs it beside the `container/` resolver. Each Cloudflare binding has a
@@ -129,6 +137,11 @@ If your fork's converter page should keep its media-only box, list your `d.` ori
 
 ### Fixed
 
+- **`RESOLVER_SECRET` was documented as protecting the Cloudflare container, and it doesn't.**
+  `container/README.md` said to set it on the container as well as the Worker, and nothing in this
+  repo puts it there: the container's Durable Object passes it no environment, so the container never
+  checks the header. On Cloudflare
+  only the binding reaches the container. Under Docker Compose the secret is enforced as before.
 - **Pinterest "shared with you" links convert to the bare pin.** The converter turned
   `pinterest.com/pin/{id}/sent/?invite_code=…` into `/pin/{id}/sent`. Now it gives `/pin/{id}`, and
   so do the `{slug}--{id}` spelling and links ending in `feedback` or `visual-search`. Cards were

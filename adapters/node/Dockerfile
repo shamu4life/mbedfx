@@ -5,9 +5,9 @@
 #   docker build -f adapters/node/Dockerfile -t mbedfx-adapter .
 # adapters/node/compose.yaml does that for you and stands the resolver container up beside it.
 #
-# NOT BUILT BY WORKERS BUILDS and not exercised by CI. Built by hand on 2026-11-25 through compose.yaml
-# (docs/SELF-HOSTING.md, "The Docker run"): 226 MB, and the image held no adapters/node/.env although
-# one sat in the build context.
+# NOT BUILT BY WORKERS BUILDS and not exercised by CI. Built by hand on 2026-11-25, at commit 90fb2d8,
+# through compose.yaml (docs/SELF-HOSTING.md, "The Docker run"): 226 MB, and the image held no
+# adapters/node/.env although one sat in the build context. Nobody has rebuilt it since.
 
 # 22.18.0 is .node-version, and the first 22.x that runs .ts files with no flag. Older Nodes refuse
 # them with ERR_UNKNOWN_FILE_EXTENSION.

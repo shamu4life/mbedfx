@@ -3,6 +3,12 @@
   // THE WORKERS FREE VARIANT: wrangler.jsonc without the container. Deploy it with
   //     npx wrangler deploy -c wrangler.free.jsonc
   //
+  // From the Deploy to Cloudflare button, change the deploy command on the setup page to that same
+  // line. A branch other than main builds with `npx wrangler preview`, which reads wrangler.jsonc,
+  // container and all, unless it is changed to `npx wrangler preview -c wrangler.free.jsonc`. Whether
+  // Free runs Previews at all, and what the button does with a container on a Free account, are
+  // unchecked.
+  //
   // UNTESTED ON THE FREE PLAN. Nobody has deployed this file or measured the Worker against Free's
   // limits (10 ms of CPU and 50 subrequests per request, 100,000 requests a day; Cloudflare's limits
   // page, read 2026-11-25). A card that fans out to several upstreams, a translation, or the

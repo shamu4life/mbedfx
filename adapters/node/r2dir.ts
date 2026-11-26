@@ -16,9 +16,12 @@ import { pipeline } from 'node:stream/promises'
  * WHAT DEGRADES: nothing the worker reads. It calls `head`, `get` (whole or one range), `put`,
  * `delete` and the optional `putStream`, and every one of them is here. What is missing is R2's own
  * surface that nothing in `src/` touches: `list`, multipart uploads, `httpMetadata` (accepted and
- * dropped: no read site exists), conditional gets and checksums. There is no expiry either, and R2 has
- * none configured for this bucket, so the directory grows the way the bucket does. Prune `mux%2f*`
- * by age if the disk fills; every other kind is small.
+ * dropped: no read site exists), conditional gets and checksums. There is no expiry either. The R2
+ * bucket has a 60-day lifecycle rule (expire-60d, wrangler.production.jsonc) and nothing here does that
+ * job, so the directory grows without bound. Every kind is regenerable cache, so delete files older
+ * than 60 days to match the bucket, for example
+ * `find "$MEDIA_CACHE_DIR" -maxdepth 1 -type f -mtime +60 -delete` (under compose, /data/media in the
+ * adapter container). The `mux%2f` files are the large ones.
  *
  * THREE PROPERTIES THE WORKER DEPENDS ON, each of which a naive "write the file" gets wrong:
  *

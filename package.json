@@ -1,9 +1,13 @@
 {
   "name": "mbedfx",
+  "description": "Discord embed fixer for 17 social sites: swap a link's domain and the post unfurls with its video.",
   "version": "1.17.0",
   "license": "MIT",
   "private": true,
   "type": "module",
+  "engines": {
+    "node": ">=22.18.0"
+  },
   "scripts": {
     "dev": "wrangler dev",
     "// deploy": "DEPLOYS THE GENERIC CONFIG (wrangler.jsonc) as its own Worker, mbedfx-selfhost, and that name is what makes it safe to have. Until 2026-11-25 this script refused, because the root file WAS production's: a hand `wrangler deploy` raced Cloudflare Workers Builds on the container image and on which version ended up live, and it once left the live worker on a hand-uploaded version while three Workers Builds runs failed and prod looked healthy. Production now deploys only from Workers Builds, with `npx wrangler deploy -c wrangler.production.jsonc` on main, and nothing here names that file (test/wrangler-configs.test.mjs). Run by the owner, this script creates or updates a SEPARATE Worker in the owner's account, with its own bucket, dataset and container application, and its own container bill. That is what a self-hoster and the Deploy to Cloudflare button want, and what the owner should not do by accident. The deploy that must never run by hand is `npx wrangler deploy -c wrangler.production.jsonc`.",
@@ -22,5 +26,27 @@
   },
   "dependencies": {
     "@cloudflare/containers": "^0.3.7"
+  },
+  "cloudflare": {
+    "bindings": {
+      "MEDIA_CACHE": {
+        "description": "The R2 bucket that keeps muxed videos, post metadata and translations, so a repeat card doesn't fetch them again."
+      },
+      "AE": {
+        "description": "The Analytics Engine dataset that counts each card's platform and outcome, never its URL or the reader's IP."
+      },
+      "AI": {
+        "description": "Workers AI, which translates captions that aren't in English."
+      },
+      "MUX_RUNNER": {
+        "description": "A Durable Object that retries a video's mux on an alarm when the first attempt runs out of time."
+      },
+      "SMOKE_RUNNER": {
+        "description": "A Durable Object that runs the half-hourly check of one known post per site from eastern North America."
+      },
+      "MEDIA_RESOLVER": {
+        "description": "The Durable Object behind the yt-dlp and ffmpeg container that turns a site's video into one MP4, which needs Workers Paid."
+      }
+    }
   }
 }
