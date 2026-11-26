@@ -2319,3 +2319,80 @@ test('THE OVER-CAPTURE TRIM IS ONLY KEPT WHEN IT NAMES A POST, and composes with
   assert.deepEqual(r('/X/status/20.mp4).'), r('/X/status/20.mp4'))
   assert.equal(r('/X/status/20.mp4).').direct, true)
 })
+
+/* ===================== FACEBOOK'S GROUP POST, NAMED IN THE QUERY ===================
+ *
+ * FOUND 2026-11-26 checking FixTweetBot's FIXERS.md table against production:
+ * /groups/{gid}/?multi_permalinks={pid} was "Not found" in every form, while the posts/
+ * spelling of the same two ids rendered a real group-post card. The router read no query on
+ * a group url, and the group home is unclaimed on purpose.
+ *
+ * Measured the same day with Facebook's crawler user agent (from a Linux box, not a Worker):
+ * the multi_permalinks url unfurls as the GROUP HOME, and Facebook's own route params put the
+ * id in `multi_permalinks` with `post_id: null`; the posts/ url reads the same number as its
+ * `story_id`. So the ids are the posts/ arm's ids, and the canonical has to be posts/.
+ *
+ * The ids below are the ones the posts/ tests above already use.
+ */
+
+const GROUP_ID = '328668786145521'
+const GROUP_POST = '1391536379858751'
+const groupAt = p => route(new URL(`https://megapenispoopenfarten.sex${p}`))
+
+test('FACEBOOK: a group home with ?multi_permalinks= routes exactly as the posts/ spelling of that post', () => {
+  /**
+   * Same ref, same canonical, same cache entry: fbGroupQuery calls the posts/ arm's own
+   * fbPost('group', …), and anything less would split one post into two cards that race. The
+   * canonical is the posts/ spelling because the multi_permalinks url unfurls as the group itself.
+   */
+  const want = groupAt(`/groups/${GROUP_ID}/posts/${GROUP_POST}/`)
+  assert.deepEqual(want.ref, { p: 'fb', kind: 'group', id: `${GROUP_ID}_${GROUP_POST}` })
+  for (const p of [
+    `/groups/${GROUP_ID}/?multi_permalinks=${GROUP_POST}`,
+    `/groups/${GROUP_ID}?multi_permalinks=${GROUP_POST}`,
+    // The rest of the query is Facebook's decoration on the highlight and is not read.
+    `/groups/${GROUP_ID}/?multi_permalinks=${GROUP_POST}&hoisted_section_header_type=recently_seen`,
+  ]) {
+    const got = groupAt(p)
+    assert.deepEqual(got, want, `${p} is the posts/ route`)
+    assert.equal(got.canonical, `https://www.facebook.com/groups/${GROUP_ID}/posts/${GROUP_POST}/`)
+    assert.equal(refKey(got.ref), refKey(want.ref), `${p}: one cache entry`)
+    assert.deepEqual(parseRefKey(refKey(got.ref)), got.ref, `${p}: the ref survives the wire`)
+  }
+  // The gallery toggle and the file suffix sit on the path, the id in the query, and the two compose
+  // just as they do on the posts/ spelling.
+  assert.deepEqual(groupAt(`/groups/${GROUP_ID}/p?multi_permalinks=${GROUP_POST}`),
+    groupAt(`/groups/${GROUP_ID}/posts/${GROUP_POST}/p`))
+  assert.deepEqual(groupAt(`/groups/${GROUP_ID}/.mp4?multi_permalinks=${GROUP_POST}`),
+    groupAt(`/groups/${GROUP_ID}/posts/${GROUP_POST}/.mp4`))
+})
+
+test('A GROUP URL WITHOUT ONE USABLE POST ID IN multi_permalinks KEEPS THE ANSWER IT HAD WITHOUT THE PARAMETER', () => {
+  /**
+   * The group home stays unclaimed (router.ts, the group arm in facebook()), and the parameter only
+   * takes that away when it names exactly one post the posts/ arm would accept. Each row is compared
+   * with the same path with no query at all, so "the home's current answer" is whatever it is today
+   * rather than a value copied in here.
+   */
+  const home = `/groups/${GROUP_ID}/`
+  assert.equal(groupAt(home).kind, 'notfound', 'the bare group home is still unclaimed')
+  for (const q of [
+    '',
+    '?multi_permalinks=',
+    '?multi_permalinks=abc',
+    '?multi_permalinks=1234', // below FB_NUM's five digits, which the posts/ arm refuses too
+    // A LIST: the parameter's name allows more than one, and picking one would guess at the reader's post.
+    `?multi_permalinks=${GROUP_POST},1391536379858752`,
+    `?multi_permalinks=${GROUP_POST}%2C1391536379858752`,
+    `?hoisted_section_header_type=recently_seen`,
+  ]) {
+    assert.deepEqual(groupAt(home + q), groupAt(home), `${home}${q} is the home's answer`)
+  }
+  // A NAMED group: the posts/ arm refuses /groups/somename/posts/… too, so neither spelling claims it.
+  assert.deepEqual(groupAt(`/groups/somegroup/?multi_permalinks=${GROUP_POST}`), groupAt('/groups/somegroup/'))
+  assert.equal(groupAt(`/groups/somegroup/posts/${GROUP_POST}/`).kind, 'notfound', 'and the posts/ arm agrees')
+  // Only the HOME highlights a post. A tab under it, or /groups on its own, keeps its own answer.
+  assert.deepEqual(groupAt(`/groups/${GROUP_ID}/members?multi_permalinks=${GROUP_POST}`), groupAt(`/groups/${GROUP_ID}/members`))
+  assert.deepEqual(groupAt(`/groups?multi_permalinks=${GROUP_POST}`), groupAt('/groups'))
+  assert.equal(groupAt(`/groups?multi_permalinks=${GROUP_POST}`).kind, 'ambiguous')
+})

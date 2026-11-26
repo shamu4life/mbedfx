@@ -1081,7 +1081,9 @@ function mbedfxConvert(input, host, gallery) {
      * became `/embed` and `/permalink.php?story_fbid=…` became `/permalink.php`, each the ['x','ig']
      * chooser, which a guest host turns away (review, 2026-10-11). The list is route()'s: `v` (/watch, YouTube's and Facebook's), `fbid` (/photo),
      * `clip` (/embed), and `story_fbid` with `id` (/story.php, /permalink.php), which only name a post
-     * as a pair, so one without the other is dropped rather than carried as noise.
+     * as a pair, so one without the other is dropped rather than carried as noise. `multi_permalinks`
+     * (/groups/{gid}, a group post, since 2026-11-26) is kept only when numeric, the one shape route()
+     * reads, so a list or junk value is dropped like any other tracking.
      */
     /**
      * A PIN LINK PASTED BACK DROPS ITS UI SEGMENT TOO, the same /pin/{id} the direct-host branch emits.
@@ -1100,6 +1102,7 @@ function mbedfxConvert(input, host, gallery) {
       keep.set('story_fbid', u.searchParams.get('story_fbid'));
       keep.set('id', u.searchParams.get('id'));
     }
+    if (/^\d{5,}$/.test(u.searchParams.get('multi_permalinks') || '')) keep.set('multi_permalinks', u.searchParams.get('multi_permalinks'));
     var kept = keep.toString();
     return out(stripped === '/' ? '/' : stripped + (kept ? '?' + kept : ''), null,
       'Already an mbedfx link. Re-pointed at the selected domain.');
@@ -1164,7 +1167,7 @@ function mbedfxConvert(input, host, gallery) {
     /**
      * FACEBOOK'S PHOTO QUERY FORMS carry the id in the QUERY, not the path, and this converter drops
      * the query for every platform except YouTube's ?v=, Twitch's ?clip= and the Facebook ones kept
-     * here: ?fbid=, ?story_fbid= with ?id=, and the watch page's ?v=. So /photo/?fbid=… and
+     * here: ?fbid=, ?story_fbid= with ?id=, the watch page's ?v= and a group's ?multi_permalinks=. So /photo/?fbid=… and
      * /photo.php?fbid=… converted to a bare /photo, which the worker reads as the ['x','ig'] chooser
      * — offering two links that cannot resolve, for a url that is unmistakably Facebook's.
      *
@@ -1177,6 +1180,12 @@ function mbedfxConvert(input, host, gallery) {
      * spelling of /story.php that route() accepts, and the story arm's ids now take the router's own
      * shapes (FB_POST_ID, FB_OWNER), so a pfbid permalink or a vanity owner is carried too instead of
      * falling through to an ambiguous /story.php.
+     *
+     * AND FOR /groups/{gid}/?multi_permalinks={pid}, until 2026-11-26. It came out the bare group home,
+     * which the worker leaves unclaimed, so "Not found". Like story.php it converts to the PATH spelling,
+     * /groups/{gid}/posts/{pid}/: the router reads both as one post, and the path form is what the forced
+     * "Read as Facebook" link (/fb/…) can carry, since on 2026-11-26 the worker's /fb/ prefix read no query. Both ids
+     * take the router's FB_NUM shape (fbGroupQuery), so a named group or a list of ids keeps today's answer.
      *
      * KNOWN EDGE, not fixed: an 11-digit numeric v also matches the router's YouTube id (YT_ID), which
      * route() tries first, so /watch?v={11 digits} would be labelled Facebook here and read as YouTube
@@ -1207,6 +1216,11 @@ function mbedfxConvert(input, host, gallery) {
       if (sfbid && sid && /^(?:\d{5,}|pfbid[A-Za-z0-9]{10,})$/.test(sfbid) && /^[A-Za-z0-9.]{3,}$/.test(sid)
           && /^\/(story|permalink)\.php\/?$/.test(path)) {
         return out('/' + sid + '/posts/' + sfbid + '/', 'Facebook', '', 'fb');
+      }
+      var gpid = u.searchParams.get('multi_permalinks') || '';
+      var ghome = /^\/groups\/(\d{5,})$/.exec(qpath);
+      if (ghome && /^\d{5,}$/.test(gpid)) {
+        return out('/groups/' + ghome[1] + '/posts/' + gpid + '/' + qsuf, 'Facebook', '', 'fb');
       }
     }
     if (platform === 'Instagram' && seg[0] === 'stories') {

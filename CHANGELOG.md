@@ -146,6 +146,11 @@ mbedfx.app's Reddit app and account, and it names no account at all. Nobody else
 
 ### Fixed
 
+- **Facebook group links that point at one post now show it.** A
+  `facebook.com/groups/{group}/?multi_permalinks={post}` link said "Not found", and the converter
+  dropped the post id and handed out the group's home page. The link now draws the same card as
+  `/groups/{group}/posts/{post}/`, and the converter gives that `/posts/` link. A group's home page
+  still says "Not found", and so does a link listing more than one post.
 - **The `/fb/` and `/th/` site codes work on Facebook query links and Threads share links.**
   `mbedfx.app/fb/photo/?fbid=…`, `/fb/photo.php?fbid=…`, `/fb/watch/?v=…`, `/fb/story.php?…`,
   `/fb/permalink.php?…` and `/th/share/{code}` answered "Not found" though the same links without the

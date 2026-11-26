@@ -647,7 +647,9 @@ function facebook(seg: string[]): Route | null {
    *
    * BOTH SEGMENTS MUST BE NUMERIC, and that is what keeps this off every other /groups/ url: a group
    * HOME page (/groups/{gid}) and its /members, /media and /about tabs all fail the depth-4 shape,
-   * and a NAMED group (/groups/somename/posts/…) fails FB_NUM at seg[1].
+   * and a NAMED group (/groups/somename/posts/…) fails FB_NUM at seg[1]. The home page stays
+   * unclaimed with ONE exception, which is not here because its post id is in the query: a home url
+   * carrying a numeric `?multi_permalinks=` is this same post, routed by fbGroupQuery below.
    */
   if (seg.length === 4 && seg[0] === 'groups' && FB_NUM.test(seg[1])
     && (seg[2] === 'permalink' || seg[2] === 'posts') && FB_NUM.test(seg[3])) {
@@ -784,6 +786,50 @@ function facebook(seg: string[]): Route | null {
 }
 
 /**
+ * `/groups/{gid}/?multi_permalinks={pid}` — a GROUP POST WHOSE ID IS IN THE QUERY, a spelling
+ * FixTweetBot's FIXERS.md lists among the Facebook link types every fixer is rated on. It was "Not
+ * found" in every form: the group home is unclaimed (see the group arm in facebook()), nothing read
+ * the query, and the converter dropped it and emitted the bare home. Found 2026-11-26 checking that
+ * table against production.
+ *
+ * WHAT WAS MEASURED, 2026-11-26, from a Linux box with Facebook's own crawler user agent (NOT from a
+ * Worker; this is a question about what the url means, not about what Cloudflare's egress is sent):
+ *   - the multi_permalinks url answers the GROUP HOME: og:url and og:title name the group, and
+ *     Facebook's own route params carry `multi_permalinks: "{pid}"` with `post_id: null`. So the post
+ *     is a highlight on the home page, and that page unfurls as the group. Sending a crawler there
+ *     would draw the group, which is why the canonical below is the posts/ spelling and not this one;
+ *   - `/groups/{gid}/posts/{pid}/` answers og:url `…/posts/{pid}/` with its route param
+ *     `story_id: "{pid}"`. The same number is that group's post id in both;
+ *   - and, per the same day's production report (measured through mbedfx.app, so from Worker
+ *     egress), `/groups/{gid}/posts/{pid}/` renders a real group-post card.
+ * What was NOT measured is that the highlighted post on the home page is the one the posts/ spelling
+ * renders; that rests on the two route params naming the same number.
+ *
+ * SO IT MINTS EXACTLY THE ROUTE THE posts/ SHAPE MINTS, through the same fbPost('group', …), and the
+ * three spellings share one ref and one cache entry. The guards are the group arm's own: FB_NUM on
+ * both ids, because that arm refuses a named group and a non-numeric post, and this one must not
+ * claim a pair that arm would refuse.
+ *
+ * WHAT STAYS UNROUTED, on purpose:
+ *   - a missing, empty or non-numeric multi_permalinks, which leaves the group home's own answer;
+ *   - a LIST (`multi_permalinks=1,2`). The name says it can hold more than one, and choosing one of
+ *     them would be a guess at which post the reader meant;
+ *   - a named group (`/groups/somename/?multi_permalinks=…`), refused by the posts/ arm as well;
+ *   - any deeper /groups/{gid}/… tab carrying the parameter. Only the home page was seen with it,
+ *     and what a tab would do with it was not measured.
+ *
+ * A HELPER THAT TAKES SEGMENTS AND THE QUERY, called first by facebookQuery() below, which both
+ * routeInner's unforced query block and the /fb/ escape hatch use. So
+ * `/fb/groups/{gid}/?multi_permalinks=` routes like its unprefixed form, as every other query-id
+ * link under /fb/ does since the forced twins landed (2026-11-26).
+ */
+function fbGroupQuery(seg: string[], q: URLSearchParams): Route | null {
+  if (seg.length !== 2 || seg[0] !== 'groups' || !FB_NUM.test(seg[1])) return null
+  const pid = q.get('multi_permalinks') || ''
+  return FB_NUM.test(pid) ? fbPost('group', `${seg[1]}_${pid}`) : null
+}
+
+/**
  * META'S BARE SHARE LINK, `/share/{code}`, which Threads and Facebook mint in the same shape. It is a
  * 'metashare' route, not a post: the code names neither a post nor a platform until worker.ts asks
  * both hosts and follows whichever one 302s (platforms/metashare/fetch.ts has the measurement).
@@ -827,6 +873,9 @@ function metaShare(seg: string[]): Route | null {
  * stays YouTube's. /fb/watch?v=dQw4w9WgXcQ claims nothing either way, since that id fails FB_NUM.
  */
 function facebookQuery(seg: string[], q: URLSearchParams): Route | null {
+  // The group arm reads a two-segment path, so it goes before the one-segment shapes below.
+  const group = fbGroupQuery(seg, q)
+  if (group) return group
   if (seg.length !== 1) return null
   if (seg[0] === 'watch') {
     // A long NUMERIC v is Facebook's. Reads the RAW param, cutting a pasted `/…` tail the way the
