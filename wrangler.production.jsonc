@@ -61,10 +61,24 @@
   //     paths over a service binding (src/guesthost.ts). Without this var those requests go out
   //     unmarked and you-stupid serves its own page instead of the card.
   // Request-carrying paths ignore PUBLIC_ORIGIN and use the request's own origin, as before.
+  //
+  // SITE_NAME and REDDIT_USER_AGENT, since 2026-11-25 (self-hosting phase 6). Both were constants in src/
+  // until then, and these values reproduce them byte for byte; test/instance.test.mjs pins that.
+  //   - SITE_NAME: og:site_name on every head and provider_name in the oEmbed document. "mbedfx" is
+  //     also the code default (src/instance.ts), so this line changes nothing today. It is set anyway so
+  //     the public instance's name is written down here rather than inherited: if the default is ever
+  //     changed for forks' sake, the cards this instance draws keep their name.
+  //   - REDDIT_USER_AGENT: what Reddit's OAuth API is told, on the fallback that runs only with
+  //     REDDIT_CLIENT_ID and REDDIT_CLIENT_SECRET set (src/platforms/reddit/fetch.ts). It names the
+  //     owner's Reddit account, which is why it is here and not the code default: a fork running its
+  //     own Reddit app must not send it. The archive's user agent needs no var; it is built from the
+  //     PUBLIC_ORIGIN primary above, which gives the old constant back exactly.
   "vars": {
     "YT_PROMISE": "off",
     "PUBLIC_ORIGIN": "https://mbedfx.app https://megapenispoopenfarten.sex https://d.mbedfx.app https://d.megapenispoopenfarten.sex",
-    "GUEST_HOSTS": "sorryifuckedyour.mom hotsinglesnear.you"
+    "GUEST_HOSTS": "sorryifuckedyour.mom hotsinglesnear.you",
+    "SITE_NAME": "mbedfx",
+    "REDDIT_USER_AGENT": "web:mbedfx.app:v0.1 (by /u/shamu4life)"
   },
   "workers_dev": false,
   // PREVIEW URLS, kept on — but NOTHING SERVES AT THE PREVIEW HOSTNAMES, measured 2026-08-19. The
@@ -338,18 +352,22 @@
   // The container keeps production's size, so a Preview's mux timing is production's; max_instances
   // is a cap and does not bill.
   //
-  // THE SAME VARS AS PRODUCTION, all three, and test/wrangler-configs.test.mjs holds them equal. A Preview
+  // THE SAME VARS AS PRODUCTION, all five, and test/wrangler-configs.test.mjs holds them equal. A Preview
   // is how a branch is measured before it merges, so a var that differs is something measured there that
   // production will not run. Neither of the two added on 2026-11-25 changes a Preview's answers today: no
   // cron runs there, so nothing reads the PUBLIC_ORIGIN primary, and a guest hostname arrives only through
   // you-stupid's service binding, which reaches the deployed Worker, never a Preview. Both are kept anyway
   // because the converter page is meant to read them (self-hosting phase 5), and a Preview should draw
-  // the page production draws.
+  // the page production draws. SITE_NAME and REDDIT_USER_AGENT (2026-11-25) follow the same rule: a
+  // Preview's cards should carry production's name, and with no Reddit secrets set for Previews the user
+  // agent is never sent there anyway.
   "previews": {
     "vars": {
       "YT_PROMISE": "off",
       "PUBLIC_ORIGIN": "https://mbedfx.app https://megapenispoopenfarten.sex https://d.mbedfx.app https://d.megapenispoopenfarten.sex",
-      "GUEST_HOSTS": "sorryifuckedyour.mom hotsinglesnear.you"
+      "GUEST_HOSTS": "sorryifuckedyour.mom hotsinglesnear.you",
+      "SITE_NAME": "mbedfx",
+      "REDDIT_USER_AGENT": "web:mbedfx.app:v0.1 (by /u/shamu4life)"
     },
     "r2_buckets": [
       { "binding": "MEDIA_CACHE", "bucket_name": "mbedfx-preview-media" }

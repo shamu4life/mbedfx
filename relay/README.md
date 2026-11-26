@@ -76,7 +76,23 @@ relay's traffic, but Google requires a billing account on the project anyway.
    - `REDDIT_RELAY_URL` = the Service URL
    - `REDDIT_RELAY_KEY` = the key from step 4
 
+## A relay for a different mbedfx
+
+`/selftest` sends the archive the same user agent as mbedfx.app's Worker. If your Worker serves
+another domain, it sends its own instead: your primary `PUBLIC_ORIGIN` host, then
+`(embed fixer; +https://github.com/shamu4life/mbedfx)`. Set `ARCHIVE_USER_AGENT` to that string so
+the self-test measures the request your Worker makes. In step 5, put it in `--set-env-vars`
+with the whole list in double quotes, because the value has spaces:
+
+```sh
+--set-env-vars "RELAY_KEY=$KEY,ARCHIVE_USER_AGENT=embed.example.com (embed fixer; +https://github.com/shamu4life/mbedfx)"
+```
+
+Nothing else reads it. A request through `/fetch` carries your Worker's own user agent.
+
 ## Updating it
 
 From Cloud Shell, in `mbedfx/relay`: `git pull`, then `KEY=` followed by the key you saved, then
-step 5 again. Keeping the same key means nothing changes on the Cloudflare side.
+step 5 again. Keeping the same key means nothing changes on the Cloudflare side. If you set
+`ARCHIVE_USER_AGENT`, keep it in the list too: `--set-env-vars` replaces every variable the
+service had.

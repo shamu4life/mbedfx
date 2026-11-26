@@ -406,23 +406,37 @@ test('production\'s PUBLIC_ORIGIN is bare https origins on its own zones, and na
 test('a Preview runs production\'s vars, all of them', () => {
   /**
    * A Preview is how a branch is measured before it merges, so a var that differs is something measured
-   * there that production will not run. The production file's comment on `previews` says why the two
-   * vars that change nothing in a Preview today are kept anyway.
+   * there that production will not run. The production file's comment on `previews` says why the vars
+   * that change nothing in a Preview today are kept anyway.
    */
   assert.deepEqual(prod.previews.vars, prod.vars)
 })
 
+/**
+ * REWRITTEN 2026-11-25 (self-hosting phase 6): this named PUBLIC_ORIGIN and GUEST_HOSTS only, and now
+ * covers SITE_NAME and REDDIT_USER_AGENT as well. The reason is the same for all four: each says who a
+ * deployment is. A REDDIT_USER_AGENT in a generic file would be the worse leak of the two new ones. It
+ * names a Reddit account, and every fork deploying the file would send it as its own. A SITE_NAME there
+ * would rename every card of every fork that never set one.
+ */
+const IDENTITY_VARS = ['PUBLIC_ORIGIN', 'GUEST_HOSTS', 'SITE_NAME', 'REDDIT_USER_AGENT']
+
+test('production sets every identity var, so its cards and requests depend on no code default', () => {
+  for (const k of IDENTITY_VARS) assert.equal(typeof prod.vars[k], 'string', `wrangler.production.jsonc sets ${k}`)
+})
+
 for (const file of GENERIC) {
-  test(`${file} sets neither PUBLIC_ORIGIN nor GUEST_HOSTS, at the top level or for Previews`, () => {
+  test(`${file} sets none of the identity vars, at the top level or for Previews`, () => {
     /**
-     * Either one in a generic file is a deploy that names somebody's domain: an origin the scheduled check
-     * renders on and the guard refuses, or a host whose front page this Worker declines. The scan above
-     * keeps production's own values out; this keeps out any value, because the right one is per
-     * deployment and goes in the dashboard, where keep_vars leaves it alone.
+     * Any one in a generic file is a deploy that claims to be somebody: an origin the scheduled check
+     * renders on and the guard refuses, a host whose front page this Worker declines, a name on every
+     * card, or a Reddit account. The scan above keeps production's own values out; this keeps out any
+     * value, because the right one is per deployment and goes in the dashboard, where keep_vars leaves it
+     * alone.
      */
     const cfg = read(file)
     for (const vars of [cfg.vars, cfg.previews?.vars]) {
-      for (const k of ['PUBLIC_ORIGIN', 'GUEST_HOSTS']) assert.equal(vars?.[k], undefined, `${file} sets ${k}`)
+      for (const k of IDENTITY_VARS) assert.equal(vars?.[k], undefined, `${file} sets ${k}`)
     }
     assert.equal(cfg.keep_vars, true, 'dashboard vars must survive a deploy of this file')
   })

@@ -2,6 +2,7 @@ import type { Post } from '../types.ts'
 import { esc, html } from './fail.ts'
 import { byline, bytesIndex, describe, dimTags, mediaOf, mediaUrl, str, usable } from './embed.ts'
 import { buildPlainText } from './text.ts'
+import { siteLabel } from '../instance.ts'
 
 /**
  * Telegram's head: plain OpenGraph, ONE picture, and nothing else at all.
@@ -30,7 +31,7 @@ import { buildPlainText } from './text.ts'
  * function must not throw on any shape a corrupted record can carry — it is the whole contract
  * of the route, and worker.ts calls render() outside any try/catch.
  */
-export function renderTelegram(post: Post, origin: string): Response {
+export function renderTelegram(post: Post, origin: string, site: string): Response {
   const media = mediaOf(post)
   const tags = [
     // str(post.author?.…) IS a crash fix, not only a cosmetic one. `author` can be absent from
@@ -65,7 +66,8 @@ export function renderTelegram(post: Post, origin: string): Response {
     // stays double-quoted for a matching reason: esc() does not escape "'" or a backtick.
     `<meta property="og:description" content="${esc(describe(post, buildPlainText(post)))}"/>`,
     `<meta property="og:url" content="${esc(str(post.canonical))}"/>`,
-    `<meta property="og:site_name" content="mbedfx"/>`,
+    // The instance's name (SITE_NAME), escaped like every other value here: an operator's var is text.
+    `<meta property="og:site_name" content="${esc(siteLabel(site))}"/>`,
   ]
 
   // The subject picture, or the absence of one. The property this branch has to hold is

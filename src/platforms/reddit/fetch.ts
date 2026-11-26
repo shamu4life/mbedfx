@@ -7,6 +7,7 @@ import {
 import { crawlerCaption, feedCaption } from './caption.ts'
 import { askTwice } from '../../fetchretry.ts'
 import { viaRelay } from './relay.ts'
+import { archiveUserAgent, redditUserAgent } from '../../instance.ts'
 
 /**
  * I/O ONLY. Reddit blocks anonymous `.json` from datacenter IPs (verified 2026-07-21: our Workers
@@ -27,10 +28,12 @@ import { viaRelay } from './relay.ts'
  */
 
 const BROWSER_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36'
-// Reddit's convention is `platform:app-id:version (by /u/user)`. Only the OAUTH fallback sends
-// this (the primary embed path uses BROWSER_UA), and that path is effectively dead behind
-// Reddit's Responsible Builder gate — so the rename here is identification, not behaviour.
-const REDDIT_UA = 'web:mbedfx.app:v0.1 (by /u/shamu4life)'
+// The OAUTH fallback's user agent is redditUserAgent(env) (src/instance.ts), in Reddit's convention
+// `platform:app-id:version (by /u/user)`. Only that path sends it (the primary embed path uses
+// BROWSER_UA), and it is effectively dead behind Reddit's Responsible Builder gate, so the string is
+// identification, not behaviour. It was the constant 'web:mbedfx.app:v0.1 (by /u/shamu4life)' until
+// 2026-11-25, which made every fork's OAuth app introduce itself as the owner's. The public instance
+// now sets that string as REDDIT_USER_AGENT (wrangler.production.jsonc).
 
 // The post id is base36; guard the path the same way the other fetchers guard theirs.
 const POST_ID = /^[0-9a-z]+$/i
@@ -181,8 +184,14 @@ const CAPTION_MIN_MS = 100
  * challenge and a fake Googlebot a 403 (residential, 2026-10-11).
  */
 const CRAWLER_UA = 'Mozilla/5.0 (compatible; Discordbot/2.0; +https://discordapp.com)'
-/** Arctic Shift asks its users to be considerate; a name and a way to reach the project is the minimum. */
-const ARCHIVE_UA = 'mbedfx.app (embed fixer; +https://github.com/shamu4life/mbedfx)'
+/**
+ * Arctic Shift asks its users to be considerate; a name and a way to reach the project is the minimum.
+ * The ARCHIVE'S user agent is archiveUserAgent(env) (src/instance.ts): this deployment's primary host,
+ * then the product token and the repository. On the public instance that is the constant this used to
+ * be, 'mbedfx.app (embed fixer; +https://github.com/shamu4life/mbedfx)'. On a fork it no longer claims
+ * mbedfx.app, which is the name the archive's rate limit and its maintainer would hold to account.
+ * relay/server.mjs's /selftest sends the same string, so it measures the request this file makes.
+ */
 
 /**
  * The response body as text, up to `cap` bytes: 512 KB by default (Reddit's block page is ~190 KB), more for an
@@ -300,7 +309,7 @@ async function fetchRedditArchive(ref: Extract<PostRef, { p: 'rd' }>, asked: str
   const early = asked !== '_' ? crawl(asked) : null
   const kept = await keptArchive(env, ref.id)
   const archive = kept ?? await readRequired(`https://arctic-shift.photon-reddit.com/api/posts/ids?ids=${ref.id}`,
-    { 'user-agent': ARCHIVE_UA, accept: 'application/json' }, left(ARCHIVE_POST_TIMEOUT_MS), 'follow', ARCHIVE_MAX_BYTES,
+    { 'user-agent': archiveUserAgent(env), accept: 'application/json' }, left(ARCHIVE_POST_TIMEOUT_MS), 'follow', ARCHIVE_MAX_BYTES,
     viaRelay(env))
   const sub = archive === undefined ? null : redditArchiveSub(archive, ref.id)
   if (archive === undefined || !sub) return { ok: false, reason: 'assert_fail', refused: true }
@@ -366,7 +375,7 @@ async function withCaption(
       left(FEED_TIMEOUT_MS), 'manual', viaRelay(env))
     if (cut && feedCaption(caption.feed ?? '', id) === null) {
       caption.archive = await readSource(`https://arctic-shift.photon-reddit.com/api/posts/ids?ids=${id}&fields=id,selftext`,
-        { 'user-agent': ARCHIVE_UA, accept: 'application/json' }, left(ARCHIVE_TIMEOUT_MS), 'follow', viaRelay(env))
+        { 'user-agent': archiveUserAgent(env), accept: 'application/json' }, left(ARCHIVE_TIMEOUT_MS), 'follow', viaRelay(env))
     }
   }
   return { ...got, caption }
@@ -476,7 +485,7 @@ async function appToken(env: Env): Promise<string | null> {
     headers: {
       authorization: `Basic ${btoa(`${id}:${secret}`)}`,
       'content-type': 'application/x-www-form-urlencoded',
-      'user-agent': REDDIT_UA,
+      'user-agent': redditUserAgent(env),
     },
     body: 'grant_type=client_credentials',
   })
@@ -492,7 +501,7 @@ async function fetchRedditOAuth(ref: Extract<PostRef, { p: 'rd' }>, env: Env): P
   const token = await appToken(env)
   if (!token) return { ok: false, reason: 'assert_fail' }
   const res = await askTwice(`https://oauth.reddit.com/comments/${encodeURIComponent(ref.id)}?raw_json=1&limit=1`, {
-    headers: { authorization: `Bearer ${token}`, 'user-agent': REDDIT_UA, accept: 'application/json' },
+    headers: { authorization: `Bearer ${token}`, 'user-agent': redditUserAgent(env), accept: 'application/json' },
   })
   if (!(res.headers.get('content-type') || '').includes('json')) return { ok: false, reason: 'assert_fail' }
   const body = await res.json()

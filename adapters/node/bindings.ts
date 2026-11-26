@@ -495,7 +495,7 @@ export const resolveHost = async (host: string): Promise<string[]> =>
  * src/analytics.ts and fails when a string field is added there and not here.
  */
 export const ENV_VARS = [
-  'RESOLVER_SECRET', 'OWN_HOSTS', 'MUX_BUFFER_MAX', 'PUBLIC_ORIGIN', 'GUEST_HOSTS',
+  'RESOLVER_SECRET', 'OWN_HOSTS', 'MUX_BUFFER_MAX', 'PUBLIC_ORIGIN', 'GUEST_HOSTS', 'SITE_NAME', 'REDDIT_USER_AGENT',
   'IMGUR_CLIENT_ID', 'TRANSLATE_GOOGLE', 'IG_GRAPHQL_DOC_ID',
   'X_ACCOUNTS', 'IG_ACCOUNTS', 'YT_ACCOUNTS', 'YT_PROMISE',
   'X_ACCOUNTS_2', 'X_ACCOUNTS_3', 'IG_ACCOUNTS_2', 'IG_ACCOUNTS_3', 'YT_ACCOUNTS_2', 'YT_ACCOUNTS_3',

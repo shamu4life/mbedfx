@@ -292,7 +292,7 @@ the platform.
 | Media | Served as |
 |---|---|
 | remuxed video | R2 bytes, answering range requests, so a player can seek |
-| images, avatars, posters, already-progressive video | `302` to the CDN under `cache-control: public, max-age=300` (`MEDIA_MAX_AGE`, `src/cache.ts:8`) |
+| images, avatars, posters, already-progressive video | `302` to the CDN under `cache-control: public, max-age=300` (`MEDIA_MAX_AGE`, `src/cache.ts:9`) |
 | Instagram, Twitch and Threads video | proxied rather than redirected (the `media` arm of `src/worker.ts`; the three platforms are scoped in `proxyableVideoUrl`, `src/mediaproxy.ts`) |
 
 A Reddit link post (a post whose content is a link to a YouTube video, a tweet, a clip) carries the
@@ -438,11 +438,11 @@ and the rest come back from the proxy as HTML and the Worker never runs.
 re-measured 2026-08-05: `/_api/v2?url=…` and `/_api/v1/anything?url=…` return HTTP 404 to an
 ordinary client, body `not found\n`, carrying exactly one header,
 `content-type: text/plain;charset=UTF-8`. That header is the runtime's own default;
-`src/render/index.ts:51` builds the response as `new Response('not found\n', { status: 404 })` with
+`src/render/index.ts:89` builds the response as `new Response('not found\n', { status: 404 })` with
 no headers object, so no `cache-control` reaches the client and an intermediary applies whatever it
 defaults to. A user agent classified as Discord gets an HTML embed at HTTP 200 on the same path,
 `og:title` `Not found`, minted by the `notfound` arm's `render()` call (`src/worker.ts`) and
-split from the human 404 at `src/render/index.ts:49-53`. `/_api` returns an HTML chooser page at
+split from the human 404 at `src/render/index.ts:87-89`. `/_api` returns an HTML chooser page at
 HTTP 300 (`src/render/chooser.ts:72`). Pin the path exactly; `test/api.test.mjs:533` refuses to
 serve `/_api/v2` as v1.
 
@@ -579,7 +579,7 @@ the production counters put a completed YouTube mux at p50 18.2 s, p90 41.3 s, m
 139 samples. Quoting a number smaller than the p10 as the cost of a cold video is how a client
 timeout gets sized to fail.
 
-A post is held 900 s (`POST_TTL`, `src/cache.ts:5`) independently of the response, and a second
+A post is held 900 s (`POST_TTL`, `src/cache.ts:6`) independently of the response, and a second
 request skips the upstream fetch even when the first answer wasn't cacheable. `/_api/v1` never
 consults the response cache; a cold post pays the upstream fetch until that entry is warm.
 
@@ -756,7 +756,7 @@ and nothing else.
 
 ## Caching and limits
 
-A complete answer is sent `cache-control: public, max-age=900` (`RESP_TTL`, `src/cache.ts:6`); an
+A complete answer is sent `cache-control: public, max-age=900` (`RESP_TTL`, `src/cache.ts:7`); an
 incomplete one `no-store` (the `api` arm), as is every failure envelope (`apiError`).
 
 `src/` holds no API key, no quota and no rate limiting. Any limit on the public instance is a zone
