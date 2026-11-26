@@ -218,17 +218,19 @@ commit is live.
 
 ## Against the other embed fixers
 
-Measured 2026-08-01 against FxEmbed, vxTwitter, fxTikTok, InstaFix and InstaFix Revived. The README
-carries the feature table, and this section is not for publishing.
+Measured 2026-08-01 against FxEmbed, vxTwitter, fxTikTok, InstaFix and InstaFix Revived, and re-checked
+2026-11-26 with embeds.now added (live probes from a residential host with Discord's user agent). The
+README carries the feature table, and this section is not for publishing.
 
-FxEmbed has three years of production traffic behind it, vxTwitter four. This project is the newest
-of the six by years, and no crowd has hit it yet. Treat "it works" as provisional until it has
+FxEmbed has three years of production traffic behind it, vxTwitter four. This project is newer
+than every rival in the table except embeds.now (launched 2026-10-09), and no crowd has hit it yet. Treat "it works" as provisional until it has
 survived a crowd, and expect first real traffic to find what the test suite cannot.
 
 Breadth is the differentiator and the liability at once. Seventeen platforms of undocumented
-endpoints break independently, on their own schedule. Nobody else runs more than four live embed
-domains, which is the genuine advantage and also why failure cards and degrade paths matter more
-here than in a single-platform fixer.
+endpoints break independently, on their own schedule. The domain count is no longer
+the advantage it was (FxEmbed served seven live domains on 2026-11-26, and embeds.now lists about 23
+per-site subdomains); the seventeen sites still are, and they are why failure cards and degrade paths
+matter more here than in a single-platform fixer.
 
 | Gap | Where it stands |
 |---|---|
@@ -236,9 +238,11 @@ here than in a single-platform fixer.
 | No realistic self-hosting | Mostly closed. The suite runs in stock Node against `src/worker.ts`, `handle()` is already an adapter entry point, six of the eight Cloudflare surfaces it touches need only an object literal, and `container/` has no Cloudflare surface at all. Since 2026-08-12 the corrections that stood between "it would run" and "it would be safe to expose" have landed: the private-address guard the Worker half never had (`src/netguard.ts`, ported from `container/server.py`, with a `RESOLVE_HOST` seam for the DNS half a Worker cannot do), a configurable and additive `OWN_HOSTS`, a Twitter guest-token cache that works where the `cf` fetch option is ignored, a bound on the mux buffering fallback, and the `CacheLike` contract written down. Since 2026-11-25 the adapter exists too: `adapters/node/` serves `handle()` from node:http with a stand-in for each binding, and `adapters/node/compose.yaml` runs it beside the resolver. On a residential host four of five posts matched mbedfx.app (Twitter lacked its repost count), and compose built both images and ran them; CI builds neither. On Cloudflare, `wrangler.jsonc` deploys a separate `mbedfx-selfhost` and `wrangler.free.jsonc` the same without the container, and the README carries a Deploy to Cloudflare button, which nobody has clicked on a real account yet. Closed for a first run, still open for a crowd; the unknown is egress IP. The guide is `docs/SELF-HOSTING.md`. |
 | No profile embeds | Closed where it was real, and measured closed where it was not. `/profile/{handle}` renders a Bluesky account (bio, avatar, three counts, join month) because bsky.app hands a crawler `og:title` and nothing else. Measured 2026-08-11 from Cloudflare egress, x.com, tiktok.com and instagram.com all already answer a crawler with a complete profile card, so a route for them would duplicate what Discord draws; Instagram's profile surfaces are additionally walled from this egress (HTTP 429, zero bytes, with a post-page control at 254 KB). Bare `/{handle}` and `/@{handle}` stay choosers: each names an account on two sites at once, so claiming one serves a card from a site nobody pasted. vxTwitter can claim bare handles because it serves one platform. |
 | No operator metrics | Half closed. `docs/METRICS.md` documents the Analytics Engine SQL read path, and since 2026-08-12 a half-hourly cron renders one known post per platform through this worker's own handler and counts whether a real card came back (`src/smoke.ts`, `/_smoke`), added because Facebook was broken for up to a week and the detector was the owner pasting a link. That is a breakage detector, not an uptime monitor: it runs inside the worker it checks. It also told nobody: on 2026-10-14 its counters showed TikTok failing on almost every tick for a week, unread. Since then the cron keeps its own week in R2 (`src/health.ts`, published at `/_health`, with the Cloudflare location of each run), and `.github/workflows/health-check.yml` reads it twice a week, runs the checks again from GitHub's network (which also sees DNS, routes and a failed deploy), tests the container and the guest domains, and files `health-check` issues. There is deliberately no scrape endpoint: an in-Worker one would need an account-scoped API token at the edge, and `pool_unused` publishes whether the account pools are loaded. `/_clients` joined it on 2026-08-28, a sibling probe that runs inside the container on production egress and reports which YouTube player clients actually serve bytes; it takes no input and rides the existing authenticated `/resolve`, so it opens no new surface, and it degrades to 503 or 502 rather than 500 because a diagnostic that crashes tells an operator less than one that says it could not reach the container. It exists because `/_smoke` stayed green through a total container outage the same week. fxTikTok has a `/metrics`; this Worker doesn't. |
+| No Discord component embeds | Open. Discord documented component embeds on 2026-10-05 (an inline `discord:component-embed` JSON block, 3,000 bytes, OG tags kept as the fallback). On 2026-11-26 vxReddit, embeds.now, ebfix and embed.waxdt.com served them live, vxTwitter used them for galleries over four items or mixed media, and FxEmbed had the code switched off. Every adopter emits either a component embed or an activity+json link, never both, and mbedfx's video cards are built from the activity+json status, so what Discord does with a page carrying both is the question to settle first: a paste test in desktop and mobile clients, the way #49 was settled, before any code. Older mobile clients reportedly draw these as a blank box, and a video in one does not autoplay. |
 | No card screenshots in the README | Four of the five show the card their project produces. The README shows a designed banner. |
 
-Do not assume the converter page is unique. InstaFix Revived ships one. This one adds cross-site
+Do not assume the converter page is unique. embeds.now has a paste-box converter and x1tt3r.com a
+converter landing page (InstaFix Revived's went with its domain around 2026-10-01). This one adds cross-site
 detection, the ambiguity chooser, share-code unfurling, and a preview of the card before the link is
 sent.
 
