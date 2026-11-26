@@ -4,11 +4,12 @@ import http from 'node:http'
 import { mkdtempSync, readFileSync, readdirSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { createAdapter, gracefulStop, toRequest, writeResponse } from '../adapters/node/server.ts'
+import { createAdapter, gracefulStop, pickOrigin, toRequest, writeResponse } from '../adapters/node/server.ts'
 import { DirBucket, keyFile } from '../adapters/node/r2dir.ts'
 import { ENV_VARS, envVars, inProcessMuxRunner, memoryCache, trackingContext } from '../adapters/node/bindings.ts'
 import { refKey } from '../src/refkey.ts'
 import { FORK_IMAGE_ALT, HEAD_IMAGE_ALT } from '../src/sitepage.ts'
+import { GUEST_MARK } from '../src/guesthost.ts'
 
 /**
  * THE NODE ADAPTER (adapters/node/), started in this process on a random port and driven over real
@@ -190,6 +191,52 @@ test('the Host header picks among configured origins only: d. is honoured, an un
   const direct = await raw(port, 'GET', `/adapterwatch/status/${id}`, { 'user-agent': BOT, host: 'd.embed.example.test' })
   assert.equal(direct.status, 302, 'a d. host answers with the bytes, not the card')
   assert.match(direct.headers.location, /^https:\/\/d\.embed\.example\.test\/_media\//, 'minted on the d. origin it was asked on')
+})
+
+test('A GUEST HOST IS ANSWERED AS A GUEST: built on its own https origin, embed paths only, each marked', async () => {
+  /**
+   * GUEST_HOSTS on Node (2026-11-25). The adapter rebuilt every request on a PUBLIC_ORIGIN entry, so a Host
+   * naming a guest came in as the primary and was answered as the primary. The docs then said to list the
+   * guest in PUBLIC_ORIGIN as well, which makes it one of this deployment's own hosts, and isGuestHost
+   * never treats an own host as a guest. Guest routing could not fire on Node either way. Now the adapter
+   * accepts a guest host and its d. name as themselves, on https, without either being in PUBLIC_ORIGIN.
+   */
+  const id = '2000000000000000903'
+  const { port } = await start({
+    deps: offlineDeps(tweet(id)).deps,
+    vars: { RESOLVER_SECRET: SECRET, TRANSLATE_GOOGLE: 'off', GUEST_HOSTS: 'guest.example.test' },
+  })
+  const post = await raw(port, 'GET', `/adapterwatch/status/${id}`, { 'user-agent': BOT, host: 'guest.example.test' })
+  assert.equal(post.status, 200)
+  assert.equal(post.headers[GUEST_MARK], 'served', 'an embed path on a guest host is marked')
+  assert.match(post.body.toString(), /href="https:\/\/guest\.example\.test\/users\/adapterwatch\/statuses\//,
+    'and minted on the guest\'s own https origin')
+  assert.doesNotMatch(post.body.toString(), /embed\.example\.test/)
+
+  for (const path of ['/', '/robots.txt', '/_api/v1?url=https://x.com/adapterwatch/status/' + id, '/adapterwatch']) {
+    const declined = await raw(port, 'GET', path, { host: 'guest.example.test' })
+    assert.equal(declined.status, 404, `${path} is not an embed path, so a guest host declines it`)
+    assert.equal(declined.headers[GUEST_MARK], undefined, `${path}: the decline is unmarked`)
+  }
+
+  const direct = await raw(port, 'GET', `/adapterwatch/status/${id}`, { 'user-agent': BOT, host: 'd.guest.example.test' })
+  assert.equal(direct.status, 302, 'the guest\'s d. name serves the bytes')
+  assert.equal(direct.headers[GUEST_MARK], 'served')
+  assert.match(direct.headers.location, /^https:\/\/d\.guest\.example\.test\/_media\//)
+
+  // Only the guest and its d. name: a deeper name is not accepted, and gets the primary like any stranger.
+  const deeper = await raw(port, 'GET', `/adapterwatch/status/${id}`, { 'user-agent': BOT, host: 'x.guest.example.test' })
+  assert.equal(deeper.status, 200)
+  assert.equal(deeper.headers[GUEST_MARK], undefined)
+  assert.match(deeper.body.toString(), /href="https:\/\/embed\.example\.test\/users\//)
+  // And the deployment's own front page is untouched by the guest.
+  assert.equal((await raw(port, 'GET', '/', { host: 'embed.example.test' })).status, 200)
+
+  // pickOrigin itself: a configured origin wins, a guest is matched without case, and no guest list means none.
+  assert.equal(pickOrigin([PRIMARY], 'GUEST.example.test', ['guest.example.test']), 'https://guest.example.test')
+  assert.equal(pickOrigin([PRIMARY], 'guest.example.test', []), PRIMARY)
+  assert.equal(pickOrigin([PRIMARY, 'https://guest.example.test'], 'guest.example.test', ['guest.example.test']), 'https://guest.example.test')
+  assert.equal(pickOrigin([PRIMARY], 'guest.example.test:8443', ['guest.example.test']), PRIMARY, 'the exact name, no port')
 })
 
 test('the request target cannot choose the host: //host is a path, an absolute-form target is refused', () => {

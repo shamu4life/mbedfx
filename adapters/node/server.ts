@@ -8,6 +8,7 @@ import { pipeline } from 'node:stream/promises'
 import type { Env } from '../../src/analytics.ts'
 import type { Deps } from '../../src/worker.ts'
 import worker, { handle, scheduledDeps } from '../../src/worker.ts'
+import { guestHosts } from '../../src/guesthost.ts'
 import { DirBucket } from './r2dir.ts'
 import {
   analytics, containerResolver, envVars, inProcessMuxRunner, inProcessSmokeRunner, memoryCache, publicAssets,
@@ -39,6 +40,21 @@ const REPO = resolve(fileURLToPath(new URL('../..', import.meta.url)))
  * header matches it exactly, which is how one adapter serves both `embed.example.com` and
  * `d.embed.example.com`. A Host that matches nothing gets the primary, so an attacker-chosen Host can
  * never become the origin of a card.
+ *
+ * A GUEST HOST IS THE ONE OTHER HOST ACCEPTED (2026-11-25): a Host naming a GUEST_HOSTS entry exactly, or
+ * that entry's `d.` name, becomes `https://<that host>`. It must not be in PUBLIC_ORIGIN. A host listed
+ * there is one of this deployment's own, and src/guesthost.ts isGuestHost never treats an own host as a
+ * guest (the 2026-11-25 review: a guest entry that was the parent of the operator's domain swallowed it).
+ * So before this, a guest host on Node had two options and neither worked. Left out of PUBLIC_ORIGIN, its
+ * requests were rebuilt on the primary and answered as the primary. Listed there, they kept their host
+ * and were answered as an own host. Guest routing never fired. On Cloudflare the request keeps its own
+ * url through the service binding; this is the same url for the same request.
+ *
+ * Still no host a client chooses. The operator named each guest, as they named each origin, and a guest
+ * host is held to the guest answers (embed paths only, each marked `x-mbedfx-guest: served`), so naming
+ * one in a Host header gets a client nothing the guest itself would not get. https because the guest
+ * contract is https: the domain belongs to another server, which forwards to this one. Only the exact name
+ * and its d. name: isGuestHost also counts deeper subdomains, but nothing in the contract sends them.
  */
 export function parseOrigins(spec: string): string[] {
   const out: string[] = []
@@ -52,9 +68,12 @@ export function parseOrigins(spec: string): string[] {
   return out
 }
 
-export function pickOrigin(origins: string[], hostHeader: string | undefined): string {
+export function pickOrigin(origins: string[], hostHeader: string | undefined, guests: string[] = []): string {
   const host = (hostHeader ?? '').toLowerCase()
-  return origins.find(o => new URL(o).host === host) ?? origins[0]
+  const own = origins.find(o => new URL(o).host === host)
+  if (own) return own
+  if (host && guests.some(g => host === g || host === `d.${g}`)) return `https://${host}`
+  return origins[0]
 }
 
 /** Hop-by-hop headers (RFC 9110 §7.6.1) and Host, which the configured origin replaces. */
@@ -80,7 +99,7 @@ const HOP = new Set([
  * renders the card. CONNECT, TRACE and TRACK are refused here, because the fetch Request constructor
  * throws on all three.
  */
-export function toRequest(req: IncomingMessage, origins: string[]): Request | null {
+export function toRequest(req: IncomingMessage, origins: string[], guests: string[] = []): Request | null {
   const raw = req.url ?? ''
   if (!raw.startsWith('/')) return null
   const method = (req.method ?? 'GET').toUpperCase()
@@ -92,7 +111,7 @@ export function toRequest(req: IncomingMessage, origins: string[]): Request | nu
     try { headers.append(name, req.rawHeaders[i + 1]) } catch { /* a header fetch refuses is dropped */ }
   }
   try {
-    return new Request(pickOrigin(origins, req.headers.host) + raw, { method, headers })
+    return new Request(pickOrigin(origins, req.headers.host, guests) + raw, { method, headers })
   } catch {
     return null
   }
@@ -178,6 +197,10 @@ export function createAdapter(cfg: AdapterConfig) {
   env.AI = undefined
   env.RESOLVE_HOST = resolveHost
 
+  // The guest hosts pickOrigin accepts, read with the Worker's own parser from the value handle() reads,
+  // so a host the adapter lets in as a guest is one guest routing knows.
+  const guests = guestHosts(env.GUEST_HOSTS)
+
   const cache = memoryCache({ log })
   // NOT A HAND-COPIED liveDeps. scheduledDeps() is liveDeps(COLD_CACHE), exported from src/worker.ts, so
   // spreading it picks up every live fetcher the default export uses, including any added later. Only
@@ -185,7 +208,7 @@ export function createAdapter(cfg: AdapterConfig) {
   const deps: Deps = { ...scheduledDeps(), cache, ...cfg.deps }
 
   const server = http.createServer(async (req, res) => {
-    const request = toRequest(req, cfg.origins)
+    const request = toRequest(req, cfg.origins, guests)
     if (!request) {
       res.writeHead(400, { 'content-type': 'text/plain' })
       res.end('bad request\n')
