@@ -100,7 +100,7 @@ env.AE?.writeDataPoint({ blobs: [platform, outcome, client], doubles: [1] })
 | `blob2` | outcome | one of the values in the `Outcome2` union (`src/analytics.ts`) |
 | `blob3` | client class | `discord` `telegram` `other-bot` `human`, or `none` on a `mux_*` row (`card_degraded` carries a real one; see below) |
 | `double1` | the literal `1` | always |
-| `double2` | elapsed milliseconds, a code, or a duration | `mux_*` rows carry milliseconds; `wait_users`/`wait_api` rows carry the digits between the wait id's `9` and the real id (`105` = a/5, `50406` = p/4/6; `600`/`601` were d's control and variant, used once on 2026-11-25 for issue #49 and retired that day; `700`/`701` are e's control and component-embed variant, an experiment from 2026-11-26 [below](#reading-the-component-embed-paste-_waite)); `wait_media` rows carry the slot digit × 100 + n (`206` = media/6, `506` = mediap/6); since 1.15.0 `card_promised` carries the video's duration in seconds, `video_wait` a join code (3 warm, 0 held here, 1 polling another isolate), `video_ok`/`video_fail` the milliseconds the client waited; `0` on every other row |
+| `double2` | elapsed milliseconds, a code, or a duration | `mux_*` rows carry milliseconds; `wait_users`/`wait_api` rows carry the digits between the wait id's `9` and the real id (`105` = a/5, `50406` = p/4/6; `600`/`601` were d's control and variant, used once on 2026-11-25 for issue #49 and retired that day; `700`/`701` were e's control and component-embed variant, used once on 2026-11-26 and retired that day, [below](#the-component-embed-paste-_waite-2026-11-26)); `wait_media` rows carry the slot digit × 100 + n (`206` = media/6, `506` = mediap/6); since 1.15.0 `card_promised` carries the video's duration in seconds, `video_wait` a join code (3 warm, 0 held here, 1 polling another isolate), `video_ok`/`video_fail` the milliseconds the client waited; `0` on every other row |
 | `timestamp` | set by the runtime | `DateTime`, always UTC |
 
 Columns are 1-based: the first `blobs` element is `blob1`, and there is no `blob0`. `writeDataPoint`
@@ -398,50 +398,39 @@ cards than it wins would look like an improvement. Pair the ratio with client di
 activity route. To decide whether a budget can win, read the `mux_*` distribution above instead of
 this ratio.
 
-### Reading the component-embed paste (`/_wait/e`)
+### The component-embed paste (`/_wait/e`, 2026-11-26)
 
-This one is an experiment, and it comes out once the owner has pasted it. Discord documented component
-embeds on 2026-10-05, and nobody has measured what Discord draws when a head carries one beside the
-activity link. `/_wait/e/{v}/{tag}/{post path}` serves production's head for an X or Bluesky post,
-changed one way per variant:
+This experiment is over and its route is gone. It ran for one day, to learn what Discord draws when a
+head carries a component embed beside the activity link. The owner pasted an X video post and a
+Bluesky post with four pictures in the Discord mobile app, each as today's head (`v=0`), today's head
+with a component embed (`v=1`), and the component embed without the activity link (`v=2`).
 
-| `v` | The head | `wait_*` row |
-|---|---|---|
-| `0` | production's head; only the activity id changes, to carry the code | `700` for each fetch of the document |
-| `1` | as `0`, plus a component embed in the head | `701` for each fetch of the document |
-| `2` | the component embed, with the activity link taken out | none, because there is no document to fetch |
+Discord drew the component card for `v=1` and `v=2` on both posts. The rows showed three `700`
+fetches for the X post at 23:13 UTC and no `701` row at all, so with a component embed in the head
+Discord never fetched the activity document. The component embed replaces the activity card. On the
+video it showed a blank tile with a play button instead of the poster frame (the video still played
+when tapped), and the footer with the site name and date was gone. The Bluesky `v=0` paste drew its
+card from the document but left no `700` row, and nobody has worked out why.
 
-Both documents are today's document byte for byte, so whatever differs between the cards comes from
-the head. The link button shows which card Discord drew. The component embed has one; the activity
-card and the Open Graph card don't.
+Since that paste, the Discord head of a post with more than four pictures and no video carries a
+component embed built to look like the activity card, with up to nine pictures in a 3x3 grid, and
+every other head is unchanged (`src/render/componentembed.ts`). Nothing writes `700` or `701` any
+more.
+
+Those rows carry the post's platform (`x` or `bs`) in `blob1`, where every other wait row has `none`.
+To read them, write the codes as floats. `double2` is a Float64 column, and Analytics Engine refuses
+`double2 IN (700, 701)` with "IN expression types must be consistent". This form works:
 
 ```sql
 SELECT blob1 AS platform, blob2 AS path, double2 AS code,
        intDiv(toUInt32(timestamp), 60) * 60 AS minute, SUM(_sample_interval) AS fetches
 FROM mbedfx_counters
-WHERE blob2 IN ('wait_api', 'wait_users') AND double2 IN (700, 701)
-  AND timestamp > NOW() - INTERVAL '1' DAY
+WHERE blob2 IN ('wait_api', 'wait_users') AND double2 IN (700.0, 701.0)
 GROUP BY platform, path, code, minute
 ORDER BY minute
 ```
 
-Each row names its post's platform (`x` or `bs`) and the minute it landed, so paste the two posts a
-few minutes apart, and run any Embed Debugger check before the pastes, not between them: the
-debugger's fetch writes the same row a paste does.
-
-If a `701` row sits beside a component card, Discord fetched the document and still drew the script.
-If there's a component card and no `701` row, Discord skipped the document once it had the script.
-`v=2` writes no row of its own, so read its answer off the card. Each head fetch writes the rows an
-ordinary paste of that post writes, and `v=1` and `v=2` then read the post back from the cache the head
-just warmed, which normally costs no second upstream fetch.
-
-One thing the paste can't separate yet: the video in the component embed uses og:video's `.mp4` url,
-but every picture uses an extensionless url, the avatar on both posts included, because the CDN picks
-the format per request. If Discord turns down extensionless media, both component cards could fail
-together, and Discord's docs warn that some failures show no embed at all. That would look like
-"component embeds don't work" when the urls were the problem. Run the `v=1` and `v=2` urls through
-Discord's [Embed Debugger](https://discord.com/developers/embeds) before reading it that way
-(`src/render/componentembed.ts`).
+Analytics Engine keeps three months of rows, so these run out around the end of February 2027.
 
 ---
 
