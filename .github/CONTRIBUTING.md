@@ -59,7 +59,7 @@ Measure from a Worker, and say so in the comment. A datacenter IP and a resident
 
 ### Comment the why, not the what
 
-The code says what it does. A comment carries the measurement behind a value, the approach that was tried and didn't work, and what breaks if this gets "simplified". If you call a rule deliberate, say what goes wrong without it.
+A comment carries what the code can't: the measurement behind a value, the approach that was tried and didn't work, and what breaks if this gets "simplified". If you call a rule deliberate, say what goes wrong without it.
 
 ### Don't guess
 
@@ -67,7 +67,7 @@ Never invent a title, an author or a thumbnail. When something cannot be determi
 
 ### Fetching and normalising are separate
 
-Keep judgement in the pure half. Each platform has a `fetch.ts` that does I/O and a `normalize.ts` that is pure and tested against captured fixtures with no network.
+Each platform has a `fetch.ts` that does I/O and a `normalize.ts` that is pure and tested against captured fixtures with no network. Keep judgement in the pure half.
 
 ### The converter page's wording
 

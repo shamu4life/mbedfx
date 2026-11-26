@@ -1,14 +1,14 @@
-# Can a Worker resolve the aweme URL to a CDN URL? — the header sweep
+# Can a Worker resolve the aweme URL to a CDN URL? / the header sweep
 
-**Measured 2026-07-19 from `staging.megapenispoopenfarten.sex`** (a real deployed Cloudflare
-Worker, not `wrangler dev --remote`), with a residential-US-IP control arm taken against the
-**same URL, minutes apart and in one case seconds apart**.
+Measured 2026-07-19 from `staging.megapenispoopenfarten.sex` (a real deployed Cloudflare Worker,
+not `wrangler dev --remote`), with a residential-US-IP control arm taken against the same URL,
+minutes apart and in one case seconds apart.
 
-## Verdict: NO. Not under any request shape.
+## Verdict: no. Not under any request shape.
 
-**One-hop via server-side resolution is not achievable from Workers egress.** Twelve request
-shapes — every header axis the question named, plus two beyond it — produced **one distinct
-`Location` value between them**, and it is not a CDN:
+One-hop via server-side resolution is not achievable from Workers egress. Twelve request shapes
+(every header axis the question named, plus two beyond it) produced one distinct `Location` value
+between them, and it is not a CDN:
 
 ```
 https://www.tiktok.com/404?fromUrl=/aweme/v1/play/?faid=1988&file_id=<REDACTED>
@@ -16,19 +16,19 @@ https://www.tiktok.com/404?fromUrl=/aweme/v1/play/?faid=1988&file_id=<REDACTED>
   &signaturev3=<REDACTED>&tk=tt_chain_token&video_id=v15044gf0000d97soa7og65p2qmqtldg
 ```
 
-TikTok redirects datacenter egress to **its own 404 page**, carrying the original request as a
-`fromUrl` query param. The header is not the variable. **The egress IP is**, and that is not
-something a request shape can change.
+TikTok redirects datacenter egress to its own 404 page, carrying the original request as a
+`fromUrl` query param. The headers make no difference. The egress IP decides, and no request shape
+can change that.
 
-`resolveAwemeUrl`'s existing degrade path — return null, keep handing Discord the aweme URL — is
+`resolveAwemeUrl`'s existing degrade path (return null and keep handing Discord the aweme URL) is
 therefore the permanent behaviour on this route, not a temporary one awaiting the right header.
 
 ---
 
 ## The measurement that settles it
 
-Everything else here is supporting detail; this one control is the whole answer. A **single
-aweme URL, minted residentially**, fetched from both egresses within seconds of each other:
+Everything else here is supporting detail. The answer comes from one control: a single aweme URL,
+minted residentially, fetched from both egresses within seconds of each other:
 
 | | Residential US IP | Workers egress (staging) |
 |---|---|---|
@@ -36,13 +36,13 @@ aweme URL, minted residentially**, fetched from both egresses within seconds of 
 | `Location` host | **`v16m-default.tiktokcdn-us.com`** | **`www.tiktok.com`** (a `/404` page) |
 | following it | 1 redirect → HTTP 206, `ftyp` at 4-8 **true** | HTTP 200 `text/html`, `ftyp` **false** |
 
-The URL is byte-identical across both arms, so **the URL is not the variable and neither is its
-freshness**. This also answers a question the id-mode sweep structurally could not: the aweme URL
-is **not** bound to the IP that minted it. A residentially-minted URL fails from Workers exactly
-as a Workers-minted one does. **The IP that FETCHES is what is checked.**
+The URL is byte-identical across both arms, so neither the URL nor its freshness is the variable.
+This also answers a question the id-mode sweep structurally could not: the aweme URL is not bound
+to the IP that minted it. A residentially minted URL fails from Workers exactly as a Workers-minted
+one does, because what gets checked is the IP that fetches it.
 
-That closes the last door. There is no "mint it somewhere friendlier and resolve it later"
-architecture hiding behind this, because the resolution step itself is what gets refused.
+So there is no "mint it somewhere friendlier and resolve it later" architecture hiding behind this
+either, because the resolution step itself is what gets refused.
 
 ---
 
@@ -50,7 +50,7 @@ architecture hiding behind this, because the resolution step itself is what gets
 
 Post id `7660566211100511518` (video, @mysticaquariumct). Page fetch: HTTP 200, marker present,
 `statusCode: 0`, `itemStruct` present, aweme URL found, three cookies set (`ttwid`,
-`tt_csrf_token`, `tt_chain_token`). Every row below is the SAME aweme URL from that page, with
+`tt_csrf_token`, `tt_chain_token`). Every row below is the same aweme URL from that page, with
 `redirect: 'manual'`.
 
 | # | variant | status | Location host | content-type | body octets | `ftyp` 4-8 |
@@ -69,21 +69,21 @@ Post id `7660566211100511518` (video, @mysticaquariumct). Page fetch: HTTP 200, 
 | 12 | full browser impersonation † | 302 | www.tiktok.com | text/html | 136 | false |
 
 † UA, `accept`, `accept-language`, `referer`, `origin`, `range: bytes=0-`, all three `sec-ch-ua*`,
-all three `sec-fetch-*`, and the full cookie jar — simultaneously.
+all three `sec-fetch-*`, and the full cookie jar, all sent at once.
 
-**Distinct `Location` values across all twelve: 1.** Not merely "all failed" — all failed
-*identically*, byte for byte, including the `signaturev3` echo. The endpoint is not weighing these
-headers at all on this code path.
+Distinct `Location` values across all twelve: 1. All twelve failed identically, byte for byte,
+including the `signaturev3` echo, so on this code path the endpoint is not weighing these headers
+at all.
 
 First 16 bytes of the 136-byte body, every variant:
-`3c68746d6c3e0d0a3c686561643e3c74` = `<html>\r\n<head><t` — a redirect stub, not video.
+`3c68746d6c3e0d0a3c686561643e3c74` = `<html>\r\n<head><t`, a redirect stub and not video.
 
 ### Following each Location (no cookies, as Discord's proxy would)
 
-All twelve targets: **HTTP 200, `text/html; charset=utf-8`, first bytes
-`3c21646f63747970652068746d6c3e3c` (`<!doctype html><`), `ftyp` false.** Every redirect leads to
-an HTML 404 page. **A redirect that leads to a 404 is worth nothing to us** — which is why the
-"did it 302?" question had to be asked as "did it 302 *to a CDN that serves bytes*".
+All twelve targets: HTTP 200, `text/html; charset=utf-8`, first bytes
+`3c21646f63747970652068746d6c3e3c` (`<!doctype html><`), `ftyp` false. Every redirect leads to
+an HTML 404 page, and a redirect to a 404 is worth nothing to us. That is why the "did it 302?"
+question had to be asked as "did it 302 *to a CDN that serves bytes*".
 
 ### The `bitrateInfo[].PlayAddr.UrlList[]` alternatives, cookie-free
 
@@ -94,73 +94,74 @@ Six non-aweme URLs from the same blob, all on `*-webapp-prime.tiktok.com`:
 | v16-webapp-prime.tiktok.com (×3) | 403 | text/html | 506 | false |
 | v19-webapp-prime.tiktok.com (×3) | 403 | text/html; charset=utf-8 | 423 | false |
 
-**None is directly fetchable.** This reproduces the recon's cookie gate from Workers egress:
-`v16`/`v19-webapp-prime` are the gated branch and they 403 without the cookie. There is no
+None is directly fetchable. This reproduces the recon's cookie gate from Workers egress:
+`v16`/`v19-webapp-prime` are the gated branch, and they 403 without the cookie, so there is no
 one-hop URL to hand out directly.
 
 ---
 
 ## What changed since the Task 1 probe, and what did not
 
-The earlier probe recorded the aweme URL answering **HTTP 200 `text/html` with no redirect at
-all**. Today it answers **302 to a 404 page**. So the *shape* of the refusal moved — a redirect
-now exists where there was none — and anyone re-reading the old document should not trust its
-"there is no 302" wording as current.
+The earlier probe recorded the aweme URL answering HTTP 200 `text/html` with no redirect at
+all. Today it answers 302 to a 404 page. The shape of the refusal has moved (a redirect now exists
+where there was none), so anyone re-reading the old document should not trust its "there is no
+302" wording as current.
 
-**The conclusion is unchanged and is now much better supported.** The old measurement was one
-request shape and could not distinguish "wrong headers" from "wrong IP". This one sweeps twelve
-shapes and adds a same-URL residential control, and it lands harder: the refusal is not
-header-sensitive in any degree, and it survives a URL minted on a residential IP.
+The conclusion is unchanged and much better supported. The old measurement was one request shape
+and could not distinguish "wrong headers" from "wrong IP". This one sweeps twelve shapes and adds a
+same-URL residential control: the refusal is not header-sensitive in any degree, and it survives a
+URL minted on a residential IP.
 
-**One transient worth recording, because it would mislead a re-run.** The very first probe call
-returned **HTTP 403 with no rehydration marker on the PAGE fetch** — the fetch that normally
+One transient is worth recording, because it would mislead a re-run. The very first probe call
+returned HTTP 403 with no rehydration marker on the page fetch, which is the fetch that normally
 works. Three immediate retries all returned 200 with the marker, `statusCode: 0` and an
 `itemStruct`, as did every subsequent call. The page path is not broken; TikTok occasionally
-throws a 403 at a Worker colo. **Do not read a single 403 as the page gate closing** — retry
-before concluding anything, and note the page fetch is the arm this project actually depends on.
+throws a 403 at a Worker colo. **Do not read a single 403 as the page gate closing.** Retry
+before concluding anything, and remember that the page fetch is the arm this project actually
+depends on.
 
 Also incidentally reconfirmed: the deleted-post trap (id `7660566180852435743` → HTTP 200,
 `statusCode: 10204`, no `itemStruct`) and the photo-post case (id `7663591047909379341` → 200,
-`itemStruct` present, **no** aweme URL, correctly — a slideshow has no `bitrateInfo`).
+`itemStruct` present, and correctly no aweme URL, since a slideshow has no `bitrateInfo`).
 
 ---
 
 ## What this decides
 
-**The two-hop video chain cannot be collapsed by resolving server-side.** That option is closed,
-and the architecture should stop treating it as pending work.
+The two-hop video chain cannot be collapsed by resolving server-side. That option is closed, and
+the architecture should stop treating it as pending work.
 
-- `resolveAwemeUrl` returning null **is** the steady state on this route. It costs one upstream
+- `resolveAwemeUrl` returning null is the steady state on this route. It costs one upstream
   request per video post fetch and buys nothing. Whether to keep paying that for the chance
   TikTok's posture changes, or to delete it and reclaim the request, is a judgement call this
-  measurement does not make — but it should be made knowingly, not left as an assumed-temporary
+  measurement does not make. It should still be made knowingly, not left as an assumed-temporary
   degrade.
 - **Nothing here says the video is broken.** Our Worker never fetches the aweme URL in
   production; Discord's media proxy does, from Discord's IPs. This measures our egress only. The
   standing caution from the Task 1 document still applies in both directions: Discord's proxy is
-  also datacenter-egress, so the same treatment is plausible — and only a real Discord embed
+  also datacenter egress, so the same treatment is plausible, and only a real Discord embed
   settles that.
-- **The remaining route to one hop, if one is wanted, is to change what we hand out, not how we
-  ask for it.** Every option in that direction (proxying bytes, an offload service like
-  production fxtiktok's) is a different architecture with its own costs, and this document does
-  not recommend one. It only rules out the cheap fix.
+- If one hop is wanted, the remaining route is to change what we hand out rather than how we ask
+  for it. Every option in that direction (proxying bytes, an offload service like production
+  fxtiktok's) is a different architecture with its own costs, and this document does not recommend
+  one. It only rules out the cheap fix.
 
-**No TTL changes.** Nothing measured here touches the 900 + 300 s window.
+No TTL changes: nothing measured here touches the 900 + 300 s window.
 
 ---
 
 ## Reproducing this
 
-**The probe is deleted.** `src/probe.ts`, its mount in `worker.ts`, the `PROBE_TOKEN` field in
+The probe is deleted. `src/probe.ts`, its mount in `worker.ts`, the `PROBE_TOKEN` field in
 `analytics.ts`, and the staging secret are all gone; `test/pipeline.test.mjs`'s "THE PROBE IS
-GONE" test fails if any of them returns. Rebuild it from this document's variant table if the
-question is ever reopened — and if you do, note that its `q` mode (host and path hardcoded, only
-the query string caller-supplied, so it cannot leave `www.tiktok.com/aweme/v1/play/`) is what made
-the mint-IP-vs-fetch-IP control possible.
+GONE" test fails if any of them returns. If the question is ever reopened, rebuild the probe from
+this document's variant table, and note that its `q` mode (host and path hardcoded, only the query
+string caller-supplied, so it cannot leave `www.tiktok.com/aweme/v1/play/`) is what made the
+mint-IP-vs-fetch-IP control possible.
 
-**Treat `PROBE_TOKEN` as burned after any run.** The token is a **path segment** and
-`wrangler.jsonc` sets `"observability": { "enabled": true }`, so Workers Logs captures the request
-URL — the only thing protecting the endpoint lands in the log store. The token used here was
+**Treat `PROBE_TOKEN` as burned after any run.** The token is a path segment and `wrangler.jsonc`
+sets `"observability": { "enabled": true }`, so Workers Logs captures the request URL, and with it
+the only thing protecting the endpoint. The token used here was
 deleted with `wrangler secret delete PROBE_TOKEN` immediately after the run.
 
 `megapenispoopenfarten.sex` was never touched. All measurement was against

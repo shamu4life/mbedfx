@@ -1,29 +1,29 @@
-# Instagram from Cloudflare Workers egress — what was measured, and what was not
+# Instagram from Cloudflare Workers egress / what was measured, and what was not
 
-**Written 2026-07-20, after the fact.** This document exists because three places in the plan
-(lines 217, 229, 648) and one comment block in `src/platforms/instagram/fetch.ts` cited it as a
-phase deliverable, and it had never been written. A dangling citation in a source comment is worse
-than no citation: it reads as a live pointer, and the block that carried it is the documented
-escalation path for a production-only Instagram failure.
+**Written 2026-07-20, after the fact.** Three places in the plan (lines 217, 229, 648) and one
+comment block in `src/platforms/instagram/fetch.ts` cited this document as a phase deliverable, and
+it had never been written. A dangling citation in a source comment is worse than none, because it
+reads as a live pointer, and the block that carried this one is the documented escalation path for a
+production-only Instagram failure.
 
-**It is deliberately not a reconstruction.** Task 1 deployed a probe to staging and Task 8 deleted
-it (commit `0a32bbc`) without recording its output. That output is gone. What follows separates
-what the repo can still evidence from what it cannot, because the failure mode this phase is most
-exposed to — believing a residential measurement transfers to Cloudflare egress — is made worse,
-not better, by a confident-sounding document.
+It is deliberately not a reconstruction. Task 1 deployed a probe to staging, and Task 8 deleted it
+(commit `0a32bbc`) without recording its output, so that output is gone. What follows separates what
+the repo can still evidence from what it cannot. The failure this phase is most exposed to is
+believing that a residential measurement transfers to Cloudflare egress, and a confident-sounding
+document would make that mistake more likely.
 
 ---
 
 ## Verdict
 
-**The one row this platform depends on is confirmed from Workers egress. The rest of the table is
+The one row this platform depends on is confirmed from Workers egress. **The rest of the table is
 unmeasured and should not be cited as if it were.**
 
 ---
 
 ## Confirmed: the crawler UA gets the real payload from Workers egress
 
-Not asserted from the probe — asserted from the deployed pipeline, end to end.
+This comes from the deployed pipeline, end to end, and not from the probe.
 
 ```
 $ curl -sS -A 'Discordbot/2.0' https://staging.megapenispoopenfarten.sex/reel/Da5ynsiuAZ_
@@ -39,12 +39,11 @@ $ curl -sL -r 0-1023 "$LOC" | xxd -l 12
 00000000: 0000 0020 6674 7970 6973 6f6d            ... ftypisom
 ```
 
-**Why this is a Workers-egress result and not a restatement of the residential one.** Our Worker
-never proxies media bytes; `/_media/` reads the Post cache and 302s. So a CDN URL can only be in
-that cache if `fetchInstagram` parsed a real embed payload, and that fetch left from Cloudflare.
-A decoy response carries no payload at all (it is a contentless shell — see
-`test/fixtures/instagram-decoy.html`), so this path cannot be reached by a decoy being mistaken
-for content. The author name `nasajpl` and the `ftypisom` magic bytes are content assertions, not
+This is a Workers-egress result, not a restatement of the residential one. Our Worker never
+proxies media bytes: `/_media/` reads the Post cache and 302s. So a CDN URL can only be in that
+cache if `fetchInstagram` parsed a real embed payload, and that fetch left from Cloudflare. A decoy
+response carries no payload at all (it is a contentless shell; see
+`test/fixtures/instagram-decoy.html`), so a decoy mistaken for content cannot reach this path. The author name `nasajpl` and the `ftypisom` magic bytes are content assertions, not
 status or content-type assertions, per the project's standing rule.
 
 ## Confirmed: the CDN signature outlives our cache by two orders of magnitude
@@ -58,18 +57,18 @@ measured at:      1784527193  ->  2026-07-20 06:00 UTC
 secondsRemaining: 129009      (~35.8 h)
 ```
 
-An independent sample taken ~25 minutes earlier during code review read `6A5F790A`, ~32.1 h
-remaining — a different signature from a later re-mint, consistent band.
+An independent sample taken ~25 minutes earlier during code review read `6A5F790A`, with ~32.1 h
+remaining: a different signature from a later re-mint, in a consistent band.
 
-**Why it matters, and it is the number Task 9 escalates to.** `POST_TTL` is 900 s and
-`MEDIA_MAX_AGE` is 300 s (`src/cache.ts`), so a handed-out URL can be at most ~20 minutes old when
-Discord's media proxy resolves it, against a signature good for ~32–36 hours. If the human gate
-reports that video does not play, **signature expiry is not the cause** and `POST_TTL` is not the
-knob — the margin is roughly 100×. Look at Discord's egress instead, which no test here reaches.
+This is the number Task 9 escalates to. `POST_TTL` is 900 s and `MEDIA_MAX_AGE` is 300 s
+(`src/cache.ts`), so a handed-out URL can be at most ~20 minutes old when Discord's media proxy
+resolves it, against a signature good for ~32 to 36 hours. If the human gate reports that video
+does not play, **signature expiry is not the cause** and `POST_TTL` is not the knob: the margin is
+roughly 100×. Look at Discord's egress instead, which no test here reaches.
 
 ---
 
-## NOT measured: the rest of the four-UA table, from Workers
+## Not measured: the rest of the four-UA table, from Workers
 
 `src/platforms/instagram/fetch.ts` documents an inverted UA gate:
 
@@ -78,41 +77,42 @@ knob — the margin is roughly 100×. Look at Discord's egress instead, which no
 | `facebookexternalhit/1.1` | real, server-rendered payload |
 | `Discordbot/2.0` | real, server-rendered payload |
 | `curl/8.4.0` | real, server-rendered payload |
-| `Chrome/122` | ~598 KB empty shell, no payload, HTTP 200 — **decoy** |
+| `Chrome/122` | ~598 KB empty shell, no payload, HTTP 200 (a **decoy**) |
 
-**Every row of that table was measured from a RESIDENTIAL IP on 2026-07-19**, and the fixtures in
+**Every row of that table was measured from a residential IP on 2026-07-19**, and the fixtures in
 `test/fixtures/` are the captured bytes for two of them. Only the `Discordbot/2.0` row has since
 been confirmed from Workers egress, by the section above. The plan's fact 11 states that
-Instagram's behaviour toward Cloudflare is **path-dependent**, so the other three rows do not
-transfer for free — in particular, *nothing here establishes that Chrome-from-Workers gets the
-decoy rather than something else*. We simply never look: the fetcher pins the crawler UA.
+Instagram's behaviour toward Cloudflare is path-dependent, so the other three rows do not transfer
+for free. In particular, nothing here establishes that Chrome-from-Workers gets the decoy rather
+than something else. We never look, because the fetcher pins the crawler UA.
 
 This is a documentation gap, not a shipping risk, because the pinned UA is the confirmed row.
 
 ### If you do need the full table
 
-The probe is gone and its reintroduction now fails the suite (three tests in
-`test/pipeline.test.mjs`, including under a different filename — the name-scoped version of that
-enforcer was shown by review to be bypassable by renaming the file). Re-adding one is a deliberate,
-temporary act, not an accident. Two traps, both paid for once already:
+The probe is gone, and reintroducing it now fails the suite: three tests in
+`test/pipeline.test.mjs` catch it, including under a different filename, because review showed the
+name-scoped version of that enforcer could be bypassed by renaming the file. Re-adding one has to be
+a deliberate, temporary act. Two traps, both paid for once already:
 
 1. **Do not point it at a single-image post.** The old probe asserted on `shortcode_media`, a
-   marker Task 3 disproved, and a single image carries none — so against a single image it reported
-   a false *"blocked from Workers egress"*, the most damaging wrong answer available here. Probe a
-   **reel** or a **carousel**.
-2. **Assert on content, never on status.** A nonexistent shortcode returns HTTP 200. So does the
-   decoy. So does the 80,319-byte "post unavailable" page.
+   marker Task 3 disproved, and a single image carries none, so against a single image it reported
+   a false "blocked from Workers egress", the most damaging wrong answer available here. Probe a
+   reel or a carousel.
+2. **Assert on content, never on status.** A nonexistent shortcode returns HTTP 200. The decoy does
+   too, and so does the 80,319-byte "post unavailable" page.
 
 ---
 
-## Correction to the plan's edge-cache model — measured 2026-07-20
+## Correction to the plan's edge-cache model / measured 2026-07-20
 
-The plan's *THE EDGE-CACHE HAZARD* section says the edge key is **the path alone**, and offers as a
+The plan's *THE EDGE-CACHE HAZARD* section says the edge key is the path alone, and offers as a
 workaround: *"the same shortcode under a different path spelling (`/p/X` vs `/reel/X` vs
 `/instagram/p/X` are three distinct edge keys)."*
 
-**That workaround does not exist, and the mechanism is ours, not Cloudflare's.** Measured against
-staging, three spellings of one post return one entry whose `age` climbs in lockstep:
+That workaround does not exist, and the mechanism behind the shared entry is ours, not
+Cloudflare's. Measured against staging, three spellings of one post return one entry whose `age`
+climbs in lockstep:
 
 ```
 /p/Da5ynsiuAZ_     HIT age=125 → 130 → 135
@@ -122,20 +122,20 @@ staging, three spellings of one post return one entry whose `age` climbs in lock
 
 Three independent entries could not share one monotonic age counter. The cause is not a zone rule:
 `respCacheKey(ref, client)` is `resp:{refKey(ref)}:{client}` (`src/cache.ts`), and `refKey`
-collapses `/p/`, `/reel/`, `/reels/` and `/tv/` onto one ref **by design** — that is Task 2's
-stated goal, locked by *"EVERY SPELLING OF ONE POST COLLAPSES TO THE SAME CACHE KEY"* in
+collapses `/p/`, `/reel/`, `/reels/` and `/tv/` onto one ref by design. That is Task 2's stated
+goal, locked by *"EVERY SPELLING OF ONE POST COLLAPSES TO THE SAME CACHE KEY"* in
 `test/router.test.mjs`. The review that found the shared entry read it as a Cloudflare cache rule;
 it is our own two-layer cache working correctly.
 
 Two consequences, in opposite directions:
 
-- **Against the workaround:** re-fetching a burned shortcode under another spelling buys nothing.
-  Neither does a query string. A fresh **shortcode** is the only reset.
-- **In mitigation:** the entry is bounded by `RESP_TTL = 900 s`, not by the zone's four hours. A
-  burned shortcode is reusable after ~15 minutes, not ~4. This does not license reuse inside the
-  window; it does mean a phase is never blocked for four hours by one curl.
+- Against the workaround: re-fetching a burned shortcode under another spelling buys nothing, and
+  neither does a query string. Only a fresh shortcode resets it.
+- In mitigation: the entry is bounded by `RESP_TTL = 900 s`, not by the zone's four hours, so a
+  burned shortcode is reusable after ~15 minutes rather than ~4 hours. That does not license reuse
+  inside the window, but it does mean one curl never blocks a phase for four hours.
 
-**The 900 s bound was observed directly, not inferred from the constant.** Polling one URL across
+The 900 s bound was observed directly, not inferred from the constant, by polling one URL across
 the boundary:
 
 ```
@@ -145,17 +145,15 @@ the boundary:
 06:07:09  cf-cache-status: HIT  age:  40                               last-modified: 06:06:29
 ```
 
-The middle row is the whole result: at ~915 s the entry was gone and the request reached the
-origin, which answered with **its own** `public, max-age=0, must-revalidate` and no cache status.
-A new entry was then minted at 06:06:29 and its age restarted from zero.
+The middle row is the result: at ~915 s the entry was gone and the request reached the origin,
+which answered with its own `public, max-age=0, must-revalidate` and no cache status. A new entry
+was then minted at 06:06:29 and its age restarted from zero.
 
-**So `cache-control: max-age=14400` on a hit is cosmetic** — a zone Browser-Cache-TTL rewrite
-applied on the way out to the client. It is *not* the edge lifetime, and reading it as one is what
-produced the "burned for four hours" conclusion. The measured edge lifetime is our `RESP_TTL`.
-This is a case where the header lies and only the behaviour is evidence, which is the same rule
-this project already applies to status codes and content types.
+That makes `cache-control: max-age=14400` on a hit cosmetic, a zone Browser-Cache-TTL rewrite
+applied on the way out to the client. It is not the edge lifetime, and reading it as one produced the "burned
+for four hours" conclusion. The measured edge lifetime is our `RESP_TTL`.
 
-A failure render is never `cache.put` at all (`src/worker.ts`), which is why a nonexistent
-shortcode stays uncached no matter how many times it is fetched — verified over five consecutive
-requests. Nonexistent codes are therefore free to use for cache-key experiments, which is how the
-measurements above were taken without spending shortcode budget.
+A failure render is never `cache.put` at all (`src/worker.ts`), so a nonexistent shortcode stays
+uncached however many times it is fetched (verified over five consecutive requests). That makes
+nonexistent codes free for cache-key experiments, and it is how the measurements above were taken
+without spending shortcode budget.

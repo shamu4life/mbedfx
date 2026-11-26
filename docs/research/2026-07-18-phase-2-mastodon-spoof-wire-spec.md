@@ -1,4 +1,4 @@
-# Phase 2 — authoritative wire spec (evidence-derived, 2026-07-18)
+# Phase 2 / authoritative wire spec (evidence-derived, 2026-07-18)
 
 This supersedes the Phase 2 plan wherever they disagree. Everything below marked
 VERIFIED was observed live against `fxbsky.app` (FxEmbed build
@@ -10,30 +10,30 @@ Where we deliberately differ from FxEmbed, it is called out as DEVIATION with a 
 
 ---
 
-## 1. The status id must be NUMERIC (plan was risky)
+## 1. The status id must be numeric (plan was risky)
 
 VERIFIED, two independent ways:
 
 - Live decode: the advertised id for the 4-image fixture is 78 digits. Each *pair*
   of digits indexes a base64-ish alphabet (a/A→00 … z/Z→25, 0-9→52-61, `"`→66,
   `:`→67, `,`→68, `.`→69). It decodes to exactly
-  `"i":"3mqscrhxmsc2v","h":"timosborne.ca"` — the brace-stripped body of
+  `"i":"3mqscrhxmsc2v","h":"timosborne.ca"`, the brace-stripped body of
   `{"i":"<rkey>","h":"<handle>"}`. Confirmed on 4 handles; length varies with
   handle length (78 digits for a 13-char handle, 74 for an 11-char one).
 - Source: `src/helpers/snowcode.ts` JSON-stringifies a params object, strips the
   outer braces, and maps each char to its 2-digit index in a 72-char alphabet.
 
-The point is not the exact alphabet — it is that FxEmbed goes to real trouble to make
-the segment **pure digits, so it looks like a Mastodon snowflake id**. Real Mastodon
+FxEmbed goes to real trouble to make the segment pure digits, so that it looks like a
+Mastodon snowflake id, and that matters more than the exact alphabet. Real Mastodon
 ids are numeric. The plan's "pack `refKey` into `{id}`" would put letters, `:` and
 `%3A` there.
 
-The risk is asymmetric and severe: if Discord requires a numeric-looking id and we
-emit `bs%3Aalice…`, the spoof silently does nothing — and because the spoof path
-emits ZERO `og:image`, the fallback is *worse* than Phase 1 ships today. Emitting
+The risk is asymmetric and severe. If Discord requires a numeric-looking id and we
+emit `bs%3Aalice…`, the spoof silently does nothing, and because the spoof path
+emits zero `og:image`, the fallback is worse than what Phase 1 ships today. Emitting
 numeric when Discord doesn't care costs nothing.
 
-**DECISION — new module `src/statusid.ts`:**
+**DECISION: new module `src/statusid.ts`.**
 
 ```
 encodeStatusId(key: string): string   // UTF-8 bytes -> 3-digit zero-padded decimal each
@@ -41,26 +41,26 @@ decodeStatusId(id: string): string | null   // total; null on junk, never throws
 ```
 
 DEVIATION from FxEmbed: 3-digit-per-byte instead of their 2-digit-per-char alphabet.
-Simpler, total over all byte values (no "disallowed char" retry path like theirs), and
-equally pure-digit. Reject on: empty, any non-digit, `length % 3 !== 0`, any group
-> 255, or invalid UTF-8. Must be an exact inverse of `encodeStatusId` — test with a
-round-trip over the same 7-variant `PostRef` table `cache.test.mjs` already uses,
-DID handles included.
+It is simpler, total over all byte values (no "disallowed char" retry path like
+theirs), and equally pure-digit. Reject on: empty, any non-digit, `length % 3 !== 0`,
+any group > 255, or invalid UTF-8. It must be an exact inverse of `encodeStatusId`:
+test with a round-trip over the same 7-variant `PostRef` table `cache.test.mjs`
+already uses, DID handles included.
 
-**Bonus:** because the wire form is now pure digits, it contains no `%` at all, so
-the double-decode hazard below disappears for these routes.
+Because the wire form is now pure digits, it contains no `%` at all, so the
+double-decode hazard below also disappears for these routes.
 
 ---
 
-## 2. Router — shape-match with FALLTHROUGH, never "reserve" (plan wording is dangerous)
+## 2. Router / shape-match with fallthrough, never "reserve" (plan wording is dangerous)
 
 The plan says *"Reserve `api`, `users`, `_oembed` as root tokens."* **Do not.**
 "Reserve" means dead-end, and dead-ending is precisely the Phase 1 bug fixed in
-`37386db` (`/x/status/123` — a real post by @x — returned notfound).
+`37386db` (`/x/status/123`, a real post by @x, returned notfound).
 
 VERIFIED by content-probing x.com (live handles return the React SPA shell; dead ones
-return the static `<html class="dog">` error page — status codes agree but content is
-the load-bearing check):
+return the static `<html class="dog">` error page; the status codes agree, so the
+content is what decides):
 
 | handle | live on x.com? |
 |---|---|
@@ -70,10 +70,10 @@ the load-bearing check):
 | `users` | no |
 | `_oembed` | no |
 
-So `/api/status/123` routes as a real X post **today** and must keep doing so.
+So `/api/status/123` routes as a real X post today and must keep doing so.
 
-Add two helpers beside `bluesky()`/`x()`, called **after** the `_alt` dead-end and
-**before** the `ESCAPE` block. Both return `null` on any miss so control falls through
+Add two helpers beside `bluesky()`/`x()`, called after the `_alt` dead-end and
+before the `ESCAPE` block. Both return `null` on any miss so control falls through
 to `ESCAPE` → `matchPost` → `known` → `ambiguity()`:
 
 - `activity(seg)`: `seg.length === 4` and either
@@ -83,9 +83,9 @@ to `ESCAPE` → `matchPost` → `known` → `ambiguity()`:
 - `oembed(seg)`: `seg.length === 2 && seg[0]==='_oembed' && seg[1]`, then the same
   decode chain → `{kind:'oembed', ref}` or `null`.
 
-Both read **`seg`** (already decoded once at the `raw.map(safeDecode)` line), and must
-**not** call `safeDecode` themselves. The plan's phrase "identical handling to
-`/_media/`" invites a second decode; that is a real bug, proven by execution:
+Both read `seg` (already decoded once at the `raw.map(safeDecode)` line), and **must
+not call `safeDecode` themselves**. The plan's phrase "identical handling to
+`/_media/`" invites a second decode, and that is a real bug, proven by execution:
 
 ```
 wire     : bs%3Adid%253Aplc%253Az72i…%3A3l6o
@@ -95,38 +95,38 @@ decode x2: bs:did:plc:z72i…:3l6o       -> split(':') = 5 parts -> NULL
 
 That would 404 every Bluesky DID-handle URL, silently.
 
-Do **not** add these tokens to the `known` set — that set is a dead-end list.
+**Do not add these tokens to the `known` set**: that set is a dead-end list.
 
 The ambiguity table must be a strict no-op: `/api`, `/users`, `/_oembed` stay
 `ambiguous ['x','ig']`; `/api/v1`, `/users/someone` stay `notfound`. That invariant is
 only true under fallthrough, which makes it the acceptance test for this task.
 
 **TS2366:** `worker.ts`'s `switch (r.kind)` has no `default` and tsconfig is `strict`,
-so adding two `Route` kinds without their `case`s is a compile error. Router + worker
-must land in ONE commit.
+so adding two `Route` kinds without their `case`s is a compile error, and router and
+worker must land in one commit.
 
-### Pre-existing bug found, NOT fixed here (out of scope — flagged for the user)
+### Pre-existing bug found, not fixed here (out of scope / flagged for the user)
 
 `@_media` and `@_alt` are live X accounts, and both branches dead-end, so
-`/_media/status/123` is notfound today — shadowing a real post permalink and falsifying
-the invariant claimed at `router.ts:12`. Same bug class, already shipped. Pin current
-behavior with a `KNOWN:` test so a future fix is deliberate, and leave it alone.
+`/_media/status/123` is notfound today. That shadows a real post permalink and falsifies
+the invariant claimed at `router.ts:12`. It is the same bug class, already shipped. Pin
+current behavior with a `KNOWN:` test so a future fix is deliberate, and leave it alone.
 
 ---
 
-## 3. Counts placement — ONE SLOT PER CONSUMER SURFACE (settles the plan's ambiguity)
+## 3. Counts placement / one slot per consumer surface (settles the plan's ambiguity)
 
-VERIFIED across 6 posts. FxEmbed puts counts in **both** oEmbed `author_name` **and**
-Mastodon `content` — and this does *not* double-render, because the two surfaces have
+VERIFIED across 6 posts. FxEmbed puts counts in both oEmbed `author_name` and
+Mastodon `content`, and this does not double-render, because the two surfaces have
 disjoint consumers:
 
-- **OpenGraph path:** body from `og:description` (**no counts**) + author line from
+- OpenGraph path: body from `og:description` (no counts) + author line from
   oEmbed `author_name` (counts). One render.
-- **Mastodon path:** counts inline in `content`. Discord prefers activity data and
+- Mastodon path: counts inline in `content`. Discord prefers activity data and
   does not use oEmbed for the body. One render.
 
-**The trap is therefore `og:description` + `author_name`, not `content` + `author_name`.**
-Our spoof path emits an `og:description` fallback, so: **`og:description` must never
+The trap is therefore `og:description` + `author_name`, not `content` + `author_name`.
+Our spoof path emits an `og:description` fallback, so **`og:description` must never
 carry counts.** `buildPlainText` is used for `og:description` and must stay counts-free.
 
 `author_name` is a single-purpose priority slot, VERIFIED (counts win over reply
@@ -139,10 +139,10 @@ context; zero-valued metrics are omitted entirely):
 
 ---
 
-## 4. Newlines — U+FE00 pairs, not a hair space (plan is wrong)
+## 4. Newlines / U+FE00 pairs, not a hair space (plan is wrong)
 
-The plan says insert `&hairsp;`/a space between *consecutive* `<br>`. FxEmbed actually
-appends **two U+FE00 (VARIATION SELECTOR-1)** after **every** newline-derived `<br>`,
+The plan says to insert `&hairsp;`/a space between consecutive `<br>`. FxEmbed actually
+appends two U+FE00 (VARIATION SELECTOR-1) after every newline-derived `<br>`,
 unconditionally. VERIFIED by codepoint dump and by isolating a single-newline post:
 
 ```
@@ -152,17 +152,17 @@ unconditionally. VERIFIED by codepoint dump and by isolating a single-newline po
 U+FE00 is invisible and non-whitespace, so a blank line is never trimmed or collapsed.
 
 - Text newlines: `esc(text).replace(/\n/g, '<br>︀︀')`
-- FxEmbed's own **structural** separators use bare `<br><br>` with **no** U+FE00 —
-  that is how you tell a user's blank line from a generated gap. Match this.
+- FxEmbed's own structural separators use bare `<br><br>` with no U+FE00, which is
+  how a user's blank line is told apart from a generated gap. Match this.
 
 ---
 
-## 5. Gate the spoof on HAS-MEDIA, not on multi-image (plan implied always-for-discord)
+## 5. Gate the spoof on has-media, not on multi-image (plan implied always-for-discord)
 
 VERIFIED by sweeping 0/1/2/3/4-image posts from one author:
 
-- post **with** 1+ images → ZERO `og:image`, `twitter:card=summary_large_image`, activity link present
-- post with **0** images → exactly ONE `og:image` (the author avatar), `twitter:card=summary`
+- post with 1+ images → zero `og:image`, `twitter:card=summary_large_image`, activity link present
+- post with 0 images → exactly one `og:image` (the author avatar), `twitter:card=summary`
 
 So: `spoof = client === 'discord' && post.media.length > 0`.
 
@@ -178,7 +178,7 @@ posts through `og:description`, which FxEmbed also does (its quote page's
 
 ### 6a. HTML head, spoof path (`discord` + has media)
 
-Emit ONLY:
+Emit only these:
 ```
 <meta property="og:title" content="{Name} (@{handle})"/>
 <meta property="og:description" content="{buildPlainText(post)}"/>   <-- NO counts
@@ -189,16 +189,16 @@ Emit ONLY:
 <link rel="alternate" type="application/json+oembed" href="{origin}/_oembed/{numericId}"/>
 ```
 **No `og:image`, no `og:video`, no `twitter:card`, no `twitter:image`.**
-VERIFIED as the suppression mechanism in source — `src/embed/status.ts:449` skips the
-entire media block: `if (!useActivity && !flags?.textOnly) {`.
+VERIFIED as the suppression mechanism in source: `src/embed/status.ts:449` skips the
+entire media block with `if (!useActivity && !flags?.textOnly) {`.
 
-Keep every attribute **double-quoted** — `esc()` does not escape `'`.
+Keep every attribute **double-quoted**, because `esc()` does not escape `'`.
 
 ### 6b. Non-spoof path (`other-bot`, and `discord` with no media)
 
-Unchanged Phase 1 `renderPost` output. Additionally, for `discord` only, emit the
-oEmbed link so counts reach the author line. Do NOT emit it for `other-bot` — an
-oEmbed with `type:"rich"` and no `html` violates the oEmbed spec and we have no
+Unchanged Phase 1 `renderPost` output. For `discord` only, also emit the oEmbed
+link so counts reach the author line. **Do not emit it for `other-bot`**: an
+oEmbed with `type:"rich"` and no `html` violates the oEmbed spec, and we have no
 evidence about how Slack/Facebook react.
 
 ### 6c. `GET /api/v1/statuses/{numericId}` and the `/users/…` alias
@@ -246,15 +246,15 @@ evidence about how Slack/Facebook react.
   "meta": { "original": { "width": w, "height": h, "size": "{w}x{h}", "aspect": w/h } }
 }
 ```
-DEVIATION on dimensions: the plan says apply Phase 1's `fudge()`. Evidence says
-FxEmbed sends **true** dimensions for images (4000x2250 etc. — mixed orientations
-preserved, all 4 render) and only size-multiplies **video**. Follow the evidence:
+DEVIATION on dimensions: the plan says to apply Phase 1's `fudge()`. The evidence says
+FxEmbed sends true dimensions for images (4000x2250 etc., with mixed orientations
+preserved and all 4 rendering) and size-multiplies only video. Follow the evidence:
 images true, video fudged. Guard `aspect` against `h === 0` (JSON.stringify(Infinity)
 silently becomes `null`).
 
-DEVIATION on media urls: FxEmbed emits raw `cdn.bsky.app` URLs. We must not — signed
-URLs expire, and `/_media/` is a hard project constraint. Phase 1 already proved
-Discord's media proxy follows our percent-encoded `/_media/` 302 to a real image.
+DEVIATION on media urls: FxEmbed emits raw `cdn.bsky.app` URLs, and we must not,
+because signed URLs expire and `/_media/` is a hard project constraint. Phase 1 already
+proved Discord's media proxy follows our percent-encoded `/_media/` 302 to a real image.
 
 ### 6d. `GET /_oembed/{numericId}`
 
@@ -266,51 +266,51 @@ Discord's media proxy follows our percent-encoded `/_media/` 302 to a real image
   "provider_url": "{origin}", "title": "Embed", "type": "rich", "version": "1.0" }
 ```
 
-### 6e. `buildContentHtml(post)` — Mastodon `content`
+### 6e. `buildContentHtml(post)` / Mastodon `content`
 
 Composition order, matching FxEmbed:
 1. reply prefix, if any:
    `<sub>↩ <a href="{author.url}" class="u-url mention">{Name} (@{handle})</a></sub><br>`
-   (plain `<br>`, no U+FE00 — structural)
+   (plain `<br>`, no U+FE00, because this separator is structural)
 2. post text with `\n` → `<br>︀︀`
-3. quote, if any — preceded by bare `<br><br>`:
+3. quote, if any, preceded by bare `<br><br>`:
    `<blockquote><b><a href="{quote.canonical}">Quoting</a> {Name} (<a href="{quote.author.url}">@{handle}</a>)</b><br>︀<br>{quoted text}</blockquote>`
-   (note: exactly ONE U+FE00 in the quote's internal separator — verified)
-4. counts, if any nonzero — preceded by bare `<br><br>`:
+   (note: exactly one U+FE00 in the quote's internal separator, verified)
+4. counts, if any nonzero, preceded by bare `<br><br>`:
    `<b>💬 5&ensp;🔁 14&ensp;❤️ 140&ensp;</b>` (trailing `&ensp;` included; omit zero metrics)
 
 Discord renders `<b> <i> <a> <blockquote> <br> <code> <pre>`; `<img> <ul> <h1>` do not
 render. `<sub>` is used by FxEmbed and evidently renders acceptably.
 
-Counts are abbreviated at scale by FxEmbed (`1.1K`, `8.1K`) — implement `abbrev(n)`.
+FxEmbed abbreviates counts at scale (`1.1K`, `8.1K`), so implement `abbrev(n)`.
 
 Depth is 1: `post.quote.quote` is always undefined (normalizer guarantee). The builder
 must not assume it, but need not recurse.
 
-### 6f. `buildPlainText(post)` — `og:description`, COUNTS-FREE
+### 6f. `buildPlainText(post)` / `og:description`, COUNTS-FREE
 
 ```
 {↩ Name (@handle)\n}?  {text}  {\n\nQuoting Name (@handle)\n\n{quote text}}?
 ```
-Sensitive marker stays Phase 1's `[sensitive] ` prefix, applied by the renderer.
+The sensitive marker stays Phase 1's `[sensitive] ` prefix, applied by the renderer.
 
 ---
 
 ## 7. Quote media hoisting (own task, own commit)
 
-VERIFIED: FxEmbed hoists a quoted post's images into the **parent's**
-`media_attachments`. Proven by resolving the attachment's DID — it belongs to the
-quoted author, not the post author — and matching the CID byte-for-byte.
+VERIFIED: FxEmbed hoists a quoted post's images into the parent's
+`media_attachments`. That was proven by resolving the attachment's DID (it belongs to
+the quoted author, not the post author) and matching the CID byte-for-byte.
 
 Phase 1 fought a real bug to *extract* this data (Task 6: quote media was always
 dropped because `viewRecord` uses plural `embeds`). Dropping it at render would waste
 that fix, and a quote-only post would otherwise render with no image at all.
 
-Cheapest correct implementation, requiring **no** router or type change: introduce
-`mediaList(post) = [...post.media, ...(post.quote?.media ?? [])]` and have BOTH
+The cheapest correct implementation needs no router or type change: introduce
+`mediaList(post) = [...post.media, ...(post.quote?.media ?? [])]` and have both
 `pickMedia` and the Mastodon mapper index into it. Parent media keeps indices
-0..n-1, so every existing `/_media/` URL and Phase 1's `og:image` path are unchanged —
-this is purely additive.
+0..n-1, so every existing `/_media/` URL and Phase 1's `og:image` path are unchanged,
+and the change is purely additive.
 
 Land it as a separate commit so it is independently revertible.
 
@@ -318,93 +318,94 @@ Land it as a separate commit so it is independently revertible.
 
 ## 8. Analytics
 
-Add `api_hit` / `api_miss` to `Outcome2` for the two new routes. Do NOT reuse
-`media_hit`/`media_miss` — the spec's fetch-amplification alert watches that ratio and
+Add `api_hit` / `api_miss` to `Outcome2` for the two new routes. **Do not reuse
+`media_hit`/`media_miss`**: the spec's fetch-amplification alert watches that ratio, and
 folding a second traffic class into it would blind the alert. Do not reuse `ok` either;
-that tracks post-HTML renders.
+it tracks post-HTML renders.
 
 ---
 
 ## 9. Known-unverifiable until a real Discord client sees it
 
-- That Discord accepts our **numeric-but-not-FxEmbed-scheme** id.
+- That Discord accepts our numeric-but-not-FxEmbed-scheme id.
 - That Discord's media proxy resolves `/_media/` URLs inside `media_attachments`
-  (it does for `og:image` — proven live in Phase 1 — but the gallery path is untested).
+  (it does for `og:image`, proven live in Phase 1; the gallery path is untested).
 - iOS multi-image rendering (the plan calls this the known weak spot).
 - That `<sub>` and `<blockquote>` render as expected in current Discord builds.
 
-The embed debugger does NOT render these paths faithfully. Desktop + Android + iOS.
+The embed debugger does not render these paths faithfully. Test on Desktop + Android + iOS.
 
 ---
 
-# CORRECTIONS (added after the recon synthesis, same day)
+# Corrections (added after the recon synthesis, same day)
 
 The synthesis agent re-measured several things live and overturned two claims above.
 **These corrections win over anything earlier in this document.**
 
-## C1. §5 was WRONG — the activity link is ALWAYS emitted for Discord
+## C1. §5 was wrong / the activity link is always emitted for Discord
 
 §5 above said `spoof = discord && post.media.length > 0`. That was my inference from
 "text-only posts emit one og:image", and it is wrong. The synthesis fetched 5 fixtures
-(0/1/4 images, quote, reply) and measured `activity=1` on **all five**.
+(0/1/4 images, quote, reply) and measured `activity=1` on all five.
 
-Two independent gates, not one:
+There are two independent gates, not one:
 
-- **The activity+json and json+oembed links: emitted for EVERY `discord` response**,
+- The activity+json and json+oembed links are emitted for every `discord` response,
   regardless of media. Gating them on media would silently drop rich text, reply
   context, quote blockquotes and counts from every text-only post.
-- **`og:image` is what's gated on media**, and the trigger is `>= 1` media, not `> 1`:
+- `og:image` is what's gated on media, and the trigger is `>= 1` media, not `> 1`:
 
 | media count | og:image | twitter:card |
 |---|---|---|
 | >= 1 | **zero** | `summary_large_image` |
 | 0 | **exactly one** (the avatar) | `summary` |
 
-`mediaCount` must include **hoisted quote media** (§7), or a quote-only post gets both
+`mediaCount` must include hoisted quote media (§7), or a quote-only post gets both
 an avatar og:image and a populated `media_attachments`.
 
-This also means the earlier claim "no twitter:card on the spoof path" is wrong —
-`twitter:card` IS emitted on both branches, with the value from the table.
+This also means the earlier claim "no twitter:card on the spoof path" is wrong:
+`twitter:card` is emitted on both branches, with the value from the table.
 
-## C2. The status id needs a NONZERO LEADING SENTINEL
+## C2. The status id needs a nonzero leading sentinel
 
-A real hazard my §1 scheme missed. 3-digit-per-byte encoding of a refKey beginning with
-`b` (98) starts `098…`. Any layer that treats the segment as a number — and Discord may
-well, since real Mastodon ids are numeric snowflakes — eats the leading zero via
+My §1 scheme missed a real hazard. A 3-digit-per-byte encoding of a refKey beginning
+with `b` (98) starts `098…`. Any layer that treats the segment as a number (and Discord
+may well, since real Mastodon ids are numeric snowflakes) eats the leading zero via
 `parseInt`, after which `length % 3 !== 0` and decode fails.
 
 **Prefix the encoded string with a constant nonzero digit (`1`) and strip it on decode.**
-`decodeStatusId` must reject anything not starting with that sentinel. Cheap insurance
-against a failure mode that would be invisible in local tests and total in production.
+`decodeStatusId` must reject anything not starting with that sentinel. It is cheap
+insurance against a failure mode that would be invisible in local tests and total in
+production.
 
 ## C3. Smaller corrections
 
-- **`theme-color`**: the proven head uses `property="theme-color"`. Our existing
+- `theme-color`: the proven head uses `property="theme-color"`. Our existing
   `errorEmbed()` in `src/render/fail.ts` uses `name="theme-color"`. Use `property=` on
-  the spoof path; note the `fail.ts` inconsistency rather than silently diverging.
-- **`<link rel="canonical" href="{canonical}"/>`** is present in the proven head. Emit it.
-- **`media_attachments[].id`**: keep unique ids, but add a comment recording that
+  the spoof path, and note the `fail.ts` inconsistency rather than silently diverging.
+- `<link rel="canonical" href="{canonical}"/>` is present in the proven head. Emit it.
+- `media_attachments[].id`: keep unique ids, but add a comment recording that
   FxEmbed's hardcoded `"114163769487684704"` is the production-proven value and is the
   first thing to try if multi-image fails in a real client.
-- **oEmbed `title`**: the constant string `"Embed"` (already correct in §6d). It doubles
-  as the `author_name` fallback. Empty string is untested — do not use it.
+- oEmbed `title`: the constant string `"Embed"` (already correct in §6d). It doubles
+  as the `author_name` fallback. Empty string is untested, so do not use it.
 - **Never emit `replies_count` / `reblogs_count` / `favourites_count`.** Verified absent
   from FxEmbed's payload. Keeping them absent makes a third count-render structurally
   impossible.
-- **Telegram**: FxEmbed serves Telegram a *mosaic* composite plus
+- Telegram: FxEmbed serves Telegram a mosaic composite plus
   `al:android:app_name="Medium"`. We have no mosaic service, so our single-image Telegram
-  output is an **accepted divergence**, not an unfinished feature. Record it as such.
+  output is an accepted divergence, not an unfinished feature. Record it as such.
 
 ## C4. The one thing that stays genuinely unresolved
 
-**Does Discord read oEmbed `author_name` while also consuming the activity Status JSON?**
+Does Discord read oEmbed `author_name` while also consuming the activity Status JSON?
 Both links are present in the same head (re-confirmed live), so if Discord consumes both,
-counts render twice — once in the author line, once in the body tail.
+counts render twice: once in the author line, once in the body tail.
 
 No probe opened a real Discord client, so this cannot be settled from here. It is the
 first thing to look at during the Task 7 live gate: post a link with nonzero
 likes/reposts/replies and check whether the stats string appears once or twice.
 
-If it appears twice, the fix is one line — drop the counts suffix from
+If it appears twice, the fix is one line: drop the counts suffix from
 `buildContentHtml`, since `author_name` is the surface FxEmbed proved works on the
-OpenGraph path. Structure the code so that is a one-line change.
+OpenGraph path. Structure the code so that it stays a one-line change.

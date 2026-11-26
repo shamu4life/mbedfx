@@ -5,7 +5,7 @@ instead of Cloudflare's. Reddit blocks every request from Cloudflare (since 2026
 Arctic Shift archive rate-limits the one address every Cloudflare Worker shares, so where a request
 comes from decides whether a Reddit card works. `server.mjs` says what was measured.
 
-It is not an open proxy. It asks only three hosts (`embed.reddit.com`, `www.reddit.com`,
+It is not an open proxy: it asks only three hosts (`embed.reddit.com`, `www.reddit.com`,
 `arctic-shift.photon-reddit.com`), only over https, only for a caller holding the key, and it
 follows a redirect only to one of those hosts. `/selftest` takes no input and no key, asks three
 fixed urls, and keeps its answer for a minute.
@@ -22,8 +22,8 @@ marked `x-relay: error`, so mbedfx can fall back to asking directly.
 ## Deploying it on Google Cloud Run
 
 Everything happens in Google Cloud Shell, a terminal in the browser with Google's tools already
-signed in. Nothing to install. Cloud Run's free tier (2 million requests a month) covers this
-relay's traffic, but Google requires a billing account on the project anyway.
+signed in, so there is nothing to install. Cloud Run's free tier (2 million requests a month)
+covers this relay's traffic, but Google requires a billing account on the project anyway.
 
 1. Open <https://shell.cloud.google.com> and sign in with your Google account.
 

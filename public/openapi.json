@@ -4,7 +4,7 @@
     "title": "mbedfx JSON API",
     "version": "v1",
     "summary": "The post data the embed cards are drawn from, as JSON.",
-    "description": "Swap a social-media host for an mbedfx one and the post unfurls as an embed card. `/_api/v1` serves the same post the card is drawn from, as data.\n\nThe contract is versioned by path. Within `v1` fields are added, never removed or retyped; `error.code` values are added and existing ones keep their meaning; `error.message` wording may change, so match on `code`. `/_api/v2` is never answered with `v1`.\n\nNo key, no signup, no required headers, no rate limit in the source. Prose, measurements and the reasoning behind every rule are in `docs/API.md`; this document is the machine-readable half of it. `test/openapi.test.mjs` fails when its schemas drift from the code. The prose here and in `docs/API.md` is not checked.",
+    "description": "Swap a social-media host for an mbedfx one and the post unfurls as an embed card. `/_api/v1` serves the same post the card is drawn from, as data.\n\nThe contract is versioned by path. Within `v1` fields are added, never removed or retyped; `error.code` values are added and existing ones keep their meaning; `error.message` wording may change, so match on `code`. `/_api/v2` is never answered with `v1`.\n\nIt needs no key, no signup and no required headers, and the source sets no rate limit. Prose, measurements and the reasoning behind every rule are in `docs/API.md`; this document is the machine-readable half of it. `test/openapi.test.mjs` fails when its schemas drift from the code. The prose here and in `docs/API.md` is not checked.",
     "license": { "name": "MIT", "identifier": "MIT" }
   },
   "servers": [
@@ -21,7 +21,7 @@
       "get": {
         "operationId": "getPost",
         "summary": "Describe the post a url names.",
-        "description": "Routing reads the path and the query of `url`. The host in it is ignored, deliberately: it would make the answer depend on a caller-controlled string on a service where a hostname is a thing the worker fetches. A path two sites claim answers `ambiguous` with the candidate list; re-ask with a two-letter site prefix, for example `/im/gallery/YcAQlkx`.\n\nMastodon, Misskey, Lemmy and PeerTube have no single host, and routing drops it. Move the instance into the path and drop the scheme: `?url=/lemmy.world/post/49966212`.\n\nThe answer is one budget rather than a per-step limit. A cold post pays the upstream fetch plus up to 9000 ms for the mux and the translation, which race, plus up to 8000 ms more on a first YouTube link while its metadata is extracted. A 20 s client timeout covers the worst case; 5 or 10 s cuts off requests that were about to answer.",
+        "description": "Routing reads the path and the query of `url`. The host in it is ignored, deliberately: it would make the answer depend on a caller-controlled string on a service where a hostname is a thing the worker fetches. A path two sites claim answers `ambiguous` with the candidate list; re-ask with a two-letter site prefix, for example `/im/gallery/YcAQlkx`.\n\nMastodon, Misskey, Lemmy and PeerTube have no single host, and routing drops it. Move the instance into the path and drop the scheme: `?url=/lemmy.world/post/49966212`.\n\nOne budget bounds the whole answer, with no per-step limit. A cold post pays the upstream fetch plus up to 9000 ms for the mux and the translation, which race, plus up to 8000 ms more on a first YouTube link while its metadata is extracted. A 20 s client timeout covers the worst case; 5 or 10 s cuts off requests that were about to answer.",
         "parameters": [
           {
             "name": "url",
@@ -129,7 +129,7 @@
             }
           },
           "400": {
-            "description": "The request itself is unusable: no `url` (or an empty one), or a `url` that is not a url. Nothing about a post.",
+            "description": "The request itself is unusable: no `url` (or an empty one), or a `url` that is not a url. The answer says nothing about a post.",
             "headers": {
               "cache-control": { "description": "Always `no-store`.", "schema": { "type": "string" }, "example": "no-store" }
             },
@@ -153,7 +153,7 @@
             }
           },
           "405": {
-            "description": "A write verb. This endpoint reads, and the refusal is issued before an upstream fetch, a mux wait or a container call is spent.",
+            "description": "The request used a write verb. This endpoint reads, and the refusal is issued before an upstream fetch, a mux wait or a container call is spent.",
             "headers": {
               "cache-control": { "description": "Always `no-store`.", "schema": { "type": "string" }, "example": "no-store" }
             },
@@ -201,7 +201,7 @@
             }
           },
           "400": {
-            "description": "No `url`, or one that is not a url. The same request-level failures `GET` has, and the body is `ErrorEnvelope` on a `GET`, while a `HEAD` carries the status and the headers alone."
+            "description": "No `url`, or one that is not a url: the same request-level failures `GET` has. On a `GET` the body is `ErrorEnvelope`; a `HEAD` carries the status and the headers alone."
           }
         }
       },
@@ -241,7 +241,7 @@
     "schemas": {
       "PostEnvelope": {
         "type": "object",
-        "description": "A post that could be read. `muxing` and `pending` both mean the answer is incomplete but correct; neither is an error, both clear on their own, and both suppress caching. Re-ask later and the finished answer is free, because the work behind each is still running: the translation for the 30 seconds `waitUntil` allows, the mux on a Durable Object alarm. See `muxing` for how long later actually is.",
+        "description": "A post that could be read. `muxing` and `pending` both mean the answer is incomplete but correct; neither is an error, both clear on their own, and both suppress caching. Re-ask later and the finished answer is free, because the work behind each is still running: the translation for the 30 seconds `waitUntil` allows, the mux on a Durable Object alarm. See `muxing` for how much later.",
         "properties": {
           "ok": { "const": true, "description": "The discriminator. `true` on this shape." },
           "muxing": {
@@ -321,7 +321,7 @@
       },
       "Post": {
         "type": "object",
-        "description": "The facts the card is drawn from. The card's own answers are deliberately absent: no stripe colour, no pre-rendered stat line, no assembled author line. A consumer drawing its own presentation wants the parts.",
+        "description": "The facts the card is drawn from. The card's own presentation is left out on purpose (no stripe colour, no pre-rendered stat line, no assembled author line), because a consumer drawing its own presentation wants the parts.",
         "properties": {
           "platform": { "$ref": "#/components/schemas/Platform" },
           "canonical": {
@@ -416,7 +416,7 @@
           },
           "still": {
             "type": "boolean",
-            "description": "This picture is standing in for a video. Read it with the envelope's `muxing`: `still` false with `muxing` false is an ordinary picture; `still` true with `muxing` true means a video is still muxing, so ask again; `still` true with `muxing` false means a video exists that cannot be served (it is longer than the remux ceiling, or it is a live or scheduled broadcast with no finished file behind it), and that is final for as long as this card is cached. It also means every scheduled attempt to mux the video failed; that verdict holds for six hours, after which the next request tries again. Without this flag the last case is indistinguishable from a photograph except by reading the English in `text`. On a deployment with no video container or no media bucket (the Free config, a Worker Preview with no bucket, a Node adapter with no container), a video that needs muxing is published as an ordinary picture with `still` false. That comes from reading the code, not from a measurement."
+            "description": "This picture is standing in for a video. Read it with the envelope's `muxing`: `still` false with `muxing` false is an ordinary picture; `still` true with `muxing` true means a video is still muxing, so ask again; `still` true with `muxing` false means a video exists that cannot be served (it is longer than the remux ceiling, or it is a live or scheduled broadcast with no finished file behind it), and that is final for as long as this card is cached. The same pair also covers a video whose every scheduled mux attempt failed; that verdict holds for six hours, after which the next request tries again. Without this flag, only the English in `text` would tell the last case apart from a photograph. On a deployment with no video container or no media bucket (the Free config, a Worker Preview with no bucket, a Node adapter with no container), a video that needs muxing is published as an ordinary picture with `still` false. That comes from reading the code, not from a measurement."
           }
         },
         "required": ["kind", "url", "poster", "width", "height", "still"],
@@ -424,7 +424,7 @@
       },
       "Quote": {
         "type": "object",
-        "description": "The quoted post. Depth is capped at 1 by the normalizers, so a quote never carries a quote of its own. Its media is not published in v1: those entries live at indices after the outer post's, and getting that arithmetic wrong would publish urls resolving to the wrong bytes. Additive later; wrong now would be permanent.",
+        "description": "The quoted post. Depth is capped at 1 by the normalizers, so a quote never carries a quote of its own. Its media is not published in v1: those entries live at indices after the outer post's, and getting that arithmetic wrong would publish urls resolving to the wrong bytes. Adding it later is additive, while publishing it wrong now would be permanent.",
         "properties": {
           "canonical": { "type": ["string", "null"], "description": "The quoted post's own url." },
           "text": { "type": "string", "description": "`\"\"` when there is none." },

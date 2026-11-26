@@ -27,7 +27,7 @@
 - [ ] `npm run test:container` passes, if `container/` changed
 - [ ] `docker compose -f adapters/node/compose.yaml build` succeeds, if `adapters/node/` or `container/` changed (CI doesn't build the images)
 - [ ] No new network calls in tests
-- [ ] Assertions are on response **content**, not on status
+- [ ] Assertions are on response content, not on status
 
 ### Behaviour changes
 - [ ] Any test that pinned the old behaviour is rewritten, not deleted, and says what changed
