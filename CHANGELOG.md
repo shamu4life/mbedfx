@@ -18,7 +18,9 @@ in its deploy command. Pass it to `wrangler secret`, `wrangler tail`, `wrangler 
 and a `wrangler secret put` fed from a file or pipe creates that Worker to hold the secret. Don't
 copy the old names back into `wrangler.jsonc`: `npm run build` fails when that file uses
 mbedfx.app's names or sets `containers[].name`, and the old file did both unless you changed it.
-Nobody else has anything to do.
+If your fork's converter page should keep its media-only box, list your `d.` origin in
+`PUBLIC_ORIGIN`: the box now shows only for a domain whose `d.` name is listed there or in
+`OWN_HOSTS`. Nobody else has anything to do.
 
 ### Added
 
@@ -53,6 +55,22 @@ Nobody else has anything to do.
 
 ### Changed
 
+- **The converter page names the deployment it runs on.** Until now every copy carried mbedfx.app's
+  domains, so a fork's page handed out `https://mbedfx.app/...` links, told readers to swap in
+  mbedfx.app, and unfurled with mbedfx.app's link and image. The Worker now adds one script block to
+  the page as it serves it, built from `PUBLIC_ORIGIN`, `OWN_HOSTS`, `GUEST_HOSTS` and the host the
+  request came in on. The page takes its domain buttons and the domains it counts as its own from that
+  block. Its fallback domain, its instructions and its `og:url`, `og:image` and `twitter:image` use the
+  first `PUBLIC_ORIGIN` entry. With that var unset they use the page's own domain, which is then the
+  only button. The media-only box shows only for a domain whose `d.` name is listed. mbedfx.app gets
+  the same file as before plus the block. Its config adds `OWN_HOSTS` for forsen.sex and the three
+  `d.` names served outside `PUBLIC_ORIGIN`, so all five domains keep the box. One thing does change
+  there: opened on d.megapenispoopenfarten.sex or d.forsen.sex, the page now starts on the domain
+  under the `d.` where it used to start on mbedfx.app. The page also stops sending an ETag, so a
+  browser downloads it in full on each visit instead of revalidating.
+- **`/openapi.json` points a generated client at the host that served it.** Its `servers` list named
+  mbedfx.app's three domains, so a client built from a fork's copy talked to mbedfx.app. The list is
+  now the relative `/`.
 - **The YouTube promise is off unless `YT_PROMISE` is `on`.** Until now only `off` turned it off,
   so a deployment that never set the var promised Discord an mp4 for a cold short video whenever
   it knew the video's length. On 2026-11-24 that promise made Discord's window one time in eight,
