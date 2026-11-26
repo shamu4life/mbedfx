@@ -392,7 +392,8 @@ deploy dates.
 *It cannot see the failure a raised budget risks.* A degrade is a card we rendered; an abandon is
 Discord hanging up before we answer. Only degrades are countable here, so a budget that loses more
 cards than it wins would look like an improvement. Pair the ratio with client disconnects on the
-activity route.
+activity route. To decide whether a budget can win, read the `mux_*` distribution above instead of
+this ratio.
 
 ---
 
