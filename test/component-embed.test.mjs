@@ -4,6 +4,7 @@ import {
   COMPONENT_EMBED_MAX_BYTES, GALLERY_CARD_MAX, galleryCardJson, galleryCardScript, md, takesGalleryCard,
 } from '../src/render/componentembed.ts'
 import { toMastodonStatus } from '../src/render/mastodon.ts'
+import { TRANSLATION_MARKER, withTranslation } from '../src/translate.ts'
 
 /**
  * THE GALLERY CARD (src/render/componentembed.ts): a Discord component embed for a post with more than
@@ -325,4 +326,21 @@ test('NO SECTION, NO THUMBNAIL, NO BUTTON: the look the owner turned down cannot
   assert.equal(JSON.parse(galleryCardJson(carousel(5, { author: { handle: 'only' } }), ORIGIN, 'mbedfx')).component.components[0].content, '**@only**')
   const anon = validate(galleryCardJson(carousel(5, { author: undefined }), ORIGIN, 'mbedfx'))
   assert.deepEqual(anon.component.components.map(n => n.type), [10, 12, 10], 'no author line rather than an empty one')
+})
+
+test('A TRANSLATED GALLERY POST SAYS WHAT ITS ACTIVITY DOCUMENT SAYS: the translation and the marker reach the card', () => {
+  /**
+   * CLAUDE.md's "Discord reads two documents" lesson, for the third surface. The translation bug was a fix
+   * that reached one document and not the other. withTranslation writes the translation and its marker
+   * into post.text, and the gallery card reads post.text through the same clampText as the activity
+   * card's `content`, so both carry them. A marker added only inside mastodon.ts would have reached the
+   * activity card and not this one; this pins that it does not work that way.
+   */
+  const post = withTranslation(carousel(6, { text: '白菜おいしいね' }), 'Chinese cabbage is delicious', 'ja')
+  const body = JSON.parse(galleryCardJson(post, ORIGIN, 'mbedfx')).component.components[1].content
+  assert.equal(body, `Chinese cabbage is delicious\n\n${TRANSLATION_MARKER} from Japanese\n白菜おいしいね\n\n**❤️ 20.9K 💬 82 🔁 4.1K**`)
+  const content = toMastodonStatus(post, ORIGIN, 'videos', 'mbedfx').content
+  for (const line of ['Chinese cabbage is delicious', `${TRANSLATION_MARKER} from Japanese`, '白菜おいしいね']) {
+    assert.ok(content.includes(line), `the activity document carries "${line}" too`)
+  }
 })
