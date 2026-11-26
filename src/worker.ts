@@ -6,7 +6,7 @@ import { pageResponse } from './sitepage.ts'
 import { render } from './render/index.ts'
 import { redirect } from './render/fail.ts'
 import { toMastodonStatus, toOEmbed } from './render/mastodon.ts'
-import { componentEmbedJson } from './render/componentembed.ts'
+import { galleryCardJson } from './render/componentembed.ts'
 import { pickMedia, pickMediaEntry } from './media.ts'
 import { bytesIndex, byline, isSpoiler, knownDate, mediaOf, mediaUrl, str, themeColor, usable } from './render/embed.ts'
 import { clampText, statParts } from './render/text.ts'
@@ -25,7 +25,7 @@ import {
 import { fetchBluesky, fetchBlueskyProfile } from './platforms/bluesky/fetch.ts'
 import { normalizeBluesky, normalizeBlueskyProfile } from './platforms/bluesky/normalize.ts'
 import type { AwemeResolver } from './platforms/tiktok/fetch.ts'
-import { DEFAULT_GALLERY_MODE, decodeStatusId, encodeStatusId } from './statusid.ts'
+import { DEFAULT_GALLERY_MODE, encodeStatusId } from './statusid.ts'
 import { fetchTikTok, isTikTokCdnHost, resolveTikTokShortlink, TIKTOK_UA, withResolvedVideo } from './platforms/tiktok/fetch.ts'
 import { AWEME_PLAY, normalizeTikTok, tiktokGate, tiktokRefFrom, videoDetailScope } from './platforms/tiktok/normalize.ts'
 import {
@@ -6002,29 +6002,6 @@ async function serve(req: Request, env: Env, ctx: ExecutionContext, d: Deps): Pr
    *       UNFURL (it subtracts, and p/4/6 loses). Wait id `9` `5` nn mm + real id; code 5nnmm.
    *       `mediap` is a distinct slot so its urls never collide with m's — Discord caches a failed
    *       fetch per url for a while. p/0/0 is its positive control (a/0 and m/0 folded together).
-   *   `/_wait/e/{v}/{tag}/{x or bluesky post path}` — THE COMPONENT EMBED (2026-11-26). Not a
-   *       patience question either. Discord documented component embeds on 2026-10-05: a
-   *       `<script id="discord:component-embed">` in the head, one Container of Discord components,
-   *       Open Graph kept as the fallback (the schema is quoted in src/render/componentembed.ts).
-   *       Every media card here is drawn from the activity document, and every adopter read on
-   *       2026-11-26 (CLAUDE.md, the comparison table) emits one or the other, never both. So
-   *       nothing says which one Discord draws when a head carries both, or what a component card
-   *       looks like without the document behind it. The head is the ORDINARY production head for
-   *       the path, rendered by re-entering handle(), and:
-   *         v=0, the control: only the activity id changes, to `9` `7` `00` + the real id, so the
-   *           document fetch is counted (wait code 700). The card should be today's.
-   *         v=1: the id becomes `9` `7` `01` + the real id (701), and a component embed built
-   *           from the same Post goes in before `</head>`. Both cards' documents are today's, byte
-   *           for byte, so a difference can only come from the script. A 701 row with a component
-   *           card says Discord fetched the document and drew the script anyway; no 701 row says it
-   *           skipped the document when offered the script.
-   *         v=2: the component embed goes in and the activity link comes OUT. There is no document
-   *           and so no row: v=2 is read off the card alone. A component card says the script
-   *           stands on its own; the Open Graph card (no picture on an image post, whose spoof head
-   *           carries no og:image) says it was refused.
-   *       The tell is the link button. Neither the activity card nor the Open Graph card draws one.
-   *       Only X and Bluesky post paths are accepted, the two posts the paste needs. The {tag} is
-   *       required for the reason d's was: the head url is the only url a retry can change.
    *
    * WHY THIS EXISTS (2026-08-31). The owner's verdict on 1.14.0's stock player: it re-wraps the
    * YouTube playback Discord already has, which is a stopgap and not the goal. The goal is the
@@ -6066,14 +6043,14 @@ async function serve(req: Request, env: Env, ctx: ExecutionContext, d: Deps): Pr
     // without `created_at` (issue #49, PR #137). That answered its question and was removed; the
     // reading is recorded at toMastodonStatus. The `wait_api` rows coded 600 and 601 in the
     // analytics are that test. A `96nn…` id is an ordinary bad status id again.
-    // Digit 7 is e (2026-11-26, the component-embed paste), and only with 00 or 01 after it, the
-    // lookahead d used: e's documents are v=0 and v=1, and v=2 has no activity link to fetch one
-    // from. A fresh digit rather than 6 again, so a 600/601 row can only ever mean d. Any other
-    // `97nn…` id still reaches the router and 404s as it did before e.
-    const wsid = /^\/(users\/[^/]+|api\/v1)\/statuses\/(9(?:([1-4]|7(?=0[01]))(\d\d)|(5)(\d\d)(\d\d))(1\d+))$/.exec(url.pathname)
+    // Digit 7 has no surface either. For one day, 2026-11-26, it was e: Discord's component embed pasted
+    // beside and instead of the activity link (PR #156). That answered its question and was removed; the
+    // reading is recorded in render/componentembed.ts, which turned it into the gallery card. The
+    // `wait_api` rows coded 700 and 701 are that test. A `97nn…` id is an ordinary bad status id again.
+    const wsid = /^\/(users\/[^/]+|api\/v1)\/statuses\/(9(?:([1-4])(\d\d)|(5)(\d\d)(\d\d))(1\d+))$/.exec(url.pathname)
     if (wsid) {
       const [, path, waitSid, sdigit4, ns4, sdigit5, nds, nms, realSid] = wsid
-      const surface = sdigit5 ? 'p' : ({ '1': 'a', '2': 'm', '3': 'b', '4': 'c', '7': 'e' } as const)[sdigit4 as '1' | '2' | '3' | '4' | '7']
+      const surface = sdigit5 ? 'p' : ({ '1': 'a', '2': 'm', '3': 'b', '4': 'c' } as const)[sdigit4 as '1' | '2' | '3' | '4']
       // p carries two holds, the document's and the video's; the others carry one, and for them
       // the document hold is the surface's own number (only a uses it).
       const n = Number(sdigit5 ? nms : ns4)
@@ -6088,11 +6065,7 @@ async function serve(req: Request, env: Env, ctx: ExecutionContext, d: Deps): Pr
       // the row carries the wait code (surface digit × 100 + n) so a long hold's re-fetches can be
       // read off the timestamps whatever the card did. Counted, not logged: no url, no post id, no
       // user agent leaves here.
-      // e's rows also name the post's platform (x or bs, read off the real id) in blob1, where every
-      // other surface writes 'none'. Without it an X paste and a Bluesky paste both write 701, and the
-      // owner reading the rows cannot tell which card fetched its document (review, 2026-11-26).
-      const platform = surface === 'e' ? (decodeStatusId(realSid)?.split(':')[0] || 'none') : 'none'
-      countWait(env, path === 'api/v1' ? 'wait_api' : 'wait_users', classify(req.headers.get('user-agent')), code, platform)
+      countWait(env, path === 'api/v1' ? 'wait_api' : 'wait_users', classify(req.headers.get('user-agent')), code)
       // a and p hold the DOCUMENT; m, b and c are instant — the whole point of those surfaces is
       // that the crawler waits for nothing and only the media fetch carries the stall.
       if ((surface === 'a' || surface === 'p') && ndoc) await new Promise(r => setTimeout(r, ndoc * 1000))
@@ -6102,18 +6075,6 @@ async function serve(req: Request, env: Env, ctx: ExecutionContext, d: Deps): Pr
       // as its first key, so this touches the top-level id and nothing else; the real id is a
       // 40-odd digit string that occurs nowhere else in the document.
       let body = (await real.text()).replace(`{"id":"${realSid}"`, `{"id":"${waitSid}"`)
-      if (surface === 'e') {
-        // e's two documents are BOTH today's document under the wait id: no hold, no /_media/
-        // rewrite, no key removed. The heads differ (v=1 also carries a component embed), the
-        // documents do not, so a difference between the two cards can only come from the head.
-        // What the 700/701 rows add is whether Discord fetched the document at all when the head
-        // also offered a component embed. no-store, as d's were: a cached answer would make a
-        // retry re-read the first crawl.
-        const heads = new Headers(real.headers)
-        heads.delete('content-length')
-        heads.set('cache-control', 'no-store')
-        return new Response(body, { status: 200, headers: heads })
-      }
       if (surface !== 'a') {
         // Only VIDEO urls (/_media/{key}/{digits}) carry the stall. Poster (/p0) and avatar
         // segments stay on the real route, so the card's imagery cannot confound the reading —
@@ -6240,62 +6201,6 @@ async function serve(req: Request, env: Env, ctx: ExecutionContext, d: Deps): Pr
       heads.delete('content-range')
       heads.delete('accept-ranges')
       return new Response(readable, { status: 200, headers: heads })
-    }
-    // e's HEAD: the production head for an X or Bluesky post path, changed only as its variant says.
-    // See the block comment for the question it asks.
-    const we = /^\/_wait\/e\/([012])\/[\w-]{1,24}(\/.*)$/.exec(url.pathname)
-    if (we) {
-      const [, v, tail] = we
-      const noStore = { 'cache-control': 'no-store' }
-      // Concatenated, never new URL(tail, origin): a tail spelled `//other.host/…` would be read as
-      // a host there, and every link in the head is built from the request's origin.
-      const target = `${url.origin}${tail}${url.search}`
-      // ONLY AN X OR BLUESKY POST, checked before re-entering, for d's reasons: handle() answers every
-      // route and this reads a 200 into memory, so an unchecked tail could buffer a video off
-      // /_media/ or nest /_wait/ surfaces. A gallery mode moves the id's sentinel off `1`, and
-      // `direct` answers with a file, not a head.
-      const tr = route(new URL(target))
-      if (tr.kind !== 'post' || (tr.ref.p !== 'x' && tr.ref.p !== 'bs') || tr.gallery || tr.direct) {
-        return new Response('the e surface takes an X or Bluesky post path', { status: 404, headers: noStore })
-      }
-      const real = await handle(new Request(target, { headers: req.headers }), env, ctx, d)
-      // Unchanged when it is not a card: a human gets production's redirect, and a failure answer
-      // is the measurement's to show, not this route's to hide.
-      if (real.status !== 200) return real
-      if (!(real.headers.get('content-type') || '').startsWith('text/html')) {
-        void real.body?.cancel()
-        return new Response('the post did not answer with a head', { status: 422, headers: noStore })
-      }
-      const head = await real.text()
-      // The whole tag, so v=2 can take it out, and the id inside it, so v=0 and v=1 can mark it.
-      // EXACTLY ONE, with the `1` sentinel, or the experiment refuses: a head it cannot mark would
-      // come back as a second control, and two identical cards would read as an answer.
-      const act = /<link rel="alternate" type="application\/activity\+json" href="([^"]*\/statuses\/)(1\d+)"\/>/g
-      const acts = [...head.matchAll(act)]
-      if (acts.length !== 1 || head.split('</head>').length !== 2) {
-        return new Response('the head has no activity link this experiment can mark', { status: 422, headers: noStore })
-      }
-      let body = head
-      if (v !== '0') {
-        // The Post the head was just rendered from, so a warm cache answers this without an upstream
-        // fetch. Read here rather than off the activity document: that document's `content` is HTML,
-        // and the component needs Discord markdown built from the same plain text the other heads use.
-        const { post } = await getPost(tr.ref, d, env, classify(req.headers.get('user-agent')), ctx, url.origin)
-        const json = post ? componentEmbedJson(post, url.origin) : null
-        // No payload means no variant. Served without the script, this head would be the control
-        // under another name.
-        if (!json) return new Response('no component embed could be built for this post', { status: 422, headers: noStore })
-        // A function, not a string: a `$` in the JSON (a caption with "$5") would read as a group.
-        body = body.replace('</head>', () => `<script id="discord:component-embed" type="application/json">${json}</script></head>`)
-      }
-      body = v === '2'
-        ? body.replace(act, () => '')
-        // The /_oembed/ link keeps the real id: the experiment changes the document's id only.
-        : body.replace(act, (tag: string, pre: string, sid: string) => tag.replace(`${pre}${sid}"`, `${pre}970${v}${sid}"`))
-      const heads = new Headers(real.headers)
-      heads.delete('content-length')
-      heads.set('cache-control', 'no-store')
-      return new Response(body, { status: 200, headers: heads })
     }
     // p takes two holds (document, then video); the others one. Parsed into one shape so the head
     // below is the same head for all six surfaces, which is what makes their cards comparable.
@@ -7044,6 +6949,15 @@ async function serve(req: Request, env: Env, ctx: ExecutionContext, d: Deps): Pr
       return Response.json({
         ok: true,
         ...directOf,
+        /**
+         * WHETHER DISCORD DRAWS THE GALLERY CARD FOR THIS POST (render/componentembed.ts, 2026-11-26): the
+         * first nine pictures in a grid, no avatar beside the author, where every other post gets the
+         * activity card. Asked of the same post, the same origin and the same site name through the same
+         * function the head calls, so the page cannot draw a grid the card does not carry, or miss one it
+         * does; a copy of the five-picture rule in the page is how the two would drift. Present only when
+         * true, like `direct`, so every other answer is byte-identical.
+         */
+        ...(galleryCardJson(post, origin, site) ? { componentGallery: true as const } : {}),
         /**
          * THE ONE THING THE PAGE COULD NOT PREVIOUSLY LEARN: that this answer is incomplete.
          *

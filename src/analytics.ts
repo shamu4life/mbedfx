@@ -770,6 +770,6 @@ export function countStage(env: Env, platform: Platform | 'none', s: MuxStage): 
  * no n and five `wait_api` rows for three pastes could not be told apart. With the code, one round
  * of long holds reads the crawler's own timeout off the timestamps, whatever the card did.
  */
-export function countWait(env: Env, path: 'wait_users' | 'wait_api' | 'wait_media', client: ClientClass, code: number, platform = 'none'): void {
-  env.AE?.writeDataPoint({ blobs: [platform, path, client], doubles: [1, code] })
+export function countWait(env: Env, path: 'wait_users' | 'wait_api' | 'wait_media', client: ClientClass, code: number): void {
+  env.AE?.writeDataPoint({ blobs: ['none', path, client], doubles: [1, code] })
 }

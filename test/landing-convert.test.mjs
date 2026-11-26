@@ -1159,6 +1159,34 @@ test('A WORKER-SUPPLIED URL IS RE-POINTED AT THE CHOSEN HOST', () => {
   assert.equal(repoint('not a url', 'mbedfx.app', true), 'not a url', 'a url it cannot parse comes back as it was')
 })
 
+test('THE PREVIEW DRAWS THE GALLERY CARD WHEN THE WORKER SAYS DISCORD DOES: nine pictures, three to a row, no avatar', () => {
+  /**
+   * Since 2026-11-26 Discord draws a post with more than four pictures and no video from a component
+   * embed (src/render/componentembed.ts): up to nine pictures where the activity card shows four, and no
+   * avatar beside the author. The converter preview is the third seam (CLAUDE.md), fetched once and never
+   * healed by a re-paste, so it has to draw that card too. It does not decide when: /_card says so with
+   * `componentGallery`, from the same function the head calls (test/gallery-card.test.mjs holds /_card
+   * to that), and the page only draws.
+   */
+  const draw = HTML.slice(HTML.indexOf('function drawCard(sent, j) {'), HTML.indexOf('function syncSent() {'))
+  assert.match(draw, /var gallery = !!j\.componentGallery;/, 'the page reads the worker\'s answer, not a rule of its own')
+  assert.doesNotMatch(draw.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, ''), /length\s*>\s*4|>=\s*5/,
+    'and keeps no copy of the five-picture rule to drift from the worker\'s')
+  assert.match(draw, /\.slice\(0, gallery \? 9 : 4\)/, 'nine on the gallery card, four on the activity card')
+  assert.match(draw, /\(!gallery && j\.author && j\.author\.avatar \?/, 'the avatar only where the card draws one')
+  // The grid, lifted and run: six columns, three to a row, the remainder of a multiple of three leading.
+  const src = HTML.match(/function galleryCells\(n\) \{[\s\S]*?\n {2}\}/)
+  assert.ok(src, 'public/index.html carries galleryCells')
+  const galleryCells = new Function(`${src[0]}; return galleryCells`)()
+  assert.deepEqual(galleryCells(9), [2, 2, 2, 2, 2, 2, 2, 2, 2], 'nine is the 3x3 grid')
+  assert.deepEqual(galleryCells(6), [2, 2, 2, 2, 2, 2])
+  assert.deepEqual(galleryCells(5), [3, 3, 2, 2, 2])
+  assert.deepEqual(galleryCells(7), [6, 2, 2, 2, 2, 2, 2])
+  assert.deepEqual(galleryCells(8), [3, 3, 2, 2, 2, 2, 2, 2])
+  for (let n = 5; n <= 9; n++) assert.equal(galleryCells(n).reduce((a, b) => a + b, 0) % 6, 0, `${n}: every row is full`)
+  assert.match(HTML, /\.pv \.shots\.g \{ grid-template-columns: repeat\(6, 1fr\); \}/)
+})
+
 test('THE PAGE STILL CARRIES NO VISIBLE EM DASH AND NO SECOND PERSON', () => {
   /**
    * Both were owner requests, and both were re-broken by later work — the media-only note arrived

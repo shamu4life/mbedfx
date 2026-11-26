@@ -200,8 +200,11 @@ export function abbrev(n: number): string {
  *
  * The `as unknown` is not ceremony: author is typed non-optional, so without it the check
  * reads as dead code to anyone (and to any linter) who trusts the type over the cache.
+ *
+ * Exported for the gallery card (componentembed.ts), which draws the same reply and quote heads
+ * from the same fields and must drop them on the same records.
  */
-function hasAuthor(p: Post): boolean {
+export function hasAuthor(p: Post): boolean {
   const a = p.author as unknown
   return !!a && typeof a === 'object'
 }
@@ -211,9 +214,10 @@ function hasAuthor(p: Post): boolean {
  * `content` string as a real carriage return, for which Discord renders no break at all —
  * two lines would silently run together while the payload still looked plausible. Shared
  * with buildPlainText so og:description, which is fed from that side, cannot drift: it is
- * the same hazard reaching a different attribute.
+ * the same hazard reaching a different attribute. The gallery card (componentembed.ts) is the third
+ * body surface and reads it for the same reason.
  */
-const normalizeBreaks = (text: string) => text.replace(/\r\n?/g, '\n')
+export const normalizeBreaks = (text: string) => text.replace(/\r\n?/g, '\n')
 
 /**
  * Escapes, then converts newlines. Order matters: esc() first means a '<' the user typed

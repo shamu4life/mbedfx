@@ -6,6 +6,7 @@ import { esc, html } from './fail.ts'
 import { accountHandle, byline, bytesIndex, describe, dimTags, isSpoiler, mediaOf, mediaUrl, pendingMuxIndex, playableVideo, stockState, str, themeColor, usable } from './embed.ts'
 import { buildPlainText } from './text.ts'
 import { siteLabel } from '../instance.ts'
+import { galleryCardScript } from './componentembed.ts'
 
 /**
  * Two heads, one gate, ONE operand:
@@ -588,6 +589,40 @@ function renderSpoof(post: Post, origin: string, mode: GalleryMode | undefined, 
       ? []
       : [`<link rel="alternate" type="application/activity+json" href="${esc(`${origin}/users/${handle}/statuses/${id}`)}"/>`]),
     oembedLink(origin, id),
+    /**
+     * THE GALLERY CARD, for a post with more than four pictures and no video (2026-11-26). The decision,
+     * the measurement and the look are in render/componentembed.ts; the short version is a paste of the
+     * one-day /_wait/e route in the Discord mobile app. With a component embed in the head, Discord drew
+     * the component card and did not fetch the activity document at all (no 701 row), so the script
+     * REPLACES the activity card wherever it appears. That replacement cost the video post its poster
+     * frame and the footer's date, and the owner approved only today's card, so the script goes only on
+     * the one shape the activity card cannot hold: five to nine-plus pictures, drawn as a 3x3 grid at nine.
+     *
+     * EVERYTHING ABOVE IS UNTOUCHED, the activity link included. It stays as the fallback for a client
+     * without component embeds, and the paste measured that it costs nothing where Discord has them: the
+     * document was not fetched. The script goes last, before `</head>`, which is where the paste put it.
+     * Every other post's head is byte for byte what it was (test/gallery-card.test.mjs holds 26 answers
+     * to goldens rendered from the commit before this one).
+     *
+     * WHICH HEADS. This one only: the gate above sends every Discord post here, telegram.ts and the plain
+     * head never serve Discord, and a component embed is Discord's alone. A post without media can never
+     * reach it. The stock, pending-mux and video branches can't either, because each needs a video and the
+     * gallery card needs none (takesGalleryCard). A spoiler post keeps today's head: it names no media here
+     * on purpose, and this card would.
+     *
+     * THE GALLERY MODE (/p, /v) CHANGES NOTHING HERE. It decides what happens to a gallery's videos, and
+     * this card is only drawn for a post without one; the activity id above still carries the mode, as
+     * it always has.
+     *
+     * GUEST HOSTS GET IT TOO, with /_media/ urls on the guest origin, which guestServes answers. A d. host
+     * answers with the post's file and never renders a head.
+     *
+     * NO CACHE KEY CHANGES. The script depends on the post (how many pictures, of what kind), on `origin`
+     * and on `site`, and the response cache key already holds the ref, the client, the origin, the mode
+     * and the site name (cache.ts respCacheKey). The one lag is deploy-time: a head cached before the
+     * deploy keeps serving without the script for up to RESP_TTL (900 s).
+     */
+    ...((card => (card ? [card] : []))(galleryCardScript(post, origin, site))),
   ]
   return html(tags.join(''))
 }
