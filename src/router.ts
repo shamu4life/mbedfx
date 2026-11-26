@@ -647,7 +647,9 @@ function facebook(seg: string[]): Route | null {
    *
    * BOTH SEGMENTS MUST BE NUMERIC, and that is what keeps this off every other /groups/ url: a group
    * HOME page (/groups/{gid}) and its /members, /media and /about tabs all fail the depth-4 shape,
-   * and a NAMED group (/groups/somename/posts/…) fails FB_NUM at seg[1].
+   * and a NAMED group (/groups/somename/posts/…) fails FB_NUM at seg[1]. The home page stays
+   * unclaimed with ONE exception, which is not here because its post id is in the query: a home url
+   * carrying a numeric `?multi_permalinks=` is this same post, routed by fbGroupQuery below.
    */
   if (seg.length === 4 && seg[0] === 'groups' && FB_NUM.test(seg[1])
     && (seg[2] === 'permalink' || seg[2] === 'posts') && FB_NUM.test(seg[3])) {
@@ -787,6 +789,50 @@ function facebook(seg: string[]): Route | null {
   // /{page}/videos/{id} — the classic page-video permalink; equivalent to watch?v={id}.
   if (seg.length === 3 && seg[1] === 'videos' && FB_NUM.test(seg[2]) && seg[0]) return fbPost('watch', seg[2])
   return null
+}
+
+/**
+ * `/groups/{gid}/?multi_permalinks={pid}` — a GROUP POST WHOSE ID IS IN THE QUERY, a spelling
+ * FixTweetBot's FIXERS.md lists among the Facebook link types every fixer is rated on. It was "Not
+ * found" in every form: the group home is unclaimed (see the group arm in facebook()), nothing read
+ * the query, and the converter dropped it and emitted the bare home. Found 2026-11-26 checking that
+ * table against production.
+ *
+ * WHAT WAS MEASURED, 2026-11-26, from a Linux box with Facebook's own crawler user agent (NOT from a
+ * Worker; this is a question about what the url means, not about what Cloudflare's egress is sent):
+ *   - the multi_permalinks url answers the GROUP HOME: og:url and og:title name the group, and
+ *     Facebook's own route params carry `multi_permalinks: "{pid}"` with `post_id: null`. So the post
+ *     is a highlight on the home page, and that page unfurls as the group. Sending a crawler there
+ *     would draw the group, which is why the canonical below is the posts/ spelling and not this one;
+ *   - `/groups/{gid}/posts/{pid}/` answers og:url `…/posts/{pid}/` with its route param
+ *     `story_id: "{pid}"`. The same number is that group's post id in both;
+ *   - and, per the same day's production report (measured through mbedfx.app, so from Worker
+ *     egress), `/groups/{gid}/posts/{pid}/` renders a real group-post card.
+ * What was NOT measured is that the highlighted post on the home page is the one the posts/ spelling
+ * renders; that rests on the two route params naming the same number.
+ *
+ * SO IT MINTS EXACTLY THE ROUTE THE posts/ SHAPE MINTS, through the same fbPost('group', …), and the
+ * three spellings share one ref and one cache entry. The guards are the group arm's own: FB_NUM on
+ * both ids, because that arm refuses a named group and a non-numeric post, and this one must not
+ * claim a pair that arm would refuse.
+ *
+ * WHAT STAYS UNROUTED, on purpose:
+ *   - a missing, empty or non-numeric multi_permalinks, which leaves the group home's own answer;
+ *   - a LIST (`multi_permalinks=1,2`). The name says it can hold more than one, and choosing one of
+ *     them would be a guess at which post the reader meant;
+ *   - a named group (`/groups/somename/?multi_permalinks=…`), refused by the posts/ arm as well;
+ *   - any deeper /groups/{gid}/… tab carrying the parameter. Only the home page was seen with it,
+ *     and what a tab would do with it was not measured.
+ *
+ * A HELPER THAT TAKES SEGMENTS AND THE QUERY, not a block inline in routeInner, so that the forced
+ * spelling can call it on `seg.slice(1)` the day the ESCAPE block tries query arms. Until then,
+ * `/fb/groups/{gid}/?multi_permalinks=` stays notfound, like every other query-id link under /fb/;
+ * the converter's forced link does not depend on it, because it emits the posts/ path.
+ */
+function fbGroupQuery(seg: string[], q: URLSearchParams): Route | null {
+  if (seg.length !== 2 || seg[0] !== 'groups' || !FB_NUM.test(seg[1])) return null
+  const pid = q.get('multi_permalinks') || ''
+  return FB_NUM.test(pid) ? fbPost('group', `${seg[1]}_${pid}`) : null
 }
 
 /**
@@ -2069,6 +2115,11 @@ function routeInner(url: URL): Route {
     const fbid = url.searchParams.get('fbid') || ''
     if (FB_NUM.test(fbid)) return fbPost('photo', fbid)
   }
+
+  // `/groups/{gid}/?multi_permalinks={pid}`, a group post named in the query. Why, and what stays
+  // unrouted, is at fbGroupQuery.
+  const groupQuery = fbGroupQuery(seg, url.searchParams)
+  if (groupQuery) return groupQuery
 
   /**
    * `clips.twitch.tv/embed?clip={slug}&parent=…` — the EMBED IFRAME url, handled here for the same

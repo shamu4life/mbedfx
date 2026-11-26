@@ -146,6 +146,11 @@ mbedfx.app's Reddit app and account, and it names no account at all. Nobody else
 
 ### Fixed
 
+- **Facebook group links that point at one post now show it.** A
+  `facebook.com/groups/{group}/?multi_permalinks={post}` link said "Not found", and the converter
+  dropped the post id and handed out the group's home page. The link now draws the same card as
+  `/groups/{group}/posts/{post}/`, and the converter gives that `/posts/` link. A group's home page
+  still says "Not found", and so does a link listing more than one post.
 - **`RESOLVER_SECRET` was documented as protecting the Cloudflare container, and it doesn't.**
   `container/README.md` said to set it on the container as well as the Worker, and nothing in this
   repo puts it there: the container's Durable Object passes it no environment, so the container never

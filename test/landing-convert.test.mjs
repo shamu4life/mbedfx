@@ -1109,6 +1109,7 @@ test('A .mp4 BEFORE THE QUERY OF A QUERY-ID LINK SURVIVES CONVERSION, and the id
     ['https://www.youtube.com/watch/.mp4?v=dQw4w9WgXcQ', '/watch.mp4?v=dQw4w9WgXcQ'],
     ['https://www.facebook.com/photo/.mp4?fbid=1092409469807430', '/photo/.mp4?fbid=1092409469807430'],
     ['https://www.facebook.com/photo.mp4?fbid=1092409469807430', '/photo/.mp4?fbid=1092409469807430'],
+    ['https://www.facebook.com/groups/328668786145521/.mp4?multi_permalinks=1391536379858751', '/groups/328668786145521/posts/1391536379858751/.mp4'],
   ]) {
     const got = convert(input, 'mbedfx.app')
     assert.equal(got.path, want, input)
@@ -1314,6 +1315,7 @@ const GUEST_PASTES = [
   'https://www.facebook.com/permalink.php?story_fbid=1596906778724399&id=100052152768666',
   'https://www.facebook.com/story.php?story_fbid=pfbid02AbCdEfGhIjKlMnOpQrStUv&id=100052152768666',
   'https://www.facebook.com/watch/?v=10153231379946729',
+  'https://www.facebook.com/groups/328668786145521/?multi_permalinks=1391536379858751',
   'https://www.twitch.tv/embed?clip=DeliciousDelightfulPicklesWOOP&parent=example.com',
   'https://imgur.com/a/abc12',
   'https://imgur.com/gallery/abc12',
@@ -1661,17 +1663,64 @@ test('permalink.php AND A pfbid story.php CONVERT TO THE PERMALINK SHAPE, like a
   }
 })
 
+test('A GROUP LINK WITH ?multi_permalinks= CONVERTS TO THE posts/ PATH, on every host and forced', () => {
+  /**
+   * Found 2026-11-26 checking FixTweetBot's FIXERS.md table against production. The converter kept
+   * only ?v=, ?fbid= and ?story_fbid= with ?id= on a Facebook link, so this came out the bare
+   * /groups/{gid}: the group home, which the worker leaves unclaimed, so "Not found". It now emits the
+   * path spelling, which the router reads as the same post, and which the forced "Read as Facebook"
+   * link can carry because on 2026-11-26 the worker's /fb/ prefix read paths only.
+   */
+  const want = route(new URL('https://mbedfx.app/groups/328668786145521/posts/1391536379858751/'))
+  for (const paste of [
+    'https://www.facebook.com/groups/328668786145521/?multi_permalinks=1391536379858751&hoisted_section_header_type=recently_seen',
+    'https://m.facebook.com/groups/328668786145521?multi_permalinks=1391536379858751',
+  ]) {
+    for (const host of EVERY_HOST) {
+      const r = convert(paste, host)
+      assert.ok(r.ok, `${paste} converts`)
+      assert.equal(r.platform, 'Facebook')
+      assert.equal(r.path, '/groups/328668786145521/posts/1391536379858751/', 'only the two ids are kept')
+      const got = route(new URL(r.url))
+      assert.deepEqual(got, want, `${r.url} is the group post`)
+      assert.ok(guestServes(got), `${r.url} is answered on a guest host`)
+      // The picker's forced link is `/` + code + this path (public/index.html, the data-force handler).
+      assert.deepEqual(route(new URL(`https://${host}/fb${r.path}`)), want, `/fb${r.path} is the same post`)
+    }
+  }
+  // No usable id: the converter keeps today's answer, the bare home, rather than building a post.
+  for (const paste of [
+    'https://www.facebook.com/groups/328668786145521/',
+    'https://www.facebook.com/groups/328668786145521/?multi_permalinks=abc',
+    'https://www.facebook.com/groups/328668786145521/?multi_permalinks=1391536379858751,1391536379858752',
+  ]) {
+    assert.equal(convert(paste, 'mbedfx.app').path, '/groups/328668786145521', paste)
+  }
+  // A named group is not a shape the router reads, so it is not rewritten into one.
+  assert.equal(convert('https://www.facebook.com/groups/somegroup/?multi_permalinks=1391536379858751', 'mbedfx.app').path,
+    '/groups/somegroup')
+  // A link with only its host swapped by hand keeps the id, and the tracking still drops.
+  assert.equal(convert('https://mbedfx.app/groups/328668786145521/?multi_permalinks=1391536379858751&hoisted_section_header_type=recently_seen', 'hotsinglesnear.you').url,
+    'https://hotsinglesnear.you/groups/328668786145521?multi_permalinks=1391536379858751')
+  assert.deepEqual(route(new URL('https://hotsinglesnear.you/groups/328668786145521?multi_permalinks=1391536379858751')), want)
+  // And a list is dropped there too, because route() does not read one.
+  assert.equal(convert('https://mbedfx.app/groups/328668786145521/?multi_permalinks=1391536379858751,1391536379858752', 'mbedfx.app').url,
+    'https://mbedfx.app/groups/328668786145521')
+})
+
 test("THE CONVERTER'S OWN QUERY-ID LINKS, PASTED BACK, NAME THE SAME POST on every host", () => {
   /**
    * The already-ours branch kept only ?v=, so re-pasting the page's own /photo/?fbid=… or
    * /embed?clip=… link gave /photo or /embed, the chooser. It now keeps the parameters route() reads
-   * an id from (v, fbid, clip, and story_fbid with id as a pair) and drops the rest.
+   * an id from (v, fbid, clip, story_fbid with id as a pair, and a numeric multi_permalinks since
+   * 2026-11-26) and drops the rest.
    */
   const QUERY_ID = [
     'https://www.facebook.com/photo/?fbid=1596906755391068',
     'https://www.facebook.com/photo.php?fbid=1596906755391068&set=a.774304400984645&type=3',
     'https://www.facebook.com/watch/?v=10153231379946729',
     'https://www.facebook.com/permalink.php?story_fbid=1596906778724399&id=100052152768666',
+    'https://www.facebook.com/groups/328668786145521/?multi_permalinks=1391536379858751',
     'https://www.youtube.com/watch?v=dQw4w9WgXcQ',
     'https://www.twitch.tv/embed?clip=DeliciousDelightfulPicklesWOOP&parent=example.com',
     'https://www.youtube.com/watch.mp4?v=dQw4w9WgXcQ',
