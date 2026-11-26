@@ -39,9 +39,10 @@ obligation.
 
 ## Simple Icons
 
-The brand marks in `public/index.html` are from [Simple Icons](https://simpleicons.org) 16.27.1,
-released under CC0 1.0. Attribution is not required under CC0 and is given anyway. The marks
-themselves remain their owners' trademarks and only identify which sites are supported.
+The brand marks in `public/index.html`, and the README's copies of them in `docs/images/sites/`,
+are from [Simple Icons](https://simpleicons.org) 16.27.1, released under CC0 1.0. Attribution is not
+required under CC0 and is given anyway. The marks themselves remain their owners' trademarks and only
+identify which sites are supported. Streamable has no mark in that set, so it gets a plain play glyph.
 
 ## yt-dlp, FFmpeg and Deno
 
