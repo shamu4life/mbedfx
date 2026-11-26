@@ -201,14 +201,14 @@ Other domains can run copies of this code ([Host your own](#host-your-own)), and
 ## Host your own
 
 > [!WARNING]
-> Nobody has deployed mbedfx with the Deploy to Cloudflare button or on the Workers Free plan yet. Both are written from Cloudflare's documentation and this repo's configs, not from a run. The Docker setup was built and run by hand on one Linux host on 2026-11-25, and CI doesn't build it.
+> Nobody has deployed mbedfx with the Deploy to Cloudflare button or on the Workers Free plan yet. Both are written from Cloudflare's documentation and this repo's configs, not from a run. The Docker setup was built and run by hand on one Linux host on 2026-11-25, before the latest changes to the adapter, and CI doesn't build it.
 
 | Way | You need | Video | Tested |
 |---|---|---|---|
 | Deploy to Cloudflare button | A GitHub account, and a Cloudflare account on Workers Paid (Containers need it) | Yes | No |
 | Cloudflare, from a checkout | Workers Paid, Node 22.18 or later, and Docker running while you deploy | Yes | No |
-| Docker Compose | Docker with Compose v2 on an x86_64 host, and a reverse proxy that terminates TLS | Yes | By hand, once |
-| Node, without Docker | Node 22.18 or later, plus the resolver for video (its image, or Python with ffmpeg, yt-dlp and Deno) | Only with the resolver | The adapter ran once |
+| Docker Compose | Docker with Compose v2 on an x86_64 host, and a reverse proxy that terminates TLS | Yes | Once, before the latest adapter changes |
+| Node, without Docker | Node 22.18 or later, plus the resolver for video (its image, or Python with ffmpeg, yt-dlp and Deno) | Only with the resolver | The adapter ran once, before the same changes |
 
 Either Cloudflare way also runs on Workers Free through `wrangler.free.jsonc`, without the container, and there a video that needs muxing shows its cover image. [docs/SELF-HOSTING.md](docs/SELF-HOSTING.md) is the full guide: every step, what each way costs, and what each one has been measured doing.
 
@@ -225,7 +225,10 @@ git clone https://github.com/shamu4life/mbedfx.git && cd mbedfx
 npm ci
 npx wrangler login
 npm run deploy    # Workers Paid; builds the container image, so Docker must be running
+curl -s 'https://mbedfx-selfhost.<YOUR_SUBDOMAIN>.workers.dev/_api/v1?url=https%3A%2F%2Fbsky.app%2Fprofile%2Fbsky.app%2Fpost%2F3msqpuobiwk2t' | jq .ok
 ```
+
+The last line prints `true` once the Worker answers. Your workers.dev subdomain is in the URL the deploy printed. [The guide](docs/SELF-HOSTING.md#after-the-first-deploy) also checks the container.
 
 Then give the bucket its 60-day expiry, once. Nothing else ever deletes from it:
 
@@ -237,21 +240,20 @@ npx wrangler r2 bucket lifecycle add mbedfx-selfhost-media expire-60d --expire-d
 
 ```bash
 git clone https://github.com/shamu4life/mbedfx.git && cd mbedfx
-umask 077
-printf 'PUBLIC_ORIGIN=https://<YOUR_DOMAIN>\nRESOLVER_SECRET=%s\n' "$(openssl rand -hex 32)" > adapters/node/.env
+(umask 077 && printf 'PUBLIC_ORIGIN=https://<YOUR_DOMAIN>\nRESOLVER_SECRET=%s\n' "$(openssl rand -hex 32)" > adapters/node/.env)
 docker compose -f adapters/node/compose.yaml up --build -d
 curl -s 'http://127.0.0.1:8787/_api/v1?url=https%3A%2F%2Fbsky.app%2Fprofile%2Fbsky.app%2Fpost%2F3msqpuobiwk2t' | jq .ok
 ```
 
 The last line prints `true` once the stack is up and the Bluesky post loads. Compose won't start without `PUBLIC_ORIGIN` and `RESOLVER_SECRET`. It publishes the adapter on `127.0.0.1:8787` only and the resolver not at all, so put your TLS proxy in front of port 8787 and have it pass the client's `Host` header through. [The guide](docs/SELF-HOSTING.md#host-it-with-docker-compose) covers logs, updates, where the media goes, and the measured run.
 
-Your copy of the repo carries this project's GitHub workflows too. If Actions run there, one of them opens a yt-dlp bump pull request every Monday that yt-dlp has shipped a release, and the health check stays off until you set the `HEALTH_BASE` repository variable ([details](docs/SELF-HOSTING.md#with-the-deploy-to-cloudflare-button)).
+Your copy of the repo carries this project's GitHub workflows too. If Actions run there, one of them pushes a yt-dlp bump branch every Monday that yt-dlp has shipped a release and opens a pull request for it. A new repository doesn't let Actions open pull requests unless you turn that on, and there the job opens an issue instead. The health check stays off until you set the `HEALTH_BASE` repository variable ([details](docs/SELF-HOSTING.md#with-the-deploy-to-cloudflare-button)).
 
 ## Configuration
 
 Nothing below is required on Cloudflare. Under Docker Compose, `PUBLIC_ORIGIN` and `RESOLVER_SECRET` are.
 
-On Cloudflare, set a plain setting as a variable in the dashboard (Workers & Pages, your Worker, Settings, Variables and Secrets); `keep_vars` in `wrangler.jsonc` keeps dashboard variables across deploys. Set a credential with `npx wrangler secret put <NAME>`, which reaches the Worker named in your `wrangler.jsonc`. If your Worker has another name, for example one you picked on the Deploy to Cloudflare page, add `--name <your-worker>` or use the dashboard. For mbedfx.app itself, add `-c wrangler.production.jsonc`. On Docker or Node, both kinds go in `adapters/node/.env` or the environment.
+On Cloudflare, set a plain setting as a variable in the dashboard (Workers & Pages, your Worker, Settings, Variables and Secrets); `keep_vars` in `wrangler.jsonc` keeps dashboard variables across deploys. Set a credential with `npx wrangler secret put <NAME>`, which reaches the Worker named in your `wrangler.jsonc`. If your Worker has another name, for example one you picked on the Deploy to Cloudflare page, add `--name <your-worker>` or use the dashboard. For mbedfx.app itself, add `-c wrangler.production.jsonc`. Under Docker Compose, both kinds go in `adapters/node/.env`. On Node without Docker, set them as environment variables of the `node` process: the adapter reads no `.env` file.
 
 | Name | Kind | Default | What it does |
 |---|---|---|---|

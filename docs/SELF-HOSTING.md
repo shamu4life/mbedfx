@@ -9,7 +9,8 @@ was taken.
 > Nobody has deployed mbedfx with the Deploy to Cloudflare button, on Workers Free, or from the generic
 > `wrangler.jsonc` on a real account. Those paths are written from Cloudflare's documentation and this
 > repo's configs, not from a run. The Docker Compose setup was built and run by hand on one residential
-> Linux host on 2026-11-25. CI builds none of the images.
+> Linux host on 2026-11-25, at `90fb2d8`. Later changes to the adapter and the compose file haven't
+> been built, and CI builds none of the images ([The Docker run](#the-docker-run)).
 
 ## Pick a way to run it
 
@@ -17,8 +18,8 @@ was taken.
 |---|---|---|---|---|
 | [Deploy to Cloudflare button](#with-the-deploy-to-cloudflare-button) | A GitHub account, and a Cloudflare account on Workers Paid (Containers need it) | Yes | Workers Paid, plus the container's time awake ([What it costs](#what-it-costs)) | No |
 | [Cloudflare, by hand](#by-hand-from-a-checkout) | Workers Paid, Node 22.18 or later, and Docker running while you deploy | Yes | The same | No |
-| [Docker Compose](#host-it-with-docker-compose) | Docker Engine with Compose v2, an x86_64 host, a domain, and a reverse proxy that terminates TLS | Yes | Your own host | By hand, once, on 2026-11-25 |
-| [Node without Docker](#run-it-on-node-without-docker) | Node 22.18 or later. For video, the resolver too: its image, or Python with ffmpeg, yt-dlp and Deno | Only with the resolver | Your own host | The adapter ran once, on 2026-11-25, beside a local `server.py` |
+| [Docker Compose](#host-it-with-docker-compose) | Docker Engine with Compose v2, an x86_64 host, a domain, and a reverse proxy that terminates TLS | Yes | Your own host | Once by hand, on 2026-11-25 at `90fb2d8`; not rebuilt since later changes to the adapter ([The Docker run](#the-docker-run)) |
+| [Node without Docker](#run-it-on-node-without-docker) | Node 22.18 or later. For video, the resolver too: its image, or Python with ffmpeg, yt-dlp and Deno | Only with the resolver | Your own host | The adapter ran once, on 2026-11-25, beside a local `server.py`, before those same adapter changes |
 
 Both Cloudflare ways also deploy on Workers Free through `wrangler.free.jsonc`, which leaves the
 container out. Videos that need muxing then show their cover image, and Free's limits haven't been
@@ -71,25 +72,33 @@ What to expect, none of it tried yet:
   `.env.example`, and this repo has neither on purpose. Every mbedfx secret is optional, and nobody
   has checked whether the setup page accepts one left blank. Set the ones you want after the first
   deploy ([After the first deploy](#after-the-first-deploy)).
-- **If you rename the Worker on the setup page**, note the name. Whether the page writes it back into
-  your copy's `wrangler.jsonc` is unchecked, and a `wrangler secret put` from a checkout of that copy
-  needs `--name <your-worker>` if it didn't.
+- **If you rename the Worker on the setup page**, note the name. Cloudflare's docs say the page
+  writes it into your copy's `wrangler.jsonc`; nobody here has checked. If it didn't, a
+  `wrangler secret put` from a checkout of that copy needs `--name <your-worker>`. Those docs name
+  only the one config file, so expect `wrangler.free.jsonc` to keep the old name
+  ([On Workers Free](#on-workers-free)).
 - **Other branches.** This project's own Worker builds every branch except `main` with
   `npx wrangler preview`. Whether a Worker the button makes gets the same command is unchecked. Where
   it does, a Preview reads the `previews` block in `wrangler.jsonc`: the container is included, there
   is no R2 bucket, so videos show their cover still there.
 - **Your copy carries this repo's GitHub workflows.** Whether Actions run in a repository the button
-  creates is unchecked. If they do, `ytdlp-freshness.yml` pushes a `chore/ytdlp-<version>` branch and
-  opens a pull request every Monday that yt-dlp has a new release, and Workers Builds builds that
-  branch too. Turn the workflow off under Actions if you don't want it. `health-check.yml` skips until
-  you set the repository variable `HEALTH_BASE` to your primary origin (and `HEALTH_GUESTS` if you
-  have guest hosts). It then checks your instance twice a week and opens issues labelled
+  creates is unchecked. If they do, `ytdlp-freshness.yml` pushes a `chore/ytdlp-<version>` branch
+  every Monday that yt-dlp has a new release and opens a pull request for it. A new repository
+  doesn't let Actions open pull requests until you turn on "Allow GitHub Actions to create and
+  approve pull requests" (Settings, Actions, General), and until then the job opens an issue
+  instead. Workers Builds builds the branch either way. Turn the workflow off under Actions if you
+  don't want it. `health-check.yml` skips until you set the repository variable `HEALTH_BASE` to
+  your primary origin (and `HEALTH_GUESTS` if you have guest hosts). It then checks your instance twice a week and opens issues labelled
   `health-check`.
 
 ### On Workers Free
 
-Workers Free has no Containers. With the button, change two commands on the setup page before the
-first build:
+Workers Free has no Containers. With the button, keep the default Worker and bucket names on the
+setup page, or make the same renames in `wrangler.free.jsonc` in your copy before the first build.
+Cloudflare's docs say setup-page names are written into the copy's Wrangler config, and they mention
+only one config file, which here is `wrangler.jsonc`. They also say Workers Builds fails a build
+whose config names a different Worker from the one it builds. Nobody here has tried either. Then
+change two commands on the setup page before the first build:
 
 | Command | Change it to |
 |---|---|
@@ -114,8 +123,9 @@ What nobody has checked:
 - Whether a Free account has to turn on R2 before the bucket can be created.
 - Whether Free runs Worker Previews at all, and what the button does with a container on a Free
   account.
-- Moving to Workers Paid later. The two files use the same Worker and resource names, so it should be
-  a deploy of `wrangler.jsonc` onto the same Worker, keeping its cache and its workers.dev URL.
+- Moving to Workers Paid later. The two files ship with the same Worker and resource names, so if you
+  kept both files' names in step it should be a deploy of `wrangler.jsonc` onto the same Worker,
+  keeping its cache and its workers.dev URL.
 
 ### By hand, from a checkout
 
@@ -146,6 +156,22 @@ If you are the owner of mbedfx.app: run from a checkout without `-c`, these comm
 `-c wrangler.production.jsonc`.
 
 ### After the first deploy
+
+First check that the Worker answers. `<YOUR_SUBDOMAIN>` is your account's workers.dev subdomain,
+which is in the URL the deploy printed and on the Worker's page in the dashboard. Use your Worker's
+name if you changed it. Both commands need `curl` and `jq`:
+
+```bash
+curl -s 'https://mbedfx-selfhost.<YOUR_SUBDOMAIN>.workers.dev/_api/v1?url=https%3A%2F%2Fbsky.app%2Fprofile%2Fbsky.app%2Fpost%2F3msqpuobiwk2t' | jq .ok
+curl -s https://mbedfx-selfhost.<YOUR_SUBDOMAIN>.workers.dev/_clients | jq '{ok, ytdlp, serving}'
+```
+
+The first prints `true` when the Bluesky post loaded. On Workers Paid the second reaches the
+container and reports which YouTube player clients served bytes, which can take 20 seconds or more.
+On Workers Free there is no container, so `/_clients` answers 503 and the second prints `"ok": false`
+with `null` for the other two.
+
+Then:
 
 1. **Give the bucket its 60-day expiry, once.** Nothing in the code deletes from it, and a config file
    can't hold a lifecycle rule. Use your bucket's name if you changed it:
@@ -187,8 +213,10 @@ models that at about $166 a month on `standard-2` and $29 on `basic`, on top of 
 instance costs a fraction of that, but the half-hourly check can wake a container too.
 
 For scale, mbedfx.app's own container bill for 2026-07-27 to 2026-08-26, read on 2026-08-16 with 21
-of the 31 days in, was $21.63. $21.23 of it was uptime and $0.41 was work. That was with a 10-minute sleep
-timer. The measurement and the reasoning for 5 minutes are the comment on `sleepAfter` in
+of the 31 days in, was $21.63: $21.23 of uptime and $0.41 of work. That cycle ran on `basic` (1/4
+vCPU, 1 GiB, 4 GB) with a 10-minute sleep timer, before production moved to `standard-2` on
+2026-08-28. On `standard-2`, which provisions 6 GiB and 12 GB, the same hours cost several times as
+much. The measurement and the reasoning for 5 minutes are the comment on `sleepAfter` in
 `src/container.ts`.
 
 `basic` is cheaper and slower. The measured YouTube extract is 14.1 s on `basic`, 9.1 s on
@@ -222,13 +250,18 @@ only on `127.0.0.1`.
 
 ```bash
 git clone https://github.com/shamu4life/mbedfx.git && cd mbedfx
-umask 077
-cat > adapters/node/.env <<EOF
+(umask 077 && cat > adapters/node/.env <<EOF
 PUBLIC_ORIGIN=https://<YOUR_DOMAIN>
 RESOLVER_SECRET=$(openssl rand -hex 32)
 EOF
+)
 docker compose -f adapters/node/compose.yaml up --build -d
 ```
+
+The parentheses limit `umask 077` to the command that writes `.env`, so only you can read that file.
+Left set in your shell, it would apply to a later `git pull` as well. The files that pull rewrites
+would reach the adapter image owned by root and unreadable to `node`, the user the adapter runs as.
+That follows from how git and Docker set file modes, and nobody has reproduced it.
 
 Replace `<YOUR_DOMAIN>` before you start: the adapter refuses a `PUBLIC_ORIGIN` that isn't a bare
 `http` or `https` origin. Compose won't start without `PUBLIC_ORIGIN` and `RESOLVER_SECRET`. To serve
@@ -319,6 +352,11 @@ proxy_pass http://127.0.0.1:8787;
 
 Neither example has been tested.
 
+Before you share the domain, replace `public/og.jpg`, which carries the mbedfx.app wordmark, then
+rebuild with `docker compose -f adapters/node/compose.yaml up --build -d`. Set `OWN_HOSTS` for any
+domain you serve that isn't in `PUBLIC_ORIGIN`.
+[Before a public deployment](#before-a-public-deployment) has both steps.
+
 ### Logs, updates and stopping
 
 ```bash
@@ -366,27 +404,6 @@ Compose reads `adapters/node/.env` only to fill in the `${...}` values in `compo
   you raise `MUX_PAGE_TIMEOUT` past 360, raise the adapter's `RESOLVER_TIMEOUT_MS` (default 420000)
   with it, to stay a minute above.
 
-### The Docker run
-
-On 2026-11-25 Docker 26.1.5 and Compose 2.26.1 went onto the residential Linux host from
-[What the first run measured](#what-the-first-run-measured), and the stack was built from a clean
-checkout of `main` at `90fb2d8` with a throwaway `.env` holding only `PUBLIC_ORIGIN` and
-`RESOLVER_SECRET`.
-
-| Check | Result |
-|---|---|
-| `docker compose build` | Both images built in 50 s: `mbedfx-adapter` 226 MB, `mbedfx-resolver` 761 MB. |
-| `.env` kept out of the image | `adapters/node/.env` sat in the build context and is absent from the image. |
-| The resolver's port | Not published. The adapter answered on `127.0.0.1:8787`; nothing answered on the host's 8080. |
-| `/_clients` through the adapter | yt-dlp 2026.11.23, ffmpeg 7.1.5, four YouTube player clients served bytes (`default`, `web_embedded`, `tv_simply`, `mweb`), and the HLS playlist and segment probes passed. |
-| Cards against mbedfx.app | `og:title` and `og:description` matched for a Bluesky post, a Bluesky profile, Reddit and Mastodon. YouTube's first view was the degraded card again while the video was cold. |
-| A muxed video | `/_media/yt%3AjNQXAC9IVRw/0.mp4` served 629,172 bytes. |
-| `docker compose stop adapter` | Under a second, logging `SIGTERM: requests finished, 0 background task(s) pending at stop, all settled`. |
-
-Since then #140, #144, #145, #146 and #148 changed `compose.yaml`, `adapters/node/bindings.ts` or
-`adapters/node/server.ts`, and nobody has built the images again. Nothing builds or runs them in CI,
-so a change can break them without a red check.
-
 ---
 
 ## Run it on Node, without Docker
@@ -411,9 +428,11 @@ Python. `container/README.md`, "Without Docker", has the command and one ffmpeg 
 resolver, start the adapter with `CONTAINER_URL=off`, and videos that need muxing show their cover
 still.
 
-`server.py` checks `X-Resolver-Secret` only when `RESOLVER_SECRET` is set. Unset, it is an
-unauthenticated remuxer that fetches and downloads whatever any caller names, so never publish its
-port or bind it to a public interface.
+`server.py` always listens on 0.0.0.0, every IPv4 interface, and has no setting to change that.
+Under Docker, `-p 127.0.0.1:8080:8080` keeps it on loopback. Without Docker, always set
+`RESOLVER_SECRET`, and firewall port 8080 so only the adapter's host can reach it. The resolver
+checks `X-Resolver-Secret` only when `RESOLVER_SECRET` is set. Without it, the resolver is an
+unauthenticated remuxer that fetches whatever any caller names.
 
 ### Start the adapter
 
@@ -432,6 +451,10 @@ not its parents, which is what the `install -d` line is for. The adapter listens
 put a reverse proxy in front of it as in [Put it behind HTTPS](#put-it-behind-https), and keep it
 running with whatever supervises processes on your host. Nobody has written a systemd unit for it
 yet. To update, `git pull`, rebuild the resolver image, and restart both.
+
+Before you share the domain, replace `public/og.jpg`, which carries the mbedfx.app wordmark, and set
+`OWN_HOSTS` for any domain you serve that isn't in `PUBLIC_ORIGIN`.
+[Before a public deployment](#before-a-public-deployment) has both steps.
 
 ### What each stand-in gives up
 
@@ -457,23 +480,6 @@ says what it replaces. The trade-offs, the same under compose:
 
 `test/node-adapter.test.mjs` starts the adapter on a random port against a fake container and runs
 offline with the rest of the suite.
-
-### What the first run measured
-
-On 2026-11-25 the adapter ran on a residential Linux host under Node 22.18.0, started from a copy of
-exactly the files the Dockerfile copies. Beside it ran `container/server.py` with yt-dlp 2026.11.23,
-which `container/Dockerfile` pinned that day, ffmpeg 7.1.5 and Deno 2.9.8. Each post was fetched with
-Discord's user agent through the adapter and through mbedfx.app, and `og:title`, `og:description`,
-`og:image`, `og:video`, the activity document and the `/_api/v1` JSON were compared with the origins
-stripped. Like and view counts moved between the two reads and are left out below.
-
-| Post | Result |
-|---|---|
-| Bluesky `/profile/bsky.app/post/3msqpuobiwk2t` | Identical: the head, the activity document and all 25 API fields. |
-| Reddit `/r/pics/comments/haucpf` | Identical, all 24 API fields, with no relay and no OAuth app configured. |
-| Mastodon `/mstdn.social/@stux/116994812581955524` | Identical. |
-| Twitter `/jack/status/20` | Same head, but no repost count. From this host the syndication endpoint, the primary path, answered without `retweet_count` (checked by calling it directly), so `reposts` is absent. mbedfx.app shows 126.3K. Which path production's answer came from can't be seen from outside. |
-| YouTube `/jNQXAC9IVRw` | The first view differed. The video was cold here and warm on production, so the adapter drew the degraded card (YouTube's own player, never cached) while the mux ran, which took 3.6 s. On the second view the head and the activity document matched, `og:video` included. The two MP4s are different muxes of the same 19-second video: 629,172 bytes here, 633,710 there. |
 
 ---
 
@@ -539,7 +545,7 @@ disagrees.
 
 | Name | Default | What it does |
 |---|---|---|
-| `PORT` | `8080` | Where it listens (IPv4 only) |
+| `PORT` | `8080` | Where it listens, on 0.0.0.0 (all IPv4 interfaces, no IPv6) |
 | `RESOLVER_SECRET` | unset, meaning no auth | Required in `X-Resolver-Secret` on every `/resolve` when set |
 | `MAX_SECONDS` | `1500` | The longest video it will mux |
 | `MAX_BYTES` | `393216000` (375 MB) | The output ceiling. Move it with `MAX_SECONDS`: the mux is `-c copy`, so output size is the source bitrate times the duration |
@@ -570,144 +576,34 @@ enough disk for `MAX_BYTES` plus the unmerged tracks, per concurrent mux.
 
 ## Before a public deployment
 
-A private instance runs without any of this; a public one does not. Everything in this section is
-code that is now in the tree. What is left is the settings you have to fill in and the one thing
-that still can't be fixed from inside a Worker.
+A private instance runs without these steps, and a public one needs all three. The code behind them
+is in the tree with offline tests (`test/netguard.test.mjs`, `test/selfhost.test.mjs`). None of it
+has run on a public instance yet.
 
-The adapter has run, privately, on one host. Nothing below has been tested on a public instance; it is
-code with offline tests (`test/netguard.test.mjs`, `test/selfhost.test.mjs`), not a deployment report.
+1. **Set `OWN_HOSTS`** to every domain you serve from that isn't already in `PUBLIC_ORIGIN` or
+   `GUEST_HOSTS`, whitespace- or comma-separated, as hostnames or origins:
 
-### `OWN_HOSTS`, and setting it
+   ```sh
+   OWN_HOSTS="embed.example.com https://staging.embed.example.com"
+   ```
 
-The fediverse routes take an instance hostname straight from the URL path and make it the origin of
-a fetch. `fetchableInstance` (`src/platforms/fedihost.ts`) refuses mbedfx's own zones:
-
-```ts
-const OWN_HOSTS = [
-  'mbedfx.app', 'megapenispoopenfarten.sex', 'forsen.sex', 'workers.dev',
-  'sorryifuckedyour.mom', 'hotsinglesnear.you',
-]
-```
-
-The last two are mbedfx.app's guest hosts (`src/guesthost.ts`), domains of another Worker that hands
-mbedfx its post links through a service binding. mbedfx.app's `GUEST_HOSTS` var names them, and they
-are written out here too so they stay refused if that var is ever lost. A self-hosted instance never
-sees a request on them.
-
-The domain a request came in on is refused with no setting at all. On `embed.example.com`, or on
-`d.embed.example.com`, `/embed.example.com/post/1` fetches nothing. Your other domains are not covered
-that way. Serve on `embed.example.com` and `cards.example.net` without declaring either, and
-`/embed.example.com/post/1` requested on `cards.example.net` makes the service fetch itself. On
-Cloudflare that re-enters through the edge and bypasses the zone's own WAF; on a self-hosted box it is
-a self-request and, with the wrong DNS, an internal-service reach.
-
-Set `OWN_HOSTS` on the env to every domain you serve from, whitespace- or comma-separated, as
-hostnames or origins:
-
-```sh
-OWN_HOSTS="embed.example.com https://staging.embed.example.com"
-```
-
-- The value is **added** to the built-in list, never substituted for it. A typo, an empty value or a
-  hostile one can't un-block mbedfx's zones, so every way of getting this wrong is "too strict".
-- One apex entry covers every subdomain: the test is `host === h || host.endsWith('.' + h)`.
-- Unset is a **misconfiguration, not an open door**. The built-in list, the address guard below and
-  the response-shape assert all still stand. What is left reachable is your other public domains,
-  which resolve to your own public address, and the self-request lands on a path this Worker does not
-  serve as an API and renders "couldn't load".
-- The domain a request came in on is read off the request itself. Since 2026-11-25 the Worker hands
-  each request's origin to `fetchableInstance` as `self` (`getPost` in `src/worker.ts`). On a `d.`
-  host the domain under it is refused as well, since a `d.` host is an alias of that domain.
-- Every host in `PUBLIC_ORIGIN` and `GUEST_HOSTS` is refused too, on Workers and on Node, so a domain
-  listed in either needs no second entry here. Any other domain you serve goes here.
-
-The converter page counts `OWN_HOSTS` domains as its own without offering them as buttons: a link
-pasted from one is pointed at the chosen domain instead of being read as a fediverse server.
-
-### DNS and private-range guarding in the Worker half
-
-`src/netguard.ts` is the port of `container/server.py`'s `_safe_url`, in two halves.
-
-**The literal half runs everywhere, including on Cloudflare.** It parses a hostname to bytes and
-range-checks them, so every spelling of one address gets one verdict: `127.0.0.1`, `127.1`,
-`2130706433`, `0177.0.0.1`, `::ffff:127.0.0.1`, `::ffff:7f00:1`, `64:ff9b::7f00:1` and
-`2002:7f00:1::` are all loopback. Covered: `0/8`, `10/8`, `100.64/10`, `127/8`, `169.254/16`
-(including `169.254.169.254`), `172.16/12`, `192.168/16`, `198.18/15`, the documentation ranges,
-`224/4`, `240/4`, `::`, `::1`, `fc00::/7`, `fe80::/10`, `ff00::/8`, NAT64, 6to4, and the
-IPv4-mapped/-compatible forms of all of the above. It also refuses `localhost`, `.local`,
-`.internal`, `.lan`, `.home.arpa` and `.arpa` names, which `FEDI_HOST` admits as soon as they carry
-a dot (`api.localhost` passes that regex; `localhost` does not).
-
-**The DNS half needs a resolver.** `env.RESOLVE_HOST` is a function, not a wrangler binding. A Worker
-has no resolver, so on Cloudflare it is permanently undefined and the literal check is the whole guard.
-The Node adapter sets it (`resolveHost` in `adapters/node/bindings.ts`):
-
-```ts
-import dns from 'node:dns/promises'
-env.RESOLVE_HOST = async (host) => (await dns.lookup(host, { all: true })).map(a => a.address)
-```
-
-With it wired, `evil.example.com IN A 127.0.0.1` is refused **before** the request is made, and a
-name with one public address and one private one is refused too, because every address is checked, as
-`getaddrinfo` is in the container. A resolver that throws or answers with nothing fails closed.
-
-What it still can't promise: DNS rebinding. Between the resolution and the fetch's own, a record
-with a one-second TTL can change; closing that needs pinning the connection to the address that was
-checked, which neither `fetch()` nor Workers exposes. The bound on the residual is unchanged: no
-credential is attached, the body is capped, and the response must be the right shape, so the worst case
-stays a blind GET.
-
-### The Twitter guest token
-
-`getGuestToken` kept its `cf: { cacheEverything, cacheTtl }` and gained a process-local memo with a
-shared in-flight promise (`src/platforms/twitter/fetch.ts`). The `cf` option is a Cloudflare-only
-field and is silently ignored elsewhere; without the memo, every cold card off Cloudflare minted a
-fresh guest token. A token has roughly a 500-request budget, so the symptom was never an outage.
-It was Twitter rate-limiting an instance for a reason invisible from the code. N processes still
-hold N tokens, which is the same weakness the `cf` cache had (it is per-colo) and is bounded.
-
-### The mux buffering fallback, bounded
-
-`FixedLengthStream` is a Workers global, and `putMuxed` (`src/worker.ts`) used it to stream a muxed
-MP4 into R2 without buffering. Off Cloudflare it doesn't exist, so every mux took the fallback:
-`cache.put(key, await muxed.arrayBuffer())`, the whole video in memory. The comment called that
-"bounded by the container's own MAX_BYTES output cap", which is true and is a bound of the wrong
-size. `MAX_BYTES` is 393216000, a **375 MB** output ceiling, beside `MAX_SECONDS` 1500
-(`container/server.py`), and `RESOLVER_SLOTS` is 4. Four ordinary long videos, no attacker: 1.5 GB
-resident.
-
-Three paths now, in order of how little memory they hold:
-
-1. `FixedLengthStream` plus a `content-length` is the Workers production path, unchanged. The
-   container always sends the header (`send_header("content-length", str(size))`).
-2. `MEDIA_CACHE.putStream(key, stream, length)`: **implement this** if your store can take a
-   stream (a file write, an S3 multipart upload). R2 can't, which is why `FixedLengthStream` exists
-   at all. A store that implements it never buffers and is not subject to the ceiling. The Node
-   adapter's directory store implements it.
-3. Buffering, capped at `MUX_BUFFER_MAX` (default 64 MB, env-overridable). Bodies with no
-   `content-length` are read with a running total and abandoned at the cap rather than measured
-   after the fact. Past the cap the object is **not stored**: that view degrades to the cover still,
-   exactly as a failed mux does, and a line goes to stderr.
-
-64 MB is chosen against the ~128 MB Workers isolate ceiling, not against a measured distribution of
-video sizes, and nobody has measured that. The cost of the refusal is real: an over-ceiling video
-re-muxes on every view. `putStream` is the fix; raising `MUX_BUFFER_MAX` is the workaround for an
-operator with memory to spend.
-
-### The front page's link preview
-
-Paste your instance's front page into Discord and it unfurls from the page's own head. The Worker
-points `og:url`, `og:image` and `twitter:image` at your primary `PUBLIC_ORIGIN` entry and drops the
-domain from `og:image:alt` (`injectPage` in `src/sitepage.ts`). The picture is another matter.
-`public/og.jpg` is mbedfx.app's artwork, with the mbedfx.app wordmark across the middle, and the
-Worker can't redraw it. Until you replace the file, your front page unfurls with somebody else's
-domain on it.
-
-Save a 1200×630 JPEG over `public/og.jpg` and deploy. On Node, rebuild the image too, because the
-Dockerfile copies `public/` in. The head declares that size and type in `og:image:width`,
-`og:image:height` and `og:image:type`, and Discord won't draw a large image without a declared size.
-If yours differs, change those three tags in `public/index.html` as well. Nobody has measured how
-long Discord keeps showing the old picture for a link it unfurled before the swap.
+   The value is added to the built-in list and never replaces it, so a typo or an empty value can
+   only make the guard stricter. One apex entry covers all of its subdomains. Leaving it unset is a
+   misconfiguration with a narrow reach: a request on one of your domains can make the fediverse
+   routes fetch another of them, and the rest of the guard still stands
+   ([`OWN_HOSTS`, and setting it](#own_hosts-and-setting-it)).
+2. **Replace `public/og.jpg`** with a 1200×630 JPEG of your own. It is the front page's link preview,
+   and it carries the mbedfx.app wordmark. If yours has another size or type, change
+   `og:image:width`, `og:image:height` and `og:image:type` in `public/index.html` to match, because
+   Discord won't draw a large image without a declared size. On Cloudflare, deploy again. Under
+   Docker Compose, rebuild the adapter image with
+   `docker compose -f adapters/node/compose.yaml up --build -d`, because its Dockerfile copies
+   `public/` in. On Node without Docker the adapter reads `public/` on every request, so the new
+   files are served at once ([The front page's link preview](#the-front-pages-link-preview)).
+3. **Off Cloudflare, keep `RESOLVE_HOST` wired.** The Node adapter wires it to `dns.lookup` by
+   default, which turns on the DNS half of the private-address guard. An adapter of your own has to
+   supply it. Even wired, it can't stop DNS rebinding
+   ([DNS and private-range guarding in the Worker half](#dns-and-private-range-guarding-in-the-worker-half)).
 
 ---
 
@@ -720,7 +616,49 @@ README's comparison table said "Workers only". Both were corrected once the adap
 The corrections that make exposing an instance safe landed on 2026-08-12: the private-address guard
 the Worker half never had (`src/netguard.ts`), a configurable `OWN_HOSTS`, a guest-token cache that
 works on both runtimes, a bound on the mux buffering fallback, and the `CacheLike` contract written
-down. They are code with offline tests ([Before a public deployment](#before-a-public-deployment)).
+down. They are code with offline tests, and each has a section below, from
+[`OWN_HOSTS`, and setting it](#own_hosts-and-setting-it) to
+[The front page's link preview](#the-front-pages-link-preview).
+[Before a public deployment](#before-a-public-deployment) lists what an operator has to set.
+
+### What the first run measured
+
+On 2026-11-25 the adapter ran on a residential Linux host under Node 22.18.0, started from a copy of
+exactly the files `adapters/node/Dockerfile` copies, before the adapter changes listed under
+[The Docker run](#the-docker-run). Beside it ran `container/server.py` with yt-dlp 2026.11.23,
+which `container/Dockerfile` pinned that day, ffmpeg 7.1.5 and Deno 2.9.8. Each post was fetched with
+Discord's user agent through the adapter and through mbedfx.app, and `og:title`, `og:description`,
+`og:image`, `og:video`, the activity document and the `/_api/v1` JSON were compared with the origins
+stripped. Like and view counts moved between the two reads and are left out below.
+
+| Post | Result |
+|---|---|
+| Bluesky `/profile/bsky.app/post/3msqpuobiwk2t` | Identical: the head, the activity document and all 25 API fields. |
+| Reddit `/r/pics/comments/haucpf` | Identical, all 24 API fields, with no relay and no OAuth app configured. |
+| Mastodon `/mstdn.social/@stux/116994812581955524` | Identical. |
+| Twitter `/jack/status/20` | Same head, but no repost count. From this host the syndication endpoint, the primary path, answered without `retweet_count` (checked by calling it directly), so `reposts` is absent. mbedfx.app shows 126.3K. Which path production's answer came from can't be seen from outside. |
+| YouTube `/jNQXAC9IVRw` | The first view differed. The video was cold here and warm on production, so the adapter drew the degraded card (YouTube's own player, never cached) while the mux ran, which took 3.6 s. On the second view the head and the activity document matched, `og:video` included. The two MP4s are different muxes of the same 19-second video: 629,172 bytes here, 633,710 there. |
+
+### The Docker run
+
+On 2026-11-25 Docker 26.1.5 and Compose 2.26.1 went onto the residential Linux host from
+[What the first run measured](#what-the-first-run-measured), and the stack was built from a clean
+checkout of `main` at `90fb2d8` with a throwaway `.env` holding only `PUBLIC_ORIGIN` and
+`RESOLVER_SECRET`.
+
+| Check | Result |
+|---|---|
+| `docker compose build` | Both images built in 50 s: `mbedfx-adapter` 226 MB, `mbedfx-resolver` 761 MB. |
+| `.env` kept out of the image | `adapters/node/.env` sat in the build context and is absent from the image. |
+| The resolver's port | Not published. The adapter answered on `127.0.0.1:8787`; nothing answered on the host's 8080. |
+| `/_clients` through the adapter | yt-dlp 2026.11.23, ffmpeg 7.1.5, four YouTube player clients served bytes (`default`, `web_embedded`, `tv_simply`, `mweb`), and the HLS playlist and segment probes passed. |
+| Cards against mbedfx.app | `og:title` and `og:description` matched for a Bluesky post, a Bluesky profile, Reddit and Mastodon. YouTube's first view was the degraded card again while the video was cold. |
+| A muxed video | `/_media/yt%3AjNQXAC9IVRw/0.mp4` served 629,172 bytes. |
+| `docker compose stop adapter` | Under a second, logging `SIGTERM: requests finished, 0 background task(s) pending at stop, all settled`. |
+
+Since then #140, #144, #145, #146 and #148 changed `compose.yaml`, `adapters/node/bindings.ts` or
+`adapters/node/server.ts`, and nobody has built the images again. Nothing builds or runs them in CI,
+so a change can break them without a red check.
 
 ### The container, on its own
 
@@ -965,6 +903,134 @@ Secrets are plain strings on `Env` and map straight onto environment variables: 
 `REDDIT_RELAY_URL`, `REDDIT_RELAY_KEY`, and the three pools with their overflow secrets, `X_ACCOUNTS`,
 `IG_ACCOUNTS` and `YT_ACCOUNTS` with `_2` and `_3` each (all on `Env` in `src/analytics.ts`).
 `TRANSLATE_GOOGLE` is read the same way. [Settings](#settings) has what each does.
+
+### `OWN_HOSTS`, and setting it
+
+The fediverse routes take an instance hostname straight from the URL path and make it the origin of
+a fetch. `fetchableInstance` (`src/platforms/fedihost.ts`) refuses mbedfx's own zones:
+
+```ts
+const OWN_HOSTS = [
+  'mbedfx.app', 'megapenispoopenfarten.sex', 'forsen.sex', 'workers.dev',
+  'sorryifuckedyour.mom', 'hotsinglesnear.you',
+]
+```
+
+The last two are mbedfx.app's guest hosts (`src/guesthost.ts`), domains of another Worker that hands
+mbedfx its post links through a service binding. mbedfx.app's `GUEST_HOSTS` var names them, and they
+are written out here too so they stay refused if that var is ever lost. A self-hosted instance never
+sees a request on them.
+
+The domain a request came in on is refused with no setting at all. On `embed.example.com`, or on
+`d.embed.example.com`, `/embed.example.com/post/1` fetches nothing. Your other domains are not covered
+that way. Serve on `embed.example.com` and `cards.example.net` without declaring either, and
+`/embed.example.com/post/1` requested on `cards.example.net` makes the service fetch itself. On
+Cloudflare that re-enters through the edge and bypasses the zone's own WAF; on a self-hosted box it is
+a self-request and, with the wrong DNS, an internal-service reach.
+
+`OWN_HOSTS` closes that gap. [Before a public deployment](#before-a-public-deployment) has the
+example. How the value is read:
+
+- The value is **added** to the built-in list, never substituted for it. A typo, an empty value or a
+  hostile one can't un-block mbedfx's zones, so every way of getting this wrong is "too strict".
+- One apex entry covers every subdomain: the test is `host === h || host.endsWith('.' + h)`.
+- Unset is a **misconfiguration, not an open door**. The built-in list, the address guard below and
+  the response-shape assert all still stand. What is left reachable is your other public domains,
+  which resolve to your own public address, and the self-request lands on a path this Worker does not
+  serve as an API and renders "couldn't load".
+- The domain a request came in on is read off the request itself. Since 2026-11-25 the Worker hands
+  each request's origin to `fetchableInstance` as `self` (`getPost` in `src/worker.ts`). On a `d.`
+  host the domain under it is refused as well, since a `d.` host is an alias of that domain.
+- Every host in `PUBLIC_ORIGIN` and `GUEST_HOSTS` is refused too, on Workers and on Node, so a domain
+  listed in either needs no second entry here. Any other domain you serve goes here.
+
+The converter page counts `OWN_HOSTS` domains as its own without offering them as buttons: a link
+pasted from one is pointed at the chosen domain instead of being read as a fediverse server.
+
+### DNS and private-range guarding in the Worker half
+
+`src/netguard.ts` is the port of `container/server.py`'s `_safe_url`, in two halves.
+
+**The literal half runs everywhere, including on Cloudflare.** It parses a hostname to bytes and
+range-checks them, so every spelling of one address gets one verdict: `127.0.0.1`, `127.1`,
+`2130706433`, `0177.0.0.1`, `::ffff:127.0.0.1`, `::ffff:7f00:1`, `64:ff9b::7f00:1` and
+`2002:7f00:1::` are all loopback. Covered: `0/8`, `10/8`, `100.64/10`, `127/8`, `169.254/16`
+(including `169.254.169.254`), `172.16/12`, `192.168/16`, `198.18/15`, the documentation ranges,
+`224/4`, `240/4`, `::`, `::1`, `fc00::/7`, `fe80::/10`, `ff00::/8`, NAT64, 6to4, and the
+IPv4-mapped/-compatible forms of all of the above. It also refuses `localhost`, `.local`,
+`.internal`, `.lan`, `.home.arpa` and `.arpa` names, which `FEDI_HOST` admits as soon as they carry
+a dot (`api.localhost` passes that regex; `localhost` does not).
+
+**The DNS half needs a resolver.** `env.RESOLVE_HOST` is a function, not a wrangler binding. A Worker
+has no resolver, so on Cloudflare it is permanently undefined and the literal check is the whole guard.
+The Node adapter sets it (`resolveHost` in `adapters/node/bindings.ts`):
+
+```ts
+import dns from 'node:dns/promises'
+env.RESOLVE_HOST = async (host) => (await dns.lookup(host, { all: true })).map(a => a.address)
+```
+
+With it wired, `evil.example.com IN A 127.0.0.1` is refused **before** the request is made, and a
+name with one public address and one private one is refused too, because every address is checked, as
+`getaddrinfo` is in the container. A resolver that throws or answers with nothing fails closed.
+
+What it still can't promise: DNS rebinding. Between the resolution and the fetch's own, a record
+with a one-second TTL can change; closing that needs pinning the connection to the address that was
+checked, which neither `fetch()` nor Workers exposes. The bound on the residual is unchanged: no
+credential is attached, the body is capped, and the response must be the right shape, so the worst case
+stays a blind GET.
+
+### The Twitter guest token
+
+`getGuestToken` kept its `cf: { cacheEverything, cacheTtl }` and gained a process-local memo with a
+shared in-flight promise (`src/platforms/twitter/fetch.ts`). The `cf` option is a Cloudflare-only
+field and is silently ignored elsewhere; without the memo, every cold card off Cloudflare minted a
+fresh guest token. A token has roughly a 500-request budget, so the symptom was never an outage.
+It was Twitter rate-limiting an instance for a reason invisible from the code. N processes still
+hold N tokens, which is the same weakness the `cf` cache had (it is per-colo) and is bounded.
+
+### The mux buffering fallback, bounded
+
+`FixedLengthStream` is a Workers global, and `putMuxed` (`src/worker.ts`) used it to stream a muxed
+MP4 into R2 without buffering. Off Cloudflare it doesn't exist, so every mux took the fallback:
+`cache.put(key, await muxed.arrayBuffer())`, the whole video in memory. The comment called that
+"bounded by the container's own MAX_BYTES output cap", which is true and is a bound of the wrong
+size. `MAX_BYTES` is 393216000, a **375 MB** output ceiling, beside `MAX_SECONDS` 1500
+(`container/server.py`), and `RESOLVER_SLOTS` is 4. Four ordinary long videos, no attacker: 1.5 GB
+resident.
+
+Three paths now, in order of how little memory they hold:
+
+1. `FixedLengthStream` plus a `content-length` is the Workers production path, unchanged. The
+   container always sends the header (`send_header("content-length", str(size))`).
+2. `MEDIA_CACHE.putStream(key, stream, length)`: **implement this** if your store can take a
+   stream (a file write, an S3 multipart upload). R2 can't, which is why `FixedLengthStream` exists
+   at all. A store that implements it never buffers and is not subject to the ceiling. The Node
+   adapter's directory store implements it.
+3. Buffering, capped at `MUX_BUFFER_MAX` (default 64 MB, env-overridable). Bodies with no
+   `content-length` are read with a running total and abandoned at the cap rather than measured
+   after the fact. Past the cap the object is **not stored**: that view degrades to the cover still,
+   exactly as a failed mux does, and a line goes to stderr.
+
+64 MB is chosen against the ~128 MB Workers isolate ceiling, not against a measured distribution of
+video sizes, and nobody has measured that. The cost of the refusal is real: an over-ceiling video
+re-muxes on every view. `putStream` is the fix; raising `MUX_BUFFER_MAX` is the workaround for an
+operator with memory to spend.
+
+### The front page's link preview
+
+Paste your instance's front page into Discord and it unfurls from the page's own head. The Worker
+points `og:url`, `og:image` and `twitter:image` at your primary `PUBLIC_ORIGIN` entry and drops the
+domain from `og:image:alt` (`injectPage` in `src/sitepage.ts`). The picture is another matter.
+`public/og.jpg` is mbedfx.app's artwork, with the mbedfx.app wordmark across the middle, and the
+Worker can't redraw it. Until you replace the file, your front page unfurls with somebody else's
+domain on it.
+
+The head declares the picture's size and type in `og:image:width`, `og:image:height` and
+`og:image:type`, and Discord won't draw a large image without a declared size. That is why a
+replacement of another size needs those three tags changed as well (step 2 of
+[Before a public deployment](#before-a-public-deployment)). Nobody has measured how long Discord
+keeps showing the old picture for a link it unfurled before the swap.
 
 ### Egress IP
 

@@ -81,8 +81,9 @@ relay's traffic, but Google requires a billing account on the project anyway.
    `npx wrangler secret put REDDIT_RELAY_URL` and then the same for `REDDIT_RELAY_KEY` do the same
    job; for mbedfx.app add `-c wrangler.production.jsonc`.
 
-   On the Node adapter or Docker Compose, put both lines in `adapters/node/.env`. Compose passes
-   them to the adapter.
+   Under Docker Compose, put both lines in `adapters/node/.env`, and compose passes them to the
+   adapter. On the Node adapter without Docker, set them as environment variables of the `node`
+   process: the adapter reads no `.env` file.
 
 Off Cloudflare you may not need a relay at all. On 2026-11-25, Node's `fetch` got Reddit's embed
 from a home connection, where curl from the same address was refused (docs/SELF-HOSTING.md, "Egress
