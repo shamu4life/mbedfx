@@ -73,6 +73,14 @@ mbedfx.app's Reddit app and account, and it names no account at all. Nobody else
   its old pin.it warning. In `/_api/v1`, send it
   as `?url=/pin.it/{code}`. The shortener was measured from a home connection on 2026-11-25. Nobody
   has measured it from Cloudflare's network yet.
+- **A paste test for Discord's component embeds, to be removed once it has answered.**
+  `/_wait/e/{0|1|2}/{tag}/{post path}` takes an X or Bluesky post and serves its normal Discord head
+  with one change per variant. `0` marks the activity link's id. `1` also adds a component embed to
+  the head. `2` adds the component embed and takes the activity link out. Pasted together, the three
+  show which card Discord draws when a page carries both, and whether a component embed works
+  without the activity document. Each fetch of the `0` or `1` document writes a `wait_api` row coded
+  700 or 701 (`docs/METRICS.md`). The routes answer `no-store`, and no other response changes. Nobody
+  has pasted them yet.
 
 ### Changed
 
@@ -145,6 +153,17 @@ mbedfx.app's Reddit app and account, and it names no account at all. Nobody else
   from X and Bluesky already did. FixTweetBot's FIXERS.md comparison (tested 2026-11-08) found both.
   Neither fix has been pasted into Discord yet. A shared Instagram video wasn't among the examples,
   and if Threads sends one without a playable link, the card shows its cover picture.
+- **Facebook group links that point at one post now show it.** A
+  `facebook.com/groups/{group}/?multi_permalinks={post}` link said "Not found", and the converter
+  dropped the post id and handed out the group's home page. The link now draws the same card as
+  `/groups/{group}/posts/{post}/`, and the converter gives that `/posts/` link. A group's home page
+  still says "Not found", and so does a link listing more than one post.
+- **The `/fb/` and `/th/` site codes work on Facebook query links and Threads share links.**
+  `mbedfx.app/fb/photo/?fbid=…`, `/fb/photo.php?fbid=…`, `/fb/watch/?v=…`, `/fb/story.php?…`,
+  `/fb/permalink.php?…` and `/th/share/{code}` answered "Not found" though the same links without the
+  code worked, and now give the same card as those links. The converter's "Read as" list adds the
+  code to the front of the link, so picking Facebook on a photo or video link, or Threads on a share
+  link, used to swap a working link for a dead one.
 - **`RESOLVER_SECRET` was documented as protecting the Cloudflare container, and it doesn't.**
   `container/README.md` said to set it on the container as well as the Worker, and nothing in this
   repo puts it there: the container's Durable Object passes it no environment, so the container never

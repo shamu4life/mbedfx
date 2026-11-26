@@ -2271,8 +2271,10 @@ test('WAIT GUARDS: humans go to YouTube, n past 60 is refused, malformed paths f
   // A 9-prefixed id that is not a wait id is an ordinary bad status id. 5 became p on 2026-09-02,
   // and the guard moved to digit 6. 6 was d for one day (2026-11-25, 9600 control and 9601
   // variant), and since d was removed every `96nn` id is unassigned again, those two included: a
-  // Discord crawler that re-asks for one gets the same 404 as any other bad id. Digit 7 has never
-  // had a surface. The last two have no sentinel after the prefix.
+  // Discord crawler that re-asks for one gets the same 404 as any other bad id. Digit 7 had no
+  // surface until 2026-11-26, when it became e (the component-embed paste); e takes only 00 and 01,
+  // so `9705` stays here as an id that must still 404, and test/component-embed.test.mjs covers the
+  // two it does take. The last two have no sentinel after the prefix.
   for (const path of ['/users/youtube/statuses/9605' + '1121116', '/api/v1/statuses/9600' + '1121116', '/api/v1/statuses/9601' + '1121116',
     '/users/ExpPage/statuses/9601' + '1121116', '/api/v1/statuses/9602' + '1121116', '/api/v1/statuses/9705' + '1121116',
     '/api/v1/statuses/9105' + '2121116', '/api/v1/statuses/950406' + '2121116']) {

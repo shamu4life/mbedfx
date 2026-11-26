@@ -647,7 +647,9 @@ function facebook(seg: string[]): Route | null {
    *
    * BOTH SEGMENTS MUST BE NUMERIC, and that is what keeps this off every other /groups/ url: a group
    * HOME page (/groups/{gid}) and its /members, /media and /about tabs all fail the depth-4 shape,
-   * and a NAMED group (/groups/somename/posts/…) fails FB_NUM at seg[1].
+   * and a NAMED group (/groups/somename/posts/…) fails FB_NUM at seg[1]. The home page stays
+   * unclaimed with ONE exception, which is not here because its post id is in the query: a home url
+   * carrying a numeric `?multi_permalinks=` is this same post, routed by fbGroupQuery below.
    */
   if (seg.length === 4 && seg[0] === 'groups' && FB_NUM.test(seg[1])
     && (seg[2] === 'permalink' || seg[2] === 'posts') && FB_NUM.test(seg[3])) {
@@ -767,17 +769,11 @@ function facebook(seg: string[]): Route | null {
    * escaped only because a leading underscore fails FB_CODE, which is luck rather than a guard.
    *
    * The TYPED forms below (/share/v|r|p/{code}) stay Facebook's — those name the platform. Only the
-   * bare one is ambiguous, and only the bare one is resolved.
+   * bare one is ambiguous, and only the bare one is resolved. The arm itself is metaShare(), because
+   * the /th/ escape hatch is its second caller.
    */
-  if (seg.length === 2 && seg[0] === 'share' && SHARE_CODE.test(seg[1])) {
-    return {
-      kind: 'metashare',
-      code: seg[1],
-      // Through canonical() for the same reason the shortlink route is: this becomes a Location
-      // header, and a decoded segment can carry a CR/LF that makes `new Headers` throw.
-      canonical: canonical(`https://www.threads.com/share/${seg[1]}`),
-    }
-  }
+  const bareShare = metaShare(seg)
+  if (bareShare) return bareShare
   if (
     seg.length === 3 && seg[0] === 'share' &&
     (seg[1] === 'v' || seg[1] === 'r' || seg[1] === 'p') && FB_CODE.test(seg[2])
@@ -786,6 +782,156 @@ function facebook(seg: string[]): Route | null {
   }
   // /{page}/videos/{id} — the classic page-video permalink; equivalent to watch?v={id}.
   if (seg.length === 3 && seg[1] === 'videos' && FB_NUM.test(seg[2]) && seg[0]) return fbPost('watch', seg[2])
+  return null
+}
+
+/**
+ * `/groups/{gid}/?multi_permalinks={pid}` — a GROUP POST WHOSE ID IS IN THE QUERY, a spelling
+ * FixTweetBot's FIXERS.md lists among the Facebook link types every fixer is rated on. It was "Not
+ * found" in every form: the group home is unclaimed (see the group arm in facebook()), nothing read
+ * the query, and the converter dropped it and emitted the bare home. Found 2026-11-26 checking that
+ * table against production.
+ *
+ * WHAT WAS MEASURED, 2026-11-26, from a Linux box with Facebook's own crawler user agent (NOT from a
+ * Worker; this is a question about what the url means, not about what Cloudflare's egress is sent):
+ *   - the multi_permalinks url answers the GROUP HOME: og:url and og:title name the group, and
+ *     Facebook's own route params carry `multi_permalinks: "{pid}"` with `post_id: null`. So the post
+ *     is a highlight on the home page, and that page unfurls as the group. Sending a crawler there
+ *     would draw the group, which is why the canonical below is the posts/ spelling and not this one;
+ *   - `/groups/{gid}/posts/{pid}/` answers og:url `…/posts/{pid}/` with its route param
+ *     `story_id: "{pid}"`. The same number is that group's post id in both;
+ *   - and, per the same day's production report (measured through mbedfx.app, so from Worker
+ *     egress), `/groups/{gid}/posts/{pid}/` renders a real group-post card.
+ * What was NOT measured is that the highlighted post on the home page is the one the posts/ spelling
+ * renders; that rests on the two route params naming the same number.
+ *
+ * SO IT MINTS EXACTLY THE ROUTE THE posts/ SHAPE MINTS, through the same fbPost('group', …), and the
+ * three spellings share one ref and one cache entry. The guards are the group arm's own: FB_NUM on
+ * both ids, because that arm refuses a named group and a non-numeric post, and this one must not
+ * claim a pair that arm would refuse.
+ *
+ * WHAT STAYS UNROUTED, on purpose:
+ *   - a missing, empty or non-numeric multi_permalinks, which leaves the group home's own answer;
+ *   - a LIST (`multi_permalinks=1,2`). The name says it can hold more than one, and choosing one of
+ *     them would be a guess at which post the reader meant;
+ *   - a named group (`/groups/somename/?multi_permalinks=…`), refused by the posts/ arm as well;
+ *   - any deeper /groups/{gid}/… tab carrying the parameter. Only the home page was seen with it,
+ *     and what a tab would do with it was not measured.
+ *
+ * A HELPER THAT TAKES SEGMENTS AND THE QUERY, called first by facebookQuery() below, which both
+ * routeInner's unforced query block and the /fb/ escape hatch use. So
+ * `/fb/groups/{gid}/?multi_permalinks=` routes like its unprefixed form, as every other query-id
+ * link under /fb/ does since the forced twins landed (2026-11-26).
+ */
+function fbGroupQuery(seg: string[], q: URLSearchParams): Route | null {
+  if (seg.length !== 2 || seg[0] !== 'groups' || !FB_NUM.test(seg[1])) return null
+  const pid = q.get('multi_permalinks') || ''
+  return FB_NUM.test(pid) ? fbPost('group', `${seg[1]}_${pid}`) : null
+}
+
+/**
+ * META'S BARE SHARE LINK, `/share/{code}`, which Threads and Facebook mint in the same shape. It is a
+ * 'metashare' route, not a post: the code names neither a post nor a platform until worker.ts asks
+ * both hosts and follows whichever one 302s (platforms/metashare/fetch.ts has the measurement).
+ *
+ * A FUNCTION, for shortlink()'s reason: it has two callers. facebook() claims it unforced, which is
+ * also how /fb/share/{code} reaches it, and the /th/ escape hatch claims /th/share/{code}. Until the
+ * second caller existed the Threads twin was notfound while the Facebook one worked, so picking
+ * Threads in the converter's "Read as" list on a threads.com/share/ paste handed out a dead link.
+ */
+function metaShare(seg: string[]): Route | null {
+  if (seg.length !== 2 || seg[0] !== 'share' || !SHARE_CODE.test(seg[1])) return null
+  return {
+    kind: 'metashare',
+    code: seg[1],
+    // Through canonical() for the same reason the shortlink route is: this becomes a Location
+    // header, and a decoded segment can carry a CR/LF that makes `new Headers` throw.
+    canonical: canonical(`https://www.threads.com/share/${seg[1]}`),
+  }
+}
+
+/**
+ * FACEBOOK'S QUERY-ID SHAPES: `/watch?v={id}`, `/story.php` and `/permalink.php` with
+ * `?story_fbid={post}&id={owner}`, and `/photo?fbid={id}` or `/photo.php?fbid={id}`. The id lives in
+ * the QUERY, which facebook()'s segment ladder never sees, so these take the segments AND the query.
+ *
+ * SEGMENTS, NOT url.pathname, because there are two callers: routeInner's unforced query block and the
+ * /fb/ escape hatch, which hands this `seg.slice(1)`. Until 2026-11-26 the three arms were inline in
+ * routeInner, keyed on `seg.length === 1` and, for story.php, on an exact `url.pathname`. Under the
+ * prefix the segments start with 'fb' and the pathname with '/fb/', so none of them could fire:
+ * /fb/photo/?fbid=…, /fb/photo.php?fbid=…, /fb/watch/?v=…, /fb/story.php?… and /fb/permalink.php?…
+ * were all notfound while the same links without /fb/ worked. Found by running route() offline at
+ * ff73eb9 over the Facebook rows of FixTweetBot's FIXERS.md, which lists this instance as
+ * `mbedfx.app/fb`, and confirmed by requests from a Linux machine to production, where each prefixed
+ * link answered a "Not found" card. Routing reads no network, so a Worker's egress could not change
+ * that answer. The converter's "Read as" picker builds `/{code}{path}` from what it converted, so
+ * picking Facebook on a photo or watch paste handed out one of those dead links.
+ *
+ * YOUTUBE IS NOT HERE. A `v` of exactly YouTube's 11-char id is YouTube's, and routeInner checks that
+ * before calling this unforced; this reads only a numeric v. Forced, that check is skipped on purpose:
+ * /fb/watch?v={11 digits} is Facebook's because the reader named Facebook, while /watch?v={11 digits}
+ * stays YouTube's. /fb/watch?v=dQw4w9WgXcQ claims nothing either way, since that id fails FB_NUM.
+ */
+function facebookQuery(seg: string[], q: URLSearchParams): Route | null {
+  // The group arm reads a two-segment path, so it goes before the one-segment shapes below.
+  const group = fbGroupQuery(seg, q)
+  if (group) return group
+  if (seg.length !== 1) return null
+  if (seg[0] === 'watch') {
+    // A long NUMERIC v is Facebook's. Reads the RAW param, cutting a pasted `/…` tail the way the
+    // YouTube arm tolerates one, and not the YouTube-validated id, which is empty for every Facebook
+    // id: reading that one silently unrouted Facebook when the tolerant-v parsing landed.
+    const fbId = (q.get('v') || '').replace(/\/.*$/, '')
+    return FB_NUM.test(fbId) ? fbPost('watch', fbId) : null
+  }
+  /**
+   * `/story.php?story_fbid={post}&id={owner}` and `/permalink.php?…` — Facebook's LEGACY post
+   * permalinks.
+   *
+   * REPORTED 2026-08-01, and the old behaviour was worse than a miss. `/story.php` is one segment, so
+   * it fell through every platform matcher to the AMBIGUOUS chooser, which offered a human
+   * "x.com/story.php or instagram.com/story.php" — two links that mean nothing, for a url that is
+   * unambiguously Facebook's.
+   *
+   * IT IS ALSO WHERE FACEBOOK'S OWN SHARE RESOLUTION LANDS for some codes. Measured on the reported
+   * link: /share/p/{code} 302s here, while three other share codes 302 to /{owner}/posts/{id}. So a
+   * resolved share was being handed a permalink shape nothing could route — the reason
+   * platforms/metashare's comment already lists story.php among "the shapes the router already
+   * parses" while the router did not.
+   *
+   * BOTH IDS ARE REQUIRED. story_fbid alone does not name a post — the pair does, which is exactly
+   * why the ref id is the composite. A url carrying only one is not routed rather than guessed at.
+   */
+  if (seg[0] === 'story.php' || seg[0] === 'permalink.php') {
+    const post = q.get('story_fbid') || ''
+    const owner = q.get('id') || ''
+    return FB_POST_ID.test(post) && FB_OWNER.test(owner) ? fbPost('post', `${owner}_${post}`) : null
+  }
+  /**
+   * `/photo/?fbid={id}` and `/photo.php?fbid={id}` — the two QUERY spellings of a photo permalink.
+   * Facebook emits both, in the same document: measured 2026-08-11 on one page's own markup, its album
+   * links spell `/photo/?fbid={id}&set=a.{albumId}` while its timeline links spell
+   * `/photo.php?fbid={id}&set=pb.{pageId}.-2207520000&type=3`.
+   *
+   * THE OLD ANSWER WAS THE AMBIGUOUS CHOOSER, not a miss — /photo.php is one segment, so it fell
+   * through every matcher to the bare-username row and offered a human "x.com/photo.php or
+   * instagram.com/photo.php", two links that mean nothing, for a url that is unambiguously
+   * Facebook's. That is the same defect /story.php had, fixed the same way and for the same reason.
+   *
+   * WHAT IS AND IS NOT CLAIMED. The chooser is only taken away when `fbid` is present AND numeric:
+   * a bare /photo, /photo.php or a junk fbid still falls through to exactly today's answer. That
+   * matters because @photo IS a plausible handle — /photo/status/{id} is a real Twitter permalink by
+   * @photo and /photo/p/{code} a real Instagram one, and both are claimed by x() and instagram() at
+   * depth 3, which this depth-1 arm never reaches. No X or Instagram profile url carries `?fbid=`.
+   *
+   * `set` AND `type` ARE IGNORED, not required. They are decoration on the id — measured: the plugin
+   * returns the same fragment for `/photo/?fbid={id}` with no set at all as for the fully-qualified
+   * spelling — and requiring them would refuse the shortest form Facebook itself emits.
+   */
+  if (seg[0] === 'photo' || seg[0] === 'photo.php') {
+    const fbid = q.get('fbid') || ''
+    return FB_NUM.test(fbid) ? fbPost('photo', fbid) : null
+  }
   return null
 }
 
@@ -1993,6 +2139,36 @@ function routeInner(url: URL): Route {
       const forcedPin = pinShortlink(seg.slice(1))
       if (forcedPin) return forcedPin
     }
+    // /fb/watch?v=…, /fb/photo/?fbid=…, /fb/photo.php?fbid=…, /fb/story.php?… and /fb/permalink.php?…:
+    // Facebook's query-id shapes, read by facebookQuery(), the helper the unforced block below calls
+    // too; its docstring has the report. Unforced, each is a depth-2 path no matcher claims (the sweep
+    // in test/router.test.mjs's section on this found every one notfound before), so nothing is
+    // shadowed. One difference is deliberate: story.php is read from segments here, while the unforced
+    // read keeps its exact-pathname gate, so /fb/story.php/?… (a trailing slash) is the post and
+    // /story.php/?… stays the chooser. Settling that kind of doubt is what the prefix is for.
+    if (forced === 'fb') {
+      const forcedQuery = facebookQuery(seg.slice(1), url.searchParams)
+      if (forcedQuery) return forcedQuery
+    }
+    /**
+     * /th/share/{code}, Meta's bare share link under the Threads token. It was notfound while
+     * /fb/share/{code} worked, because the only arm for the bare form sat inside facebook(), which a
+     * forced 'th' never reaches (found with the /fb/ shapes above, the same way).
+     *
+     * IT IS THE 'metashare' ROUTE /share/{code} GETS, NOT A THREADS-ONLY VARIANT, though the reader named
+     * Threads. The resolver asks both hosts and only the code's owner 302s (platforms/metashare/fetch.ts
+     * has the measurement), so the code already says whose it is, and /fb/share/{code} has always been
+     * this route too. A Threads-only route would save one upstream ask and would turn a Facebook code
+     * forced as Threads into a failure card for a post we can draw. It would also need a new Route kind
+     * through types.ts, worker.ts, guesthost.ts, the prep unwrap and the API, all for that one ask.
+     *
+     * Unforced, /th/share/{code} is a depth-3 path no matcher claims, so nothing is shadowed. The typed
+     * /th/share/v|r|p/{code} stays unrouted: those spellings are Facebook's alone.
+     */
+    if (forced === 'th') {
+      const forcedShare = metaShare(seg.slice(1))
+      if (forcedShare) return forcedShare
+    }
     // seg[0] may be a real handle rather than an escape token (e.g. x.com/x/status/…),
     // so fall through to the normal unforced interpretation instead of dead-ending.
   }
@@ -2010,64 +2186,28 @@ function routeInner(url: URL): Route {
     const v = YT_ID.test(raw) ? raw
       : (raw.length > 11 && YT_ID.test(raw.slice(0, 11)) && !/[A-Za-z0-9_-]/.test(raw[11]) ? raw.slice(0, 11) : '')
     if (v) return ytPost(v)
-    // Facebook's /watch/?v={id} shares the shape; a long NUMERIC v is Facebook's (YouTube's is the
-    // 11-char id checked just above, so a real yt id never reaches here). Reads RAW, not the
-    // YouTube-validated `v` — that one is empty for every Facebook id, which silently unrouted Facebook
-    // when the tolerant-v parsing landed.
-    const fbId = raw.replace(/\/.*$/, '')
-    if (FB_NUM.test(fbId)) return fbPost('watch', fbId)
+    // Facebook's /watch/?v={id} shares the shape, and a long NUMERIC v is Facebook's. facebookQuery()
+    // just below reads it; a real yt id never gets that far, because it returned above.
   }
 
   /**
-   * `/story.php?story_fbid={post}&id={owner}` and `/permalink.php?…` — Facebook's LEGACY post
-   * permalinks, handled here for the same reason /watch?v= is: the ids live in the QUERY, which the
-   * segment matchers never see.
+   * FACEBOOK'S QUERY-ID SHAPES, /watch?v={numeric}, /story.php and /permalink.php, /photo and
+   * /photo.php. Read by facebookQuery(), which the /fb/ escape hatch above calls too, and which carries
+   * each shape's report. Here for the /watch?v= reason: the ids live in the QUERY, which the segment
+   * matchers never see, so this sits at matchPost's priority, above the KNOWN dead-end set and the
+   * ambiguity chooser that each of these used to fall into.
    *
-   * REPORTED 2026-08-01, and the old behaviour was worse than a miss. `/story.php` is one segment, so
-   * it fell through every platform matcher to the AMBIGUOUS chooser, which offered a human
-   * "x.com/story.php or instagram.com/story.php" — two links that mean nothing, for a url that is
-   * unambiguously Facebook's.
-   *
-   * IT IS ALSO WHERE FACEBOOK'S OWN SHARE RESOLUTION LANDS for some codes. Measured on the reported
-   * link: /share/p/{code} 302s here, while three other share codes 302 to /{owner}/posts/{id}. So a
-   * resolved share was being handed a permalink shape nothing could route — the reason
-   * platforms/metashare's comment already lists story.php among "the shapes the router already
-   * parses" while the router did not.
-   *
-   * BOTH IDS ARE REQUIRED. story_fbid alone does not name a post — the pair does, which is exactly
-   * why the ref id is the composite. A url carrying only one is not routed rather than guessed at.
+   * THE story.php HALF KEEPS ITS EXACT-PATHNAME GATE HERE, and only here. Read from segments the way the
+   * forced twin reads it, `/story.php/?story_fbid=…&id=…` (a trailing slash), `//story.php?…`,
+   * `/story%2Ephp?…` and `/story.php||?…` would stop being the ['x','ig'] chooser and become the post.
+   * That is probably the right answer, but it changes what an unforced link answers, which the change
+   * that added the forced twin (2026-11-26) set out not to do, so the widening is left as a decision of
+   * its own. The photo and watch halves always read segments, and still do.
    */
-  if (url.pathname === '/story.php' || url.pathname === '/permalink.php') {
-    const post = url.searchParams.get('story_fbid') || ''
-    const owner = url.searchParams.get('id') || ''
-    if (FB_POST_ID.test(post) && FB_OWNER.test(owner)) return fbPost('post', `${owner}_${post}`)
-  }
-
-  /**
-   * `/photo/?fbid={id}` and `/photo.php?fbid={id}` — the two QUERY spellings of a photo permalink,
-   * here for the same reason /story.php is: the id lives in the query, which the segment matchers
-   * never see. Facebook emits both, in the same document: measured 2026-08-11 on one page's own
-   * markup, its album links spell `/photo/?fbid={id}&set=a.{albumId}` while its timeline links spell
-   * `/photo.php?fbid={id}&set=pb.{pageId}.-2207520000&type=3`.
-   *
-   * THE OLD ANSWER WAS THE AMBIGUOUS CHOOSER, not a miss — /photo.php is one segment, so it fell
-   * through every matcher to the bare-username row and offered a human "x.com/photo.php or
-   * instagram.com/photo.php", two links that mean nothing, for a url that is unambiguously
-   * Facebook's. That is the same defect /story.php had, fixed the same way and for the same reason.
-   *
-   * WHAT IS AND IS NOT CLAIMED. The chooser is only taken away when `fbid` is present AND numeric:
-   * a bare /photo, /photo.php or a junk fbid still falls through to exactly today's answer. That
-   * matters because @photo IS a plausible handle — /photo/status/{id} is a real Twitter permalink by
-   * @photo and /photo/p/{code} a real Instagram one, and both are claimed by x() and instagram() at
-   * depth 3, which this depth-1 arm never reaches. No X or Instagram profile url carries `?fbid=`.
-   *
-   * `set` AND `type` ARE IGNORED, not required. They are decoration on the id — measured: the plugin
-   * returns the same fragment for `/photo/?fbid={id}` with no set at all as for the fully-qualified
-   * spelling — and requiring them would refuse the shortest form Facebook itself emits.
-   */
-  if (seg.length === 1 && (seg[0] === 'photo' || seg[0] === 'photo.php')) {
-    const fbid = url.searchParams.get('fbid') || ''
-    if (FB_NUM.test(fbid)) return fbPost('photo', fbid)
+  const fbStory = seg[0] === 'story.php' || seg[0] === 'permalink.php'
+  if (!fbStory || url.pathname === `/${seg[0]}`) {
+    const fbQuery = facebookQuery(seg, url.searchParams)
+    if (fbQuery) return fbQuery
   }
 
   /**

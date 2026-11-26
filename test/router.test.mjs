@@ -1902,6 +1902,155 @@ test('THE PHOTO ARM SHADOWS NOTHING — the reservation it makes, pinned', () =>
   assert.equal(route(new URL('https://megapenispoopenfarten.sex/WYFF4/photos/album')).kind, 'notfound')
 })
 
+/* ===================== THE /fb/ AND /th/ PREFIX ON THE QUERY SHAPES AND THE BARE SHARE LINK =====================
+ *
+ * FOUND 2026-11-26, while checking FixTweetBot's FIXERS.md against production. FIXERS.md lists this
+ * instance as `mbedfx.app/fb` and `mbedfx.app/th`, and in that form every query-shaped Facebook link
+ * and Threads' bare /share/ answered a "Not found" card, while the same links without the prefix
+ * worked. Reproduced offline with route() at ff73eb9:
+ *
+ *   /fb/photo/?fbid=…   /fb/photo.php/?fbid=…   /fb/watch/?v=…        all notfound
+ *   /fb/story.php?story_fbid=…&id=…   /fb/permalink.php?…              notfound
+ *   /th/share/{code}                                                   notfound, while /fb/share/{code} worked
+ *
+ * The query arms lived inline in routeInner, keyed on `seg.length === 1` or an exact url.pathname, so
+ * they could never fire under a prefix; the bare-share arm lived inside facebook(), which a forced 'th'
+ * never reaches. The converter's "Read as" picker builds `/{code}{path}`, so it handed out these links.
+ *
+ * Checked by a before/after sweep (the router at ff73eb9 against this one) over 4,869,720 paths:
+ * every prefix token, the query shapes and their neighbours, and the trailing `/`, `/p`, `/v`, `.mp4`,
+ * `||` and `).` variants. 2,457 answers changed, every one a /fb or /th path going from notfound to a
+ * Facebook post or the metashare route. 2,415 of them now route exactly as the path without the
+ * prefix; the other 42 are the two asymmetries pinned below. No answer changed under any other
+ * prefix, and no path that was not notfound changed at all.
+ */
+
+const FB_QUERY_SHAPES = [
+  `/photo/?fbid=${PHOTO_FBID}`,
+  `/photo?fbid=${PHOTO_FBID}`,
+  `/photo.php/?fbid=${PHOTO_FBID}`,
+  `/photo.php?fbid=${PHOTO_FBID}&set=pb.100044561550831.-2207520000&type=3`,
+  '/watch/?v=10153231379946729',
+  '/watch?v=10153231379946729',
+  '/watch/?v=10153231379946729/???',
+  '/story.php?story_fbid=1092409469807430&id=100071151613394',
+  '/permalink.php?story_fbid=1092409469807430&id=100071151613394',
+  '/story.php?story_fbid=pfbid02CJXS9HmCajRTMH32saTDvbWirGiKTnbzJvKaw7Bvc7Vy6LH32Lc8jrjC5nryXP8fl&id=100071151613394',
+]
+
+/** The path suffixes the converter and Discord put on a link: the gallery toggles and the `.mp4` file
+ *  form, both spellings. Inserted before the query, where the converter puts them. */
+const PATH_SUFFIXES = ['', '/p', '/v', '.mp4', '/.mp4']
+const suffixed = (p, sfx) => {
+  const q = p.indexOf('?')
+  const head = q < 0 ? p : p.slice(0, q)
+  return (sfx ? head.replace(/\/+$/, '') + sfx : head) + (q < 0 ? '' : p.slice(q))
+}
+
+/** Every escape token except the two this section is about. */
+const OTHER_TOKENS = ['x', 'tt', 'ig', 'rd', 'bs', 'yt', 'dm', 'st', 'im', 'tw', 'lm', 'ms', 'mk', 'pt', 'pn']
+
+test('THE /fb/ PREFIX READS FACEBOOK\'S QUERY SHAPES EXACTLY AS THE BARE LINK DOES', () => {
+  /**
+   * The equivalence, not just "it routes": /fb/{shape} must be deepEqual to /{shape}, ref, canonical,
+   * gallery mode and `direct` included. A twin that only matched the plain spelling would still hand out
+   * a dead link from the picker with "all as stills" ticked, which appends `/p` before the query.
+   */
+  let checked = 0
+  for (const shape of FB_QUERY_SHAPES) {
+    for (const sfx of PATH_SUFFIXES) {
+      const p = suffixed(shape, sfx)
+      const bare = r(p)
+      assert.equal(bare.kind, 'post', `${p} is a Facebook post to begin with`)
+      assert.equal(bare.ref.p, 'fb', p)
+      assert.deepEqual(r(`/fb${p}`), bare, `/fb${p} must route exactly as ${p}`)
+      checked++
+    }
+  }
+  assert.equal(checked, FB_QUERY_SHAPES.length * PATH_SUFFIXES.length)
+})
+
+test('/th/share/{code} IS THE SAME metashare ROUTE AS /share/{code}, and /fb/share/{code} still is', () => {
+  /**
+   * The reader named Threads, and the answer is still the metashare route rather than a Threads-only
+   * one. The resolver asks both hosts and only the code's owner redirects (platforms/metashare/fetch.ts),
+   * so the code says whose it is, and /fb/share/{code} has been this route all along. A leading
+   * underscore is in the list because Threads uses it and FB_CODE refuses it: SHARE_CODE is the shape
+   * that has to admit it, under either prefix.
+   */
+  for (const code of ['Fixture08X', '_Fixture1X', 'Fix-ture9X']) {
+    for (const sfx of ['', '/', '/p', '/v', '.mp4']) {
+      const p = `/share/${code}${sfx}`
+      const bare = r(p)
+      assert.equal(bare.kind, 'metashare', `${p} is the metashare route to begin with`)
+      assert.equal(bare.code, code, p)
+      assert.deepEqual(r(`/th${p}`), bare, `/th${p} must route exactly as ${p}`)
+      assert.deepEqual(r(`/fb${p}`), bare, `/fb${p} must route exactly as ${p}`)
+    }
+  }
+  // The TYPED share forms name Facebook, so the Threads prefix does not take them, and forcing Threads
+  // must not mint a Facebook ref. They stay what they were: notfound.
+  for (const t of ['v', 'r', 'p']) {
+    assert.equal(r(`/th/share/${t}/Fixture1`).kind, 'notfound', `/th/share/${t}/{code} is not Threads'`)
+    assert.equal(r(`/share/${t}/Fixture1`).ref?.p, 'fb', `while /share/${t}/{code} is still Facebook's`)
+  }
+  // No code, or one too short for SHARE_CODE, is not a share link under the prefix either.
+  assert.equal(r('/th/share').kind, 'notfound')
+  assert.equal(r('/th/share/abc').kind, 'notfound')
+})
+
+test('NO OTHER PREFIX PICKS UP A FACEBOOK QUERY SHAPE OR A META SHARE LINK', () => {
+  /**
+   * The twins are guarded on `forced === 'fb'` and `forced === 'th'`, the way /tt/t/{code} is guarded
+   * on 'tt': /yt/photo/?fbid=… must not start minting a Facebook ref, and /bs/share/{code} must not ask
+   * Meta's shortener.
+   *
+   * Asserted as "not Facebook's, not a share link" rather than as notfound, because some of these are
+   * posts and were before this change: the forced depth-1 arms of /st/, /im/, /dm/ and /tw/ read any
+   * single segment as that site's id, so /st/photo/?fbid=… is Streamable id 'photo'. The sweep in the
+   * section header found none of these answers changed.
+   */
+  for (const tok of OTHER_TOKENS) {
+    for (const p of [...FB_QUERY_SHAPES.map(s => `/${tok}${s}`), `/${tok}/share/Fixture08X`]) {
+      const got = r(p)
+      assert.notEqual(got.ref?.p, 'fb', `${p} must not be read as Facebook`)
+      assert.notEqual(got.kind, 'metashare', `${p} must not be read as a Meta share link`)
+    }
+  }
+})
+
+test('THE /fb/ QUERY TWIN CLAIMS ONLY A USABLE ID, and the two places it differs from the bare link are deliberate', () => {
+  // A YouTube id under /fb/ is not Facebook's, and the /fb/ prefix does not hand it to YouTube either.
+  assert.equal(r('/fb/watch?v=dQw4w9WgXcQ').kind, 'notfound')
+  // The same id-shape guards as the bare arms: half a story pair, a junk fbid, no query at all.
+  assert.notEqual(r('/fb/story.php?story_fbid=1092409469807430').kind, 'post')
+  assert.notEqual(r('/fb/story.php?id=100071151613394').kind, 'post')
+  assert.notEqual(r('/fb/photo/?fbid=abc').kind, 'post')
+  for (const p of ['/fb/photo', '/fb/photo.php', '/fb/watch', '/fb/story.php', '/fb/permalink.php']) {
+    assert.equal(r(p).kind, 'notfound', p)
+  }
+
+  /**
+   * ELEVEN DIGITS. Bare, /watch?v={11 digits} is YouTube's, because an 11-char v is checked as a
+   * YouTube id first. Under /fb/ the reader has said Facebook, so it is Facebook's watch post. Real
+   * Facebook video ids are 15 or more digits, so this is the edge, and the prefix settling it is what
+   * the prefix is for.
+   */
+  assert.equal(r('/watch?v=12345678901').ref.p, 'yt')
+  assert.deepEqual(r('/fb/watch?v=12345678901').ref, { p: 'fb', kind: 'watch', id: '12345678901' })
+
+  /**
+   * A TRAILING SLASH ON story.php. Bare, `/story.php/?…` is still the ['x','ig'] chooser, because the
+   * unforced arm keeps its exact-pathname gate: reading it from segments would change what a bare link
+   * answers, which this change did not set out to do. The /fb/ twin reads segments, so the prefix is a
+   * way out of that chooser. If the bare arm is widened later, rewrite the first assertion; the second
+   * stays.
+   */
+  const slashed = '/story.php/?story_fbid=1092409469807430&id=100071151613394'
+  assert.equal(r(slashed).kind, 'ambiguous')
+  assert.deepEqual(r(`/fb${slashed}`).ref, { p: 'fb', kind: 'post', id: '100071151613394_1092409469807430' })
+})
+
 test("DISCORD'S SPOILER BARS DO NOT BREAK A LINK", () => {
   /**
    * REPORTED 2026-08-01: `||https://mbedfx.app/hepi01967211/status/2083545767893983385||` rendered
@@ -2169,4 +2318,81 @@ test('THE OVER-CAPTURE TRIM IS ONLY KEPT WHEN IT NAMES A POST, and composes with
   assert.equal(r('/X/status/20/p).').gallery, 'stills')
   assert.deepEqual(r('/X/status/20.mp4).'), r('/X/status/20.mp4'))
   assert.equal(r('/X/status/20.mp4).').direct, true)
+})
+
+/* ===================== FACEBOOK'S GROUP POST, NAMED IN THE QUERY ===================
+ *
+ * FOUND 2026-11-26 checking FixTweetBot's FIXERS.md table against production:
+ * /groups/{gid}/?multi_permalinks={pid} was "Not found" in every form, while the posts/
+ * spelling of the same two ids rendered a real group-post card. The router read no query on
+ * a group url, and the group home is unclaimed on purpose.
+ *
+ * Measured the same day with Facebook's crawler user agent (from a Linux box, not a Worker):
+ * the multi_permalinks url unfurls as the GROUP HOME, and Facebook's own route params put the
+ * id in `multi_permalinks` with `post_id: null`; the posts/ url reads the same number as its
+ * `story_id`. So the ids are the posts/ arm's ids, and the canonical has to be posts/.
+ *
+ * The ids below are the ones the posts/ tests above already use.
+ */
+
+const GROUP_ID = '328668786145521'
+const GROUP_POST = '1391536379858751'
+const groupAt = p => route(new URL(`https://megapenispoopenfarten.sex${p}`))
+
+test('FACEBOOK: a group home with ?multi_permalinks= routes exactly as the posts/ spelling of that post', () => {
+  /**
+   * Same ref, same canonical, same cache entry: fbGroupQuery calls the posts/ arm's own
+   * fbPost('group', …), and anything less would split one post into two cards that race. The
+   * canonical is the posts/ spelling because the multi_permalinks url unfurls as the group itself.
+   */
+  const want = groupAt(`/groups/${GROUP_ID}/posts/${GROUP_POST}/`)
+  assert.deepEqual(want.ref, { p: 'fb', kind: 'group', id: `${GROUP_ID}_${GROUP_POST}` })
+  for (const p of [
+    `/groups/${GROUP_ID}/?multi_permalinks=${GROUP_POST}`,
+    `/groups/${GROUP_ID}?multi_permalinks=${GROUP_POST}`,
+    // The rest of the query is Facebook's decoration on the highlight and is not read.
+    `/groups/${GROUP_ID}/?multi_permalinks=${GROUP_POST}&hoisted_section_header_type=recently_seen`,
+  ]) {
+    const got = groupAt(p)
+    assert.deepEqual(got, want, `${p} is the posts/ route`)
+    assert.equal(got.canonical, `https://www.facebook.com/groups/${GROUP_ID}/posts/${GROUP_POST}/`)
+    assert.equal(refKey(got.ref), refKey(want.ref), `${p}: one cache entry`)
+    assert.deepEqual(parseRefKey(refKey(got.ref)), got.ref, `${p}: the ref survives the wire`)
+  }
+  // The gallery toggle and the file suffix sit on the path, the id in the query, and the two compose
+  // just as they do on the posts/ spelling.
+  assert.deepEqual(groupAt(`/groups/${GROUP_ID}/p?multi_permalinks=${GROUP_POST}`),
+    groupAt(`/groups/${GROUP_ID}/posts/${GROUP_POST}/p`))
+  assert.deepEqual(groupAt(`/groups/${GROUP_ID}/.mp4?multi_permalinks=${GROUP_POST}`),
+    groupAt(`/groups/${GROUP_ID}/posts/${GROUP_POST}/.mp4`))
+})
+
+test('A GROUP URL WITHOUT ONE USABLE POST ID IN multi_permalinks KEEPS THE ANSWER IT HAD WITHOUT THE PARAMETER', () => {
+  /**
+   * The group home stays unclaimed (router.ts, the group arm in facebook()), and the parameter only
+   * takes that away when it names exactly one post the posts/ arm would accept. Each row is compared
+   * with the same path with no query at all, so "the home's current answer" is whatever it is today
+   * rather than a value copied in here.
+   */
+  const home = `/groups/${GROUP_ID}/`
+  assert.equal(groupAt(home).kind, 'notfound', 'the bare group home is still unclaimed')
+  for (const q of [
+    '',
+    '?multi_permalinks=',
+    '?multi_permalinks=abc',
+    '?multi_permalinks=1234', // below FB_NUM's five digits, which the posts/ arm refuses too
+    // A LIST: the parameter's name allows more than one, and picking one would guess at the reader's post.
+    `?multi_permalinks=${GROUP_POST},1391536379858752`,
+    `?multi_permalinks=${GROUP_POST}%2C1391536379858752`,
+    `?hoisted_section_header_type=recently_seen`,
+  ]) {
+    assert.deepEqual(groupAt(home + q), groupAt(home), `${home}${q} is the home's answer`)
+  }
+  // A NAMED group: the posts/ arm refuses /groups/somename/posts/… too, so neither spelling claims it.
+  assert.deepEqual(groupAt(`/groups/somegroup/?multi_permalinks=${GROUP_POST}`), groupAt('/groups/somegroup/'))
+  assert.equal(groupAt(`/groups/somegroup/posts/${GROUP_POST}/`).kind, 'notfound', 'and the posts/ arm agrees')
+  // Only the HOME highlights a post. A tab under it, or /groups on its own, keeps its own answer.
+  assert.deepEqual(groupAt(`/groups/${GROUP_ID}/members?multi_permalinks=${GROUP_POST}`), groupAt(`/groups/${GROUP_ID}/members`))
+  assert.deepEqual(groupAt(`/groups?multi_permalinks=${GROUP_POST}`), groupAt('/groups'))
+  assert.equal(groupAt(`/groups?multi_permalinks=${GROUP_POST}`).kind, 'ambiguous')
 })
