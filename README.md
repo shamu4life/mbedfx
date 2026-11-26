@@ -14,7 +14,7 @@
 
 </div>
 
-<p align="center"><strong>Social links that embed properly.</strong> Paste a link, get one Discord can actually draw. 17 sites, no accounts, nothing to install.</p>
+<p align="center"><strong>Social links that embed properly.</strong> Paste a link and get one Discord can draw. It covers 17 sites, with no account and nothing to install.</p>
 
 <p align="center"><a href="https://deploy.workers.cloudflare.com/?url=https://github.com/shamu4life/mbedfx"><img src="https://deploy.workers.cloudflare.com/button" alt="Deploy to Cloudflare" /></a></p>
 
@@ -24,7 +24,7 @@
 
 Discord builds a link preview from the page's `og:` tags. Most social sites don't serve them, or serve a login wall, and the preview comes out as a grey rectangle with a domain in it.
 
-Swap the site's domain for **mbedfx.app** and the card appears: author, caption, counts, and a video that plays inline as a real MP4. Same post, same link.
+Swap the site's domain for mbedfx.app, keep the rest of the link, and the card appears: author, caption, counts, and a video that plays inline as a real MP4.
 
 ---
 
@@ -39,7 +39,7 @@ https://mbedfx.app/jack/status/20
 
 <https://mbedfx.app> does the same swap in the browser and draws the card before you send it. It also unfurls share codes.
 
-> **<https://megapenispoopenfarten.sex>** runs the same worker. It's where this started, and links people already pasted still point at it.
+> <https://megapenispoopenfarten.sex> runs the same worker. It's where this started, and links people already pasted still point at it.
 
 ### Forcing a site
 
@@ -64,13 +64,13 @@ https://mbedfx.app/profile/bsky.app
 ```
 
 The card carries the display name, the bio, the avatar, the follower, following and post counts, and
-the month the account was created. bsky.app itself gives a crawler only a title, which is the reason
-this one is here.
+the month the account was created. bsky.app itself gives a crawler only a title, which is why this
+route exists.
 
 No other site's profile links work, and that is measured rather than pending. Twitter, TikTok and
 Instagram all already hand a crawler a complete profile card of their own, so there is nothing to
-fix; and their profile urls are a bare handle, which names an account on more than one of them at
-once. A bare handle therefore stays a chooser rather than a guess.
+fix. Their profile urls are also a bare handle, which names an account on more than one of those
+sites at once, so a bare handle gets the chooser instead of a guess.
 
 ### Just the media
 
@@ -88,7 +88,7 @@ https://megapenispoopenfarten.sex/jack/status/20.mp4
 
 That goes for links whose post id sits after the `?` too: `/watch.mp4?v=…`, `/photo/.mp4?fbid=…`. A `.mp4` typed onto the end of the query instead (`watch?v=….mp4`) isn't read: a YouTube link stays a card, and a Facebook one gets the which-site chooser.
 
-The converter page has a **media only** checkbox next to the domain buttons. A `d.` url renders no card; [docs/API.md](docs/API.md#the-d-host) has the rest. It works on every domain the converter offers, the two guest domains included (see [Official domains](#official-domains)).
+The converter page has a "media only" checkbox next to the domain buttons. A `d.` url renders no card, and it works on every domain the converter offers, the two guest domains included (see [Official domains](#official-domains)). [docs/API.md](docs/API.md#the-d-host) has the rest.
 
 ## Supported sites
 
@@ -116,14 +116,18 @@ A bare `dai.ly`, `redd.it` or `pin.it` code names no site on its own, so the con
 
 ## Features
 
-The container remuxes the stream into one progressive faststart MP4 (or keeps the site's own single progressive file as served), cached in R2 and served with `accept-ranges: bytes` for Discord's player to seek on. A cold video usually draws the cover image first, and a card that is still waiting is never response-cached, so a **later paste** of the same link plays. The message that was already posted does not heal: Discord caches an embed permanently in the message it was pasted into, and per-URL for about 30 minutes on top. For the reader who pasted first, the first paste is the only paste — which is why the mux is given a Durable Object alarm and 15 minutes rather than `waitUntil`'s 30 seconds, why YouTube's crawler callback is allowed four seconds to catch a mux that finishes fast, and why `card_degraded / ok` is the number that measures both. A card that is *final* rather than incomplete — too long to mux, or a live broadcast with no finished file behind it — does cache, deliberately. [container/README.md](container/README.md) has the resolver and its ceilings.
+The container remuxes the stream into one progressive faststart MP4 (or keeps the site's own single progressive file as served). The file is cached in R2 and served with `accept-ranges: bytes` so Discord's player can seek in it.
+
+A cold video usually draws the cover image first. A card that is still waiting is never response-cached, so a later paste of the same link plays. The message that was already posted does not heal: Discord caches an embed permanently in the message it was pasted into, and per-URL for about 30 minutes on top. For the reader who pasted first, the first paste is the only paste. That is why the mux gets a Durable Object alarm and 15 minutes rather than `waitUntil`'s 30 seconds, why YouTube's crawler callback is allowed four seconds to catch a mux that finishes fast, and why `card_degraded / ok` is the number that measures both.
+
+A card that is *final* rather than incomplete (too long to mux, or a live broadcast with no finished file behind it) is cached on purpose. [container/README.md](container/README.md) has the resolver and its ceilings.
 
 Posts that can't be read get a card naming the reason: 🔒 private or friends-only, 🔞 age-restricted, or deleted and never existed. Where the platform gives no reason the card lists the likely ones and picks none. A path two sites both claim is not guessed either ([docs/API.md](docs/API.md#failures) has the codes; `src/render/chooser.ts` draws the human version).
 
 <details>
 <summary><strong>Translation</strong></summary>
 
-Captions that aren't in English get translated, with the original kept below it:
+Captions that aren't in English get translated, with the original kept below:
 
 ```
 Chinese cabbage is delicious, isn't it?
@@ -175,7 +179,7 @@ Checked 2026-08-01 against each project's docs, source and live service. **?** m
 
 | | **mbedfx** | [FxEmbed](https://github.com/FxEmbed/FxEmbed) | [vxTwitter](https://github.com/dylanpdx/BetterTwitFix) | [fxTikTok](https://github.com/okdargy/fxTikTok) | [InstaFix](https://github.com/Wikidepia/InstaFix) | [InstaFix Revived](https://github.com/Bl0ck154/InstaFix-Revived) |
 |---|---|---|---|---|---|---|
-| Sites covered | **17** | 2 documented, 4 live | Twitter | TikTok | Instagram | Instagram |
+| Sites covered | 17 | 2 documented, 4 live | Twitter | TikTok | Instagram | Instagram |
 | Working public instance | ✅ | ✅ + status page | ✅ | ✅ | ❌ archived, self-host only | ✅ |
 | How video reaches Discord | own remux | platform MP4 | CDN redirect | CDN redirect | CDN redirect | streamed |
 | Caption translation | ✅ automatic | opt-in `/en` | opt-in `/en`, undocumented | ❌ | ❌ | ❌ |
@@ -194,7 +198,9 @@ The public instance answers on these three hosts:
 
 `d.` works on all three.
 
-Two more domains serve the same cards as guests: `sorryifuckedyour.mom` and `hotsinglesnear.you`. Their front pages belong to another site, so only post links and Bluesky profile links work there: swap the host and the post unfurls as usual. The converter offers both as domain buttons, next to `mbedfx.app` and `megapenispoopenfarten.sex` (`forsen.sex` works but isn't offered). The converter page itself and the JSON API stay on the three hosts above. `d.` works on all five (`d.hotsinglesnear.you/jack/status/20` is the file), and so does a trailing `.mp4`. A link on a guest domain that names neither a post nor a Bluesky profile, a bare `/{handle}` for instance, opens the other site's page rather than the which-site chooser, and the converter's preview says so. A wildcard DNS record covers exactly one label; a deeper name such as `d.staging.mbedfx.app` would need a record of its own.
+Two more domains serve the same cards as guests: `sorryifuckedyour.mom` and `hotsinglesnear.you`. Their front pages belong to another site, so only post links and Bluesky profile links work there: swap the host and the post unfurls as usual. The converter offers both as domain buttons, next to `mbedfx.app` and `megapenispoopenfarten.sex` (`forsen.sex` works but isn't offered). The converter page itself and the JSON API stay on the three hosts above.
+
+`d.` works on all five (`d.hotsinglesnear.you/jack/status/20` is the file), and so does a trailing `.mp4`. A link on a guest domain that names neither a post nor a Bluesky profile, a bare `/{handle}` for instance, opens the other site's page rather than the which-site chooser, and the converter's preview says so. A wildcard DNS record covers exactly one label; a deeper name such as `d.staging.mbedfx.app` would need a record of its own.
 
 Other domains can run copies of this code ([Host your own](#host-your-own)), and their cards say `mbedfx` unless the operator sets `SITE_NAME`. This project doesn't run them or vouch for them, and a problem with one goes to whoever runs it.
 
@@ -274,11 +280,11 @@ On Cloudflare, set a plain setting as a variable in the dashboard (Workers & Pag
 
 `IMGUR_CLIENT_ID` falls back to the id yt-dlp publishes. That id works, and its bucket is shared with every other tool using it; a free one of your own avoids the competition.
 
-`IG_GRAPHQL_DOC_ID` pins Instagram's shortcode GraphQL query, which Meta rotates. When the pinned id dies, the older recoveries carry the card and the `copyright_gql` counter drops to zero. Re-pinning it is a config change and needs no release.
+When the id pinned in `IG_GRAPHQL_DOC_ID` dies, the older recoveries carry the card and the `copyright_gql` counter drops to zero. Re-pinning it is a config change and needs no release.
 
 `REDDIT_CLIENT_ID` / `REDDIT_CLIENT_SECRET` turn on Reddit's OAuth fallback. Both must be set for it to run at all (`fetchReddit` in `src/platforms/reddit/fetch.ts`), and it runs only after the credential-free embed read comes back empty. Set `REDDIT_USER_AGENT` with them: the default names no Reddit account.
 
-`TRANSLATE_GOOGLE=off` stops the calls to Google's translate endpoint, and Workers AI then translates on its own. The Node adapter has no Workers AI, so there it turns translation off.
+With `TRANSLATE_GOOGLE=off`, Workers AI translates on its own. The Node adapter has no Workers AI, so there the setting turns translation off.
 
 The three `*_ACCOUNTS` pools each buy something different. `YT_ACCOUNTS` turns an age-gated video into an ordinary card. `IG_ACCOUNTS` is spent only inside the container's mux. Both of those pools need the container, so on `wrangler.free.jsonc` they do nothing. Instagram's gate verdict comes off the Worker's own page fetch, which carries no cookie jar, and the pool leaves that detection where it was. **Setting `X_ACCOUNTS` changes nothing today**: the call that would spend it is not built, and gated tweets keep getting the honest 🔞 card. [docs/CREDENTIALS.md](docs/CREDENTIALS.md) covers all three: the JSON each takes, how to export a `cookies.txt` without invalidating it, and the `pool_unused` counter that reports a configured pool going unspent.
 
@@ -291,7 +297,7 @@ The three `*_ACCOUNTS` pools each buy something different. `YT_ACCOUNTS` turns a
 <details>
 <summary><strong>Discord reads two different documents</strong></summary>
 
-Both heads need the same fix, or half the posts stay broken. For a post with media it follows the `<link rel="alternate" type="application/activity+json">` tag and renders a Mastodon-shaped status. For a post without media it reads the plain OpenGraph head.
+For a post with media, Discord follows the `<link rel="alternate" type="application/activity+json">` tag and renders a Mastodon-shaped status. For a post without media it reads the plain OpenGraph head. Both heads need the same fix, or half the posts stay broken.
 
 </details>
 
@@ -319,7 +325,7 @@ Do not open a public issue for a security problem. [SECURITY.md](.github/SECURIT
 
 ## Credits
 
-Built by [**Claude**](https://claude.com/claude-code) (Anthropic), directed by [@shamu4life](https://github.com/shamu4life).
+Built by [Claude](https://claude.com/claude-code) (Anthropic), directed by [@shamu4life](https://github.com/shamu4life).
 
 Prior art: [fxtwitter](https://github.com/FixTweet/FxTwitter), [vxtwitter](https://github.com/dylanpdx/BetterTwitFix), [InstaFix](https://github.com/Wikidepia/InstaFix) and the rest of the embed-fixer lineage. No code is shared with them apart from the Twitter GraphQL feature-flag table in [NOTICE.md](NOTICE.md). Icons from [Simple Icons](https://simpleicons.org). Video from [yt-dlp](https://github.com/yt-dlp/yt-dlp) and [FFmpeg](https://ffmpeg.org). Full notices in [NOTICE.md](NOTICE.md).
 

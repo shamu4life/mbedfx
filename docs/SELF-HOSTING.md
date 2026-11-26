@@ -1,9 +1,9 @@
 # Self-hosting mbedfx
 
-You can run your own mbedfx: on your own Cloudflare account, or off Cloudflare with Docker Compose or
-plain Node. The top of this page is the guide: pick a way, follow its steps, then look up any setting.
-The bottom half is reference, the measurements and code reading behind each claim, with the date each
-was taken.
+You can run your own mbedfx on your own Cloudflare account, or off Cloudflare with Docker Compose or
+plain Node. The first half of this page is the guide: choose a way to run it, follow its steps, and
+look up settings as you need them. The second half is reference: the measurements and code reading
+behind each claim, each with its date.
 
 > [!WARNING]
 > Nobody has deployed mbedfx with the Deploy to Cloudflare button, on Workers Free, or from the generic
@@ -60,36 +60,36 @@ According to Cloudflare's documentation, the button:
 3. Creates what `wrangler.jsonc` asks for: the table above.
 4. Shows a description for each binding, read from the `cloudflare.bindings` key in `package.json`.
 
-What to expect, none of it tried yet:
+What to expect (none of it has been tried yet):
 
-- **It needs Workers Paid**, because Containers do. On Workers Free, change the commands first
+- The button needs Workers Paid, because Containers do. On Workers Free, change the commands first
   ([next section](#on-workers-free)).
-- **Workers Builds stops a build after 20 minutes.** The first build compiles the container image on
-  Cloudflare's side, and nobody has timed that there. The test suite took 81 s on one Linux machine
-  on 2026-11-25. On a home Linux host Docker Compose built both images in 50 s, which says little
-  about Cloudflare's builders.
-- **It asks for no secrets.** The button asks for the names listed in a `.dev.vars.example` or
+- Workers Builds stops a build after 20 minutes, and the first build compiles the container image on
+  Cloudflare's side. Nobody has timed that there. The test suite took 81 s on one Debian Linux
+  machine on 2026-11-25. On a home Linux host Docker Compose built both images in 50 s, which says
+  little about Cloudflare's builders.
+- The button asks for no secrets. It asks for the names listed in a `.dev.vars.example` or
   `.env.example`, and this repo has neither on purpose. Every mbedfx secret is optional, and nobody
   has checked whether the setup page accepts one left blank. Set the ones you want after the first
   deploy ([After the first deploy](#after-the-first-deploy)).
-- **If you rename the Worker on the setup page**, note the name. Cloudflare's docs say the page
-  writes it into your copy's `wrangler.jsonc`; nobody here has checked. If it didn't, a
+- If you rename the Worker on the setup page, note the name. Cloudflare's docs say the page writes
+  it into your copy's `wrangler.jsonc`; nobody here has checked. If it didn't, a
   `wrangler secret put` from a checkout of that copy needs `--name <your-worker>`. Those docs name
   only the one config file, so expect `wrangler.free.jsonc` to keep the old name
   ([On Workers Free](#on-workers-free)).
-- **Other branches.** This project's own Worker builds every branch except `main` with
-  `npx wrangler preview`. Whether a Worker the button makes gets the same command is unchecked. Where
-  it does, a Preview reads the `previews` block in `wrangler.jsonc`: the container is included, there
-  is no R2 bucket, so videos show their cover still there.
-- **Your copy carries this repo's GitHub workflows.** Whether Actions run in a repository the button
+- This project's own Worker builds every branch except `main` with `npx wrangler preview`. Whether a
+  Worker the button makes gets the same command is unchecked. Where it does, a Preview reads the
+  `previews` block in `wrangler.jsonc`, which includes the container but no R2 bucket, so videos in
+  a Preview show their cover still.
+- Your copy carries this repo's GitHub workflows, and whether Actions run in a repository the button
   creates is unchecked. If they do, `ytdlp-freshness.yml` pushes a `chore/ytdlp-<version>` branch
   every Monday that yt-dlp has a new release and opens a pull request for it. A new repository
   doesn't let Actions open pull requests until you turn on "Allow GitHub Actions to create and
   approve pull requests" (Settings, Actions, General), and until then the job opens an issue
   instead. Workers Builds builds the branch either way. Turn the workflow off under Actions if you
   don't want it. `health-check.yml` skips until you set the repository variable `HEALTH_BASE` to
-  your primary origin (and `HEALTH_GUESTS` if you have guest hosts). It then checks your instance twice a week and opens issues labelled
-  `health-check`.
+  your primary origin (and `HEALTH_GUESTS` if you have guest hosts). From then on it checks your
+  instance twice a week and opens issues labelled `health-check`.
 
 ### On Workers Free
 
@@ -173,21 +173,21 @@ with `null` for the other two.
 
 Then:
 
-1. **Give the bucket its 60-day expiry, once.** Nothing in the code deletes from it, and a config file
+1. Give the bucket its 60-day expiry, once. Nothing in the code deletes from it, and a config file
    can't hold a lifecycle rule. Use your bucket's name if you changed it:
 
    ```bash
    npx wrangler r2 bucket lifecycle add mbedfx-selfhost-media expire-60d --expire-days 60
    ```
 
-2. **Add your domain.** In the dashboard, add it to the Worker as a custom domain, and its `d.` name
+2. Add your domain. In the dashboard, add it to the Worker as a custom domain, and its `d.` name
    too if you want direct media links. `wrangler.jsonc` lists no routes, so a domain added in the
    dashboard survives every deploy.
-3. **Set the plain settings** in the dashboard (Workers & Pages, your Worker, Settings, Variables and
+3. Set the plain settings in the dashboard (Workers & Pages, your Worker, Settings, Variables and
    Secrets): `PUBLIC_ORIGIN` once you have a domain, and `OWN_HOSTS`, `SITE_NAME` or
    `REDDIT_USER_AGENT` if you need them ([Settings](#settings)). `keep_vars` in `wrangler.jsonc` keeps
    dashboard variables across deploys.
-4. **Set the secrets** you want, from a checkout:
+4. Set the secrets you want, from a checkout:
 
    ```bash
    npx wrangler secret put IMGUR_CLIENT_ID
@@ -196,7 +196,7 @@ Then:
    That reaches the Worker named in your `wrangler.jsonc`. If yours has another name, add
    `--name <your-worker>`, or set the secret in the dashboard instead. Fed from a pipe, `secret put`
    for a Worker that doesn't exist creates it to hold the secret, and your real Worker never gets it.
-5. **Replace `public/og.jpg`** with a 1200x630 JPEG of your own. It is the front page's link preview,
+5. Replace `public/og.jpg` with a 1200x630 JPEG of your own. It is the front page's link preview,
    and it carries the mbedfx.app wordmark ([The front page's link preview](#the-front-pages-link-preview)).
 
 `RESOLVER_SECRET` does nothing on Cloudflare today. The Worker sends it, but `MediaResolver` in
@@ -334,7 +334,7 @@ host, the `d.` one included.
 
 The proxy has to pass on the `Host` header the client sent. The adapter picks each request's origin by
 matching `Host` exactly against `PUBLIC_ORIGIN` and `GUEST_HOSTS`, and anything else becomes the
-primary. A proxy that rewrites `Host` quietly breaks `d.` links (they serve cards instead of files)
+primary. A proxy that rewrites `Host` silently breaks `d.` links (they serve cards instead of files)
 and makes guest hosts answer as yours. Caddy passes `Host` by default:
 
 ```caddyfile
@@ -367,8 +367,8 @@ docker compose -f adapters/node/compose.yaml down -v              # deletes it t
 ```
 
 Rebuilding is the only way a new yt-dlp reaches the resolver. The version is pinned in
-`container/Dockerfile`, and a weekly job here proposes each new release. YouTube stops working with
-old yt-dlp releases often, so pull and rebuild about as often.
+`container/Dockerfile`, and this repo's weekly `ytdlp-freshness.yml` job proposes each new release.
+Old yt-dlp releases often stop working on YouTube, so pull and rebuild about that often.
 
 A stop sends SIGTERM. The adapter stops taking requests and waits up to 25 s (`DRAIN_MS`) for running
 muxes and cache writes, and compose gives it 40 s (`stop_grace_period`) before SIGKILL.
@@ -452,9 +452,10 @@ put a reverse proxy in front of it as in [Put it behind HTTPS](#put-it-behind-ht
 running with whatever supervises processes on your host. Nobody has written a systemd unit for it
 yet. To update, `git pull`, rebuild the resolver image, and restart both.
 
-Before you share the domain, replace `public/og.jpg`, which carries the mbedfx.app wordmark, and set
-`OWN_HOSTS` for any domain you serve that isn't in `PUBLIC_ORIGIN`.
-[Before a public deployment](#before-a-public-deployment) has both steps.
+Two steps from [Before a public deployment](#before-a-public-deployment) come before you share the
+domain: replace `public/og.jpg`, which carries the mbedfx.app wordmark, and set `OWN_HOSTS` for any
+domain you serve that isn't in `PUBLIC_ORIGIN`. The adapter reads `public/` on every request, so the
+new picture is served without a restart.
 
 ### What each stand-in gives up
 
@@ -559,14 +560,14 @@ compose only `RESOLVER_SECRET` is passed ([What compose passes through](#what-co
 `MUX_PAGE_TIMEOUT` is the one most worth setting deliberately. It was `PROC_TIMEOUT + 60` (180 s)
 until 2026-08-29, less than the download a `MAX_SECONDS` video needs, so a long video was SIGKILLed
 with nothing written, on every attempt. If your egress is slower than Cloudflare's, raise it or lower
-`MAX_SECONDS`. A video admitted and then killed is worse than one refused.
+`MAX_SECONDS`, since a video admitted and then killed is worse than one refused.
 
 ### Size the host
 
-**Size it for yt-dlp's extraction, not for ffmpeg's remux.** The public instance ran the resolver on a
+Size it for yt-dlp's extraction, not for ffmpeg's remux. The public instance ran the resolver on a
 quarter of a vCPU until 2026-08-28 and paid 14-17 s per YouTube extract for it. On one vCPU the same
 extract measured 3.1-4.7 s per client from the same egress that day. For a long time that 15.9 s was
-read as YouTube throttling a datacenter IP, and it was our own CPU. The gain stops dead at one vCPU,
+read as YouTube throttling a datacenter IP, when it was our own CPU. The gain stops at one vCPU,
 because the hot path is single-threaded Python and an `ffmpeg -c copy` remux, so four cores buy
 nothing over one. Both `wrangler.production.jsonc` and the generic `wrangler.jsonc` ask for
 `standard-2` (1 vCPU, 6 GiB memory, 12 GB disk). A self-hoster wants at least one dedicated core and
@@ -580,7 +581,7 @@ A private instance runs without these steps, and a public one needs all three. T
 is in the tree with offline tests (`test/netguard.test.mjs`, `test/selfhost.test.mjs`). None of it
 has run on a public instance yet.
 
-1. **Set `OWN_HOSTS`** to every domain you serve from that isn't already in `PUBLIC_ORIGIN` or
+1. Set `OWN_HOSTS` to every domain you serve from that isn't already in `PUBLIC_ORIGIN` or
    `GUEST_HOSTS`, whitespace- or comma-separated, as hostnames or origins:
 
    ```sh
@@ -592,7 +593,7 @@ has run on a public instance yet.
    misconfiguration with a narrow reach: a request on one of your domains can make the fediverse
    routes fetch another of them, and the rest of the guard still stands
    ([`OWN_HOSTS`, and setting it](#own_hosts-and-setting-it)).
-2. **Replace `public/og.jpg`** with a 1200×630 JPEG of your own. It is the front page's link preview,
+2. Replace `public/og.jpg` with a 1200×630 JPEG of your own. It is the front page's link preview,
    and it carries the mbedfx.app wordmark. If yours has another size or type, change
    `og:image:width`, `og:image:height` and `og:image:type` in `public/index.html` to match, because
    Discord won't draw a large image without a declared size. On Cloudflare, deploy again. Under
@@ -600,7 +601,7 @@ has run on a public instance yet.
    `docker compose -f adapters/node/compose.yaml up --build -d`, because its Dockerfile copies
    `public/` in. On Node without Docker the adapter reads `public/` on every request, so the new
    files are served at once ([The front page's link preview](#the-front-pages-link-preview)).
-3. **Off Cloudflare, keep `RESOLVE_HOST` wired.** The Node adapter wires it to `dns.lookup` by
+3. Off Cloudflare, keep `RESOLVE_HOST` wired. The Node adapter wires it to `dns.lookup` by
    default, which turns on the DNS half of the private-address guard. An adapter of your own has to
    supply it. Even wired, it can't stop DNS rebinding
    ([DNS and private-range guarding in the Worker half](#dns-and-private-range-guarding-in-the-worker-half)).
@@ -808,23 +809,23 @@ outside that library. The file's last three lines are the whole entry point:
 than numbered because a line count that used to stand here was wrong by a third within a month.
 
 `container/Dockerfile` is `python:3.12-slim` plus ffmpeg, `yt-dlp[default,curl-cffi]` pinned to an
-exact STABLE release and a static Deno binary, `EXPOSE 8080`, `CMD ["python", "server.py"]`. None of
+exact stable release and a static Deno binary, `EXPOSE 8080`, `CMD ["python", "server.py"]`. None of
 it needs porting.
 
-The yt-dlp version is deliberately not repeated here. `.github/workflows/ytdlp-freshness.yml`
-PROPOSES a bump weekly, so a number written into this page would be wrong within days and would send
+This page deliberately doesn't repeat the yt-dlp version. `.github/workflows/ytdlp-freshness.yml`
+proposes a bump every week, so a number written here would be wrong within days and would send
 self-hosters to a build that can't play YouTube. Read the pin off `container/Dockerfile`, which is
 the only place it lives. The Dockerfile explains why the channel is stable rather than nightly (an
 owner decision, 2026-08-18; the job reads PyPI's newest stable and refuses a pre-release string
 outright), and why the pin is exact rather than a floor: reproducibility and a one-line revert. Docker
 layer caching was the reason once, and the 2026-08-29 correction there retracts it.
 
-**What the weekly job can't do is merge, and a pin nobody merges goes stale silently.** When a bump
+**The weekly job can't merge, and a pin nobody merges goes stale silently.** When a bump
 did arrive (2026.8.19, detected 2026-08-24), the job pushed the branch, could not open a pull request
 (the repository's "Allow GitHub Actions to create and approve pull requests" setting was off) and
 fell back to raising an issue, exactly as designed. Branch and issue then sat four days. The setting
-was turned on on 2026-08-28. If you fork this, the fallback matters more than the happy path: check
-that the pin has actually moved rather than that the workflow is green.
+was turned on on 2026-08-28. If you fork this, the fallback matters more than the happy path. Check
+that the pin has actually moved; a green workflow doesn't show that.
 
 On 2026-11-25 the image was built and run outside Workers under compose ([The Docker run](#the-docker-run)):
 `/_clients` reached it through the adapter, and it muxed a YouTube video. Before that, `server.py`
@@ -834,7 +835,7 @@ documents that path under [Running it standalone](../container/README.md#running
 
 #### The `/resolve` contract
 
-From the module docstring and `do_POST` in `container/server.py`. **`POST /resolve`**, JSON body:
+From the module docstring and `do_POST` in `container/server.py`. `POST /resolve` takes a JSON body:
 
 ```jsonc
 { "video": "<url>", "audio": "<url>"|null }   // ffmpeg -c copy mux of tracks already extracted
@@ -850,7 +851,7 @@ and never logged, echoed into an error, or returned. Without a jar, yt-dlp answe
 age-gated sources inside the container (`container/server.py`), and the Worker falls back to the
 cover image (`src/worker.ts`).
 
-**Responses**
+The resolver's responses:
 
 | | |
 |---|---|
@@ -863,14 +864,14 @@ A failed mux's stderr can carry the source URL, so it is never passed through. T
 its last error line, replaces every URL in it with `<url>`, and cuts it to 160 characters; that is `detail`.
 The Worker strips URLs again and writes it only to its log.
 
-**Environment.** The variables aren't in one block: `MAX_SECONDS`, `MAX_BYTES` and `PROC_TIMEOUT` sit
-at the top of `container/server.py`, `MUX_PAGE_TIMEOUT` under the note that argues it,
-`RESOLVER_SECRET` further down among the module constants, `PROBE_TIMEOUT` beside the client probe,
-and `PORT` is read once in the entry point. [The resolver](#the-resolver) has the defaults. The
-README has carried a stale pair before. `MAX_SECONDS` and `MAX_BYTES` were raised together on
-2026-08-03.
+The resolver's environment variables aren't in one block. `MAX_SECONDS`, `MAX_BYTES` and
+`PROC_TIMEOUT` sit at the top of `container/server.py`, `MUX_PAGE_TIMEOUT` under the note that argues
+it, `RESOLVER_SECRET` further down among the module constants and `PROBE_TIMEOUT` beside the client
+probe, and `PORT` is read once in the entry point. [The resolver](#the-resolver) has the defaults. The
+README has carried stale values for one pair before: `MAX_SECONDS` and `MAX_BYTES`, which were raised
+together on 2026-08-03.
 
-**Security, already in the container** (docstring, `container/server.py`):
+Security the container already has (docstring, `container/server.py`):
 
 - `X-Resolver-Secret`, required on every `/resolve` when `RESOLVER_SECRET` is set
 - the scheme checked to http/https
@@ -884,7 +885,7 @@ README has carried a stale pair before. `MAX_SECONDS` and `MAX_BYTES` were raise
 | Surface | Where it is declared | What the code calls | Replace with | Without it |
 |---|---|---|---|---|
 | `ASSETS` | `Env`, `src/analytics.ts` | two calls, both in `pageResponse` (`src/sitepage.ts`): `/` is fetched without the conditional headers and gets the page's config block added; every other site path (`SITE_PATHS` in `src/router.ts`: `/index.html`, `/favicon.ico`, `/robots.txt`, `/og.jpg`, `/openapi.json`) passes straight through | any static file server over `public/`, taking a `Request` and returning a `Response`. It needs no template step. The adapter's is `publicAssets` in `adapters/node/bindings.ts` | Required. Every site path throws without it. |
-| `MEDIA_CACHE` (R2) | `Env`, `src/analytics.ts` | `head(key)`, `get(key)`, `get(key, {range:{offset,length}})`, `put(key, stream\|ArrayBuffer\|string)`, `delete?.(key)` for the mux give-up mark (`clearMuxGiveUp`, `src/worker.ts`), and OPTIONALLY `putStream(key, stream, length\|null)` | any S3-compatible store, or a directory on disk. The adapter's is `DirBucket` in `adapters/node/r2dir.ts`, one file per key, with `putStream`. The test fake is a `Map` in 15 lines (`test/media-resolver.test.mjs`) | Optional. The mux is never cached: remux videos re-mux forever or get stripped, the card falls back to its cover still on every view, translations lose their cross-request cache, and yt-dlp metadata is re-extracted every time (2.4-3.1 s per Facebook video). Implement `putStream` if your store takes a stream. Without it, muxes are buffered in memory up to `MUX_BUFFER_MAX` and refused above it. |
+| `MEDIA_CACHE` (R2) | `Env`, `src/analytics.ts` | `head(key)`, `get(key)`, `get(key, {range:{offset,length}})`, `put(key, stream\|ArrayBuffer\|string)`, `delete?.(key)` for the mux give-up mark (`clearMuxGiveUp`, `src/worker.ts`), and optionally `putStream(key, stream, length\|null)` | any S3-compatible store, or a directory on disk. The adapter's is `DirBucket` in `adapters/node/r2dir.ts`, one file per key, with `putStream`. The test fake is a `Map` in 15 lines (`test/media-resolver.test.mjs`) | Optional. The mux is never cached: remux videos re-mux forever or get stripped, the card falls back to its cover still on every view, translations lose their cross-request cache, and yt-dlp metadata is re-extracted every time (2.4-3.1 s per Facebook video). Implement `putStream` if your store takes a stream. Without it, muxes are buffered in memory up to `MUX_BUFFER_MAX` and refused above it. |
 | `MEDIA_RESOLVER` (Durable Object) | `Env`, `src/analytics.ts` | `resolver.getByName(name).fetch(url, init)` and nothing else | an object whose `getByName(name)` returns `{ fetch }` pointed at the container. The name is a pooling slot, `resolver-{RESOLVER_GENERATION}-{0..N}`, and that string names the instances and nothing stored (`META_GENERATION` is the one that scopes cached records). One container or several | Optional. Without it or without `MEDIA_CACHE`, `withResolver` strips every `remux` video and those platforms render a cover still (`src/worker.ts`). |
 | `SMOKE_RUNNER` (Durable Object) | `Env`, `src/analytics.ts` | `idFromName(name)`, then `get(id, { locationHint })` and its `run()` (`smokeWhereReadersAre`, `src/worker.ts`) | an object whose `get(id).run()` calls `scheduledSmoke(env, ctx, scheduledDeps())`, as `SmokeRunner` does. The adapter's is `inProcessSmokeRunner` in `adapters/node/bindings.ts` | Required off Cloudflare, though `Env` marks it optional. Without it the cron runs the check in place through `liveDeps()`, whose default argument reads `caches.default`, a global Node does not have, so every tick throws. On Cloudflare the binding moves the check to eastern North America; off it, the check runs from your host either way. |
 | `MUX_RUNNER` (Durable Object) | `Env`, `src/analytics.ts` | `getByName(key)`, then `schedule(job)`, and `claim()` / `release()` where present (`src/worker.ts`) | the in-process runner in `adapters/node/bindings.ts`, built from `runMuxJob`, `recordMuxGiveUp`, `clearMuxGiveUp` and the `src/muxpolicy.ts` helpers | Optional. The inline attempt is then the only one, with no retry schedule and no give-up mark, so a video whose mux fails keeps being retried by each new paste. |
@@ -935,10 +936,10 @@ a self-request and, with the wrong DNS, an internal-service reach.
 `OWN_HOSTS` closes that gap. [Before a public deployment](#before-a-public-deployment) has the
 example. How the value is read:
 
-- The value is **added** to the built-in list, never substituted for it. A typo, an empty value or a
+- The value is added to the built-in list, never substituted for it. A typo, an empty value or a
   hostile one can't un-block mbedfx's zones, so every way of getting this wrong is "too strict".
 - One apex entry covers every subdomain: the test is `host === h || host.endsWith('.' + h)`.
-- Unset is a **misconfiguration, not an open door**. The built-in list, the address guard below and
+- Unset is a misconfiguration with a narrow reach. The built-in list, the address guard below and
   the response-shape assert all still stand. What is left reachable is your other public domains,
   which resolve to your own public address, and the self-request lands on a path this Worker does not
   serve as an API and renders "couldn't load".
@@ -955,7 +956,7 @@ pasted from one is pointed at the chosen domain instead of being read as a fediv
 
 `src/netguard.ts` is the port of `container/server.py`'s `_safe_url`, in two halves.
 
-**The literal half runs everywhere, including on Cloudflare.** It parses a hostname to bytes and
+The literal half runs everywhere, including on Cloudflare. It parses a hostname to bytes and
 range-checks them, so every spelling of one address gets one verdict: `127.0.0.1`, `127.1`,
 `2130706433`, `0177.0.0.1`, `::ffff:127.0.0.1`, `::ffff:7f00:1`, `64:ff9b::7f00:1` and
 `2002:7f00:1::` are all loopback. Covered: `0/8`, `10/8`, `100.64/10`, `127/8`, `169.254/16`
@@ -965,7 +966,7 @@ IPv4-mapped/-compatible forms of all of the above. It also refuses `localhost`, 
 `.internal`, `.lan`, `.home.arpa` and `.arpa` names, which `FEDI_HOST` admits as soon as they carry
 a dot (`api.localhost` passes that regex; `localhost` does not).
 
-**The DNS half needs a resolver.** `env.RESOLVE_HOST` is a function, not a wrangler binding. A Worker
+The DNS half needs a resolver. `env.RESOLVE_HOST` is a function, not a wrangler binding. A Worker
 has no resolver, so on Cloudflare it is permanently undefined and the literal check is the whole guard.
 The Node adapter sets it (`resolveHost` in `adapters/node/bindings.ts`):
 
@@ -974,11 +975,11 @@ import dns from 'node:dns/promises'
 env.RESOLVE_HOST = async (host) => (await dns.lookup(host, { all: true })).map(a => a.address)
 ```
 
-With it wired, `evil.example.com IN A 127.0.0.1` is refused **before** the request is made, and a
+With it wired, `evil.example.com IN A 127.0.0.1` is refused before the request is made, and a
 name with one public address and one private one is refused too, because every address is checked, as
 `getaddrinfo` is in the container. A resolver that throws or answers with nothing fails closed.
 
-What it still can't promise: DNS rebinding. Between the resolution and the fetch's own, a record
+It still can't stop DNS rebinding. Between the resolution and the fetch's own, a record
 with a one-second TTL can change; closing that needs pinning the connection to the address that was
 checked, which neither `fetch()` nor Workers exposes. The bound on the residual is unchanged: no
 credential is attached, the body is capped, and the response must be the right shape, so the worst case
@@ -989,8 +990,8 @@ stays a blind GET.
 `getGuestToken` kept its `cf: { cacheEverything, cacheTtl }` and gained a process-local memo with a
 shared in-flight promise (`src/platforms/twitter/fetch.ts`). The `cf` option is a Cloudflare-only
 field and is silently ignored elsewhere; without the memo, every cold card off Cloudflare minted a
-fresh guest token. A token has roughly a 500-request budget, so the symptom was never an outage.
-It was Twitter rate-limiting an instance for a reason invisible from the code. N processes still
+fresh guest token. A token has roughly a 500-request budget, so the symptom was never an outage:
+Twitter would rate-limit an instance for a reason invisible from the code. N processes still
 hold N tokens, which is the same weakness the `cf` cache had (it is per-colo) and is bounded.
 
 ### The mux buffering fallback, bounded
@@ -999,36 +1000,34 @@ hold N tokens, which is the same weakness the `cf` cache had (it is per-colo) an
 MP4 into R2 without buffering. Off Cloudflare it doesn't exist, so every mux took the fallback:
 `cache.put(key, await muxed.arrayBuffer())`, the whole video in memory. The comment called that
 "bounded by the container's own MAX_BYTES output cap", which is true and is a bound of the wrong
-size. `MAX_BYTES` is 393216000, a **375 MB** output ceiling, beside `MAX_SECONDS` 1500
-(`container/server.py`), and `RESOLVER_SLOTS` is 4. Four ordinary long videos, no attacker: 1.5 GB
-resident.
+size. `MAX_BYTES` is 393216000, a 375 MB output ceiling, beside `MAX_SECONDS` 1500
+(`container/server.py`), and `RESOLVER_SLOTS` is 4. Four ordinary long videos, with no attacker
+involved, would hold 1.5 GB resident.
 
 Three paths now, in order of how little memory they hold:
 
 1. `FixedLengthStream` plus a `content-length` is the Workers production path, unchanged. The
    container always sends the header (`send_header("content-length", str(size))`).
-2. `MEDIA_CACHE.putStream(key, stream, length)`: **implement this** if your store can take a
+2. `MEDIA_CACHE.putStream(key, stream, length)`: implement this if your store can take a
    stream (a file write, an S3 multipart upload). R2 can't, which is why `FixedLengthStream` exists
    at all. A store that implements it never buffers and is not subject to the ceiling. The Node
    adapter's directory store implements it.
 3. Buffering, capped at `MUX_BUFFER_MAX` (default 64 MB, env-overridable). Bodies with no
    `content-length` are read with a running total and abandoned at the cap rather than measured
-   after the fact. Past the cap the object is **not stored**: that view degrades to the cover still,
+   after the fact. Past the cap the object is not stored: that view degrades to the cover still,
    exactly as a failed mux does, and a line goes to stderr.
 
-64 MB is chosen against the ~128 MB Workers isolate ceiling, not against a measured distribution of
-video sizes, and nobody has measured that. The cost of the refusal is real: an over-ceiling video
-re-muxes on every view. `putStream` is the fix; raising `MUX_BUFFER_MAX` is the workaround for an
-operator with memory to spend.
+64 MB was chosen against the ~128 MB Workers isolate ceiling. Nobody has measured the distribution
+of video sizes. The refusal has a cost: an over-ceiling video re-muxes on every view. `putStream` is
+the fix; raising `MUX_BUFFER_MAX` is the workaround for an operator with memory to spend.
 
 ### The front page's link preview
 
 Paste your instance's front page into Discord and it unfurls from the page's own head. The Worker
 points `og:url`, `og:image` and `twitter:image` at your primary `PUBLIC_ORIGIN` entry and drops the
-domain from `og:image:alt` (`injectPage` in `src/sitepage.ts`). The picture is another matter.
-`public/og.jpg` is mbedfx.app's artwork, with the mbedfx.app wordmark across the middle, and the
-Worker can't redraw it. Until you replace the file, your front page unfurls with somebody else's
-domain on it.
+domain from `og:image:alt` (`injectPage` in `src/sitepage.ts`). It can't redraw the picture itself:
+`public/og.jpg` is mbedfx.app's artwork, with the mbedfx.app wordmark across the middle. Until you
+replace the file, your front page unfurls with somebody else's domain on it.
 
 The head declares the picture's size and type in `og:image:width`, `og:image:height` and
 `og:image:type`, and Discord won't draw a large image without a declared size. That is why a
@@ -1039,13 +1038,15 @@ keeps showing the old picture for a link it unfurled before the swap.
 ### Egress IP
 
 Platforms answer a datacenter IP differently from a residential one, in both directions. Some of
-that difference is a FLAP rather than a rule, and since 1.11.0 the fetchers no longer take a single
+that difference is a flap rather than a rule, and since 1.11.0 the fetchers no longer take a single
 refusal as the answer: `src/fetchretry.ts` carries one extra ask (`askTwice`, `ASK_ATTEMPTS = 2`,
 retried on 408, 425, 429 and 5xx) across thirty call sites in sixteen platform fetchers (counted
 2026-11-25; `grep -rnE "askTwice\(" src/platforms | grep -vE ":[0-9]+:\s*(\*|//)" | wc -l`),
-YouTube's among them since 1.12.0. So read the rows below as what a host is refused TWICE, not once.
+YouTube's among them since 1.12.0. So a refusal in the rows below means a host was refused twice,
+not once.
 
-The table measures ten surfaces for whether the answer changes with the IP the fetch leaves from.
+Each of the ten surfaces below was measured for whether the answer changes with the IP the fetch
+leaves from.
 
 | Platform / surface | Measured | Where |
 |---|---|---|
@@ -1056,9 +1057,9 @@ The table measures ten surfaces for whether the answer changes with the IP the f
 | Threads video (`scontent*.cdninstagram.com`) | Once blocked for the container's egress. A Worker fetch on 2026-08-09 got 200 `video/mp4` (8,990,730 bytes), and the Worker now serves those bytes itself. A residential host got the same file on 2026-11-25. | `src/platforms/threads/normalize.ts`, `src/mediaproxy.ts` |
 | Google translate endpoint | Measured 2026-07-31 from a Worker: answers in 13-16 ms and is not blocked from Cloudflare's egress. It does rate-limit bursts, and ~30 requests in a few seconds drew HTTP 429 on every one. | `src/translate.ts` |
 | Twitter guest endpoints | Byte-identical from residential and Cloudflare Workers egress in the 2026-07-19 recon; the activation and `TweetResultByRestId` were both measured working. On 2026-11-25 from a residential host, syndication (the primary path) answered `/jack/status/20` without `retweet_count`, while mbedfx.app's card for it showed a repost count. The Cloudflare side of that was not measured. | `src/platforms/twitter/fetch.ts` (`activateGuestToken`, `fetchGuest`, and the recon note before `GUEST_BEARER`) |
-| YouTube via yt-dlp | Not datacenter-IP-blocked, and measured PER PLAYER CLIENT since 2026-08-28. A `{page}` resolve returned a real ad-free MP4 from Cloudflare Container egress on 2026-07-22; it needed Deno for the signature challenge, not a different IP. `/_clients` then extracted one video with six clients on that egress and range-fetched each chosen format: `default`, `web_embedded`, `tv_simply`, `mweb` and `web_safari` all served bytes with NO PO token, and only `android_vr` was refused (`http-403`). `tv_simply` and `mweb` are the two clients yt-dlp's PO Token Guide says require one, so a token provider buys a self-hoster on datacenter egress nothing. Refusals are intermittent rather than absolute: worth one retry, not a verdict. | `src/worker.ts` (`/_clients`), `container/README.md` |
+| YouTube via yt-dlp | Not datacenter-IP-blocked, and measured per player client since 2026-08-28. A `{page}` resolve returned a real ad-free MP4 from Cloudflare Container egress on 2026-07-22; it needed Deno for the signature challenge, not a different IP. `/_clients` then extracted one video with six clients on that egress and range-fetched each chosen format: `default`, `web_embedded`, `tv_simply`, `mweb` and `web_safari` all served bytes with no PO token, and only `android_vr` was refused (`http-403`). `tv_simply` and `mweb` are the two clients yt-dlp's PO Token Guide says require one, so a token provider buys a self-hoster on datacenter egress nothing. Refusals are intermittent rather than absolute: worth one retry, not a verdict. | `src/worker.ts` (`/_clients`), `container/README.md` |
 | Instagram copyright recovery (`copyright_recovered`) | Unconfirmed from Cloudflare egress. Every measurement behind it is residential, and the recovery fails silently into a cover still. The counter exists so the failure is visible at all. | `src/analytics.ts` |
-| Instagram generally | Instagram's behaviour toward Cloudflare is PATH-DEPENDENT: a residential result does not transfer to Workers egress by itself. | `src/platforms/instagram/fetch.ts` |
+| Instagram generally | Instagram's behaviour toward Cloudflare is path-dependent: a residential result does not transfer to Workers egress by itself. | `src/platforms/instagram/fetch.ts` |
 
 #### Measured from a residential host, 2026-11-25
 
@@ -1101,13 +1102,13 @@ anonymous `.json`, a Facebook `/share/{code}`, an Instagram embed for a known-pu
 `scontent` video URL, and a Google translate call. Record the results here with the date and the
 host type.
 
-**YouTube has an instrument rather than a procedure.** `GET /_clients` runs `container/server.py`'s
-probe on your own resolver: it extracts one fixed video with each client in `PROBE_CLIENTS` and then
-range-fetches the format each one chose, so it reports bytes rather than a format list. That
-distinction is the point. A client can list formats and still be refused by googlevideo, and only the
-range fetch tells them apart. Run it from the egress you intend to serve from before concluding
-anything about YouTube on your host, because every claim in this project that was reasoned from a
-laptop and not re-measured this way turned out to be wrong in one direction or the other.
+YouTube needs no manual procedure, because it has an instrument. `GET /_clients` runs
+`container/server.py`'s probe on your own resolver: it extracts one fixed video with each client in
+`PROBE_CLIENTS` and then range-fetches the format each one chose, so it reports bytes rather than a
+format list. A client can list formats and still be refused by googlevideo, and only the range fetch
+tells the two apart. Run it from the egress you intend to serve from before concluding anything
+about YouTube on your host, because every claim in this project that was reasoned from a laptop and
+not re-measured this way turned out to be wrong in one direction or the other.
 
 ### History
 

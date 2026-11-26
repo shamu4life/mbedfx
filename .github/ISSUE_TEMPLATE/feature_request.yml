@@ -7,7 +7,7 @@ body:
     attributes:
       label: Problem
       description: >
-        What problem does this solve, or what limitation does it address?
+        What problem or limitation does this address?
         "I want X" is less useful than "When I do Y, I can't Z because…"
     validations:
       required: true
@@ -35,9 +35,9 @@ body:
     attributes:
       label: Scope notes
       description: >
-        Optional. Flag anything that affects scope. Worth knowing: this project does NATIVE
-        extraction, so "route it to another fixer" is out of scope by design. Anything needing
-        an account, a login, or a paid API is very likely out too, because the whole point is that a
-        reader pastes a link and it works, with nobody signed in to anything.
+        Optional. Flag anything that affects scope. This project does its own extraction, so
+        "route it to another fixer" is out of scope by design. Anything needing an account, a
+        login, or a paid API is very likely out too, because a reader should be able to paste a
+        link and have it work with nobody signed in to anything.
     validations:
       required: false

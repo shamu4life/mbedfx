@@ -15,8 +15,8 @@ checkable by re-running the same sample.
 
 Neither surface covers this platform on its own, and the two fail in different places: the plugin
 carries every `/photo/?fbid=` url, which the page surface answers with a login wall, and the page
-surface carries the two posts the plugin declines to embed. That is why there is an order rather
-than a preference, and why removing either surface would cost real cards.
+surface carries the two posts the plugin declines to embed. So the chain tries both surfaces in
+order instead of preferring one, and removing either would cost real cards.
 
 ## What the sample was
 
@@ -31,31 +31,31 @@ posts during the sampling window. The old ones came from the Wayback Machine's C
 `facebook.com/{page}/posts/*`, which dates them by their first archived capture: 2013-11 for
 `natgeo/posts/10151763788448951`, 2014-07 and 2015-01 for two NASA posts, 2024-02 for
 `NASA/posts/940735780755132`. Four of the old urls returned no CDX timestamp and are left undated
-here rather than guessed at.
+here.
 
 Media types were classified from what the plugin fragment actually contains rather than from the
 url: 21 photo posts (one or more images in the `t39.30808-6` bucket), 6 link shares (a single
 `external.*.fbcdn.net` preview image and no photo-bucket image), 4 video posts (a `t15.` poster),
 2 posts with no image in the fragment at all, and 2 that Meta will not embed.
 
-Discovery of the urls was done from a laptop, which is a residential client. That affects nothing:
-the urls are only inputs, and every reading in this document was taken from Cloudflare egress.
+The urls were found from a laptop, which is a residential client. That affects nothing: the urls
+are only inputs, and every reading in this document was taken from Cloudflare egress.
 
 ## Where each surface fails
 
 The og: page misses 18 of 35, in three distinct shapes, and the shapes are what make the failure
 diagnosable:
 
-- 438,5xx bytes redirecting to `login/?next=…` — a login wall. All 14 `/photo/?fbid=` urls, and
-  nothing else. This is the surface Meta walled in 2026-08-08, and as of this measurement the wall
+- 438,5xx bytes redirecting to `login/?next=…`, which is a login wall. All 14 `/photo/?fbid=` urls,
+  and nothing else. This is the surface Meta walled in 2026-08-08, and as of this measurement the wall
   is specific to the photo permalink rather than universal: ordinary `/{page}/posts/{id}` urls
   answer with a full og: set again.
-- 325,5xx bytes with no og tags at all — two urls, one live (`/WYFF4/posts/1602331204848623`) and
-  one deleted (`/NASA/posts/10153395671266772`). The same byte size for both is worth noting: a
-  stripped page and a deleted post are indistinguishable by shape, which is exactly why the age gate
-  reads Meta's own route name instead of inferring anything from absence.
-- 830–952 KB carrying `og:title` and `og:description` and no `og:image` — two urls. Both are real
-  live posts whose caption was sitting in the metadata the whole time.
+- 325,5xx bytes with no og tags at all: two urls, one live (`/WYFF4/posts/1602331204848623`) and
+  one deleted (`/NASA/posts/10153395671266772`). Both are the same size, so a stripped page and a
+  deleted post cannot be told apart by shape. The age gate reads Meta's own route name for that
+  reason, instead of inferring anything from absence.
+- 830 to 952 KB carrying `og:title` and `og:description` and no `og:image`: two urls, both real live
+  posts whose caption was in the metadata the whole time.
 
 The plugin misses 2 of 35, and both are the same thing: a 38 KB fragment reading "This Facebook post
 is no longer available. It may have been removed or the privacy settings of the post may have
@@ -80,29 +80,29 @@ plugin   38,448 bytes   "This Facebook post is no longer available"
 ```
 
 Both surfaces answered and neither was walled. The plugin refuses to embed this post, and the page
-card refused it for want of a picture — a rule written when the only alternative was rendering the
-login shell. The caption was reachable from this egress in `og:description` all along.
+card refused it for want of a picture, under a rule written when the only alternative was rendering
+the login shell. The caption was reachable from this egress in `og:description` all along.
 
 ## What changed
 
 Four fixes, each measured from this egress and each pinned by a test that fails without it.
 
-1. `facebookCaptionCard` — a third and last read of the og: page that accepts a byline and a caption
-   with no picture. It runs after the plugin, so it can only fire where the answer was otherwise the
+1. `facebookCaptionCard` is a third and last read of the og: page, one that accepts a byline and a
+   caption with no picture. It runs after the plugin, so it can only fire where the answer was otherwise the
    failure card. Counted as `caption_recovered`. Worth 2 of the 35 urls.
 2. The plugin's `<img>` tag bound went from 1400 to 4000 characters. The old number was sized
    against the signed CDN query; the tag is sized by Facebook's auto-generated alt text, which
    transcribes every word in the picture and is emitted twice (`alt=` and `caption=`). Across the 37
    photo-bucket tags in the sample the lengths run 531 / 1076 median / 1541, and the four over 1400
-   were all in one post — NPR's five-photo `/photo/?fbid=1404157071581288`, which shipped one photo.
+   were all in one post: NPR's five-photo `/photo/?fbid=1404157071581288`, which shipped one photo.
 3. Photo dimensions are now read from `style="width:364px;height:364px"` when the width and height
    attributes are absent. Two of the 37 tags spell it that way, and both of those posts are a single
-   picture, so the card was shipping its only image at 0x0 — which `render/mastodon.ts` turns into an
+   picture, so the card was shipping its only image at 0x0, which `render/mastodon.ts` turns into an
    attachment with no `meta.original` at all.
 4. `fbAuthor` no longer copies the page name into `handle`. It emptied that field only on the packed
    `… | Facebook` title shape, and no og:title in the sample ended that way, so all 17 page-surface
-   cards rendered `Name (@Name)` — and on the two reel-shaped titles, a view count and a whole
-   caption twice.
+   cards rendered `Name (@Name)`. On the two reel-shaped titles that meant a view count and a whole
+   caption, twice.
 
 End to end across the sample: 33 → 34 cards, and 44 → 48 media entries.
 
@@ -117,7 +117,7 @@ This is invisible in the coverage number today because the og: page still suppli
 most of those posts and runs first. It becomes visible the moment Meta walls the page surface again,
 which it did for a week between 2026-08-01 and 2026-08-08.
 
-Reading those two buckets is a one-step follow-up and the evidence for it is uniform — each affected
+Reading those two buckets is a one-step follow-up, and the evidence for it is uniform: each affected
 fragment carries exactly one such image, in document order after the avatar, and `fbImage` already
 range-checks `*.fbcdn.net` so no host allowlist would have to move. It is left undone here because
 it changes what media a card carries rather than repairing media it already had, and a video post's
