@@ -249,6 +249,9 @@ header:
   twice a week. Chosen 2026-10-14, over an email-only variant and a Discord webhook, knowing it widened
   the first exception. It touches no code, branch, PR or deploy.
 
+Both read the repo variables `HEALTH_BASE` and `HEALTH_GUESTS` since 2026-11-25 (owner-approved; the
+health check skips without `HEALTH_BASE`). Their identity and scope did not change.
+
 Leave both alone, or ask before changing them. Do not restore them to the owner's account unasked, and
 do not widen either to any other job.
 

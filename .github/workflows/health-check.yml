@@ -8,8 +8,8 @@
 #
 # WHAT IT READS. `/_health`, the scheduled check's own last seven days (src/health.ts: kept in R2 by the
 # Worker, so no Cloudflare credential is needed here; owner's call over a read-only API token, 2026-10-14).
-# Then, from GitHub's network: `/_smoke` twice a minute apart, `/_clients` (the video container), and both
-# guest domains with their `d.` names. What counts as broken, and the thresholds, are in
+# Then, from GitHub's network: `/_smoke` twice a minute apart, `/_clients` (the video container), and every
+# guest domain in HEALTH_GUESTS with its `d.` name. What counts as broken, and the thresholds, are in
 # .github/scripts/health-lib.mjs and pinned by test/health-check.test.mjs.
 #
 # WHAT IT WRITES. Issues labelled `health-check`: one per problem, a comment on it every run while it stays
@@ -44,6 +44,13 @@ concurrency:
 
 jobs:
   check:
+    # WHICH INSTANCE, from repo variables (Settings → Secrets and variables → Actions → Variables), set on
+    # shamu4life/mbedfx on 2026-11-25: HEALTH_BASE=https://mbedfx.app and HEALTH_GUESTS=the two guest
+    # domains. Until then both were written into health-check.mjs, so every fork that enabled Actions
+    # checked mbedfx.app and filed issues about it in its own repo. A repo without HEALTH_BASE skips the
+    # job: the condition is read before any step runs, so a fork stays quiet until it names its own
+    # instance. Delete the variable to pause the check without editing this file.
+    if: ${{ vars.HEALTH_BASE != '' }}
     runs-on: ubuntu-latest
     # The slowest honest run: /_smoke twice (150 s each, a minute apart), /_clients twice (240 s each, a
     # minute apart), /_health and four guest probes, about 20 minutes with every timeout spent.
@@ -59,4 +66,6 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_REPO: ${{ github.repository }}
+          HEALTH_BASE: ${{ vars.HEALTH_BASE }}
+          HEALTH_GUESTS: ${{ vars.HEALTH_GUESTS }}
         run: node .github/scripts/health-check.mjs --file-issues

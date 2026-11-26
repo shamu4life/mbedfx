@@ -89,6 +89,11 @@ If your fork's converter page should keep its media-only box, list your `d.` ori
 - **`/openapi.json` points a generated client at the host that served it.** Its `servers` list named
   mbedfx.app's three domains, so a client built from a fork's copy talked to mbedfx.app. The list is
   now the relative `/`.
+- **The twice-weekly health check names its instance in repo variables.** `HEALTH_BASE` (the
+  instance origin) and `HEALTH_GUESTS` (guest domains, if any) replace the mbedfx.app address and the
+  two guest domains written into `.github/scripts/health-check.mjs`. A fork without `HEALTH_BASE`
+  skips the job, where it used to check mbedfx.app and file issues about it in the fork. The weekly
+  yt-dlp bump PR names the same instance in its verify command.
 - **The YouTube promise is off unless `YT_PROMISE` is `on`.** Until now only `off` turned it off,
   so a deployment that never set the var promised Discord an mp4 for a cold short video whenever
   it knew the video's length. On 2026-11-24 that promise made Discord's window one time in eight,
