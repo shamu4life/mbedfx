@@ -7623,13 +7623,15 @@ export const CRON_FALLBACK_ORIGIN = 'http://localhost'
 
 /**
  * The PRIMARY entry of PUBLIC_ORIGIN (primaryOrigin in src/instance.ts: the first that is a bare
- * http(s) origin, as the Node adapter's parseOrigins requires). Junk is skipped, not thrown: this runs
- * inside the scheduled handler, and a throw there is a tick with no record. With no usable entry it is
- * CRON_FALLBACK_ORIGIN. It decides the origin of the check's renders and nothing else; it is never a
- * reason to admit a host anywhere.
+ * http(s) origin, as the Node adapter's parseOrigins requires, on a host of servableHost's shape). Junk
+ * is skipped, not thrown: this runs inside the scheduled handler, and a throw there is a tick with no
+ * record. With no usable entry it is CRON_FALLBACK_ORIGIN. It decides the origin of the check's renders
+ * and nothing else; it is never a reason to admit a host anywhere.
  *
  * The parse moved to src/instance.ts on 2026-11-25 so the Reddit and archive user agents read the same
- * primary. The fallback stayed here: a user agent with no primary must say so, not claim localhost.
+ * primary, and the converter page's primary is the same call (pageConfig in src/sitepage.ts). The
+ * fallback stayed here: a user agent with no primary must say so, not claim localhost, and the page falls
+ * back to the origin it was requested on.
  */
 export function cronOrigin(env: Pick<Env, 'PUBLIC_ORIGIN'>): string {
   return primaryOrigin(env) ?? CRON_FALLBACK_ORIGIN

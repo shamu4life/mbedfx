@@ -626,13 +626,14 @@ footer .fine { font-size: 12px; opacity: .8; }
           <p class="sub">A post id is meaningless without its server. About one in five bare id
              lookups against a default server returns a real post, just not the right one, so
              there's no default here. Any server's links work.</p>
-          <!-- The domain in these four spots is the deployment's primary (PRIMARY_HOST), filled in by the
+          <!-- The domain in these four spots is the deployment's primary (PRIMARY_HOST), and the scheme in
+               the three marked data-primary-scheme is that primary's (mbedfxScheme), both filled in by the
                DOM half from the worker's block. The text written here is what a copy with no block shows,
                and what the block says on mbedfx.app. -->
-          <p style="margin-top:10px">Put <span data-primary-host>mbedfx.app</span> after <code>https://</code>:</p>
-<pre>https://<b data-primary-host>mbedfx.app</b>/mstdn.social/@stux/116994812581955524</pre>
+          <p style="margin-top:10px">Put <span data-primary-host>mbedfx.app</span> after <code data-primary-scheme>https://</code>:</p>
+<pre><span data-primary-scheme>https://</span><b data-primary-host>mbedfx.app</b>/mstdn.social/@stux/116994812581955524</pre>
           <p>Or just type <span data-primary-host>mbedfx.app</span>/ in front of the whole link, one <kbd>Home</kbd> keypress:</p>
-<pre>https://<b><span data-primary-host>mbedfx.app</span>/</b>https://mstdn.social/@stux/116994812581955524</pre>
+<pre><span data-primary-scheme>https://</span><b><span data-primary-host>mbedfx.app</span>/</b>https://mstdn.social/@stux/116994812581955524</pre>
           <p class="sub">Works for Mastodon, Pleroma, Akkoma, Iceshrimp, Misskey, Sharkey, Lemmy,
              PieFed and PeerTube.</p>
         </div>
@@ -826,8 +827,8 @@ var GUEST_HOSTS = ['sorryifuckedyour.mom', 'hotsinglesnear.you'];
  * THE DEPLOYMENT'S OWN VALUES, WHEN THE WORKER SENT THEM (self-hosting phase 5, 2026-11-25).
  *
  * The worker serves this page with one more script element (id mbedfx-config) in front of this block,
- * setting MBEDFX_CONFIG (src/sitepage.ts builds it from PUBLIC_ORIGIN, OWN_HOSTS, GUEST_HOSTS and the
- * request). Its opening tag is not spelled out here, so nothing scanning for it can match this comment.
+ * setting MBEDFX_CONFIG (src/sitepage.ts builds it from PUBLIC_ORIGIN, OWN_HOSTS, GUEST_HOSTS, SITE_NAME
+ * and the request). Its opening tag is not spelled out here, so nothing scanning for it can match this comment.
  * Before that every copy of this page carried mbedfx.app's domains, so a fork's converter handed out
  * https://mbedfx.app/... links and sent its readers to somebody else's instance.
  *
@@ -849,6 +850,10 @@ function mbedfxReadConfig(c) {
   if (typeof c.primary !== 'string' || !/^https?:\/\/[^\/?#]+$/.test(c.primary)) return null;
   if (typeof c.host !== 'string' || !hosts(c.ours) || !hosts(c.public) || !c.public.length) return null;
   if (!hosts(c.guests) || !hosts(c.direct)) return null;
+  // `http` and `site` arrived after the rest (2026-11-25) and each has a natural empty value, so a block
+  // without them still applies. One that is present and the wrong shape is refused whole, like the rest.
+  if (c.http !== undefined && !hosts(c.http)) return null;
+  if (c.site !== undefined && typeof c.site !== 'string') return null;
   return c;
 }
 var MBEDFX_CFG = mbedfxReadConfig(typeof MBEDFX_CONFIG === 'undefined' ? null : MBEDFX_CONFIG);
@@ -863,10 +868,16 @@ if (MBEDFX_CFG) {
  * already off, or null with no block, in which case the DOM half reads location.hostname as before.
  * DIRECT_HOSTS is every declared d. name; null means the page cannot know, and then media only is
  * offered everywhere, which is what this page did before it could know.
+ *
+ * HTTP_HOSTS is every host of this deployment served over plain http (mbedfxScheme below). SITE_NAME is
+ * the deployment's SITE_NAME as its cards print it, which the preview's footer copies; 'mbedfx' with no
+ * block or a blank one, the name the cards use when it is unset (src/instance.ts DEFAULT_SITE_NAME).
  */
 var PRIMARY_HOST = MBEDFX_CFG ? MBEDFX_CFG.primary.replace(/^https?:\/\//, '') : 'mbedfx.app';
 var ARRIVED_HOST = MBEDFX_CFG ? MBEDFX_CFG.host : null;
 var DIRECT_HOSTS = MBEDFX_CFG ? MBEDFX_CFG.direct.slice() : null;
+var HTTP_HOSTS = MBEDFX_CFG && MBEDFX_CFG.http ? MBEDFX_CFG.http.slice() : [];
+var SITE_NAME = MBEDFX_CFG && MBEDFX_CFG.site && MBEDFX_CFG.site.trim() ? MBEDFX_CFG.site.trim() : 'mbedfx';
 
 /**
  * The nesting invariant, asserted where it cannot rot rather than in a comment. A name in
@@ -928,6 +939,22 @@ function mbedfxIsOurs(h) {
   return OUR_HOSTS.indexOf(h) >= 0 || /(^|\.)workers\.dev$/.test(h);
 }
 
+/**
+ * THE SCHEME A LINK ON HOST `h` STARTS WITH: 'http://' for a host the worker lists in HTTP_HOSTS, and
+ * 'https://' for everything else, guest hosts always (another Worker owns those domains, over https).
+ * `h` is a URL host, port included when it has one. Every link this page writes goes through here.
+ *
+ * WHY: this page wrote 'https://' in front of every link, which is right on mbedfx.app and on any
+ * deployment behind TLS, and wrong on a Node box serving plain http, the adapter's own default
+ * (http://localhost:8787). Every link the converter handed out there pointed at a port nothing answered
+ * TLS on. The worker knows each host's scheme from PUBLIC_ORIGIN (pageConfig in src/sitepage.ts); with no
+ * block the list is empty, and every link is https as it always was.
+ */
+function mbedfxScheme(h) {
+  var x = String(h == null ? '' : h).toLowerCase();
+  return HTTP_HOSTS.indexOf(x) >= 0 && GUEST_HOSTS.indexOf(x) < 0 ? 'http://' : 'https://';
+}
+
 function mbedfxDefaultHost(hostname) {
   var served = String(hostname == null ? '' : hostname).toLowerCase().replace(/\.$/, '');
   // A Workers preview. Emitted as-is so a link pasted from it reaches the build under test.
@@ -959,6 +986,9 @@ function mbedfxConvert(input, host, gallery) {
   } catch (e) { return { ok: false, kind: 'unparseable' }; }
 
   var h = u.hostname.toLowerCase().replace(/\.$/, '');
+  // The same host with its port, as OUR_HOSTS spells a deployment served on one (localhost:8787 on the
+  // Node adapter's default). `h` alone stays what platform detection reads: no social site has a port.
+  var hp = h + (u.port ? ':' + u.port : '');
   var path = u.pathname.replace(/\/+$/, '') || '/';
   var seg = path.split('/').filter(Boolean);
   /**
@@ -1009,7 +1039,7 @@ function mbedfxConvert(input, host, gallery) {
 
   var out = function (p, platform, note, code) {
     var full = withGallery(p);
-    return { ok: true, url: 'https://' + host + full, platform: platform, note: note || '', code: code || null, path: full };
+    return { ok: true, url: mbedfxScheme(host) + host + full, platform: platform, note: note || '', code: code || null, path: full };
   };
   var no = function (why) { return { ok: false, kind: 'unsupported', why: why }; };
 
@@ -1024,7 +1054,10 @@ function mbedfxConvert(input, host, gallery) {
   // `/d.mbedfx.app/jack/status/20`, `notfound` on every host (review, 2026-10-11). Exactly one label,
   // so `d.d.mbedfx.app` is still not ours; a preview has no d. form and is covered by mbedfxIsOurs.
   // The d. is dropped like a pasted /p or /v: the media-only box stays authoritative.
-  if (mbedfxIsOurs(h) || OUR_HOSTS.indexOf(h.replace(/^d\./, '')) >= 0 || h === 'x.invalid') {
+  // `hp` is checked beside `h` since 2026-11-25: a deployment on a port lists its host with the port, and
+  // checked by hostname alone its own links pasted back read as a fediverse instance.
+  if (mbedfxIsOurs(h) || OUR_HOSTS.indexOf(h.replace(/^d\./, '')) >= 0 || h === 'x.invalid'
+    || mbedfxIsOurs(hp) || OUR_HOSTS.indexOf(hp.replace(/^d\./, '')) >= 0) {
     /**
      * A SUFFIX ALREADY ON THE PASTED PATH IS DROPPED, so the checkbox stays authoritative.
      *
@@ -1258,7 +1291,8 @@ function mbedfxConvert(input, host, gallery) {
  * half for why media only is applied to the shown link alone.
  */
 function mbedfxMediaOnly(url) {
-  var m = /^(https:\/\/)([^\/?#]+)(.*)$/.exec(String(url == null ? '' : url));
+  // http as well since 2026-11-25 (mbedfxScheme): a plain-http deployment's d. name is d.<host:port>.
+  var m = /^(https?:\/\/)([^\/?#]+)(.*)$/.exec(String(url == null ? '' : url));
   return m ? m[1] + 'd.' + m[2] + m[3] : url;
 }
 
@@ -1279,12 +1313,22 @@ function mbedfxHasMediaOnly(h) {
  * RE-POINT A WORKER-SUPPLIED URL AT THE HOST THE READER CHOSE, with media only in that host's spelling.
  * See onChosenHost in the DOM half for the bug this exists for. Kept here, pure, so the test can check
  * that a /_prep answer comes out exactly as a fresh conversion does on every host.
+ *
+ * THE WHOLE ORIGIN IS REPLACED, scheme and port included, not just the hostname (2026-11-25). The worker
+ * builds its answer on the origin the request arrived on, and `host` may carry a port the answer's
+ * origin does not, or lack one it has. Setting `hostname` dropped the chosen host's port, and setting
+ * `host` keeps the old port when the new host names none (the URL standard's own rule: http://a:8080/
+ * with its host set to b is http://b:8080/). So the link is rebuilt from mbedfxScheme(host), the host as
+ * given, and the answer's path, query and fragment.
  */
 function mbedfxRepoint(u, host, mediaOnly) {
-  var x;
-  try { x = new URL(u); } catch (e) { return u; }   // not a url we can rewrite; better the original
-  x.hostname = host;
-  var s = x.toString();
+  var x, y;
+  if (!host) return u;
+  try {
+    x = new URL(u);
+    y = new URL(mbedfxScheme(host) + host + x.pathname + x.search + x.hash);
+  } catch (e) { return u; }   // not a url we can rewrite; better the original
+  var s = y.toString();
   return mediaOnly ? mbedfxMediaOnly(s) : s;
 }
 
@@ -1326,6 +1370,12 @@ function mbedfxPrepResolved(asked, answer) {
    */
   Array.prototype.forEach.call(document.querySelectorAll('[data-primary-host]'), function (el) {
     el.textContent = PRIMARY_HOST;
+  });
+  // And the scheme in front of it, marked data-primary-scheme: "Put localhost:8787 after https://" on a
+  // plain-http box describes a link that does not load. https:// as written, and as mbedfxScheme says on
+  // the public instance.
+  Array.prototype.forEach.call(document.querySelectorAll('[data-primary-scheme]'), function (el) {
+    el.textContent = mbedfxScheme(PRIMARY_HOST);
   });
   /**
    * MEDIA-ONLY emits a link that answers with the post's BYTES instead of a card: the d. host, on every
@@ -1573,7 +1623,7 @@ function mbedfxPrepResolved(asked, answer) {
      * compares base with base (see there), which ends the false caption and would have left the forced
      * link without its d. for good, so the link is shown right the first time instead.
      */
-    setResult('https://' + host + '/' + code + path);
+    setResult(mbedfxScheme(host) + host + '/' + code + path);
     result.style.display = ''; copy.style.display = '';
     note.className = 'msgline';
     note.innerHTML = 'Forced to <b>' + esc((BY_CODE[code] || {}).name || code) + '</b>.';
@@ -1960,10 +2010,14 @@ function mbedfxPrepResolved(asked, answer) {
    * Discord's footer reads just "mbedfx" (measured; src/render/mastodon.ts toMastodonStatus), so
    * /_card sends `null` for it and the first line below prints the same "mbedfx". The flag stays
    * for a real date before 2005, which the card would print as it is.
+   *
+   * THE NAME IS SITE_NAME (from the worker's block, 2026-11-25), which is what the card itself carries
+   * on that deployment (og:site_name, oEmbed's provider_name; src/instance.ts). It was the literal
+   * 'mbedfx', so a renamed instance previewed a footer its cards no longer drew.
    */
   function footLine(j) {
     var t = j && j.createdAt ? new Date(j.createdAt) : null;
-    if (!t || isNaN(t.getTime())) return 'mbedfx';
+    if (!t || isNaN(t.getTime())) return SITE_NAME;
     /**
      * THE TIME, AND THE SEPARATOR DISCORD ACTUALLY USES. Reported from a side-by-side: the real card
      * reads "mbedfx | 06/12/2026 2:54 PM" and this read "mbedfx \u2022 Jun 12, 2026" \u2014 a different divider,
@@ -1981,8 +2035,8 @@ function mbedfxPrepResolved(asked, answer) {
     // An implausible date is SHOWN and FLAGGED rather than hidden \u2014 the card draws it either way, and
     // a preview that quietly tidied it up would be flattering the card instead of describing it.
     return t.getFullYear() < 2005
-      ? 'mbedfx | ' + stamp + '  \u26a0 no upload date'
-      : 'mbedfx | ' + stamp;
+      ? SITE_NAME + ' | ' + stamp + '  \u26a0 no upload date'
+      : SITE_NAME + ' | ' + stamp;
   }
 
   function hidePreview() {

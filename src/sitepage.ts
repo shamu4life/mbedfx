@@ -1,6 +1,7 @@
 import type { Env } from './analytics.ts'
 import { declaredHosts } from './platforms/fedihost.ts'
 import { guestHosts, isGuestHost } from './guesthost.ts'
+import { primaryOrigin, publicOrigins, servableHost, siteName } from './instance.ts'
 
 /**
  * THE CONVERTER PAGE, SERVED WITH THIS DEPLOYMENT'S OWN HOST LISTS (self-hosting phase 5, 2026-11-25).
@@ -38,12 +39,23 @@ export const HEAD_SELF_LINKS = [
   `<meta name="twitter:image" content="${PAGE_ORIGIN}/og.jpg">`,
 ] as const
 
+/**
+ * THE ONE OTHER PLACE THE HEAD NAMES mbedfx.app: the image's alt text, which Discord and screen readers
+ * read with the unfurl. On any other primary it becomes FORK_IMAGE_ALT, which names no domain. It does
+ * not name the fork's own host either, because the artwork it describes is public/og.jpg, and that file
+ * still shows the mbedfx.app wordmark until the operator replaces it (docs/SELF-HOSTING.md says how). Text
+ * naming the fork would describe an image the fork does not serve; text naming mbedfx.app would
+ * advertise somebody else's instance. "mbedfx" is the software, which the artwork does show.
+ */
+export const HEAD_IMAGE_ALT = '<meta property="og:image:alt" content="mbedfx.app: social links that embed properly">'
+export const FORK_IMAGE_ALT = '<meta property="og:image:alt" content="mbedfx: social links that embed properly">'
+
 /** The block goes in front of this, which the page carries exactly once (the tests lift it by this id). */
 export const CONFIG_ANCHOR = '<script id="mbedfx-convert">'
 
 /** What the page is told. Every host is a URL `host`: lowercase, punycode, a port only when not default. */
 export interface PageConfig {
-  /** The origin the head's self-links and the visible copy name. First PUBLIC_ORIGIN entry, else the request's. */
+  /** The origin the head's self-links and the visible copy name: primaryOrigin, one d. off, else the request's. */
   primary: string
   /** The host the visitor arrived on, one leading `d.` taken off. The page's default domain. */
   host: string
@@ -55,6 +67,10 @@ export interface PageConfig {
   guests: string[]
   /** Every declared `d.` name. Media only is offered on a domain whose d. name is in here, and nowhere else. */
   direct: string[]
+  /** The hosts in `ours` served over plain http. Every other host gets https, guest hosts always. */
+  http: string[]
+  /** SITE_NAME, read by siteName as the cards read it. The preview's footer prints it. */
+  site: string
 }
 
 /**
@@ -71,40 +87,18 @@ export function stripD(host: string): string {
 }
 
 /**
- * THE ORIGINS A PUBLIC_ORIGIN VALUE DECLARES, in order: every entry that is a bare http(s) origin (no
- * path, query, fragment or userinfo), the same rule the Node adapter's parseOrigins applies. Junk is
- * skipped, never thrown, because the cron reads this too (cronOrigin in src/worker.ts is the first entry).
- */
-export function declaredOrigins(spec: string | undefined): URL[] {
-  const out: URL[] = []
-  for (const raw of (spec ?? '').split(/[\s,]+/)) {
-    if (!raw) continue
-    try {
-      const u = new URL(raw)
-      if ((u.protocol === 'https:' || u.protocol === 'http:') && u.pathname === '/' && !u.search && !u.hash
-        && !u.username && !u.password) {
-        out.push(u)
-      }
-    } catch {
-      // Not a url: skipped, like every other entry that is not an origin.
-    }
-  }
-  return out
-}
-
-/**
  * A host as the page may be told it, or null. declaredHosts passes a token with no `/` or `@` through
  * untouched, so `<b>` in OWN_HOSTS would otherwise reach the page as a "host". Kept: a string the URL
- * parser gives back unchanged as a host AND that is dot-separated labels of letters, digits and hyphens,
- * with an optional port. The second half is not redundant: the parser accepts `a"b` and `x..y` as hosts
- * (WHATWG forbids neither), and neither is a domain anybody can serve. The block is escaped as well
- * (scriptJson), so this is the first of two locks, and the reason the page can trust every list to hold
- * hostnames. An IPv6 literal does not fit the shape and is dropped; nobody publishes a converter on one.
+ * parser gives back unchanged as a host AND that has servableHost's shape (src/instance.ts, the rule
+ * PUBLIC_ORIGIN's entries are held to). The second half is not redundant: the parser accepts `a"b` and
+ * `x..y` as hosts (WHATWG forbids neither), and neither is a domain anybody can serve. The block is
+ * escaped as well (scriptJson), so this is the first of two locks, and the reason the page can trust
+ * every list to hold hostnames.
  */
 function pageHost(raw: string): string | null {
   try {
     const u = new URL(`https://${raw}`)
-    return u.host === raw && /^[a-z0-9-]+(\.[a-z0-9-]+)*(:[0-9]+)?$/.test(raw) ? raw : null
+    return u.host === raw && servableHost(raw) ? raw : null
   } catch {
     return null
   }
@@ -115,11 +109,15 @@ const dedupe = (xs: string[]) => [...new Set(xs)]
 /**
  * THIS DEPLOYMENT'S VALUES FOR THE PAGE, from its vars and the request.
  *
- *   - "ours" is every host the deployment says it answers on: PUBLIC_ORIGIN, then OWN_HOSTS, then
- *     GUEST_HOSTS, then the request's own host, each with one d. taken off. OWN_HOSTS is "every domain
- *     you serve from" (docs/SELF-HOSTING.md), which is what makes forsen.sex ours on mbedfx.app:
- *     production serves it and lists it there, and leaves it out of PUBLIC_ORIGIN so it is not offered.
- *     The request host is always in, so a deployment with no vars still recognises its own links.
+ *   - "primary" is primaryOrigin (src/instance.ts) with one d. taken off: the same function, called on
+ *     the same var, that gives the scheduled check its origin (cronOrigin in src/worker.ts) and the user
+ *     agents their host. With no usable PUBLIC_ORIGIN it is the request's own origin.
+ *   - "ours" is every host the deployment says it answers on: PUBLIC_ORIGIN (publicOrigins, the one
+ *     reading of that var), then OWN_HOSTS, then GUEST_HOSTS, then the request's own host, each with one
+ *     d. taken off. OWN_HOSTS is "every domain you serve from" (docs/SELF-HOSTING.md), which is what makes
+ *     forsen.sex ours on mbedfx.app: production serves it and lists it there, and leaves it out of
+ *     PUBLIC_ORIGIN so it is not offered. The request host is always in, so a deployment with no vars
+ *     still recognises its own links.
  *   - "public" is PUBLIC_ORIGIN's hosts, then the guest hosts. With no usable PUBLIC_ORIGIN it is the
  *     request host alone, then the guest hosts, so an unconfigured deployment offers the one domain the
  *     page was opened on.
@@ -127,26 +125,41 @@ const dedupe = (xs: string[]) => [...new Set(xs)]
  *     one handle() routes as a guest.
  *   - "direct" is every d. name the three vars declare. Nothing infers one: a d. name works only when
  *     somebody has pointed DNS at it, and a box that emits a link to a name nobody set up is a dead link.
+ *   - "http" is the hosts in "ours" whose links start `http://`. A host listed in PUBLIC_ORIGIN takes its
+ *     own entry's scheme; every other host of this deployment takes the primary's. A guest host is never
+ *     in it: another Worker owns that domain, and the guest contract (src/guesthost.ts) is https. On
+ *     mbedfx.app every entry is https, so the list is empty and every link is what it was. Before this the
+ *     page wrote `https://` in front of every link, and on a Node box serving plain http
+ *     (http://localhost:8787, the adapter's own default) every link it handed out was dead.
+ *   - "site" is SITE_NAME as the cards read it (siteName), so the preview's footer and the card's agree.
  *
- * Every list is deduplicated in first-seen order and holds only parsed hosts (pageHost).
+ * Every list is deduplicated in first-seen order and holds only hosts of servableHost's shape.
  */
-export function pageConfig(env: Pick<Env, 'PUBLIC_ORIGIN' | 'OWN_HOSTS' | 'GUEST_HOSTS'>, url: URL): PageConfig {
+export function pageConfig(
+  env: Pick<Env, 'PUBLIC_ORIGIN' | 'OWN_HOSTS' | 'GUEST_HOSTS' | 'SITE_NAME'>, url: URL,
+): PageConfig {
   const valid = (xs: string[]) => xs.map(pageHost).filter((h): h is string => h !== null)
-  // Origins whose host fails the shape are dropped before one can become the primary.
-  const origins = declaredOrigins(env.PUBLIC_ORIGIN).filter(u => pageHost(u.host) !== null)
+  const origins = publicOrigins(env)
   const originHosts = origins.map(u => u.host)
   const own = valid(declaredHosts(env.OWN_HOSTS))
-  const guests = valid(guestHosts(env.GUEST_HOSTS))
+  const guestNames = valid(guestHosts(env.GUEST_HOSTS))
   const here = stripD(url.host)
-  const first = origins[0]
+  const declared = primaryOrigin(env)
+  const first = declared ? new URL(declared) : null
   const primary = first ? `${first.protocol}//${stripD(first.host)}` : `${url.protocol}//${here}`
+  const ours = dedupe([...originHosts, ...own, ...guestNames, url.host].map(stripD))
+  const guests = dedupe(guestNames.map(stripD).filter(g => isGuestHost(g, env.GUEST_HOSTS, env.PUBLIC_ORIGIN)))
+  const primaryScheme = new URL(primary).protocol
+  const schemeOf = (h: string) => origins.find(u => stripD(u.host) === h)?.protocol ?? primaryScheme
   return {
     primary,
     host: here,
-    ours: dedupe([...originHosts, ...own, ...guests, url.host].map(stripD)),
-    public: dedupe([...(first ? originHosts : [url.host]), ...guests].map(stripD)),
-    guests: dedupe(guests.map(stripD).filter(g => isGuestHost(g, env.GUEST_HOSTS, env.PUBLIC_ORIGIN))),
-    direct: dedupe([...originHosts, ...own, ...guests].filter(h => stripD(h) !== h)),
+    ours,
+    public: dedupe([...(first ? originHosts : [url.host]), ...guestNames].map(stripD)),
+    guests,
+    direct: dedupe([...originHosts, ...own, ...guestNames].filter(h => stripD(h) !== h)),
+    http: ours.filter(h => !guests.includes(h) && schemeOf(h) === 'http:'),
+    site: siteName(env),
   }
 }
 
@@ -176,11 +189,11 @@ const attr = (s: string) => s.replace(/&/g, '&amp;').replace(/"/g, '&quot;').rep
 
 /**
  * THE PAGE WITH ITS BLOCK, and on any primary but mbedfx.app's, its head self-links pointed at that
- * primary. A page without the anchor comes back exactly as it was: serving the literal arrays is the
- * page's own fallback, and a broken page is worse.
+ * primary and its image alt made domain-free (HEAD_IMAGE_ALT). A page without the anchor comes back
+ * exactly as it was: serving the literal arrays is the page's own fallback, and a broken page is worse.
  *
- * The head links are replaced only inside the head, and only when the primary differs from PAGE_ORIGIN,
- * so on mbedfx.app the bytes outside the block are the file's bytes, which is what the owner was promised.
+ * The head is rewritten only inside the head, and only when the primary differs from PAGE_ORIGIN, so on
+ * mbedfx.app the bytes outside the block are the file's bytes, which is what the owner was promised.
  */
 export function injectPage(html: string, cfg: PageConfig): string {
   const at = html.indexOf(CONFIG_ANCHOR)
@@ -191,6 +204,7 @@ export function injectPage(html: string, cfg: PageConfig): string {
     if (end > 0) {
       let head = out.slice(0, end)
       for (const tag of HEAD_SELF_LINKS) head = head.split(tag).join(tag.replace(PAGE_ORIGIN, attr(cfg.primary)))
+      head = head.split(HEAD_IMAGE_ALT).join(FORK_IMAGE_ALT)
       out = head + out.slice(end)
     }
   }

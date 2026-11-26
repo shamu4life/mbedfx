@@ -8,6 +8,7 @@ import { createAdapter, gracefulStop, toRequest, writeResponse } from '../adapte
 import { DirBucket, keyFile } from '../adapters/node/r2dir.ts'
 import { ENV_VARS, envVars, inProcessMuxRunner, memoryCache, trackingContext } from '../adapters/node/bindings.ts'
 import { refKey } from '../src/refkey.ts'
+import { FORK_IMAGE_ALT, HEAD_IMAGE_ALT } from '../src/sitepage.ts'
 
 /**
  * THE NODE ADAPTER (adapters/node/), started in this process on a random port and driven over real
@@ -138,8 +139,8 @@ test('a SITE_PATH is served from public/ byte for byte, and /index.html redirect
   // `/` IS THE FILE PLUS THE WORKER'S BLOCK since self-hosting phase 5 (src/sitepage.ts), on this
   // runtime as on Cloudflare: one script element naming this adapter's own origins, and the head's three
   // self-links pointed at its primary, because the primary here is embed.example.test and not
-  // mbedfx.app. Taking those two changes back out must leave the file exactly, so the stand-in is still
-  // held to serving the right bytes. test/sitepage.test.mjs has the rest.
+  // mbedfx.app, and its image alt made domain-free. Taking those changes back out must leave the file
+  // exactly, so the stand-in is still held to serving the right bytes. test/sitepage.test.mjs has the rest.
   const { base } = await start()
   const robots = await fetch(`${base}/robots.txt`)
   assert.equal(robots.status, 200)
@@ -151,9 +152,10 @@ test('a SITE_PATH is served from public/ byte for byte, and /index.html redirect
   const cfg = JSON.parse(page.match(block)[1])
   assert.deepEqual(cfg, {
     primary: PRIMARY, host: new URL(PRIMARY).host, ours: [new URL(PRIMARY).host], public: [new URL(PRIMARY).host],
-    guests: [], direct: [new URL(DIRECT).host],
+    guests: [], direct: [new URL(DIRECT).host], http: [], site: 'mbedfx',
   }, 'the adapter\'s origins, read by the Worker as on Cloudflare')
   const unsubstituted = page.replace(block, '').split(`content="${PRIMARY}/`).join('content="https://mbedfx.app/')
+    .split(FORK_IMAGE_ALT).join(HEAD_IMAGE_ALT)
   assert.deepEqual(Buffer.from(unsubstituted, 'utf8'), readFileSync(new URL('../public/index.html', import.meta.url)))
   assert.equal(page.split(`content="${PRIMARY}/`).length - 1, 3, 'og:url, og:image and twitter:image, and nothing else')
   const moved = await fetch(`${base}/index.html`, { redirect: 'manual' })
