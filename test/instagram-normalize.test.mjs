@@ -72,7 +72,13 @@ const img = ({
 } = {}) =>
   `<!doctype html><html><body>` +
   `<div class="Embed" data-media-type="${type}" data-media-id="${id}">` +
-  `<div class="Avatar"><img src="${avatar}"></div>` +
+  // REWRITTEN 2026-11-26: this was `<div class="Avatar"><img src=…></div>`, a shape no capture has.
+  // markupAvatar now pairs the picture with the byline through the link's href (the fix for the
+  // story-ring and collab headers, test/instagram-avatar.test.mjs), so a builder with no link would
+  // produce no avatar at all, and the CR/LF avatar assertion below would pass without reaching the
+  // url guard. This is the wire shape from instagram-single.html, values replaced.
+  `<div class="AvatarContainer"><a class="Avatar" href="https://www.instagram.com/${handle}/?utm_source=ig_embed"` +
+  ` data-log-event="profilePhotoClick" target="_blank"><img src="${avatar}" alt="${handle}" /></a></div>` +
   `<a href="https://www.instagram.com/${handle}/" data-log-event="profileClick">` +
   `<span class="UsernameText">${handle}</span></a>` +
   `<div class="Content EmbedFrame" style="${style}"><a class="EmbeddedMedia" href="#">` +
@@ -583,6 +589,9 @@ test('A CONTROL CHARACTER IN A MEDIA URL NEVER REACHES THE LOCATION HEADER', () 
   // An avatar goes into the same header through /_media/{key}/avatar.
   assert.equal(normalizeInstagram(img({ avatar: 'https://cdn.example/a.jpg\r\nX: y' }), { p: 'ig', kind: 'p', code: 'X' })
     .author.avatar, undefined)
+  // …and its control, so the assertion above cannot be passing because no avatar was found at all.
+  assert.equal(normalizeInstagram(img({ avatar: 'https://cdn.example/a.jpg?x=1' }), { p: 'ig', kind: 'p', code: 'X' })
+    .author.avatar, 'https://cdn.example/a.jpg?x=1')
   // Belt: every url the three live fixtures produce must be header-safe by construction.
   for (const [h, ref] of [[SINGLE, SINGLE_REF], [CAROUSEL, CAROUSEL_REF], [REEL, REEL_REF]]) {
     const post = normalizeInstagram(h, ref)

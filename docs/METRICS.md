@@ -552,7 +552,8 @@ Most of these mean nothing as absolute numbers, and several mislead when read al
 | Counter | What a rise means | Read against |
 |---|---|---|
 | `ok` | A card was rendered and served. The health denominator. | nothing |
-| `assert_fail` | The page didn't answer: upstream changed shape, blocked mbedfx, or served a decoy. Not "the post is gone". On `ig`, the only way to see the 599 KB HTTP-200 decoy. On `pn` it has two sources since 2026-11-25: the pin fetch, and the pin.it shortener giving no redirect at all. If pasted `/pin/…` links still draw cards, the rise is the shortener's. | `fetch_fail`; on `yt`, `ok` (the ratio is the oembed-miss rate); on `dm`/`st`/`im`, `meta_timeout` |
+| `assert_fail` | The page didn't answer: upstream changed shape, blocked mbedfx, or served a decoy. Not "the post is gone". On `ig`, the only way to see the HTTP-200 decoy (599 KB in July 2026, 538 KB on 2026-11-26). On `pn` it has two sources since 2026-11-25: the pin fetch, and the pin.it shortener giving no redirect at all. If pasted `/pin/…` links still draw cards, the rise is the shortener's. | `fetch_fail`; on `yt`, `ok` (the ratio is the oembed-miss rate); on `dm`/`st`/`im`, `meta_timeout`; on `ig`, `embed_ok` |
+| `embed_ok` | An Instagram post read whole from its `/embed/captioned/` page, the first stage, once per post-cache miss (since 2026-11-26). Every other `ig` counter is a failure or a recovery, so this is the one direct count of posts the embed page carries. `copyright_recovered` and `copyright_remux` fire only after it, and so does `copyright_gql`, except on the full-page path. The scheduled check's Instagram post never writes it, because its embed is broken, but it adds an `assert_fail` on every tick. | `ig` `assert_fail`: `embed_ok / (embed_ok + assert_fail)` is the embed's share. Not `ok`, which counts per request |
 | `meta_timeout` | Our fault, not the upstream's: the container metadata call was still extracting when our budget ran out. Fires on `dm`/`st`/`im`, where that call is the card, so the reader got the generic "couldn't load" for a post that is fine. The result lands in R2 under `waitUntil` a moment later, so the next unfurl is a warm hit and a re-paste heals; a first paste does not. | `assert_fail` on the same platform: this one is a budget to fix, that one an upstream that moved |
 | `fetch_fail` | The generic failure card was served. Subtract the named failures to leave the ones with no name. | everything below that stacks on it |
 | `age_restricted` | An age wall (🔞). Every emitter reads a positive signal out of the platform's payload; none infers a wall from missing tags. | `pool_unused`, same platform |
@@ -566,7 +567,8 @@ Most of these mean nothing as absolute numbers, and several mislead when read al
 | `copyright_gql` / `copyright_recovered` / `copyright_remux` | The three Instagram copyright recoveries, cheapest first. The signal is the ratio across all three. | each other, and `ig`/`ok` |
 | `fullpage_recovered` | The primary surface failed but the full page carried the whole post. On `ig`, every count is a post that would previously have shown a false 🔒. Since 2026-10-14 it counts only the Instagram posts `graphql_recovered` could not answer. | `private` |
 | `reel_age_gated` | An Instagram reel drawn as its cover with "🔞 Age-restricted on Instagram", because no recovery found its video and Instagram's oEmbed gate answer called it age-restricted (`instagramAudienceGate`, since 2026-10-30). Not a gate counter: the card renders, so it does not stack on `fetch_fail`. | `fullpage_recovered`, which counted each of these too |
-| `graphql_recovered` | An Instagram post whose embed failed, drawn whole from the shortcode GraphQL query before the full page was asked for. Added because the full page is refused to Cloudflare's egress in bursts (302 then 429), and nothing measured whether the query is refused in the same windows. | `fullpage_recovered` and `ig` `fetch_fail`, which should fall as it rises |
+| `graphql_recovered` | An Instagram post whose embed failed, drawn whole from the shortcode GraphQL query before the full page was asked for. Added because the full page is refused to Cloudflare's egress in bursts (302 then 429), and nothing measured whether the query is refused in the same windows. Since 2026-11-24 two queries can answer, PolarisPostRootQuery first and the logged-out query second. This counts both, and `gql_loggedout` says how many came from the second. | `fullpage_recovered` and `ig` `fetch_fail`, which should fall as it rises |
+| `gql_loggedout` | The logged-out GraphQL query gave the answer an Instagram card was drawn from (since 2026-11-26). It's counted on top of `graphql_recovered` or `copyright_gql`, whichever that card counted, so those two still count every GraphQL card. Every `/_igprobe` run since 2026-11-24 has found the old query answering "Rate limit exceeded" to Cloudflare's egress, so expect this to match the other two added together. If it falls below them, the old query is answering again. If all three drop to zero while `fullpage_recovered` climbs, the logged-out query is refused too, which is how the 11-19 outage looked. | `graphql_recovered + copyright_gql`; the difference is the old query |
 | `plugin_recovered` / `caption_recovered` | The second and third Facebook post surfaces. `plugin_recovered` is Meta's embed fragment, which measured 33 of 35 sampled post urls on 2026-08-12 and carries every `/photo/?fbid=` url the page surface answers with a login wall. `caption_recovered` is the narrow last resort (a page with a byline and a caption and no `og:image`), answers 2 of those 35 and fires on 1 of them, because the plugin reaches the other first and returns before this read runs. Expect it to stay small. | each other, and `fb`/`ok` |
 | `body_feed` / `body_crawler` / `body_archive` / `body_cut` / `body_none` / `body_unknown` | Where a Reddit post's body came from when its embed page carried none (picture, gallery, video, link and crosspost posts; `src/platforms/reddit/caption.ts`), once per post-cache miss on `rd`. `feed` and `crawler` are Reddit's whole text, `archive` the Arctic Shift archive completing a body Reddit cut (on the embed path, the one outcome that sent a post id to a third party; on the archive path every card already has, see `embed_refused`), `cut` Reddit's text ending in `…`, `none` a post with no body. Counted on the archive path too, for every card whose body is not `[spoiler]`. `body_unknown` rising means Reddit stopped answering Worker egress on its crawler page, and every such card has quietly lost its caption, and every crosspost of a Reddit video its video (the poster is that page's og:image). | each other; `body_archive` against `body_feed` (the feed's one-request-per-minute ration being spent by other tenants) |
 | `embed_refused` | embed.reddit.com refused the request (its block page, or a 403, 429 or 5xx with no post in it) rather than answering about the post, once per post-cache miss on `rd`, so the card went to the archive path: the Arctic Shift archive's record, rendered only when Reddit's live crawler page shows the same title (`src/platforms/reddit/normalize.ts`, "Archive path"). Every such miss sends the post id to that third party. Added 2026-10-25; the block began on 2026-10-22 and only the scheduled check noticed. Falling to zero means Reddit lifted the block and the full embed render is back by itself. | `assert_fail` on `rd` beside it: a refusal the archive could not carry either (no record yet, the archive or the crawler page down, or a title Reddit no longer shows) |
@@ -1013,6 +1015,38 @@ reel is a photo again. The cards render either way.
 in four, mostly on a full page Instagram refused. If `graphql` stays near zero while `fetch_fail` does
 not fall, the query is being refused in the same windows as the page, which is the one thing nobody
 measured when it shipped.
+
+### Which Instagram stage is carrying the cards
+
+Emitted by the Instagram arm of `liveFetchPost` (`src/worker.ts`), once per post-cache miss. `embed_ok`
+and `gql_loggedout` exist since 2026-11-26, so a window reaching back past that day reads them as zero.
+
+```sql
+SELECT SUM(_sample_interval * (blob2 = 'embed_ok')) AS embed,
+       SUM(_sample_interval * (blob2 = 'assert_fail')) AS assert_fail,
+       SUM(_sample_interval * (blob2 = 'graphql_recovered')) AS graphql,
+       SUM(_sample_interval * (blob2 = 'copyright_gql')) AS copyright_gql,
+       SUM(_sample_interval * (blob2 = 'gql_loggedout')) AS logged_out,
+       SUM(_sample_interval * (blob2 = 'fullpage_recovered')) AS fullpage
+FROM mbedfx_counters
+WHERE timestamp > NOW() - INTERVAL '7' DAY AND blob1 = 'ig'
+```
+
+`embed / (embed + assert_fail)` is the share of posts the embed page served. On 2026-11-26 it served
+all ten fresh public posts probed from production. `graphql + copyright_gql - logged_out` is what the
+old query (PolarisPostRootQuery) answered. `graphql_recovered` fell to zero on 2026-11-19, and
+`/_igprobe` found the old query refused on 11-24 and again on 11-26, so expect zero there until
+Instagram lifts the limit. How much traffic the logged-out query takes before Instagram limits it as
+well hasn't been measured.
+
+The scheduled check weighs on `assert_fail` and `graphql`. Its Instagram post (`src/smoke.ts`) has an
+embed that Instagram renders broken, so every half-hour tick adds an `assert_fail` and then a GraphQL
+card, and those rows carry `blob3 = 'discord'` just like a real paste. Over the 45 days to 2026-11-26,
+rows written in the check's minutes (:00, :01, :30 and :31 UTC) made up 2320 of the 3735 `ig`
+`assert_fail` and 1663 of the 2268 `graphql_recovered`. In a light week the check's rows outnumber
+real pastes, so the embed's share looks lower and the GraphQL stage busier than real pastes alone
+would show. Nothing in the dataset marks a row as the check's. Its load is steady, two ticks an hour,
+so compare a week with the week before it rather than reading one week's share on its own.
 
 ### Is Google refusing the Worker's egress
 

@@ -146,6 +146,11 @@ mbedfx.app's Reddit app and account, and it names no account at all. Nobody else
 
 ### Fixed
 
+- **Instagram photo cards now show the author's picture when the account has a story up or the post
+  is a collaboration.** Two of ten posts checked on 2026-11-26 had no avatar for one of those reasons.
+  Instagram's header for a collaboration has one picture per account, and the card now uses the one
+  whose profile link names the author. Operators also get two new counters,
+  `embed_ok` and `gql_loggedout`, which say which Instagram stage drew a card (`docs/METRICS.md`).
 - **Threads posts that share an Instagram post show its pictures, and Threads replies say who they
   answer.** A Threads text post linking an Instagram carousel got a card with no pictures, although
   Threads shows the carousel inside the post. The card now has those pictures, under the Threads

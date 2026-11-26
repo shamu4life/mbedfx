@@ -182,9 +182,11 @@ export function hasEmbedPayload(body: unknown): boolean {
  *
  * THE OPERATIONAL CONSEQUENCE: ordinary dead-link and private-account traffic feeds the 10%
  * alert, so the threshold is noisier on Instagram than on TikTok and a firing alert is NOT by
- * itself proof the gate flipped. Check the decoy's signature — a ~598KB body — before concluding
- * that. If dead links ever swamp it in practice, the fix is a positive "post unavailable"
- * detector, not lowering the bar on the page assertion.
+ * itself proof the gate flipped. Check the decoy's signature before concluding that: about half a
+ * megabyte with no post in it (597,851 bytes on 2026-07-19; 538,096 to 538,111 bytes for five
+ * posts on 2026-11-26, residential). The figure drifts between captures, so it is a hint for a
+ * human reading an alert and never a check. If dead links ever swamp it in practice, the fix is a
+ * positive "post unavailable" detector, not lowering the bar on the page assertion.
  *
  * The counters STACK, they do not replace: an assert_fail is also counted as a fetch_fail by the
  * worker's existing null path, which is this file's established pattern (worker.ts's
@@ -232,9 +234,15 @@ const SHORTCODE = /^[A-Za-z0-9_-]{1,64}$/
 
 /**
  * ASSERT ON CONTENT, NEVER ON STATUS, NEVER ON CONTENT-TYPE, AND NEVER ON SIZE. All three lie
- * here: the decoy is HTTP 200 with an ordinary text/html, and it is SIX TIMES LARGER than the real
- * payload — so every instinct that reaches for a size or status check is not merely uninformative
- * but actively backwards. A nonexistent shortcode is also HTTP 200.
+ * here: the decoy is HTTP 200 with an ordinary text/html, and it is LARGER than the real payload
+ * — so every instinct that reaches for a size or status check is not merely uninformative but
+ * actively backwards. A nonexistent shortcode is also HTTP 200.
+ *
+ * HOW MUCH LARGER MOVES, which is a second reason no size rule belongs here. On 2026-07-19 it was
+ * six times larger (597,851 bytes against 100,183). On 2026-11-26 it was two to three times larger:
+ * 538 KB against 202 to 259 KB for four real posts (two images, a carousel, a video) and 182 KB for
+ * a post whose embed Instagram renders broken, all fetched minutes apart from a residential host,
+ * not a Worker. A threshold tuned to either capture would be wrong on the other.
  *
  * ONE SPELLING OF THE URL, FOR EVERY SURFACE. `/reel/{code}/embed/captioned/` and
  * `/p/{code}/embed/captioned/` return byte-identical payloads (verified 2026-07-19), so this
@@ -306,7 +314,8 @@ export async function fetchInstagram(ref: Extract<PostRef, { p: 'ig' }>): Promis
  * FALLBACK-ONLY, and that is the cost containment. It runs ONLY after the embed already failed — a
  * minority of IG traffic (deleted + private + blocked) — never on the happy path, and the rendered
  * result is response-cached for RESP_TTL, so a wave of dead links re-fetches once per code per 15
- * minutes. The page is 0.6–2.2MB against the embed's ~100KB, so it is deliberately not primary.
+ * minutes. The page is 0.6–2.2MB against the embed's 100-260KB (100KB in July; 202-259KB for four
+ * posts on 2026-11-26, residential), so it is deliberately not primary.
  *
  * Returns the body or null. A thrown/failed fallback is simply "no gate signal" and falls through to
  * today's generic failure — it must NEVER turn a private detection into a louder error, so the fetch
@@ -606,12 +615,32 @@ const GQL_ROOT_OBJECT = /"xdt_api__v1__media__shortcode__web_info"\s*:\s*\{/
  * (normalize.ts v1Item reads both), so it is re-wrapped as
  * `{data:{xdt_api__v1__media__shortcode__web_info:{items:[item]}}}` and every parser and card
  * downstream is unchanged.
+ *
+ * WHICH QUERY ANSWERED goes in `answered.via`, because the envelope no longer says. worker.ts counts
+ * `gql_loggedout` from it beside the counter that used the answer (analytics.ts has why). An
+ * out-parameter rather than a new return shape, the same pattern as FetchReport.reason: the body is
+ * still what every caller and test reads, and the fetcher still counts nothing itself. Left unset
+ * when neither query answered.
+ *
+ * THE TWO DO NOT COST THE SAME, and the old query's ~22 KB figure is not the stage's cost any more.
+ * Measured from production through /_igprobe on 2026-11-26: the logged-out query answered 386,348
+ * bytes, after a 538,294-byte homepage that loggedOutSession fetches once per isolate every
+ * SESSION_TTL_MS.
  */
+export type GraphQLVia = 'post_root' | 'logged_out'
+
 export async function fetchInstagramGraphQLMedia(
-  code: unknown, docId?: string,
+  code: unknown, docId?: string, answered?: { via?: GraphQLVia },
 ): Promise<string | null> {
   if (typeof code !== 'string' || !SHORTCODE.test(code)) return null
-  return (await fetchPostRootQuery(code, docId)) ?? (await fetchLoggedOutPostQuery(code))
+  const old = await fetchPostRootQuery(code, docId)
+  if (old) {
+    if (answered) answered.via = 'post_root'
+    return old
+  }
+  const out = await fetchLoggedOutPostQuery(code)
+  if (out && answered) answered.via = 'logged_out'
+  return out
 }
 
 async function fetchPostRootQuery(
