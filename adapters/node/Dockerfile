@@ -7,7 +7,8 @@
 #
 # NOT BUILT BY WORKERS BUILDS and not exercised by CI. Built by hand on 2026-11-25, at commit 90fb2d8,
 # through compose.yaml (docs/SELF-HOSTING.md, "The Docker run"): 226 MB, and the image held no
-# adapters/node/.env although one sat in the build context. Nobody has rebuilt it since.
+# adapters/node/.env although one sat in the build context. Rebuilt on 2026-11-26 at b0c7b31, after the
+# self-hosting changes: the same 226 MB, still no .env.
 
 # 22.18.0 is .node-version, and the first 22.x that runs .ts files with no flag. Older Nodes refuse
 # them with ERR_UNKNOWN_FILE_EXTENSION.
