@@ -81,7 +81,7 @@ Deno build by name. On ARM it runs under emulation.
 
 | Variable | Default | What it does |
 |---|---|---|
-| `PUBLIC_ORIGIN` | `http://localhost:$PORT` | The origin every URL in a card is built on. Set it to your public `https://` origin. A list is allowed, space- or comma-separated: the first entry is the default, and another is used only when the `Host` header names it exactly, which is how `https://d.embed.example.com` serves direct media. The hosts are added to `OWN_HOSTS`. |
+| `PUBLIC_ORIGIN` | `http://localhost:$PORT` | The origin every URL in a card is built on. Set it to your public `https://` origin. A list is allowed, space- or comma-separated: the first entry is the default, and another is used only when the `Host` header names it exactly, which is how `https://d.embed.example.com` serves direct media. The hosts are added to `OWN_HOSTS`, and the half-hourly check renders on the first entry. |
 | `PORT`, `HOST` | `8787`, `127.0.0.1` | Where the adapter listens. The image sets `HOST=0.0.0.0`. |
 | `CONTAINER_URL` | `http://127.0.0.1:8080` | The resolver. `off` leaves `MEDIA_RESOLVER` unbound, and remux videos show their cover still. |
 | `MEDIA_CACHE_DIR` | `mbedfx-media` in the system temp directory | The R2 stand-in, one file per key. `off` leaves `MEDIA_CACHE` unbound. |
@@ -91,7 +91,7 @@ Deno build by name. On ARM it runs under emulation.
 | `ANALYTICS_LOG` | off | `1` prints each Analytics Engine data point as one JSON line on stdout. |
 
 Every string variable and secret the Worker reads comes from the environment under its own name:
-`RESOLVER_SECRET`, `OWN_HOSTS`, `YT_PROMISE`, the `*_ACCOUNTS` pools and the rest of
+`RESOLVER_SECRET`, `OWN_HOSTS`, `GUEST_HOSTS`, `YT_PROMISE`, the `*_ACCOUNTS` pools and the rest of
 [the binding table](#what-replaces-each-binding-and-what-degrades-without-it). `YT_PROMISE` is off
 unless it is exactly `on`, which matches the public instance (its `wrangler.production.jsonc` sets
 `off`). An empty value counts as unset.
@@ -439,7 +439,9 @@ the failure is otherwise silent (`src/analytics.ts`).
 | `AI` (Workers AI) | `Env`, `src/analytics.ts` | `ai.run(model, input)`, `FALLBACK_MODEL = '@cf/google/gemma-4-26b-a4b-it'` (`src/translate.ts:276`) | any model behind a `run(model, input)` shim | Optional. Translation falls back to Google's endpoint alone; if that is also refused from your egress, translation stops and every card renders untranslated. |
 | `caches.default` | `src/worker.ts`, behind `CacheLike` (`src/worker.ts`) | `match(url)` / `put(url, Response)` with a synthetic `https://cache.mbedfx.internal/…` key (`src/cache.ts`) | a `Map` (what the tests use), Redis, or a disk cache. **Not** a per-process `Map` across more than one process. The five promises an implementation makes (honour `cache-control: max-age`, hand back a readable body, be shared across processes, never reject, key on the exact string) are the `CacheLike` docstring in `src/worker.ts`; `test/selfhost.test.mjs` fails if the worker starts calling a third method | Required by the type, trivial to satisfy. With a weak one, every paste refetches upstream, and Discord fetches roughly three times per paste (`src/worker.ts`). Cloudflare's Cache API is itself only per-datacenter: a self-hosted shared cache is arguably better than what the public instance has ([Cloudflare docs: "the contents of the cache do not replicate outside of the originating data center"](https://developers.cloudflare.com/workers/runtime-apis/cache/)). |
 | `ExecutionContext` | parameter of `handle` | `ctx.waitUntil(p)` only, 24 sites in `src/worker.ts` | `{ waitUntil(p) { … } }` that tracks the promise and keeps the process alive until it settles | Required. `waitUntil` is what releases in-flight container slots, keeps a mux running past the response, and writes the response cache. A no-op silently cancels all three, and the symptom is "videos never appear". The adapter's is `trackingContext` in `adapters/node/bindings.ts`, drained on SIGTERM. |
-| `OWN_HOSTS` | `src/analytics.ts` | added to the built-in own-zone list in `src/platforms/fedihost.ts` | every domain you serve from, comma- or whitespace-separated, hostname or origin | **Set it.** Unset, a request on one of your domains can make the fediverse routes fetch another one. The domain the request came in on is refused either way. Additive, so a wrong value can only make the guard stricter. |
+| `OWN_HOSTS` | `src/analytics.ts` | added to the built-in own-zone list in `src/platforms/fedihost.ts` | every domain you serve from, comma- or whitespace-separated, hostname or origin | **Set it**, unless `PUBLIC_ORIGIN` already lists every domain. Unset, a request on one of your domains can make the fediverse routes fetch another one. The domain the request came in on is refused either way. Additive, so a wrong value can only make the guard stricter. |
+| `PUBLIC_ORIGIN` | `src/analytics.ts` | `cronOrigin` in `src/worker.ts`, the origin the half-hourly check renders on; also added to the own-zone list in `src/platforms/fedihost.ts` | your origins, space- or comma-separated, primary first: `https://embed.example.com https://d.embed.example.com`. On Workers, a plain var in the dashboard, which the generic config's `keep_vars` keeps. The Node adapter fills it from its own `PUBLIC_ORIGIN` | Optional. The check renders on `http://localhost` instead, and its results are the same. Requests always use their own origin. |
+| `GUEST_HOSTS` | `src/analytics.ts` | `isGuestHost` in `src/guesthost.ts`, called by `handle()`; also added to the own-zone list | hostnames of another Worker of yours that passes this one its embed paths over a service binding | Optional. Unset, no host is a guest. A guest host answers only embed paths and marks them `x-mbedfx-guest: served`. On Node, a guest host has to be in `PUBLIC_ORIGIN` as well, or its requests arrive on the primary. |
 | `RESOLVE_HOST` | `src/analytics.ts` | `blockedResolvedHost` in `src/netguard.ts`, before every fediverse fetch | `async (host) => (await dns.lookup(host, { all: true })).map(a => a.address)` | Optional, strongly recommended off Cloudflare. Without it the address guard is literal-only, which is all a Worker can ever do, so `evil.example.com IN A 127.0.0.1` is not caught. |
 | `MUX_BUFFER_MAX` | `src/analytics.ts` | `putMuxed` in `src/worker.ts` | bytes, as a string. Default 64 MB | Optional. Raise it if you have memory and no `putStream`; a video above it is not cached and its card degrades to the cover still. |
 | `cf: { cacheEverything, cacheTtl }` | `src/platforms/twitter/fetch.ts` | reuses one Twitter guest-token activation for `GUEST_TOKEN_TTL` = 7200 s | nothing to supply any more: a process-local memo with a shared in-flight promise does the same job on both runtimes | Was silently ignored off Cloudflare, so every cold card minted a fresh guest token. A token has roughly a 500-request budget, so the cost was one extra request to Twitter per cold card and a source of rate-limiting invisible from the code. Now bounded to one activation per process per two hours. |
@@ -468,12 +470,16 @@ The fediverse routes take an instance hostname straight from the URL path and ma
 a fetch. `fetchableInstance` (`src/platforms/fedihost.ts`) refuses mbedfx's own zones:
 
 ```ts
-const OWN_HOSTS = ['mbedfx.app', 'megapenispoopenfarten.sex', 'forsen.sex', 'workers.dev', ...GUEST_HOSTS]
+const OWN_HOSTS = [
+  'mbedfx.app', 'megapenispoopenfarten.sex', 'forsen.sex', 'workers.dev',
+  'sorryifuckedyour.mom', 'hotsinglesnear.you',
+]
 ```
 
-`GUEST_HOSTS` (`src/guesthost.ts`) are two domains of another Worker that hands mbedfx its post links
-through a service binding. They are refused for the same reason, and a self-hosted instance never sees
-a request on them.
+The last two are mbedfx.app's guest hosts (`src/guesthost.ts`), domains of another Worker that hands
+mbedfx its post links through a service binding. mbedfx.app's `GUEST_HOSTS` var names them, and they
+are written out here too so they stay refused if that var is ever lost. A self-hosted instance never
+sees a request on them.
 
 The domain a request came in on is refused with no setting at all. On `embed.example.com`, or on
 `d.embed.example.com`, `/embed.example.com/post/1` fetches nothing. Your other domains are not covered
@@ -498,9 +504,9 @@ OWN_HOSTS="embed.example.com https://staging.embed.example.com"
   serve as an API and renders "couldn't load".
 - The domain a request came in on is read off the request itself. Since 2026-11-25 the Worker hands
   each request's origin to `fetchableInstance` as `self` (`getPost` in `src/worker.ts`). On a `d.`
-  host the domain under it is refused as well, since a `d.` host is an alias of that domain. The Node
-  adapter also adds every `PUBLIC_ORIGIN` host to `OWN_HOSTS`, so there all your configured domains
-  are covered. A Cloudflare deploy has no such step, so list them here.
+  host the domain under it is refused as well, since a `d.` host is an alias of that domain.
+- Every host in `PUBLIC_ORIGIN` and `GUEST_HOSTS` is refused too, on Workers and on Node, so a domain
+  listed in either needs no second entry here. Any other domain you serve goes here.
 
 ### DNS and private-range guarding in the Worker half
 

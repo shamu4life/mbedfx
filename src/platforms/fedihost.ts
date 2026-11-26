@@ -1,6 +1,5 @@
 import { FEDI_HOST } from '../refkey.ts'
 import { blockedHost, blockedResolvedHost, type HostResolver } from '../netguard.ts'
-import { GUEST_HOSTS } from '../guesthost.ts'
 
 /**
  * THE SSRF BOUNDARY SHARED BY EVERY FEDIVERSE CLIENT, and every clause is load-bearing. The host
@@ -70,16 +69,28 @@ export const MAX_BODY = 512 * 1024
  * mbedfx.app was added 2026-07-30 alongside the original domain, which is retained: links already
  * pasted in Discord keep resolving, so both are genuinely serving and both must be refused here.
  *
- * GUEST_HOSTS are spread in because this Worker serves embeds on them too, through another Worker's
- * service binding rather than a route of its own. Fetching one would reach that Worker, which hands
- * the path back here; src/guesthost.ts has the rest.
+ * sorryifuckedyour.mom and hotsinglesnear.you are the public instance's two GUEST HOSTS: this Worker
+ * serves embeds on them too, through another Worker's service binding rather than a route of its own.
+ * Fetching one would reach that Worker, which hands the path back here; src/guesthost.ts has the rest.
+ *
+ * WRITTEN OUT, NOT READ FROM THE GUEST_HOSTS VAR, since 2026-11-25. Until then this list spread
+ * guesthost.ts's constant. The constant is now a var that wrangler.production.jsonc sets, and the var is
+ * added below like OWN_HOSTS, so the guard reads it. The names stay here as well because the routing and
+ * the refusal fail differently. If the var is ever lost from production (a deploy without it, a
+ * dashboard edit), the guest routing stops and you-stupid gets unmarked answers and serves its own page.
+ * That is visible and harmless. Without the names here the same loss would also re-open the two-Worker
+ * loop above, silently. They cost every other deployment nothing: refusing someone else's domain as a
+ * fediverse instance is the right answer anywhere.
  */
-const OWN_HOSTS = ['mbedfx.app', 'megapenispoopenfarten.sex', 'forsen.sex', 'workers.dev', ...GUEST_HOSTS]
+const OWN_HOSTS = [
+  'mbedfx.app', 'megapenispoopenfarten.sex', 'forsen.sex', 'workers.dev',
+  'sorryifuckedyour.mom', 'hotsinglesnear.you',
+]
 
 /**
- * The two settings a fediverse fetch reads off the environment. Structural rather than `Env` so this
- * file keeps importing nothing but refkey.ts, netguard.ts and guesthost.ts's host list, and so a test
- * can pass `{}`.
+ * The settings a fediverse fetch reads off the environment. Structural rather than `Env` so this file
+ * keeps importing nothing but refkey.ts and netguard.ts, and so a test can pass `{}`. worker.ts passes
+ * the whole `Env`, so a field added here is read from the Worker's own var of the same name.
  */
 export interface FediEnv {
   /**
@@ -108,9 +119,25 @@ export interface FediEnv {
    * a service that will fetch its own hostname is a service that will fetch its own siblings on the
    * same private network the moment DNS says so. The request-origin refusal does not make it
    * optional: it covers only the domain each request came in on, so every other serving domain is
-   * known to this guard through this list alone.
+   * known to this guard through this list, or through PUBLIC_ORIGIN below when the operator lists it
+   * there (since 2026-11-25).
    */
   OWN_HOSTS?: string
+  /**
+   * THE ORIGINS THIS DEPLOYMENT IS SERVED ON (the PUBLIC_ORIGIN var; on Node, the adapter's own
+   * PUBLIC_ORIGIN). Every host in it is refused like an OWN_HOSTS entry, and each entry is read the way
+   * the request origin is (selfHosts), so a `d.` origin refuses the domain under it as well. Since
+   * 2026-11-25, so a Cloudflare deployment that lists its domains here for the scheduled check has them
+   * guarded too, as the Node adapter's have been since it folded PUBLIC_ORIGIN into OWN_HOSTS.
+   * Additive, like OWN_HOSTS: an entry that does not parse refuses nothing and admits nothing.
+   */
+  PUBLIC_ORIGIN?: string
+  /**
+   * THE GUEST HOSTS (src/guesthost.ts). A guest host reaches this Worker through another Worker, and
+   * fetching one would loop through that Worker and back. Read with the same parser as OWN_HOSTS, the
+   * one guesthost.ts routes with, so every host routed as a guest is refused here. Additive.
+   */
+  GUEST_HOSTS?: string
   /**
    * THE DNS SEAM (clause 7). Absent on Cloudflare — a Worker has no resolver — and supplied by a
    * self-hosted adapter as roughly `(h) => dns.promises.lookup(h, { all: true }).then(a =>
@@ -175,8 +202,14 @@ export function selfHosts(self?: string): string[] {
   return /^d\.[^.]+\./.test(h) ? [h, h.slice(2)] : [h]
 }
 
-/** `a.example, https://b.example` -> ['a.example', 'b.example']. Total: junk contributes nothing. */
-function declaredHosts(list?: string): string[] {
+/**
+ * `a.example, https://b.example` -> ['a.example', 'b.example']. Total: junk contributes nothing.
+ *
+ * THE ONE READING OF A HOST-LIST VAR. OWN_HOSTS and GUEST_HOSTS go through it here, and
+ * src/guesthost.ts routes GUEST_HOSTS through it too, so the hosts routed as guests and the hosts
+ * refused as guests cannot come apart over a separator or a trailing dot.
+ */
+export function declaredHosts(list?: string): string[] {
   if (!list) return []
   const out: string[] = []
   for (const raw of list.split(/[\s,]+/)) {
@@ -195,6 +228,11 @@ function declaredHosts(list?: string): string[] {
   return out.filter(Boolean)
 }
 
+/** Every host a PUBLIC_ORIGIN list names, each read as selfHosts reads the request origin. Total. */
+function publicHosts(list?: string): string[] {
+  return (list ?? '').split(/[\s,]+/).flatMap(selfHosts)
+}
+
 /**
  * THE PURE HALF of the gate: shape, our own zones, and every private destination that can be read
  * off the hostname TEXT. Sync, total, and callable before any I/O is spent.
@@ -208,9 +246,13 @@ export function fetchableInstance(host: string, self?: string, env?: FediEnv): b
   // deliberately not left to it: this is the check that survives someone widening the regex to allow
   // a port, a numeric label, or an IDN, none of which look like they touch SSRF.
   if (blockedHost(host)) return false
-  // Three sources, all ADDED to one list, so none of them can take a host off another's: the built-in
-  // zones, the operator's declared ones, and the origin this request arrived on.
-  const own = [...OWN_HOSTS, ...declaredHosts(env?.OWN_HOSTS), ...selfHosts(self)]
+  // Five sources, all ADDED to one list, so none of them can take a host off another's: the built-in
+  // zones, the operator's declared ones, the deployment's configured origins and guest hosts, and the
+  // origin this request arrived on.
+  const own = [
+    ...OWN_HOSTS, ...declaredHosts(env?.OWN_HOSTS), ...publicHosts(env?.PUBLIC_ORIGIN),
+    ...declaredHosts(env?.GUEST_HOSTS), ...selfHosts(self),
+  ]
   return !own.some(h => host === h || host.endsWith(`.${h}`))
 }
 

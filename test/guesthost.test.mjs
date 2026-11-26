@@ -2,7 +2,8 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { handle } from '../src/worker.ts'
-import { GUEST_HOSTS, GUEST_MARK, guestServes, isGuestHost } from '../src/guesthost.ts'
+import { GUEST_MARK, guestHosts, guestServes, isGuestHost } from '../src/guesthost.ts'
+import { fetchableInstance } from '../src/platforms/fedihost.ts'
 import { route } from '../src/router.ts'
 
 /**
@@ -14,8 +15,16 @@ import { route } from '../src/router.ts'
  *
  * Every request here goes through handle(), the same entry the binding reaches. No network: the post
  * is a stub, and ASSETS throws, because a guest host must never be served mbedfx's own files.
+ *
+ * REWRITTEN 2026-11-25 (self-hosting phase 4): which hosts are guests used to be a constant in
+ * src/guesthost.ts, imported here. It is now the GUEST_HOSTS var, so the tests that pinned the public
+ * instance's behaviour run with wrangler.production.jsonc's own vars in `env`, read through the same
+ * parser the Worker uses, and assert exactly what they asserted before. The tests at the bottom cover
+ * what the var adds: unset means no guest hosts, and a self-hoster's value routes and refuses theirs.
  */
 
+const PROD_VARS = JSON.parse(readFileSync('wrangler.production.jsonc', 'utf8').replace(/^\s*\/\/.*$/gm, '')).vars
+const GUEST_HOSTS = guestHosts(PROD_VARS.GUEST_HOSTS)
 const GUEST = 'https://hotsinglesnear.you'
 const BOT = { 'user-agent': 'Mozilla/5.0 (compatible; Discordbot/2.0; +https://discordapp.com)' }
 const PERSON = { 'user-agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0 Safari/537.36' }
@@ -40,10 +49,22 @@ const jack = () => ({
   media: [{ kind: 'image', url: 'https://example.invalid/one.jpg', w: 800, h: 600 }],
 })
 
-const env = (assets = async () => { throw new Error('ASSETS must not be reached on a guest host') }) => ({
+// Production's vars, GUEST_HOSTS among them. `vars` replaces them, for the self-hoster tests below.
+const env = (assets = async () => { throw new Error('ASSETS must not be reached on a guest host') }, vars = PROD_VARS) => ({
+  ...vars,
   AE: { writeDataPoint() {} },
   ASSETS: { fetch: assets },
   TRANSLATE_GOOGLE: 'off',
+})
+
+test('production\'s GUEST_HOSTS var names exactly the two hosts the constant named', () => {
+  /**
+   * The var replaced `['sorryifuckedyour.mom', 'hotsinglesnear.you']` in src/guesthost.ts. Every test
+   * above the self-hoster section runs on this value, so this is what makes them the same tests as
+   * before: a third name, a lost one or a different spelling turns this red first.
+   */
+  assert.deepEqual(GUEST_HOSTS, ['sorryifuckedyour.mom', 'hotsinglesnear.you'])
+  assert.ok(GUEST.endsWith(GUEST_HOSTS[1]))
 })
 
 const deps = (fetchPost = async () => jack()) => ({
@@ -183,14 +204,15 @@ test('a guest host is matched on whole labels, so a lookalike domain is not one'
    * domain that has nothing to do with you-stupid. The anchoring is the same `.endsWith('.' + h)` rule
    * fedihost.ts uses.
    */
+  const spec = PROD_VARS.GUEST_HOSTS
   for (const h of GUEST_HOSTS) {
-    assert.equal(isGuestHost(h), true)
-    assert.equal(isGuestHost(`www.${h}`), true, 'a subdomain belongs to the same Worker')
-    assert.equal(isGuestHost(h.toUpperCase() + '.'), true, 'case and a trailing dot are not a different host')
-    assert.equal(isGuestHost(`not${h}`), false)
-    assert.equal(isGuestHost(`${h}.example.com`), false)
+    assert.equal(isGuestHost(h, spec), true)
+    assert.equal(isGuestHost(`www.${h}`, spec), true, 'a subdomain belongs to the same Worker')
+    assert.equal(isGuestHost(h.toUpperCase() + '.', spec), true, 'case and a trailing dot are not a different host')
+    assert.equal(isGuestHost(`not${h}`, spec), false)
+    assert.equal(isGuestHost(`${h}.example.com`, spec), false)
   }
-  assert.equal(isGuestHost('mbedfx.app'), false)
+  assert.equal(isGuestHost('mbedfx.app', spec), false)
 })
 
 test('a guest host is never claimed as a route here, because another Worker owns it', () => {
@@ -240,4 +262,124 @@ test('/_card says when a guest host would pass the path to the other site, and o
   const profile = await cardOf('/profile/bsky.app')
   assert.equal(profile.reason, 'profile')
   assert.ok(!('guestDeclines' in profile), 'a profile is answered on a guest host, so it is not flagged')
+})
+
+/* ============ GUEST_HOSTS IS A VAR (self-hosting phase 4, 2026-11-25) ============
+ *
+ * Until 2026-11-25 every deployment declined `/` on the owner's two domains and could have no guest host
+ * of its own without editing src/guesthost.ts. These pin what the var changes for everyone else, and that
+ * it changes nothing about the SSRF guard's built-in refusals.
+ */
+
+const SELF = 'guest.example'
+
+test('UNSET MEANS NO GUEST HOSTS: the owner\'s two domains get mbedfx\'s front door, unmarked, and stay refused as instances', async () => {
+  /**
+   * A fork that never heard of you-stupid must not decline its own front page on somebody else's
+   * domain because this repo's constant said so. Unset, handle() is serve() everywhere: `/` reaches
+   * ASSETS and nothing is marked. The SSRF guard still refuses both names, because they are written
+   * out in fedihost.ts's built-in list as well as read from the var, so losing the var never
+   * re-opens the two-Worker loop.
+   */
+  for (const vars of [{}, { GUEST_HOSTS: '' }, { GUEST_HOSTS: '  , ' }]) {
+    let asked = null
+    const assets = async req => { asked = new URL(req.url).pathname; return new Response('page') }
+    const root = await handle(new Request(`${GUEST}/`, { headers: PERSON }), env(assets, vars), ctx, deps())
+    assert.equal(asked, '/', `${JSON.stringify(vars)}: the converter page is served`)
+    assert.equal(root.headers.get(GUEST_MARK), null)
+    const card = await handle(new Request(`${GUEST}/jack/status/20`, { headers: BOT }), env(undefined, vars), ctx, deps())
+    assert.match(await card.text(), /og:title" content="jack \(@jack\)"/)
+    assert.equal(card.headers.get(GUEST_MARK), null, 'a card on a host that is not a guest carries no mark')
+    assert.equal(isGuestHost('hotsinglesnear.you', vars.GUEST_HOSTS), false)
+  }
+  for (const h of ['sorryifuckedyour.mom', 'hotsinglesnear.you', 'd.hotsinglesnear.you']) {
+    assert.equal(fetchableInstance(h), false, `${h} stays a built-in refusal with no env at all`)
+  }
+  assert.equal(fetchableInstance(SELF), true, 'and no other host is refused on its account')
+})
+
+test('A SELF-HOSTER\'S GUEST_HOSTS routes their host as a guest: embeds answered and marked, everything else declined', async () => {
+  /**
+   * The same contract production's two get, on a host this repo has never heard of. The decline list is
+   * a sample of the full one above; what is being shown is that the var, not a constant, decides it.
+   */
+  const vars = { GUEST_HOSTS: `https://${SELF.toUpperCase()}., other.example` }
+  assert.deepEqual(guestHosts(vars.GUEST_HOSTS), [SELF, 'other.example'], 'an origin, case and a trailing dot all read as the host')
+  const d = deps()
+  const card = await handle(new Request(`https://${SELF}/jack/status/20`, { headers: BOT }), env(undefined, vars), ctx, d)
+  assert.equal(card.headers.get(GUEST_MARK), 'served')
+  const html = await card.text()
+  assert.match(html, /og:title" content="jack \(@jack\)"/)
+  const activity = html.match(/type="application\/activity\+json" href="([^"]+)"/)?.[1]
+  assert.ok(activity?.startsWith(`https://${SELF}/`), `minted on the guest host, got ${activity}`)
+  const file = await handle(new Request(`https://d.${SELF}/jack/status/20`, { headers: BOT }), env(undefined, vars), ctx, d)
+  assert.equal(file.headers.get('location'), `https://d.${SELF}/_media/x%3A20/0`)
+  assert.equal(file.headers.get(GUEST_MARK), 'served')
+  const boom = async () => { throw new Error('a declined path must not fetch') }
+  for (const path of ['/', '/robots.txt', '/foo', '/_smoke', '/_api/v1?url=https%3A%2F%2Fx.com%2Fjack%2Fstatus%2F20']) {
+    const res = await handle(new Request(`https://${SELF}${path}`, { headers: PERSON }), env(undefined, vars),
+      ctx, { ...deps(boom), cache: { match: boom, put: boom } })
+    assert.equal(res.status, 404, `${path} declined`)
+    assert.equal(res.headers.get(GUEST_MARK), null, `${path} unmarked`)
+  }
+  // And with that value, the owner's two are ordinary hosts again for routing.
+  const root = await handle(new Request(`${GUEST}/`, { headers: PERSON }), env(async () => new Response('page'), vars), ctx, deps())
+  assert.equal(await root.text(), 'page')
+})
+
+test('EVERY HOST ROUTED AS A GUEST IS REFUSED AS AN INSTANCE, for any value of the var, junk included', () => {
+  /**
+   * The two halves read one var through one parser (fedihost.ts declaredHosts), and this is the
+   * property that sharing buys: a value that routes a host as a guest also refuses it, so configuring a
+   * guest host can never open the loop through the other Worker. Junk routes nothing and refuses
+   * nothing extra, and it never takes a built-in refusal away.
+   */
+  const specs = [
+    PROD_VARS.GUEST_HOSTS, SELF, `https://${SELF}/`, `${SELF}.`, ` ${SELF} ,other.example `,
+    '', ' ', ',', 'https://', '*.guest.example', 'not a host', undefined,
+  ]
+  const probes = [SELF, `d.${SELF}`, `www.${SELF}`, 'other.example', ...GUEST_HOSTS, ...GUEST_HOSTS.map(h => `d.${h}`), 'lemmy.world']
+  let routed = 0
+  for (const spec of specs) {
+    for (const h of probes) {
+      if (isGuestHost(h, spec)) {
+        routed++
+        assert.equal(fetchableInstance(h, undefined, { GUEST_HOSTS: spec }), false,
+          `${h} is routed as a guest under ${JSON.stringify(spec)} and must be refused under it too`)
+      }
+    }
+    for (const h of ['mbedfx.app', 'forsen.sex', 'sorryifuckedyour.mom', 'hotsinglesnear.you']) {
+      assert.equal(fetchableInstance(h, undefined, { GUEST_HOSTS: spec }), false,
+        `${h} stays refused with GUEST_HOSTS=${JSON.stringify(spec)}`)
+    }
+    assert.equal(isGuestHost('lemmy.world', spec), false)
+    assert.equal(fetchableInstance('lemmy.world', undefined, { GUEST_HOSTS: spec }), true,
+      `a real instance is not refused because of ${JSON.stringify(spec)}`)
+  }
+  assert.ok(routed >= 15, `the sweep must actually route some hosts, routed ${routed}`)
+})
+
+test('A HOST THE DEPLOYMENT DECLARES IN PUBLIC_ORIGIN IS NEVER A GUEST, even under a guest parent (review, 2026-11-25)', () => {
+  // A self-hoster runs their own site Worker on example.com and mbedfx on embed.example.com, and sets
+  // GUEST_HOSTS=example.com. Subdomains count as guests, so embed.example.com used to become a guest of
+  // its own deployment: the converter page, /_api/v1, /_card and /_health all 404'd there.
+  const guests = 'example.com'
+  const own = 'https://embed.example.com https://d.embed.example.com'
+  assert.equal(isGuestHost('embed.example.com', guests, own), false, 'the operator\'s own domain')
+  assert.equal(isGuestHost('d.embed.example.com', guests, own), false, 'and its d. alias')
+  assert.equal(isGuestHost('example.com', guests, own), true, 'the guest itself still is one')
+  assert.equal(isGuestHost('d.example.com', guests, own), true, 'and so is its d. name')
+  assert.equal(isGuestHost('other.example.com', guests, own), true, 'and any other subdomain')
+  // Declaring only the bare origin covers its d. alias too (selfHosts reads a d. host's parent), and
+  // never widens upward: example.com stays a guest.
+  assert.equal(isGuestHost('d.embed.example.com', guests, 'https://embed.example.com'), false)
+  assert.equal(isGuestHost('example.com', guests, 'https://embed.example.com'), true)
+  // Production is unchanged: no guest domain is a parent of a serving one.
+  for (const g of GUEST_HOSTS) {
+    assert.equal(isGuestHost(g, PROD_VARS.GUEST_HOSTS, PROD_VARS.PUBLIC_ORIGIN), true, g)
+    assert.equal(isGuestHost(`d.${g}`, PROD_VARS.GUEST_HOSTS, PROD_VARS.PUBLIC_ORIGIN), true, `d.${g}`)
+  }
+  for (const o of PROD_VARS.PUBLIC_ORIGIN.split(/\s+/)) {
+    assert.equal(isGuestHost(new URL(o).hostname, PROD_VARS.GUEST_HOSTS, PROD_VARS.PUBLIC_ORIGIN), false, o)
+  }
 })

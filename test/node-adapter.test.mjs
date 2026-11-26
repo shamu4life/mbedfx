@@ -512,6 +512,33 @@ test('a cron tick runs the check through SMOKE_RUNNER without caches.default, an
 
 // ── env ────────────────────────────────────────────────────────────────────────────────────────────
 
+test('THE CRON RENDERS ON THE ADAPTER\'S PRIMARY ORIGIN, not on mbedfx.app and not on the Worker\'s fallback', async () => {
+  /**
+   * Until 2026-11-25 the scheduled check rendered every post on the constant https://mbedfx.app, here as
+   * on Cloudflare. It now reads the primary PUBLIC_ORIGIN (cronOrigin in src/worker.ts), and the adapter
+   * puts its own parsed list on the env, so a tick renders on the origin this process serves. The origin
+   * each render ran on reaches fetchPost as its last argument (getPost's `origin`), so the stub records
+   * it. The adapter is started with no PUBLIC_ORIGIN var at all: the origins come from its config, as
+   * main() passes them, which is the case where the raw variable and the served origin differ.
+   */
+  const seen = new Set()
+  const smokeDeps = () => ({
+    ...offlineDeps(null).deps, cache: memoryCache(),
+    fetchPost: async (ref, env, client, report, ctx, budget, self) => { seen.add(self); return null },
+  })
+  const { adapter } = await start({ smokeDeps })
+  assert.equal(adapter.env.PUBLIC_ORIGIN, `${PRIMARY} ${DIRECT}`)
+  const quiet = console.error
+  console.error = () => {}
+  try {
+    adapter.tick(Date.now())
+    assert.equal(await adapter.drain(60_000), true)
+  } finally {
+    console.error = quiet
+  }
+  assert.deepEqual([...seen], [PRIMARY], 'every render ran on the primary')
+})
+
 test('every string var Env declares is read from the environment, and nothing else is', () => {
   // A var added to Env and not to ENV_VARS would be silently unset on every self-hosted instance. Parsed
   // from the source, as test/prep.test.mjs parses the Route union, so the list cannot drift.
@@ -522,9 +549,17 @@ test('every string var Env declares is read from the environment, and nothing el
   assert.ok(declared.length >= 20, `parsed ${declared.length} vars; the parser has gone stale`)
   assert.deepEqual([...ENV_VARS].sort(), declared)
 
-  const env = envVars({ YT_PROMISE: '', OWN_HOSTS: 'mine.example', AI: '1', ASSETS: 'x', PATH: '/bin', X_ACCOUNTS_2: '[]' }, ['embed.example.test'])
+  // REWRITTEN 2026-11-25: the second argument was the served HOSTS, and is now the parsed ORIGINS, because
+  // PUBLIC_ORIGIN joined Env (the scheduled check reads its primary) and has to be the list main()
+  // parsed rather than the raw variable. The OWN_HOSTS fold is asserted exactly as before.
+  const env = envVars({
+    YT_PROMISE: '', OWN_HOSTS: 'mine.example', AI: '1', ASSETS: 'x', PATH: '/bin', X_ACCOUNTS_2: '[]',
+    PUBLIC_ORIGIN: 'https://raw.example ignored', GUEST_HOSTS: 'guest.example',
+  }, ['https://embed.example.test'])
   assert.equal(env.YT_PROMISE, 'off', 'unset or empty is production\'s value, from wrangler.production.jsonc')
   assert.equal(env.OWN_HOSTS, 'mine.example embed.example.test', 'the served host is refused as an instance too')
+  assert.equal(env.PUBLIC_ORIGIN, 'https://embed.example.test', 'the parsed list, never the raw text')
+  assert.equal(env.GUEST_HOSTS, 'guest.example', 'passed through as given; the Worker parses it')
   assert.equal(env.X_ACCOUNTS_2, '[]', 'the overflow pools are read through a computed key and still arrive')
   for (const k of ['AI', 'ASSETS', 'PATH']) assert.equal(k in env, false, k)
 

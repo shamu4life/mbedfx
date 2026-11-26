@@ -30,6 +30,16 @@ Nobody else has anything to do.
   Bluesky, Reddit, Mastodon and YouTube posts drew the same card through it as on mbedfx.app. Twitter's
   lacked its repost count. Later that day `docker compose` built both images on the same host and ran
   them. The cards matched again, and the adapter image held no `.env`. See `docs/SELF-HOSTING.md`.
+- **`PUBLIC_ORIGIN` and `GUEST_HOSTS` are Worker vars.** `PUBLIC_ORIGIN` lists your origins, space- or
+  comma-separated, primary first. Cards don't read it: they still take their links from the origin
+  each request arrived on. The half-hourly check has no request, so it renders on the primary. Until
+  now it used `https://mbedfx.app` on every deployment, forks included. Left unset, it uses
+  `http://localhost`, and its results are the same. The fediverse routes also refuse every host you
+  list, as the Node adapter already did. `GUEST_HOSTS` names the domains of another Worker that passes
+  this one its post links over a service binding. There mbedfx answers only posts, profiles, share
+  links and the media and documents a card links to, and marks each answer. This used to be a fixed
+  list of mbedfx.app's two domains, so nobody else could add one without editing the source. Unset now
+  means none. mbedfx.app sets both in `wrangler.production.jsonc` and works as before.
 - **pin.it share links work, and the converter swaps the share code out.** Following a pin.it link lands on
   a URL with `sender=` in it, the sharer's Pinterest user id. The converter now turns
   `pin.it/{code}` into `/pin.it/{code}` (the host stays in the path because a bare `/{code}` reads as

@@ -484,6 +484,25 @@ export interface Env {
    */
   MUX_BUFFER_MAX?: string
   /**
+   * THE DEPLOYMENT'S OWN ORIGINS, for the places that have no request to read one from. Space- or
+   * comma-separated full origins, the first being the PRIMARY: `https://embed.example.com
+   * https://d.embed.example.com`. Wherever a request exists the origin is still that request's own;
+   * this var never overrides it. Two readers so far (2026-11-25):
+   *   - the scheduled check renders its posts on the primary (scheduledSmoke in src/worker.ts), and
+   *     falls back to CRON_FALLBACK_ORIGIN when no entry parses;
+   *   - the SSRF guard refuses every host listed (src/platforms/fedihost.ts), additively.
+   * wrangler.production.jsonc sets mbedfx.app's. The Node adapter fills it from its own PUBLIC_ORIGIN,
+   * which also picks the origin of each request there (adapters/node/server.ts).
+   */
+  PUBLIC_ORIGIN?: string
+  /**
+   * THE GUEST HOSTS: domains another Worker owns and hands this one its embed paths for, over a service
+   * binding (src/guesthost.ts has the contract). Hostnames, space- or comma-separated; subdomains count.
+   * Unset means none, so handle() is serve() on every hostname. wrangler.production.jsonc sets the
+   * public instance's two. Every host listed is also refused by the SSRF guard.
+   */
+  GUEST_HOSTS?: string
+  /**
    * Imgur's API client id. OPTIONAL, and the fallback is the interesting part.
    *
    * Every Imgur endpoint requires a client id — there is no anonymous path, and scraping is not an

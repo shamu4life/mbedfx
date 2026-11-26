@@ -1128,15 +1128,16 @@ export async function liveFetchPost(
       // THE GUARD GETS `env` AND THE REQUEST'S ORIGIN (`self`), and the same pair goes to all four
       // fediverse arms below. The own-zone refusal reads a module-level list of the hosts this Worker
       // is served from, plus `env.OWN_HOSTS`, which is how a self-hosted instance declares a domain
-      // this repo cannot know, plus `self`. `env.RESOLVE_HOST` rides the same object (fedihost.ts
-      // clause 7).
+      // this repo cannot know, plus the hosts of the PUBLIC_ORIGIN and GUEST_HOSTS vars (since
+      // 2026-11-25), plus `self`. `env.RESOLVE_HOST` rides the same object (fedihost.ts clause 7).
       //
       // `self` WAS LEFT OUT UNTIL 2026-11-25, on the argument that the operator can simply declare
       // their host and that a stub would have to supply it. The first half did not hold: a self-hoster
       // on Cloudflare serving embed.example.com who never set OWN_HOSTS left /embed.example.com/... open
       // on embed.example.com itself, so this Worker fetched itself back through the edge, past the
       // zone's own WAF. The Node adapter already covered it by folding PUBLIC_ORIGIN into OWN_HOSTS
-      // (adapters/node/bindings.ts envVars); a Cloudflare deploy has no such step. The second half
+      // (adapters/node/bindings.ts envVars); a Cloudflare deploy had no such step until the
+      // PUBLIC_ORIGIN var, which it may still leave unset. The second half
       // never applied: `self` is optional, and absent (a test, a direct caller) is exactly the guard
       // as it was. It can only ADD a refused host, so it cannot open anything the list closes.
       //
@@ -5736,7 +5737,8 @@ async function serveDirectMedia(
 
 /**
  * THE ENTRY POINT, and the one place a GUEST HOST is told apart (src/guesthost.ts has the whole
- * argument). On mbedfx's own domains this is serve() and nothing else.
+ * argument). On mbedfx's own domains this is serve() and nothing else, and so is every hostname of a
+ * deployment that does not set GUEST_HOSTS.
  *
  * On a guest host it declines every route that is not an embed BEFORE serve() runs, so a declined
  * path costs no fetch, no cache read and no counter, and marks what it does answer. The mark goes on
@@ -5745,7 +5747,7 @@ async function serveDirectMedia(
  * this file: a throw reaches the guest Worker unmarked, and that Worker serves its own page.
  */
 export async function handle(req: Request, env: Env, ctx: ExecutionContext, d: Deps): Promise<Response> {
-  if (!isGuestHost(new URL(req.url).hostname)) return serve(req, env, ctx, d)
+  if (!isGuestHost(new URL(req.url).hostname, env.GUEST_HOSTS, env.PUBLIC_ORIGIN)) return serve(req, env, ctx, d)
   if (!guestServes(route(new URL(req.url)))) return guestDeclined()
   const res = await serve(req, env, ctx, d)
   const marked = new Response(res.body, res)
@@ -7582,11 +7584,58 @@ export const scheduledDeps = (): Deps => liveDeps(COLD_CACHE)
 
 export type ScheduledSmoke = { results: SmokeResult[]; colo: string | null }
 
+/**
+ * THE ORIGIN THE SCHEDULED CHECK RENDERS ON when PUBLIC_ORIGIN names none.
+ *
+ * WHY THE CRON NEEDS ONE AT ALL. A cron has no request, so the url each check renders has to be built
+ * on something, and every other origin in this file is the request's own. Until 2026-11-25 it was the
+ * constant 'https://mbedfx.app' on every deployment, so a fork's half-hourly check claimed to be
+ * mbedfx.app.
+ *
+ * WHY THIS VALUE. The check renders IN PROCESS: runSmoke hands each url to handle() through the render
+ * callback below, and reads only the verdict off the html (cardVerdict). Nothing fetches the origin,
+ * and nothing it mints is shown to anyone. So the fallback only has to name no real deployment and
+ * change no answer:
+ *   - `localhost` is reserved and is never the host of a request Cloudflare hands a Worker, so a
+ *     response-cache entry written under it (the in-place run, liveDeps) can never be served to a
+ *     reader. SmokeRunner and the Node adapter run on a cache that never stores anything anyway.
+ *   - the fediverse rows pass it to the guard as `self`, and `localhost` is refused there already
+ *     (netguard.ts), so they get the same answers as on any origin.
+ *   - it is no guest host and no `d.` host unless an operator lists it as one.
+ *   - it is the Node adapter's own default, `http://localhost:$PORT`, without the port.
+ * Not the first route or the workers.dev name: a Worker cannot learn either without a request, and
+ * guessing one would put a plausible wrong host into every check.
+ */
+export const CRON_FALLBACK_ORIGIN = 'http://localhost'
+
+/**
+ * The PRIMARY entry of PUBLIC_ORIGIN: the first that is a bare http(s) origin, as the Node adapter's
+ * parseOrigins requires (no path, query or fragment). Junk is skipped, not thrown: this runs inside
+ * the scheduled handler, and a throw there is a tick with no record. With no usable entry it is
+ * CRON_FALLBACK_ORIGIN. It decides the origin of the check's renders and nothing else; it is never a
+ * reason to admit a host anywhere.
+ */
+export function cronOrigin(env: Pick<Env, 'PUBLIC_ORIGIN'>): string {
+  for (const raw of (env.PUBLIC_ORIGIN ?? '').split(/[\s,]+/)) {
+    if (!raw) continue
+    try {
+      const u = new URL(raw)
+      if ((u.protocol === 'https:' || u.protocol === 'http:') && u.pathname === '/' && !u.search && !u.hash
+        && !u.username && !u.password) {
+        return u.origin
+      }
+    } catch {
+      // Not a url: skipped, like every other entry that is not an origin.
+    }
+  }
+  return CRON_FALLBACK_ORIGIN
+}
+
 /** ONE SCHEDULED RUN, rendered through this Worker's own front door, and where it ran. */
 export async function scheduledSmoke(env: Env, ctx: ExecutionContext, d: Deps): Promise<ScheduledSmoke> {
   // Asked beside the checks rather than after them, so the colo costs this run no time of its own.
   const colo = cronColo()
-  const results = await runSmoke('https://mbedfx.app', u => handle(new Request(u, {
+  const results = await runSmoke(cronOrigin(env), u => handle(new Request(u, {
     headers: { 'user-agent': 'Mozilla/5.0 (compatible; Discordbot/2.0; +https://discordapp.com)' },
   }), env, ctx, d))
   return { results, colo: await colo }
@@ -7651,8 +7700,9 @@ export default {
    * is unreachable, and no amount of care here changes that. It is a platform-breakage detector, not
    * an uptime monitor.
    *
-   * THE ORIGIN IS A CONSTANT because a scheduled invocation has no request to take one from. It is
-   * the apex, which is the host readers actually paste.
+   * THE ORIGIN IS CONFIGURED, not derived, because a scheduled invocation has no request to take one
+   * from. It is the primary PUBLIC_ORIGIN (cronOrigin), which on the public instance is the apex
+   * readers actually paste. Until 2026-11-25 it was that apex as a constant, on every deployment.
    *
    * IT RUNS FROM EASTERN NORTH AMERICA, not from wherever this invocation landed: see
    * smokeWhereReadersAre for the week the cron spent in Mumbai and Osaka.

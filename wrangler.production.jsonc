@@ -47,7 +47,25 @@
   // (src/muxpolicy.ts ytPromiseOn). Since 2026-11-25 the promise is opt-in, so deleting this line
   // changes nothing: only "on" promises. It stays as the record of the decision, and
   // test/yt-promise-off.test.mjs reads it. Set it to "on" to promise again.
-  "vars": { "YT_PROMISE": "off" },
+  //
+  // PUBLIC_ORIGIN and GUEST_HOSTS, since 2026-11-25 (self-hosting phase 4). Both were constants in src/
+  // until then, and these values reproduce them exactly; test/wrangler-configs.test.mjs pins that.
+  //   - PUBLIC_ORIGIN: the origins this instance publishes, primary first. The primary is the origin
+  //     the half-hourly check renders on (src/worker.ts cronOrigin), which was the constant
+  //     https://mbedfx.app. Every host listed is refused by the SSRF guard, as the built-in list in
+  //     src/platforms/fedihost.ts already does for all of them. forsen.sex is LEFT OUT on purpose: it
+  //     is served (routes, below) and refused (the built-in list), but the owner chose on 2026-09-11 not
+  //     to advertise it, and the converter page will read this list for the domains it offers. The d.
+  //     entries are the direct-media names of the two that are offered; nothing reads them as such yet.
+  //   - GUEST_HOSTS: the two domains of the owner's you-stupid Worker that hand this one their embed
+  //     paths over a service binding (src/guesthost.ts). Without this var those requests go out
+  //     unmarked and you-stupid serves its own page instead of the card.
+  // Request-carrying paths ignore PUBLIC_ORIGIN and use the request's own origin, as before.
+  "vars": {
+    "YT_PROMISE": "off",
+    "PUBLIC_ORIGIN": "https://mbedfx.app https://megapenispoopenfarten.sex https://d.mbedfx.app https://d.megapenispoopenfarten.sex",
+    "GUEST_HOSTS": "sorryifuckedyour.mom hotsinglesnear.you"
+  },
   "workers_dev": false,
   // PREVIEW URLS, kept on — but NOTHING SERVES AT THE PREVIEW HOSTNAMES, measured 2026-08-19. The
   // setting is not the problem and this key is not the fix; see the routes comment below for what was
@@ -235,15 +253,17 @@
   // A NEW SERVING DOMAIN MUST ALSO BE ADDED TO src/platforms/fedihost.ts's OWN_HOSTS. Adding a route
   // here alone is a silent SSRF hole: a fediverse ref names its own origin, so /{our-host}/post/1
   // would induce the Worker to fetch itself through the edge. The two lists are coupled and nothing
-  // enforces it but this comment and the test that pins them together.
+  // enforces it but this comment and the test that pins them together. Listing the domain in
+  // PUBLIC_ORIGIN (vars, above) also refuses it, but the test holds the built-in list to every route,
+  // so a vars edit cannot be the only place it is refused.
   //
   // TWO MORE HOSTS SERVE CARDS AND ARE DELIBERATELY NOT HERE: sorryifuckedyour.mom and
-  // hotsinglesnear.you (src/guesthost.ts, 2026-10-11), nor their d. names. All four are custom domains
-  // of the owner's you-stupid Worker (the d. ones since shamu4life/you-stupid#22), which keeps `/` and
-  // its own files and hands every other path to this Worker through a service binding. Listing them
-  // below would make the next deploy try to take the domains off you-stupid. They are in OWN_HOSTS like
-  // every serving domain, and test/guesthost.test.mjs fails if one, or any subdomain of one, is ever
-  // added to this array.
+  // hotsinglesnear.you (GUEST_HOSTS in vars, above; src/guesthost.ts), nor their d. names. All four are
+  // custom domains of the owner's you-stupid Worker (the d. ones since shamu4life/you-stupid#22), which
+  // keeps `/` and its own files and hands every other path to this Worker through a service binding.
+  // Listing them below would make the next deploy try to take the domains off you-stupid. They are in
+  // OWN_HOSTS like every serving domain, and test/guesthost.test.mjs fails if one, or any subdomain of
+  // one, is ever added to this array.
   "routes": [
     // The two staging.* custom domains that used to sit here were retired 2026-08-03 in favour of
     // Workers Builds preview urls. THIS COMMENT USED TO SAY THAT IS WHERE TESTING HAPPENS. It is not,
@@ -317,8 +337,20 @@
   // (Cloudflare's limitation), so no scheduled check runs there and no domain is claimed.
   // The container keeps production's size, so a Preview's mux timing is production's; max_instances
   // is a cap and does not bill.
+  //
+  // THE SAME VARS AS PRODUCTION, all three, and test/wrangler-configs.test.mjs holds them equal. A Preview
+  // is how a branch is measured before it merges, so a var that differs is something measured there that
+  // production will not run. Neither of the two added on 2026-11-25 changes a Preview's answers today: no
+  // cron runs there, so nothing reads the PUBLIC_ORIGIN primary, and a guest hostname arrives only through
+  // you-stupid's service binding, which reaches the deployed Worker, never a Preview. Both are kept anyway
+  // because the converter page is meant to read them (self-hosting phase 5), and a Preview should draw
+  // the page production draws.
   "previews": {
-    "vars": { "YT_PROMISE": "off" },
+    "vars": {
+      "YT_PROMISE": "off",
+      "PUBLIC_ORIGIN": "https://mbedfx.app https://megapenispoopenfarten.sex https://d.mbedfx.app https://d.megapenispoopenfarten.sex",
+      "GUEST_HOSTS": "sorryifuckedyour.mom hotsinglesnear.you"
+    },
     "r2_buckets": [
       { "binding": "MEDIA_CACHE", "bucket_name": "mbedfx-preview-media" }
     ],

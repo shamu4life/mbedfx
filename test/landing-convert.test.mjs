@@ -2,7 +2,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { route } from '../src/router.ts'
-import { GUEST_HOSTS, guestServes } from '../src/guesthost.ts'
+import { guestHosts, guestServes } from '../src/guesthost.ts'
 
 /**
  * THE LANDING PAGE IS TESTED AGAINST THE ROUTER, not against my memory of the router.
@@ -32,6 +32,15 @@ import { GUEST_HOSTS, guestServes } from '../src/guesthost.ts'
  */
 
 const HTML = readFileSync(new URL('../public/index.html', import.meta.url), 'utf8')
+
+/**
+ * THE WORKER'S GUEST HOSTS ON THE PUBLIC INSTANCE: wrangler.production.jsonc's GUEST_HOSTS var, read with
+ * the Worker's own parser. A constant in src/guesthost.ts until 2026-11-25. The page keeps its own copy
+ * until the Worker hands it the list (self-hosting phase 5), and the test that holds the two equal now
+ * holds the page to this var.
+ */
+const GUEST_HOSTS = guestHosts(JSON.parse(readFileSync(new URL('../wrangler.production.jsonc', import.meta.url), 'utf8')
+  .replace(/^\s*\/\/.*$/gm, '')).vars.GUEST_HOSTS)
 
 /** Lift the pure-logic block. Its id is a contract between the page and this file. */
 function loadConverter() {
@@ -1260,10 +1269,12 @@ test('THE GUEST HOSTS ARE OFFERED AS BUTTONS LABELLED WITH THEIR DOMAINS, AND fo
   /**
    * The owner's request, pinned both ways round. Each guest host is in PUBLIC_HOSTS and has a button
    * labelled with the domain it emits (the nickname rule above); forsen.sex keeps the 2026-09-11
-   * position, recognised and never offered. The page's GUEST_HOSTS must be src/guesthost.ts's list
-   * exactly: the page cannot import it (no build step), and a host in one list but not the other would
-   * get a d. link that resolves nowhere, or lose its d. for nothing.
+   * position, recognised and never offered. The page's GUEST_HOSTS must be the Worker's list exactly:
+   * the page cannot import it (no build step), and a host in one list but not the other would get a d.
+   * link that resolves nowhere, or lose its d. for nothing. Since 2026-11-25 the Worker's list is the
+   * GUEST_HOSTS var, so this compares the page with the value wrangler.production.jsonc sets.
    */
+  assert.ok(GUEST_HOSTS.length > 0, 'production sets GUEST_HOSTS, or this comparison is against nothing')
   assert.deepEqual([...pageGuests].sort(), [...GUEST_HOSTS].sort(), 'the page and the Worker agree on which hosts are guests')
   for (const g of GUEST_HOSTS) {
     assert.ok(publicHosts.includes(g), `${g} is offered`)

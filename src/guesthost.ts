@@ -1,13 +1,20 @@
 import type { Route } from './types.ts'
+import { declaredHosts, selfHosts } from './platforms/fedihost.ts'
 
 /**
  * GUEST HOSTS — domains another Worker owns, where mbedfx answers only the embed paths.
  *
- * sorryifuckedyour.mom and hotsinglesnear.you are custom domains of the owner's `you-stupid` Worker,
- * which serves a dating-site page at `/` and its own files under it. Added 2026-10-11 at the owner's
- * ask: "mbedfx.app … can perform their functions using the domains … without affecting the root
- * site function from you-stupid". So a post link with the host swapped for one of these unfurls as
- * the post, and the dating page stays where it is.
+ * WHICH DOMAINS ARE GUESTS IS THE `GUEST_HOSTS` VAR, since 2026-11-25 (self-hosting phase 4). Until then
+ * it was a constant here naming the owner's two, so every fork declined `/` on them and nobody else could
+ * have a guest host of their own without editing this file. wrangler.production.jsonc sets the var to the
+ * same two names, so mbedfx.app routes exactly as before. Unset, which is every other deployment unless
+ * its operator sets it, there are no guest hosts and handle() is serve() on every hostname.
+ *
+ * On the public instance, sorryifuckedyour.mom and hotsinglesnear.you are custom domains of the
+ * owner's `you-stupid` Worker, which serves a dating-site page at `/` and its own files under it. Added
+ * 2026-10-11 at the owner's ask: "mbedfx.app … can perform their functions using the domains … without
+ * affecting the root site function from you-stupid". So a post link with the host swapped for one of
+ * these unfurls as the post, and the dating page stays where it is.
  *
  * HOW A REQUEST GETS HERE. Not through wrangler.production.jsonc: a hostname can be a custom domain of exactly
  * one Worker, and these belong to you-stupid. That Worker serves `/`, `/whoami`, `/favicon.ico` and
@@ -43,10 +50,11 @@ import type { Route } from './types.ts'
  * unmarked, and the visitor sees exactly what they saw before. It also makes the two deploys
  * independent of order.
  *
- * EVERY GUEST HOST IS ALSO REFUSED BY THE SSRF GUARD (fedihost.ts spreads this list into OWN_HOSTS).
- * A fediverse ref names its own origin, and `/hotsinglesnear.you/post/1` would otherwise fetch
- * you-stupid, which hands the leftover path straight back here: a loop through two Workers instead
- * of the one self-fetch that guard was written for.
+ * EVERY GUEST HOST IS ALSO REFUSED BY THE SSRF GUARD: fedihost.ts adds the GUEST_HOSTS var to its
+ * own-zone list. A fediverse ref names its own origin, and `/hotsinglesnear.you/post/1` would otherwise
+ * fetch you-stupid, which hands the leftover path straight back here: a loop through two Workers instead
+ * of the one self-fetch that guard was written for. The owner's two are also written out in fedihost.ts's
+ * built-in list, so they stay refused even if the var is lost; see the note there.
  *
  * `d.` WORKS ON THESE TOO, since 2026-10-11 (owner's ask). d.sorryifuckedyour.mom and
  * d.hotsinglesnear.you are custom domains of the same you-stupid Worker (shamu4life/you-stupid#22), whose
@@ -57,21 +65,45 @@ import type { Route } from './types.ts'
  * only file spelling here; it is a post route on every host and still works.
  *
  * THE CONVERTER OFFERS BOTH AS DOMAIN BUTTONS since 2026-10-11 (owner's call; forsen.sex stays
- * recognised and not offered). public/index.html keeps its own copy of this list (GUEST_HOSTS; it has no
- * build step, and test/landing-convert.test.mjs holds the two equal), and its media-only box emits `d.`
- * on them as on every domain. It can hand out a path that guestServes declines, a bare `/{handle}` above
- * all, which here is the other site's page; /_card echoes guestServes as `guestDeclines` so the preview
- * can say so without a second copy of the switch below.
+ * recognised and not offered). public/index.html keeps its own copy of the list (GUEST_HOSTS; it has no
+ * build step, and test/landing-convert.test.mjs holds it equal to wrangler.production.jsonc's var), and
+ * its media-only box emits `d.` on them as on every domain. It can hand out a path that guestServes
+ * declines, a bare `/{handle}` above all, which here is the other site's page; /_card echoes guestServes
+ * as `guestDeclines` so the preview can say so without a second copy of the switch below.
  */
-export const GUEST_HOSTS = ['sorryifuckedyour.mom', 'hotsinglesnear.you']
 
 /** The response header you-stupid reads. Value `served`. See the contract above. */
 export const GUEST_MARK = 'x-mbedfx-guest'
 
-/** A guest host or any subdomain of one. Anchored, so `nothotsinglesnear.you` is not one. */
-export function isGuestHost(hostname: string): boolean {
+/**
+ * The GUEST_HOSTS var as a list of hostnames. Whitespace- or comma-separated, hostname or origin, read
+ * by the same function that reads OWN_HOSTS (fedihost.ts declaredHosts). Sharing it is the point: a
+ * host this file routes as a guest is, for any value of the var, a host the guard refuses, and
+ * test/guesthost.test.mjs checks that on junk as well as on real values. Total: junk contributes nothing.
+ */
+export function guestHosts(spec: string | undefined): string[] {
+  return declaredHosts(spec)
+}
+
+/**
+ * A guest host or any subdomain of one. Anchored, so `nothotsinglesnear.you` is not one.
+ *
+ * `spec` IS REQUIRED, though it may be undefined. Optional would let a caller drop `env.GUEST_HOSTS`
+ * and get "no guest hosts" with nothing failing, and on the public instance that is every guest-host
+ * answer going out unmarked, which you-stupid replaces with its own page.
+ *
+ * A HOST THE DEPLOYMENT DECLARES AS ITS OWN IS NEVER A GUEST, d. alias included. Subdomains count as
+ * guests (you-stupid's d. names arrive that way), so without this a guest entry that is the PARENT of
+ * the operator's own domain swallows it: GUEST_HOSTS=example.com with mbedfx on embed.example.com made
+ * embed.example.com a guest, and its converter page, /_api/v1, /_card and /_health all 404'd (review,
+ * 2026-11-25). `publicOrigin` is required for the same reason `spec` is. On mbedfx.app no guest domain
+ * is a parent of a serving one, so production answers exactly as before.
+ */
+export function isGuestHost(hostname: string, spec: string | undefined, publicOrigin: string | undefined): boolean {
   const h = hostname.toLowerCase().replace(/\.$/, '')
-  return GUEST_HOSTS.some(g => h === g || h.endsWith(`.${g}`))
+  const own = new Set(declaredHosts(publicOrigin).flatMap(o => selfHosts(o)))
+  if (selfHosts(h).some(x => own.has(x))) return false
+  return guestHosts(spec).some(g => h === g || h.endsWith(`.${g}`))
 }
 
 /**
