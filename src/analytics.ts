@@ -107,6 +107,34 @@ export type Outcome2 =
   // doc_id rotating; it was added precisely because nothing measured whether the query is refused in
   // the same windows as the page.
   | 'graphql_recovered'
+  // `gql_loggedout` says WHICH of the two shortcode GraphQL queries gave the answer a card was drawn
+  // from (since 2026-11-24 the old PolarisPostRootQuery is asked first and the logged-out query second;
+  // fetchInstagramGraphQLMedia). Counted ON TOP OF the counter that used the answer, never instead of
+  // it: beside `graphql_recovered` and beside both `copyright_gql` sites, so those two keep counting
+  // every card the GraphQL stage drew whichever query answered, and their series reads the same on
+  // both sides of this split. The old query's count is `graphql_recovered + copyright_gql - gql_loggedout`.
+  //
+  // Added 2026-11-26 because the stage had become one query without the counters saying so. /_igprobe,
+  // run from production on 2026-11-26, found the old query still answering "Rate limit exceeded" and
+  // the logged-out query answering with the post. Without this split, the logged-out query being
+  // refused next would look exactly like the 11-19 outage, and the old one coming back would not show
+  // at all.
+  | 'gql_loggedout'
+  // `embed_ok` is an Instagram post read whole from the /embed/captioned/ page, the PRIMARY stage, once
+  // per post-cache miss. It is the denominator the ig arm never had: every other ig counter is a
+  // failure or a recovery, so the share of posts the embed carries could only be inferred, and on
+  // 2026-11-26 it had to be inferred from `copyright_gql + copyright_remux`, which fire only after an
+  // embed read. `embed_ok / (embed_ok + assert_fail)` on ig is that share now. `copyright_recovered`
+  // and `copyright_remux` are subsets of it, and so is `copyright_gql` except the one counted on the
+  // full-page path, which runs after the embed failed. Read it against ig `assert_fail`, never against
+  // `ok`: `ok` is per request, this per post-cache miss (METRICS.md, "Stacked counters").
+  //
+  // THE SMOKE CHECK NEVER WRITES IT. src/smoke.ts's ig post renders as EmbedBrokenMedia from every
+  // vantage measured, so each tick adds an `assert_fail` and a GraphQL row and no `embed_ok`; over the
+  // 45 days to 2026-11-26 rows at the smoke minutes were 2320 of 3735 ig `assert_fail`. That fixed
+  // weight pulls the share down whenever real traffic is light, so a low share is not by itself an
+  // embed outage; a STEP in it is.
+  | 'embed_ok'
   // `reel_age_gated` is an Instagram reel drawn as its cover with the 🔞 note, because every recovery
   // missed its video and Instagram's own oEmbed gate answer called it age-restricted (since 2026-10-30,
   // instagramAudienceGate). NOT `age_restricted`: that one is a gate counter and stacks on `fetch_fail`,

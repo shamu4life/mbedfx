@@ -2582,14 +2582,20 @@ test('A REAL INSTAGRAM PAGE BECOMES A POST — the fetch->normalize seam, not ju
     assert.ok(reel.post.media[0].poster, 'a video must carry a poster all the way through dispatch')
     // A page that answered is NOT a page failure. If a success ever counted assert_fail, the
     // counter would stop meaning "Instagram changed" and the split Task 4 paid for is worthless.
-    assert.deepEqual(reel.ig, [], 'a page that answered must emit no failure counter')
+    //
+    // REWRITTEN 2026-11-26: these three assertions were `[]`, because a success then counted
+    // nothing at all. It now counts `embed_ok`, the primary stage's own row (analytics.ts), which a
+    // read-only check that day had to infer from other counters. The rule is unchanged and is
+    // stated more tightly than before: exactly one row, and it is the success one, so a failure
+    // counter riding along with it still fails here.
+    assert.deepEqual(reel.ig, ['embed_ok'], 'a page that answered must emit no failure counter')
 
     // THE SINGLE IMAGE: the MARKUP path, which has no blob at all. Both extraction paths have to
     // survive the trip through the fetcher, and only one of them would if the seam read the blob.
     const single = await run('instagram-single.html', { p: 'ig', kind: 'p', code: 'C79gQqLpkul' })
     assert.ok(single.post, 'a single-image page must produce a Post too')
     assert.deepEqual([...new Set(single.post.media.map(m => m.kind))], ['image'])
-    assert.deepEqual(single.ig, [])
+    assert.deepEqual(single.ig, ['embed_ok'])
 
     // THE MIXED CAROUSEL: ten children, four of them video. This is the fixture that catches
     // upstream's `__typename` bug — embed children carry no `__typename`, so a discriminator
@@ -2599,7 +2605,7 @@ test('A REAL INSTAGRAM PAGE BECOMES A POST — the fetch->normalize seam, not ju
     assert.equal(carousel.post.media.length, 10)
     assert.equal(carousel.post.media.filter(m => m.kind === 'video').length, 4,
       'is_video, never __typename — embed children carry no __typename at all')
-    assert.deepEqual(carousel.ig, [])
+    assert.deepEqual(carousel.ig, ['embed_ok'])
   } finally {
     globalThis.fetch = real
   }

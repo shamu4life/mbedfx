@@ -114,6 +114,32 @@ test('A WORKING OLD QUERY IS USED AS BEFORE, and the logged-out one is never ask
   } finally { restore() }
 })
 
+test('THE OUT-PARAMETER NAMES THE QUERY THAT ANSWERED, and stays unset when neither did', async () => {
+  // worker.ts counts gql_loggedout off this (analytics.ts has why). The body is unchanged either way:
+  // both queries hand back the same envelope, which is why the answer cannot say which one it was.
+  let r = stub({ gql: () => new Response(ANSWER.replaceAll(CODE, 'DViaLogOut1')) })
+  try {
+    const answered = {}
+    assert.ok(await fetchInstagramGraphQLMedia('DViaLogOut1', undefined, answered))
+    assert.equal(answered.via, 'logged_out')
+  } finally { r.restore() }
+  resetInstagramSessionForTests()
+  const old = JSON.stringify({ data: { xdt_api__v1__media__shortcode__web_info: { items: [{ ...ITEM, code: 'DViaOldQry1' }] } } })
+  r = stub({ old: () => new Response(old) })
+  try {
+    const answered = {}
+    assert.equal(await fetchInstagramGraphQLMedia('DViaOldQry1', undefined, answered), old)
+    assert.equal(answered.via, 'post_root')
+  } finally { r.restore() }
+  resetInstagramSessionForTests()
+  r = stub({ gql: () => new Response('<!DOCTYPE html><html>log in</html>') })
+  try {
+    const answered = {}
+    assert.equal(await fetchInstagramGraphQLMedia('DViaNeithr1', undefined, answered), null)
+    assert.equal('via' in answered, false)
+  } finally { r.restore() }
+})
+
 test('cookieHeaderOf keeps every cookie and survives the comma inside Expires', () => {
   assert.equal(cookieHeaderOf(homeResponse()), 'csrftoken=CSRF1; mid=MID1')
   assert.equal(cookieHeaderOf(null), '')

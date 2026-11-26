@@ -198,7 +198,8 @@ function createdAtFromId(id: unknown): Date | null {
  * pathological input is not hypothetical — Instagram serves a 598KB shell to the wrong UA on
  * purpose, and any caller can provoke it. A character loop that only ever moves forward cannot
  * backtrack, so it is O(n) by construction; MAX is a second belt on top of that, sized well above
- * any real payload (the largest live capture's whole document is 214KB).
+ * any real payload (the largest live capture's whole document was 214KB on 2026-07-19 and 259KB on
+ * 2026-11-26).
  */
 const CONTEXT_JSON = '"contextJSON":"'
 const MAX_BLOB = 2_000_000
@@ -251,7 +252,13 @@ export function shortcodeMedia(html: unknown): Any | null {
 const MEDIA_TYPE = /data-media-type="(Graph[A-Za-z]{1,20})"/
 const MEDIA_ID_ATTR = /data-media-id="(\d{1,24})"/
 const USERNAME = /<span class="UsernameText">([^<]{1,64})<\/span>/
-const AVATAR = /class="Avatar"[^>]{0,600}>\s*<img src="([^"]{20,4000})"/
+/**
+ * ONE HEADER PICTURE: the link's class, the account its href names, and the picture's url. Read by
+ * markupAvatar, which has why the href is the part that matters. `(?:stories\/)?` is the
+ * active-story form (`class="Avatar InsideRing"`, whose link opens the story); the class tail admits
+ * `InsideRing` and `SecondCollabAvatar` and, bounded, whatever modifier comes next.
+ */
+const AVATAR_LINK = /<a class="(?:Collab)?Avatar(?: [A-Za-z]{1,40}){0,3}" href="https:\/\/www\.instagram\.com\/(?:stories\/)?([\w.]{1,30})\/[^"]{0,600}"[^>]{0,600}>\s*<img src="([^"]{20,4000})"/g
 const MEDIA_IMG = /<img class="EmbeddedMediaImage"[^>]{0,600}?\ssrc="([^"]{20,4000})"/
 const MEDIA_SRCSET = /<img class="EmbeddedMediaImage"[^>]{0,8000}?\ssrcset="([^"]{20,40000})"/
 const FRAME_RATIO = /class="Content EmbedFrame"[^>]{0,200}?style="[^"]{0,200}?padding-bottom:\s*([\d.]{1,20})%/
@@ -515,10 +522,8 @@ function fromMarkup(html: unknown, ref: Extract<PostRef, { p: 'ig'; kind: 'p' | 
 
   const createdAt = createdAtFromId(html.match(MEDIA_ID_ATTR)?.[1])
   if (!createdAt) return null
-  const author = authorOf({
-    username: html.match(USERNAME)?.[1],
-    profile_pic_url: unentityUrl(html.match(AVATAR)?.[1]),
-  })
+  const username = html.match(USERNAME)?.[1]
+  const author = authorOf({ username, profile_pic_url: markupAvatar(html, username) })
   if (!author) return null
 
   const url = unentityUrl(html.match(MEDIA_IMG)?.[1])
@@ -547,6 +552,38 @@ function fromMarkup(html: unknown, ref: Extract<PostRef, { p: 'ig'; kind: 'p' | 
     counts,
     sensitive: false,
   }
+}
+
+/**
+ * THE AUTHOR'S OWN PICTURE out of the embed header, or null. Only the single-image path reads it;
+ * a blob page carries `owner.profile_pic_url` instead.
+ *
+ * IT WAS `class="Avatar"` EXACTLY, and two of ten fresh posts probed from production on 2026-11-26
+ * came back with no avatar because of it. Both shapes are in test/fixtures, cut from embed pages
+ * fetched that day with the crawler UA:
+ *  - an account with an active story wraps its picture in `class="Avatar InsideRing"`, and the link
+ *    goes to `/stories/{handle}/` rather than to the profile;
+ *  - a collaboration post has no `Avatar` at all, only `class="CollabAvatar"` and
+ *    `class="CollabAvatar SecondCollabAvatar"`, one picture per account.
+ *
+ * PAIRED BY THE HREF, NOT BY POSITION AND NOT BY `alt`, because on a collab post both of those go
+ * wrong and the result still looks right. In the 2026-11-26 capture the author's picture was the
+ * SECOND of the two links, while the first `UsernameText` was the author's. And `alt` changed meaning
+ * between captures: in the 2026-07-19 reel and carousel fixtures BOTH pictures carry the author's
+ * handle as `alt`, the collaborator's included. The href named the account whose picture it holds in
+ * every capture (the same NASA picture sits under `href=".../nasa/"` in both months). Taking the
+ * first link would have drawn the collaborator's face over the author's name.
+ *
+ * NO MATCH IS NO AVATAR. A header whose links name nobody we can pair with the byline gets none,
+ * because a wrong account's picture is a wrong value and an absent one only degrades.
+ */
+export function markupAvatar(html: unknown, handle: unknown): string | null {
+  if (typeof html !== 'string' || typeof handle !== 'string' || !handle) return null
+  const want = handle.toLowerCase()
+  for (const m of html.matchAll(AVATAR_LINK)) {
+    if (m[1].toLowerCase() === want) return unentityUrl(m[2])
+  }
+  return null
 }
 
 /** Attribute values are HTML-escaped (`&amp;` in every signed CDN URL); decode before use. */

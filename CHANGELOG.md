@@ -146,6 +146,11 @@ mbedfx.app's Reddit app and account, and it names no account at all. Nobody else
 
 ### Fixed
 
+- **Instagram photo cards now show the author's picture when the account has a story up or the post
+  is a collaboration.** Two of ten posts checked on 2026-11-26 had no avatar for one of those reasons.
+  Instagram's header for a collaboration has one picture per account, and the card now uses the one
+  whose profile link names the author. Operators also get two new counters,
+  `embed_ok` and `gql_loggedout`, which say which Instagram stage drew a card (`docs/METRICS.md`).
 - **`RESOLVER_SECRET` was documented as protecting the Cloudflare container, and it doesn't.**
   `container/README.md` said to set it on the container as well as the Worker, and nothing in this
   repo puts it there: the container's Durable Object passes it no environment, so the container never

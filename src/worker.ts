@@ -30,6 +30,7 @@ import { fetchTikTok, isTikTokCdnHost, resolveTikTokShortlink, TIKTOK_UA, withRe
 import { AWEME_PLAY, normalizeTikTok, tiktokGate, tiktokRefFrom, videoDetailScope } from './platforms/tiktok/normalize.ts'
 import {
   fetchInstagram, fetchInstagramAudienceGate, fetchInstagramFullPage, fetchInstagramGraphQLMedia, fetchInstagramUserFeed,
+  type GraphQLVia,
 } from './platforms/instagram/fetch.ts'
 import { probeInstagramGraphQL } from './platforms/instagram/probe.ts'
 import {
@@ -419,9 +420,10 @@ export async function liveFetchPost(
         /**
          * Instagram served the decoy, blocked us, or renamed what the extractor looks for. NOT the
          * same event as a deleted post — and on THIS platform that distinction is invisible without
-         * the counter, because the decoy is an HTTP 200 carrying ~598KB of perfectly ordinary
-         * text/html. Every status- or size-based health check passes on it; only the content
-         * assertion inside fetchInstagram can see it, and only this line can report it.
+         * the counter, because the decoy is an HTTP 200 carrying half a megabyte of perfectly ordinary
+         * text/html (~598KB measured 2026-07-19, 538KB on 2026-11-26, both residential). Every status-
+         * or size-based health check passes on it; only the content assertion inside fetchInstagram
+         * can see it, and only this line can report it.
          *
          * READ fetchInstagram's InstagramFetch DOCSTRING BEFORE TUNING AN ALERT OFF THIS. A
          * genuinely deleted or private post ALSO lands here, because Instagram's "post
@@ -442,16 +444,24 @@ export async function liveFetchPost(
          * the week to 10-13, mostly this way. See instagramGraphQLCard for the measurement and for what
          * the item carries that the page never did (counts, the date, the display name, the avatar).
          *
-         * ~22 KB in one request against ~950 KB for the page. When the query has no item (an age-gated
+         * ~22 KB in one request against ~950 KB for the page, while the old query answered. It stopped on
+         * 2026-11-19 (/_igprobe found "Rate limit exceeded" on 11-24 and again on 11-26), and the
+         * logged-out query carries this stage now, at 386 KB an answer plus a 538 KB homepage per
+         * isolate every ten minutes (measured from production through /_igprobe, 2026-11-26; see
+         * fetchInstagramGraphQLMedia). When the query has no item (an age-gated
          * or nonexistent post answers `data: null`; a rotated doc_id answers nothing usable) the full
          * page runs exactly as before, so the gate cards are unchanged, and the answer already in hand
          * is reused for the page's card rather than asked for twice.
          */
         const code = ref.kind === 'story' ? '' : ref.code
-        const gql = code ? await fetchInstagramGraphQLMedia(code, env.IG_GRAPHQL_DOC_ID) : null
+        // Which of the two queries answered, for `gql_loggedout` (analytics.ts). Read beside both
+        // counters this one answer can feed: graphql_recovered here, copyright_gql further down.
+        const answered: { via?: GraphQLVia } = {}
+        const gql = code ? await fetchInstagramGraphQLMedia(code, env.IG_GRAPHQL_DOC_ID, answered) : null
         const whole = instagramGraphQLCard(gql, ref)
         if (whole) {
           count(env, 'ig', 'graphql_recovered', client)
+          if (answered.via === 'logged_out') count(env, 'ig', 'gql_loggedout', client)
           // A no-op on a reel the query gave its video (every one measured); see withNoVideoNote.
           return withNoVideoNote(whole)
         }
@@ -525,6 +535,7 @@ export async function liveFetchPost(
           const viaCode = recoveredMediaFrom(gql, code)
           if (viaCode) {
             count(env, 'ig', 'copyright_gql', client)
+            if (answered.via === 'logged_out') count(env, 'ig', 'gql_loggedout', client)
             return withRecoveredVideo(card, viaCode)
           }
           // The code is passed so the feed walk can STOP as soon as it finds this post, and so it
@@ -622,6 +633,14 @@ export async function liveFetchPost(
        */
       const post = normalizeInstagram(got.html, ref)
       /**
+       * THE PRIMARY STAGE ANSWERED, counted because nothing else said so. Every other ig counter is a
+       * failure or a recovery, so on 2026-11-26 the embed's share of posts had to be inferred from the
+       * copyright counters that happen to run after it. Counted HERE, on a Post and not on `got.ok`: a
+       * page that arrived and normalized to null is the route's fetch_fail, and counting it as a
+       * success would hide exactly the normalizer drift hasEmbedPost's docstring warns about.
+       */
+      if (post) count(env, 'ig', 'embed_ok', client)
+      /**
        * THE COPYRIGHT-BLOCKED RECOVERY, and it is the ONE case where this platform makes a second
        * upstream request on a SUCCESSFUL fetch — so it is gated twice and both gates are cheap.
        *
@@ -664,11 +683,13 @@ export async function liveFetchPost(
          * a missing container or an extractor break. Nothing but Instagram refusing our egress
          * outright takes all three, and that lands on the cover still we already ship.
          */
+        const answered: { via?: GraphQLVia } = {}
         const gql = recoveredMediaFrom(
-          await fetchInstagramGraphQLMedia(code, env.IG_GRAPHQL_DOC_ID), code,
+          await fetchInstagramGraphQLMedia(code, env.IG_GRAPHQL_DOC_ID, answered), code,
         )
         if (gql) {
           count(env, 'ig', 'copyright_gql', client)
+          if (answered.via === 'logged_out') count(env, 'ig', 'gql_loggedout', client)
           return withRecoveredVideo(post, gql)
         }
         // Same walk, same reason: a copyright-blocked post outside the account's twelve most recent
