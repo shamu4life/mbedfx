@@ -151,6 +151,24 @@ mbedfx.app's Reddit app and account, and it names no account at all. Nobody else
   Instagram's header for a collaboration has one picture per account, and the card now uses the one
   whose profile link names the author. Operators also get two new counters,
   `embed_ok` and `gql_loggedout`, which say which Instagram stage drew a card (`docs/METRICS.md`).
+- **Threads posts that share an Instagram post show its pictures, and Threads replies say who they
+  answer.** A Threads text post linking an Instagram carousel got a card with no pictures, although
+  Threads shows the carousel inside the post. The card now has those pictures, under the Threads
+  post's own author and text. A reply opens with the ↩ line naming the account it answers, as replies
+  from X and Bluesky already did. FixTweetBot's FIXERS.md comparison (tested 2026-11-08) found both.
+  Neither fix has been pasted into Discord yet. A shared Instagram video wasn't among the examples,
+  and if Threads sends one without a playable link, the card shows its cover picture.
+- **Facebook group links that point at one post now show it.** A
+  `facebook.com/groups/{group}/?multi_permalinks={post}` link said "Not found", and the converter
+  dropped the post id and handed out the group's home page. The link now draws the same card as
+  `/groups/{group}/posts/{post}/`, and the converter gives that `/posts/` link. A group's home page
+  still says "Not found", and so does a link listing more than one post.
+- **The `/fb/` and `/th/` site codes work on Facebook query links and Threads share links.**
+  `mbedfx.app/fb/photo/?fbid=…`, `/fb/photo.php?fbid=…`, `/fb/watch/?v=…`, `/fb/story.php?…`,
+  `/fb/permalink.php?…` and `/th/share/{code}` answered "Not found" though the same links without the
+  code worked, and now give the same card as those links. The converter's "Read as" list adds the
+  code to the front of the link, so picking Facebook on a photo or video link, or Threads on a share
+  link, used to swap a working link for a dead one.
 - **`RESOLVER_SECRET` was documented as protecting the Cloudflare container, and it doesn't.**
   `container/README.md` said to set it on the container as well as the Worker, and nothing in this
   repo puts it there: the container's Durable Object passes it no environment, so the container never
