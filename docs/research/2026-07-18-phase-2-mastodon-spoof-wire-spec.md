@@ -1,4 +1,4 @@
-# Phase 2 — authoritative wire spec (evidence-derived, 2026-07-18)
+# Phase 2 / authoritative wire spec (evidence-derived, 2026-07-18)
 
 This supersedes the Phase 2 plan wherever they disagree. Everything below marked
 VERIFIED was observed live against `fxbsky.app` (FxEmbed build
@@ -52,7 +52,7 @@ double-decode hazard below also disappears for these routes.
 
 ---
 
-## 2. Router — shape-match with fallthrough, never "reserve" (plan wording is dangerous)
+## 2. Router / shape-match with fallthrough, never "reserve" (plan wording is dangerous)
 
 The plan says *"Reserve `api`, `users`, `_oembed` as root tokens."* **Do not.**
 "Reserve" means dead-end, and dead-ending is precisely the Phase 1 bug fixed in
@@ -105,7 +105,7 @@ only true under fallthrough, which makes it the acceptance test for this task.
 so adding two `Route` kinds without their `case`s is a compile error, and router and
 worker must land in one commit.
 
-### Pre-existing bug found, not fixed here (out of scope — flagged for the user)
+### Pre-existing bug found, not fixed here (out of scope / flagged for the user)
 
 `@_media` and `@_alt` are live X accounts, and both branches dead-end, so
 `/_media/status/123` is notfound today. That shadows a real post permalink and falsifies
@@ -114,7 +114,7 @@ current behavior with a `KNOWN:` test so a future fix is deliberate, and leave i
 
 ---
 
-## 3. Counts placement — one slot per consumer surface (settles the plan's ambiguity)
+## 3. Counts placement / one slot per consumer surface (settles the plan's ambiguity)
 
 VERIFIED across 6 posts. FxEmbed puts counts in both oEmbed `author_name` and
 Mastodon `content`, and this does not double-render, because the two surfaces have
@@ -139,7 +139,7 @@ context; zero-valued metrics are omitted entirely):
 
 ---
 
-## 4. Newlines — U+FE00 pairs, not a hair space (plan is wrong)
+## 4. Newlines / U+FE00 pairs, not a hair space (plan is wrong)
 
 The plan says to insert `&hairsp;`/a space between consecutive `<br>`. FxEmbed actually
 appends two U+FE00 (VARIATION SELECTOR-1) after every newline-derived `<br>`,
@@ -266,7 +266,7 @@ proved Discord's media proxy follows our percent-encoded `/_media/` 302 to a rea
   "provider_url": "{origin}", "title": "Embed", "type": "rich", "version": "1.0" }
 ```
 
-### 6e. `buildContentHtml(post)` — Mastodon `content`
+### 6e. `buildContentHtml(post)` / Mastodon `content`
 
 Composition order, matching FxEmbed:
 1. reply prefix, if any:
@@ -287,7 +287,7 @@ FxEmbed abbreviates counts at scale (`1.1K`, `8.1K`), so implement `abbrev(n)`.
 Depth is 1: `post.quote.quote` is always undefined (normalizer guarantee). The builder
 must not assume it, but need not recurse.
 
-### 6f. `buildPlainText(post)` — `og:description`, COUNTS-FREE
+### 6f. `buildPlainText(post)` / `og:description`, COUNTS-FREE
 
 ```
 {↩ Name (@handle)\n}?  {text}  {\n\nQuoting Name (@handle)\n\n{quote text}}?
@@ -342,7 +342,7 @@ The embed debugger does not render these paths faithfully. Test on Desktop + And
 The synthesis agent re-measured several things live and overturned two claims above.
 **These corrections win over anything earlier in this document.**
 
-## C1. §5 was wrong — the activity link is always emitted for Discord
+## C1. §5 was wrong / the activity link is always emitted for Discord
 
 §5 above said `spoof = discord && post.media.length > 0`. That was my inference from
 "text-only posts emit one og:image", and it is wrong. The synthesis fetched 5 fixtures

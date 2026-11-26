@@ -67,10 +67,10 @@ The card carries the display name, the bio, the avatar, the follower, following 
 the month the account was created. bsky.app itself gives a crawler only a title, which is why this
 route exists.
 
-No other site's profile links work, and that is measured rather than pending. Twitter, TikTok and
-Instagram all already hand a crawler a complete profile card of their own, so there is nothing to
-fix. Their profile urls are also a bare handle, which names an account on more than one of those
-sites at once, so a bare handle gets the chooser instead of a guess.
+No other site's profile links work, and a measurement settled that: Twitter, TikTok and Instagram
+all already hand a crawler a complete profile card of their own, so there is nothing to fix. Their
+profile urls are also a bare handle, which names an account on more than one of those sites at once,
+so a bare handle gets the chooser instead of a guess.
 
 ### Just the media
 

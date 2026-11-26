@@ -1,4 +1,4 @@
-# Instagram from Cloudflare Workers egress — what was measured, and what was not
+# Instagram from Cloudflare Workers egress / what was measured, and what was not
 
 **Written 2026-07-20, after the fact.** Three places in the plan (lines 217, 229, 648) and one
 comment block in `src/platforms/instagram/fetch.ts` cited this document as a phase deliverable, and
@@ -104,7 +104,7 @@ a deliberate, temporary act. Two traps, both paid for once already:
 
 ---
 
-## Correction to the plan's edge-cache model — measured 2026-07-20
+## Correction to the plan's edge-cache model / measured 2026-07-20
 
 The plan's *THE EDGE-CACHE HAZARD* section says the edge key is the path alone, and offers as a
 workaround: *"the same shortcode under a different path spelling (`/p/X` vs `/reel/X` vs

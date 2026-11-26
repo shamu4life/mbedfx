@@ -1,4 +1,4 @@
-# YouTube mux ceilings and bytes — investigation, 2026-08-23
+# YouTube mux ceilings and bytes / investigation, 2026-08-23
 
 **FROZEN 2026-08-29. This is a dated record, not a plan.** It was moved here from the repository
 root because it had stopped being one. It was written as a handoff while two PRs were open; both

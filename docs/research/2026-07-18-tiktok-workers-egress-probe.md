@@ -1,4 +1,4 @@
-# TikTok from real Cloudflare Workers egress — Task 1 measurement
+# TikTok from real Cloudflare Workers egress / Task 1 measurement
 
 Measured 2026-07-19 ~04:00 to 04:20 UTC (2026-07-18 evening PDT) from a Cloudflare-hosted Worker
 isolate, with a residential-US-IP control arm taken minutes apart against the same URLs.
@@ -34,7 +34,7 @@ That is still the live `fxtiktok` worker, untouched throughout.
 
 ---
 
-## Result 1 — the page fetch (the blocking measurement): works
+## Result 1 / the page fetch (the blocking measurement): works
 
 > **Units note** (added after adversarial review; the reports below are verbatim and unedited).
 > At the time of this run the probe computed `bytes` as `body.length`, which is JS string length
@@ -87,7 +87,7 @@ plan describes.
 
 ---
 
-## Result 2 — the video fetch: fails from Workers egress, works residentially
+## Result 2 / the video fetch: fails from Workers egress, works residentially
 
 Same aweme URL, both arms, minutes apart. It is deterministic (fact 4), so this is a true
 like-for-like comparison and not two different URLs.
@@ -202,7 +202,7 @@ account.
 
 ---
 
-## Addendum, 2026-07-19 — branch 3 shipped anyway, for a different reason
+## Addendum, 2026-07-19 / branch 3 shipped anyway, for a different reason
 
 Nothing measured above is retracted. The numbers stand; what changed is the question.
 

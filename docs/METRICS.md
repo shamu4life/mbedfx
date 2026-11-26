@@ -209,9 +209,12 @@ range-fetched, so a client that lists formats and is then refused by googlevideo
 `gvs: "http-403"` instead of looking healthy. The first run caught exactly that: `android_vr` reported
 `extracted: true, formats: 1` and served zero bytes.
 
-It is run by hand, not on a schedule, because it costs a real extraction per client on a shared
-container slot. Use it when the mux counters show `mux_gate` on `yt` while `/_smoke` says everything
-is fine. Every YouTube incident this project has had looked like that.
+It costs a real extraction per client on a shared container slot, so the Worker's own cron never
+runs it. `.github/workflows/health-check.yml` asks it every Monday and Thursday at 13:23 UTC, and once
+more a minute later when the first answer is not serving
+([The week it keeps, and who is told](#the-week-it-keeps-and-who-is-told)). Otherwise it is run by
+hand. Use it when the mux counters show `mux_gate` on `yt` while `/_smoke` says everything is fine.
+Every YouTube incident this project has had looked like that.
 
 When it cannot do its job it says so: 503 when there is no container binding, 502 when the container
 is unreachable or answers non-ok. It never 500s, because a diagnostic that crashes tells an operator
@@ -456,9 +459,11 @@ The interval varies per row, and Cloudflare's docs say explicitly that multiplyi
 constant factor does not work. Read-time sampling responds to query cost, so a longer window makes a
 naive `COUNT()` under-report more, and on a chart that looks exactly like a traffic decline.
 
-Nobody has checked whether mbedfx rows are sampled today, or what `index1` holds when no `indexes`
-array is passed; Cloudflare's docs only ever describe the index as present. The query under
-[Is any of this being sampled](#is-any-of-this-being-sampled) answers both. At low volume
+mbedfx rows have been seen sampled: `_sample_interval` read 1 to 12 in the first window queried on
+2026-08-29, and 2-5 on the half-hourly smoke burst. What `index1` holds when no `indexes` array is
+passed has not been checked; Cloudflare's docs only ever describe the index as present. The query
+under [Is any of this being sampled](#is-any-of-this-being-sampled) shows the current intervals and
+answers the `index1` question too. At low volume
 `_sample_interval` may be uniformly `1`, which agrees with `COUNT()`. Use `SUM` anyway, because that
 agreement can stop holding without any change to the written data.
 

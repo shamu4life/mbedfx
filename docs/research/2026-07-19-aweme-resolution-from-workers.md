@@ -1,4 +1,4 @@
-# Can a Worker resolve the aweme URL to a CDN URL? — the header sweep
+# Can a Worker resolve the aweme URL to a CDN URL? / the header sweep
 
 Measured 2026-07-19 from `staging.megapenispoopenfarten.sex` (a real deployed Cloudflare Worker,
 not `wrangler dev --remote`), with a residential-US-IP control arm taken against the same URL,

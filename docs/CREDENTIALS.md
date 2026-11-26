@@ -53,8 +53,10 @@ there.
 
 The `MA` verdict comes off the Worker's own page fetch, which carries no jar (`instagramAgeGate`,
 `src/platforms/instagram/normalize.ts:643`). A filled `IG_ACCOUNTS` reaches only the container mux,
-and gate detection stays where it was. If `ig`/`pool_unused` (`src/worker.ts`) climbs, the
-credential is not reaching the gate.
+and gate detection stays where it was. `ig`/`pool_unused` (`src/worker.ts`) counts a post that the
+jarless page fetch found walled while `IG_ACCOUNTS` holds an account. If it climbs, the credential is
+not reaching the request that reads the `MA` verdict, and the count says nothing about whether the
+accounts are still logged in.
 
 ## Getting a cookies.txt
 
@@ -177,13 +179,13 @@ player-client change, `g12` on 2026-08-28 with 1.11.0's single-extraction change
 day. Each one paid that cost, so the pre-fill-day records are long gone. The `g13` bump was not spent
 to invalidate a wrong record. It forced brand-new container instances out of a 501 outage, so keep
 that outage in mind before reading a bump as evidence that the records were suspect. The 2026-08-29
-split moved exactly that case to `RESOLVER_GENERATION`, where it costs nothing stored.
+split moved exactly that case to `RESOLVER_GENERATION`, where it costs no meta record.
 
 Rotating a dead pool leaves the cached verdicts in place. A record measured with a jar that still
 says gated is treated as correct, because the extract was logged in and walled anyway. Only a
 `META_GENERATION` bump (`metaCacheKey`, `src/worker.ts`) clears it, **not** `RESOLVER_GENERATION`.
 Since the two split on 2026-08-29, `RESOLVER_GENERATION` renames the pooled container instances and
-invalidates nothing stored. They held the same value on the day they were split, so a reader coming
+invalidates no meta record. They held the same value on the day they were split, so a reader coming
 from an older copy of this page will find both saying `g13`, with no way to tell from the value alone
 which one matters.
 

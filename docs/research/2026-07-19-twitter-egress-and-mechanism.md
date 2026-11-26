@@ -1,4 +1,4 @@
-# Twitter extraction — the mechanism, measured from residential AND Cloudflare Workers egress
+# Twitter extraction / the mechanism, measured from residential AND Cloudflare Workers egress
 
 Measured live 2026-07-19 from both residential and real Cloudflare Workers egress, with
 byte-identical results. FxEmbed source was read at HEAD `9f57d264` (dated 2026-07-18, which was
@@ -40,7 +40,7 @@ to the human gate (Task 9), not to this document.
 
 ---
 
-## Path A — syndication is primary. One GET, no credentials.
+## Path A / syndication is primary. One GET, no credentials.
 
 ```
 https://cdn.syndication.twimg.com/tweet-result?id={ID}&lang=en&token={TOKEN}
@@ -64,7 +64,7 @@ token = ((Number(id) / 1e15) * Math.PI).toString(36).replace(/(0+|\.)/g, '')
 - A related endpoint does not work: `syndication.twitter.com/srv/timeline-profile/screen-name/{name}` returned
   HTTP 429 on the very first residential request, so profile timelines are not available this way.
 
-## Path B — guest GraphQL is the fallback.
+## Path B / guest GraphQL is the fallback.
 
 ```
 POST https://api.x.com/1.1/guest/activate.json   -> {"guest_token": "..."}
@@ -91,7 +91,7 @@ plus `x-guest-token`, a random `x-csrf-token`, `x-twitter-active-user: yes`, and
   `ConversationTimeline`, …) is `requiresAccount: true`, so threads, profiles, and search require an account.
   Single-status fetch is exactly this project's surface.
 
-## Age gate — confirmed, ship the seam empty
+## Age gate / confirmed, ship the seam empty
 
 An age-gated post returns `__typename: "TweetTombstone"` with no text, no media, no author and no counts, on
 both paths and both egresses:
@@ -120,7 +120,7 @@ credentialed = full content.
 
 ---
 
-## The three traps — status and content-type discriminate none of them
+## The three traps / status and content-type discriminate none of them
 
 Assert on the presence of real post fields (`__typename === 'Tweet'`, non-empty text, a `user`), never on status
 or `content-type`. Twitter makes both lie, in three distinct ways on the syndication endpoint alone:
@@ -135,7 +135,7 @@ or `content-type`. Twitter makes both lie, in three distinct ways on the syndica
 
 ---
 
-## Media — the best of any platform here: 0 hops, unsigned, no `POST_TTL` constraint
+## Media / the best of any platform here: 0 hops, unsigned, no `POST_TTL` constraint
 
 Measured cookie-free, `redirect: 'manual'`, magic-byte-asserted, from both egresses:
 
@@ -163,7 +163,7 @@ Measured cookie-free, `redirect: 'manual'`, magic-byte-asserted, from both egres
   still, receives mp4 bytes, drops the rich card). `preview_url`/poster is mandatory on a video/gif attachment
   and must be the still (`media_url_https`), never the mp4.
 
-## Crawler-UA fetch — text only, media unusable. Build nothing on it.
+## Crawler-UA fetch / text only, media unusable. Build nothing on it.
 
 `x.com/{user}/status/{id}` is UA-gated and the gate is narrow: `Discordbot/2.0` and `TelegramBot` get 200 with a
 full `og:description`; Googlebot and facebookexternalhit/1.1 get 404. For allowed UAs `og:description` carries
@@ -186,7 +186,7 @@ reference at all. Both API paths beat it, and it is usable only as a last-ditch 
 
 ---
 
-## Triage checklist — three independent whim-of-Twitter fragilities
+## Triage checklist / three independent whim-of-Twitter fragilities
 
 These rotate independently, so a triager who checks only one will miss the others. Any one can break while the
 other two still work, and that is why syndication (Path A) and guest (Path B) are a primary/fallback pair.

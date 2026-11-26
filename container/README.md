@@ -164,7 +164,8 @@ They were one string until 2026-08-29, and they answer two different questions:
 - `RESOLVER_GENERATION` is part of the pooled instance name. Pooled instances have stable names
   and keep their booted image until `sleepAfter` (5m). Skip this bump and a redeploy under steady
   traffic keeps answering with the old dict: the new fields arrive `undefined`, and the change looks
-  inert. Bumping it costs one cold boot per slot and invalidates nothing stored.
+  inert. Bumping it costs one cold boot per slot. The only stored objects it retires are the mux
+  give-up marks, which `muxFailMarkKey` (`src/worker.ts`) keys under it on purpose.
 - `META_GENERATION` is the meta cache's key segment. Bumping it discards stored dates,
   descriptions, counts and gate verdicts across yt, fb, dm, st and im. The longest-lived is
   `YT_META_TTL_MS`, at 30 days; fb, dm and im hold for 24h, and st for 30 minutes.
@@ -301,9 +302,12 @@ very requests it is failing. A correct, deployed container image sat behind seve
 for ten minutes, and six minutes of deliberately not touching the service did not clear it.
 
 The lever that does work is `RESOLVER_GENERATION`. It names the Durable Objects, so bumping it sends
-the next request to a brand-new instance, which boots on the current image. It costs the cached meta
-records, a real price and the right one to pay to end an outage. If this keeps happening, a shorter
-`sleepAfter` is the cheaper permanent fix; `src/container.ts` already argues that 3m is available.
+the next request to a brand-new instance, which boots on the current image. It costs one cold boot
+per slot. The cached meta records are keyed by `META_GENERATION` and stay. The mux give-up marks are
+keyed under `RESOLVER_GENERATION` (`muxFailMarkKey`, `src/worker.ts`), so the bump also retires every
+give-up verdict written under the old generation, including the ones a broken image wrote. If this
+keeps happening, a shorter `sleepAfter` is the cheaper permanent fix; `src/container.ts` already
+argues that 3m is available.
 
 ## Running it standalone
 
@@ -385,9 +389,6 @@ HLS rendition would pass). This was found by reading the code on 2026-10-04. It 
 production, and nothing counts it, because only the last attempt's failure is counted. Making the
 option HLS-only would change what those platforms' muxes do and needs its own measurement, so it has
 been left for a separate change.
-
-The interface note above still advertises a bare `.mpd` as `video`. That is the shape to re-measure
-before relying on it, and a self-hoster on a newer ffmpeg than the image's is who would find out.
 
 The same per-input slot carries `-extension_picky 0`, for Reddit's HLS only, and only when the
 installed ffmpeg's hls demuxer lists the option. Reddit videos with audio uploaded between about

@@ -225,7 +225,9 @@ link preview does, because Reddit drops the markers there (measured on r/Jujutsu
 
 `deserializePost` validates the ref, the canonical and the date, nothing else. `text` goes out
 through `str()` (`src/render/embed.ts`, applied in `toApiPost`): a cached value of the wrong type is
-published as `""`, never verbatim (the test "A CACHED RECORD OF THE WRONG TYPE IS PUBLISHED AS null, NEVER VERBATIM" in `test/api.test.mjs`).
+published as `""`, never verbatim. The test "A CACHED RECORD OF THE WRONG TYPE IS PUBLISHED AS null, NEVER VERBATIM" in
+`test/api.test.mjs` pins it, asserting `""` for `text` and `quote.text`; the `null` in its title is
+what a wrong-typed `width` or `height` becomes.
 
 ### `spoiler`
 
@@ -608,14 +610,14 @@ Streamable, and on Imgur when it falls through to the container, where 8.7 s is 
 stops arriving at all. (This paragraph said "the four container platforms" until 2026-08-29, the same
 miscount the Facebook paragraph above corrects: Facebook makes the call and is not bounded by it.)
 
-Two measurements are recorded in comments beside the code they bound in `src/worker.ts`: a Facebook
-metadata extract at ~3.0 s (2026-07-25) and a translation at 217-798 ms.
+This page quotes two measured costs, each recorded in a comment beside the code it bounds in
+`src/worker.ts`: a Facebook metadata extract at ~3.0 s (2026-07-25) and a translation at 217-798 ms.
 
-That list used to carry two YouTube figures as well, a cold remux at 6-9 s (2026-07-24) and
-`yt-dlp -J` at 2.3-6.7 s (2026-07-26). Both are retired, not updated: they were taken on the
-quarter-core container with an older yt-dlp. Extraction alone is 3.1-4.7 s on `standard-2` now, and
-the production counters put a completed YouTube mux at p50 18.2 s, p90 41.3 s, minimum 4.2 s over
-139 samples, so a client timeout sized to a figure below the p10 would fail.
+The paragraph above also used to quote two YouTube figures, a cold remux at 6-9 s (2026-07-24) and
+`yt-dlp -J` at 2.3-6.7 s (2026-07-26). Both are retired from this page, not updated: they were
+taken on the quarter-core container with an older yt-dlp. Extraction alone is 3.1-4.7 s on
+`standard-2` now, and the production counters put a completed YouTube mux at p50 18.2 s, p90 41.3 s,
+minimum 4.2 s over 139 samples, so a client timeout sized to a figure below the p10 would fail.
 
 A post is held 900 s (`POST_TTL`, `src/cache.ts:6`) independently of the response, and a second
 request skips the upstream fetch even when the first answer wasn't cacheable. `/_api/v1` never
@@ -721,9 +723,10 @@ The last row is `ambiguous` rather than a dead end because `tiktok.com/t/` and `
 the same path on two different products, so a code TikTok disclaims may well be Threads'. The render
 arm has offered that chooser since the route was written.
 
-All four rows used to answer `not_a_post`, a false statement about a post that demonstrably exists,
-and one the render path never made. The walls were corrected on 2026-08-11 and the other two rows on
-2026-08-12, each after measuring the same code through both surfaces.
+All four rows used to answer `not_a_post`. The walls were corrected on 2026-08-11 and the other two
+rows on 2026-08-12, each after measuring the same code through both surfaces. On a walled code that
+answer was a false statement about a post that demonstrably exists, and one the render path never
+made.
 
 ### Profile urls
 

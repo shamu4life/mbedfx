@@ -1066,9 +1066,8 @@ the only instrument that can say which url Discord uses.
 The `/_wait/act`, `mact`, `bact` and `cact` routes are gone. The media routes (`/_wait/media`,
 `mediah`, `mediac`) are unchanged, and the m, b and c documents still land their video urls there.
 
-**Recorded so it is not paid for twice.** The a, m, b and c sweeps could only ever produce the null
-result, so they measured nothing. The n=0 positive control now ships with an experiment's first
-sweep, not its fifth.
+**Recorded so it is not paid for twice.** An experiment that can only produce the null result
+measures nothing. The n=0 positive control now ships with an experiment's first sweep, not its fifth.
 
 At least one WAIT test fails under each of these mutations: dropping the id rewrite, pointing the
 href back at `/_wait/act`, counting every path as `wait_users`, never sleeping on a, and accepting

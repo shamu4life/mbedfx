@@ -234,7 +234,7 @@ only on `127.0.0.1`.
 
 ### What the host needs
 
-- Docker Engine with the Compose v2 plugin. The one measured run used Docker 26.1.5 and Compose
+- Docker Engine with the Compose v2 plugin. Both measured runs used Docker 26.1.5 and Compose
   2.26.1.
 - An x86_64 host. `container/Dockerfile` downloads the x86_64 Deno build by name, so the resolver
   image is `linux/amd64` and compose pins that. On ARM it runs under emulation, which nobody has
@@ -658,10 +658,10 @@ checkout of `main` at `90fb2d8` with a throwaway `.env` holding only `PUBLIC_ORI
 | `docker compose stop adapter` | Under a second, logging `SIGTERM: requests finished, 0 background task(s) pending at stop, all settled`. |
 
 #140, #144, #145, #146 and #148 then changed `compose.yaml`, `adapters/node/bindings.ts` or
-`adapters/node/server.ts`, so on 2026-11-26 the stack was rebuilt at `b0c7b31` and the same checks
-ran again. Everything above held: the same image sizes, no `.env` in the image, the resolver off the
-host's ports, the same four YouTube clients and passing HLS probes, a 629,172-byte mux and a clean
-stop. The Bluesky, Reddit, Mastodon and Twitter cards matched mbedfx.app's titles. The converter page
+`adapters/node/server.ts`, so on 2026-11-26 the stack was rebuilt at `b0c7b31` on the same host,
+still Docker 26.1.5 and Compose 2.26.1, and the same checks ran again. Everything above held: the
+same image sizes, no `.env` in the image, the resolver off the host's ports, the same four YouTube
+clients and passing HLS probes, a 629,172-byte mux and a clean stop. The Bluesky, Reddit, Mastodon and Twitter cards matched mbedfx.app's titles. The converter page
 named the deployment: primary `http://127.0.0.1:8787`, `http` links, and no mbedfx.app in its og tags.
 Nothing builds or runs the images in CI, so a later change can break them without a red check.
 
@@ -1057,7 +1057,7 @@ leaves from.
 | Threads video (`scontent*.cdninstagram.com`) | Once blocked for the container's egress. A Worker fetch on 2026-08-09 got 200 `video/mp4` (8,990,730 bytes), and the Worker now serves those bytes itself. A residential host got the same file on 2026-11-25. | `src/platforms/threads/normalize.ts`, `src/mediaproxy.ts` |
 | Google translate endpoint | Measured 2026-07-31 from a Worker: answers in 13-16 ms and is not blocked from Cloudflare's egress. It does rate-limit bursts, and ~30 requests in a few seconds drew HTTP 429 on every one. | `src/translate.ts` |
 | Twitter guest endpoints | Byte-identical from residential and Cloudflare Workers egress in the 2026-07-19 recon; the activation and `TweetResultByRestId` were both measured working. On 2026-11-25 from a residential host, syndication (the primary path) answered `/jack/status/20` without `retweet_count`, while mbedfx.app's card for it showed a repost count. The Cloudflare side of that was not measured. | `src/platforms/twitter/fetch.ts` (`activateGuestToken`, `fetchGuest`, and the recon note before `GUEST_BEARER`) |
-| YouTube via yt-dlp | Not datacenter-IP-blocked, and measured per player client since 2026-08-28. A `{page}` resolve returned a real ad-free MP4 from Cloudflare Container egress on 2026-07-22; it needed Deno for the signature challenge, not a different IP. `/_clients` then extracted one video with six clients on that egress and range-fetched each chosen format: `default`, `web_embedded`, `tv_simply`, `mweb` and `web_safari` all served bytes with no PO token, and only `android_vr` was refused (`http-403`). `tv_simply` and `mweb` are the two clients yt-dlp's PO Token Guide says require one, so a token provider buys a self-hoster on datacenter egress nothing. Refusals are intermittent rather than absolute: worth one retry, not a verdict. | `src/worker.ts` (`/_clients`), `container/README.md` |
+| YouTube via yt-dlp | Not datacenter-IP-blocked, and measured per player client since 2026-08-28. A `{page}` resolve returned a real ad-free MP4 from Cloudflare Container egress on 2026-07-22; it needed Deno for the signature challenge, not a different IP. `/_clients` then extracted one video with six clients on that egress and range-fetched each chosen format: `default`, `web_embedded`, `tv_simply`, `mweb` and `web_safari` all served bytes with no PO token, and only `android_vr` was refused (`http-403`). `tv_simply` and `mweb` are the two clients yt-dlp's PO Token Guide says require one, so a token provider buys a self-hoster on datacenter egress nothing. Refusals are intermittent, so a refused client is worth one retry before it is written off. | `src/worker.ts` (`/_clients`), `container/README.md` |
 | Instagram copyright recovery (`copyright_recovered`) | Unconfirmed from Cloudflare egress. Every measurement behind it is residential, and the recovery fails silently into a cover still. The counter exists so the failure is visible at all. | `src/analytics.ts` |
 | Instagram generally | Instagram's behaviour toward Cloudflare is path-dependent: a residential result does not transfer to Workers egress by itself. | `src/platforms/instagram/fetch.ts` |
 
@@ -1082,9 +1082,9 @@ A home line gets the Facebook `/share` 302 that the public instance doesn't, tho
 matters only after yt-dlp misses. The Instagram embed and Threads video both answered from a home line
 on 2026-11-25, and Threads isn't a difference at all, since the Worker has served those bytes itself
 since 2026-08-09 (`src/mediaproxy.ts`). Reddit's anonymous `.json` is refused from a home line too.
-Reddit's embed answered Node's `fetch` and refused curl from the same address, so there the client
-decided, not the address. Google's limit is on burst rate, not on address, and an instance with a cold
-cache bursts harder than the public one.
+Reddit's embed answered Node's `fetch` and refused curl from the same address, so the deciding
+factor there was the HTTP client. Google's limit is on burst rate and applies whatever the address,
+and an instance with a cold cache bursts harder than the public one.
 
 A VPS or cloud host sits in the same category as the public instance, possibly worse: a smaller
 provider's ranges are often blocked more aggressively than Cloudflare's. None of the rows above
