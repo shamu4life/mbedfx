@@ -16,8 +16,15 @@ import { errorEmbed, redirect } from './fail.ts'
  * ordinary paste. It is passed straight through to renderPost and reaches only the Discord head,
  * which mints it into the status id so the activity callback can read it back — every other arm
  * here renders one picture or none, so there is no gallery for a mode to change.
+ *
+ * `site` is the instance's name (SITE_NAME, read by siteName in src/instance.ts), for og:site_name on
+ * the post and profile heads. REQUIRED, and `mode` with it, so a worker.ts call that forgets the name
+ * is a type error rather than a card that quietly says 'mbedfx' on a renamed instance. The failure and
+ * chooser arms do not print it today; they take it anyway, so a card that starts naming the instance
+ * has it to hand. The renderers below read it through siteLabel, for the .mjs tests that call this
+ * with three arguments.
  */
-export function render(outcome: Outcome, client: ClientClass, origin: string, mode?: GalleryMode): Response {
+export function render(outcome: Outcome, client: ClientClass, origin: string, mode: GalleryMode | undefined, site: string): Response {
   const isHuman = client === 'human'
 
   switch (outcome.kind) {
@@ -31,14 +38,14 @@ export function render(outcome: Outcome, client: ClientClass, origin: string, mo
       // picture, no /_alt/0), and absences are the failure mode a shared renderer full of
       // `if (client === …)` produces by accident: a tag added for Discord reaches Telegram
       // unless someone remembers it must not. Two modules make that structural.
-      if (client === 'telegram') return renderTelegram(outcome.post, origin)
+      if (client === 'telegram') return renderTelegram(outcome.post, origin, site)
 
       // Discord and every other bot go to renderPost, which branches on `client` itself since
       // Task 5 — Discord with media gets the Mastodon-spoof head, everything else the plain-og
       // one. That gate deliberately does NOT live here: it is a statement about which meta
       // tags suppress which others, so it belongs beside the tags, and hoisting it would put a
       // Discord-shaped concern in front of 'ambiguous' and 'failure', which must ignore it.
-      return renderPost(outcome.post, client, origin, mode)
+      return renderPost(outcome.post, client, origin, mode, site)
 
     /**
      * AN ACCOUNT. One head for every bot client — see render/profile.ts for why there is no
@@ -52,7 +59,7 @@ export function render(outcome: Outcome, client: ClientClass, origin: string, mo
      */
     case 'profile':
       if (isHuman) return redirect(outcome.profile.canonical)
-      return renderProfile(outcome.profile, origin)
+      return renderProfile(outcome.profile, origin, site)
 
     case 'ambiguous': {
       if (isHuman) return renderChooser(outcome.path, outcome.candidates)

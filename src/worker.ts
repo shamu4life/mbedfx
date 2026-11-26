@@ -2,7 +2,7 @@ import type { ClientClass, GalleryMode, Media, MuxJob, Platform, Post, PostRef, 
 import { classify } from './classify.ts'
 import { route } from './router.ts'
 import { GUEST_MARK, guestDeclined, guestServes, isGuestHost } from './guesthost.ts'
-import { declaredOrigins, pageResponse } from './sitepage.ts'
+import { pageResponse } from './sitepage.ts'
 import { render } from './render/index.ts'
 import { redirect } from './render/fail.ts'
 import { toMastodonStatus, toOEmbed } from './render/mastodon.ts'
@@ -15,9 +15,10 @@ import { count, countWait, countMux, countStage, type Env, type GateReason, type
 import { MUX_GAVE_UP_NOTE, gaveUpIsFresh, muxFailKey, promisable, ytPromiseOn } from './muxpolicy.ts'
 import { runSmoke, smokeOutcome, SMOKE_CHECKS, SMOKE_CLIENT, type SmokeResult } from './smoke.ts'
 import { cronColo, healthSummary, readHealth, recordSmoke } from './health.ts'
+import { primaryOrigin, siteName } from './instance.ts'
 import { cookiesFor, jarAvailable, poolSetButUnused, twitterAccounts, type CredentialPlatform } from './credentials.ts'
 import {
-  cacheUrl, deserializePost, postCacheKey, respCacheKey, shortPostCacheKey, shortRespCacheKey,
+  cacheUrl, deserializePost, postCacheKey, respCacheKey, shortPostCacheKey, shortRespCacheKey, siteKeyPart,
   serializePost, POST_TTL, PROFILE_TTL, RESP_TTL, MEDIA_MAX_AGE,
 } from './cache.ts'
 import { fetchBluesky, fetchBlueskyProfile } from './platforms/bluesky/fetch.ts'
@@ -5515,7 +5516,10 @@ async function renderPostRoute(
    * warm card to a request for the file. serveDirectMedia never writes the response cache either.
    */
   if (direct) return serveDirectMedia(ref, d, env, ctx, client, origin)
-  const rkey = cacheUrl(respCacheKey(ref, client, origin, gallery))
+  // Read off env here rather than passed in, because every caller already hands over env, and a sixth
+  // positional string beside `origin` is an easy pair to swap. serve() reads it the same way.
+  const site = siteName(env)
+  const rkey = cacheUrl(respCacheKey(ref, client, origin, gallery, site))
   const cached = await d.cache.match(rkey)
   if (cached) return cached
 
@@ -5571,7 +5575,7 @@ async function renderPostRoute(
         kind: 'failure', canonical, platform: ref.p, reason: 'could not fetch post',
         gate: renderGate(failReason),
       },
-      client, origin,
+      client, origin, undefined, site,
     )
   }
 
@@ -5642,7 +5646,7 @@ async function renderPostRoute(
   const shown = link.linked ? withLinked(post, settled.post) : settled.post
   const res = render(
     { kind: 'post', post: withTranslation(shown, xlate.translated, xlate.source) },
-    client, origin, gallery,
+    client, origin, gallery, site,
   )
   // `pending` joins `degraded` for the same reason: caching a card that is missing something still
   // arriving would pin the incomplete version for RESP_TTL.
@@ -6309,6 +6313,10 @@ async function serve(req: Request, env: Env, ctx: ExecutionContext, d: Deps): Pr
   // Always the request's own origin — never a constant. A hardcoded prod origin
   // would make staging embeds point Discord's media proxy at the live prod worker.
   const origin = url.origin
+  // The instance's NAME, unlike its origin, is configuration: one SITE_NAME per deployment, the same on
+  // every host it answers. Read once here and handed to every render and every response-cache key below,
+  // because the name is printed in the markup those keys store (cache.ts siteKeyPart).
+  const site = siteName(env)
   const client = classify(req.headers.get('user-agent'))
   const r = route(url)
   // Computed once and consulted by every post-yielding arm: a d. host, or a trailing `.mp4` that route()
@@ -6326,11 +6334,11 @@ async function serve(req: Request, env: Env, ctx: ExecutionContext, d: Deps): Pr
 
     case 'notfound':
       count(env, 'none', 'notfound', client)
-      return render({ kind: 'failure', canonical: null, platform: null, reason: 'not found' }, client, origin)
+      return render({ kind: 'failure', canonical: null, platform: null, reason: 'not found' }, client, origin, undefined, site)
 
     case 'ambiguous':
       count(env, 'none', 'ambiguous', client)
-      return render(r, client, origin)
+      return render(r, client, origin, undefined, site)
 
     // A spoof-shaped path whose {id} did not decode. The path shape already tells us the
     // caller is parsing JSON, so this gets the same 404 body a live post that vanished
@@ -6659,8 +6667,9 @@ async function serve(req: Request, env: Env, ctx: ExecutionContext, d: Deps): Pr
             // sentinel, which names no mode, and re-crawling one must not pin it to whichever default
             // happened to be live the day it was minted.
             r.gallery ?? DEFAULT_GALLERY_MODE,
+            site,
           )
-          : toOEmbed(shownApi, origin),
+          : toOEmbed(shownApi, origin, site),
       )
     }
 
@@ -7163,8 +7172,9 @@ async function serve(req: Request, env: Env, ctx: ExecutionContext, d: Deps): Pr
       // Keyed like every other rendered response: the client class (two clients get different
       // markup) and the ORIGIN (the markup carries a hostname, and two zones are live), in a
       // namespace that cannot collide with a refKey because refKey always starts with a Platform
-      // tag and 'profile' is not one. Same argument as cache.ts's `short:` infix.
-      const pkey = cacheUrl(`resp:profile:${r.ref.p}:${encodeURIComponent(r.ref.handle)}:${client}:${origin}`)
+      // tag and 'profile' is not one. Same argument as cache.ts's `short:` infix. And the site name, by
+      // cache.ts siteKeyPart, which leaves the key as it was for the default name.
+      const pkey = cacheUrl(`resp:profile:${r.ref.p}:${encodeURIComponent(r.ref.handle)}:${client}:${origin}${siteKeyPart(site)}`)
       const hit = await d.cache.match(pkey)
       if (hit) return hit
       const profile = await d.fetchProfile(r.ref, env, client)
@@ -7178,10 +7188,10 @@ async function serve(req: Request, env: Env, ctx: ExecutionContext, d: Deps): Pr
             kind: 'failure', canonical: r.canonical, platform: r.ref.p,
             reason: 'could not fetch profile', subject: 'profile',
           },
-          client, origin,
+          client, origin, undefined, site,
         )
       }
-      const res = render({ kind: 'profile', profile }, client, origin)
+      const res = render({ kind: 'profile', profile }, client, origin, undefined, site)
       /**
        * CACHED, and for a SHORTER life than a post card. RESP_TTL is 900s, which is right for a
        * post: the thing it describes is finished and the only reason to re-render is our own code
@@ -7226,7 +7236,7 @@ async function serve(req: Request, env: Env, ctx: ExecutionContext, d: Deps): Pr
         if (direct) return directNotFound('this share link could not be resolved')
         return render(
           { kind: 'failure', canonical: r.canonical, platform: 'rd', reason: 'could not fetch post' },
-          client, origin,
+          client, origin, undefined, site,
         )
       }
       return renderPostRoute(resolved.ref, resolved.canonical, d, env, ctx, client, origin, direct, r.gallery)
@@ -7304,7 +7314,7 @@ async function serve(req: Request, env: Env, ctx: ExecutionContext, d: Deps): Pr
             platform,
             reason: platform ? 'could not fetch post' : 'could not resolve this share link',
           },
-          client, origin,
+          client, origin, undefined, site,
         )
       }
       // inner.canonical is rebuilt from ref fields by router.ts, so every share parameter the
@@ -7344,7 +7354,7 @@ async function serve(req: Request, env: Env, ctx: ExecutionContext, d: Deps): Pr
           // "Couldn't load this Pinterest post" rather than the red "Not found" for a link we don't handle.
           return render(
             { kind: 'failure', canonical: null, platform: 'pn', reason: 'could not resolve this pin.it link' },
-            client, origin,
+            client, origin, undefined, site,
           )
         }
         if (!direct && client === 'human') return redirect(pin.canonical)
@@ -7377,7 +7387,7 @@ async function serve(req: Request, env: Env, ctx: ExecutionContext, d: Deps): Pr
        * than failing — a human must always land somewhere.
        */
       if (!direct && client === 'human') {
-        const cached = await d.cache.match(cacheUrl(shortRespCacheKey(r.p, r.code, 'other-bot', origin)))
+        const cached = await d.cache.match(cacheUrl(shortRespCacheKey(r.p, r.code, 'other-bot', origin, undefined, site)))
         let clean: string | null = null
         if (cached) {
           // The bot render for this code is warm, so the canonical is already known and no upstream
@@ -7404,7 +7414,7 @@ async function serve(req: Request, env: Env, ctx: ExecutionContext, d: Deps): Pr
       // be able to name the same entry in either direction — see shortPostCacheKey. loadPost
       // writes the resolved post under the CANONICAL key too, so the short link, the long-form
       // permalink and every /_media/ hit still share one entry.
-      const rkey = cacheUrl(shortRespCacheKey(r.p, r.code, client, origin))
+      const rkey = cacheUrl(shortRespCacheKey(r.p, r.code, client, origin, undefined, site))
       // NOT FOR A DIRECT REQUEST. These entries hold the HTML card this arm answers with, and a d. host
       // or a `.mp4` suffix promises bytes — a card cached under the direct origin would keep being served
       // for the whole RESP_TTL. And for `.mp4` on the apex the skip is what separates the two answers at
@@ -7481,7 +7491,7 @@ async function serve(req: Request, env: Env, ctx: ExecutionContext, d: Deps): Pr
               kind: 'failure', canonical: r.canonical, platform: r.p, reason: 'could not fetch post',
               gate: renderGate(seen.at.reason),
             },
-            client, origin,
+            client, origin, undefined, site,
           )
         }
 
@@ -7502,7 +7512,7 @@ async function serve(req: Request, env: Env, ctx: ExecutionContext, d: Deps): Pr
           count(env, r.p, 'fetch_fail', client)
           return render(
             { kind: 'failure', canonical: r.canonical, platform: r.p, reason: 'could not fetch post' },
-            client, origin,
+            client, origin, undefined, site,
           )
         }
 
@@ -7518,7 +7528,7 @@ async function serve(req: Request, env: Env, ctx: ExecutionContext, d: Deps): Pr
          * us, since 'none' also carries every /mrbeast in the world.
          */
         count(env, r.p, 'ambiguous', client)
-        const amb = render({ kind: 'ambiguous', path: url.pathname, candidates: SHORTLINK_CANDIDATES }, client, origin)
+        const amb = render({ kind: 'ambiguous', path: url.pathname, candidates: SHORTLINK_CANDIDATES }, client, origin, undefined, site)
         /**
          * CACHED, unlike the router-level chooser, for the reason it is counted differently: it
          * cost a fetch. Uncached, every re-unfurl of one pasted Threads link was another request
@@ -7551,7 +7561,7 @@ async function serve(req: Request, env: Env, ctx: ExecutionContext, d: Deps): Pr
        */
       if (direct) return serveDirectMedia(post.ref, d, env, ctx, client, origin)
 
-      const res = render({ kind: 'post', post }, client, origin)
+      const res = render({ kind: 'post', post }, client, origin, undefined, site)
       const toCache = new Response(res.clone().body, res)
       toCache.headers.set('cache-control', `max-age=${RESP_TTL}`)
       ctx.waitUntil(d.cache.put(rkey, toCache))
@@ -7612,16 +7622,17 @@ export type ScheduledSmoke = { results: SmokeResult[]; colo: string | null }
 export const CRON_FALLBACK_ORIGIN = 'http://localhost'
 
 /**
- * The PRIMARY entry of PUBLIC_ORIGIN: the first that is a bare http(s) origin, as the Node adapter's
- * parseOrigins requires (no path, query or fragment). Junk is skipped, not thrown: this runs inside
- * the scheduled handler, and a throw there is a tick with no record. With no usable entry it is
+ * The PRIMARY entry of PUBLIC_ORIGIN (primaryOrigin in src/instance.ts: the first that is a bare
+ * http(s) origin, as the Node adapter's parseOrigins requires). Junk is skipped, not thrown: this runs
+ * inside the scheduled handler, and a throw there is a tick with no record. With no usable entry it is
  * CRON_FALLBACK_ORIGIN. It decides the origin of the check's renders and nothing else; it is never a
  * reason to admit a host anywhere.
+ *
+ * The parse moved to src/instance.ts on 2026-11-25 so the Reddit and archive user agents read the same
+ * primary. The fallback stayed here: a user agent with no primary must say so, not claim localhost.
  */
 export function cronOrigin(env: Pick<Env, 'PUBLIC_ORIGIN'>): string {
-  // declaredOrigins is the one reading of the var, shared with the converter page's primary
-  // (src/sitepage.ts), so the check and the page cannot disagree about which origin comes first.
-  return declaredOrigins(env.PUBLIC_ORIGIN)[0]?.origin ?? CRON_FALLBACK_ORIGIN
+  return primaryOrigin(env) ?? CRON_FALLBACK_ORIGIN
 }
 
 /** ONE SCHEDULED RUN, rendered through this Worker's own front door, and where it ran. */

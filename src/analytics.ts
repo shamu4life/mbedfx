@@ -503,6 +503,23 @@ export interface Env {
    */
   GUEST_HOSTS?: string
   /**
+   * THE NAME THE CARDS GIVE THIS INSTANCE: og:site_name on every head and provider_name in the oEmbed
+   * document. One of the two is the name in the footer Discord draws under a card (src/render/mastodon.ts
+   * toOEmbed). Unset, empty or blank means 'mbedfx' (src/instance.ts siteName). wrangler.production.jsonc
+   * sets 'mbedfx' anyway, so the public instance's cards do not depend on what the code default is.
+   */
+  SITE_NAME?: string
+  /**
+   * THE USER AGENT FOR REDDIT'S OAUTH API, sent only on the OAuth fallback (src/platforms/reddit/fetch.ts
+   * appToken and fetchRedditOAuth), which runs only when REDDIT_CLIENT_ID and REDDIT_CLIENT_SECRET are
+   * set. Reddit's API rules ask for a unique, descriptive one naming the app's Reddit account:
+   * `web:embed.example.com:v0.1 (by /u/yourname)`. Unset, it is `web:<primary PUBLIC_ORIGIN host>:v0.1`,
+   * or `web:mbedfx-selfhost:v0.1` with no usable primary (src/instance.ts redditUserAgent). That default
+   * names no Reddit account, because none can be known. wrangler.production.jsonc sets the public
+   * instance's own, which used to be a constant in that file.
+   */
+  REDDIT_USER_AGENT?: string
+  /**
    * Imgur's API client id. OPTIONAL, and the fallback is the interesting part.
    *
    * Every Imgur endpoint requires a client id — there is no anonymous path, and scraping is not an

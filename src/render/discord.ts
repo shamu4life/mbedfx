@@ -5,6 +5,7 @@ import { encodeStatusId } from '../statusid.ts'
 import { esc, html } from './fail.ts'
 import { accountHandle, byline, bytesIndex, describe, dimTags, isSpoiler, mediaOf, mediaUrl, pendingMuxIndex, playableVideo, stockState, str, themeColor, usable } from './embed.ts'
 import { buildPlainText } from './text.ts'
+import { siteLabel } from '../instance.ts'
 
 /**
  * Two heads, one gate, ONE operand:
@@ -371,7 +372,7 @@ function stockPlayerTags(post: Post, origin: string, vid: string): string[] {
  * nothing. Everything reads through str(): a renderer's input comes from the cache unvalidated
  * (see embed.ts), and esc() throws on a non-string.
  */
-function renderSpoof(post: Post, origin: string, mode?: GalleryMode): Response {
+function renderSpoof(post: Post, origin: string, mode: GalleryMode | undefined, site: string): Response {
   /**
    * THE MODE IS MINTED INTO THE {id}, AND THAT IS THE WHOLE MECHANISM BEHIND /p AND /v.
    *
@@ -451,7 +452,8 @@ function renderSpoof(post: Post, origin: string, mode?: GalleryMode): Response {
     // rather than printed twice on one card.
     `<meta property="og:description" content="${esc(describe(post, buildPlainText(stock ? { ...post, title: undefined } : post)))}"/>`,
     `<meta property="og:url" content="${canonical}"/>`,
-    `<meta property="og:site_name" content="mbedfx"/>`,
+    // The instance's name (SITE_NAME), escaped: an operator's var is text like any other value here.
+    `<meta property="og:site_name" content="${esc(siteLabel(site))}"/>`,
     // C1's 0-media branch, and the ONLY og:image this head can ever emit. Positioned with the
     // other og: tags to match the plain head below; the live evidence measured that the tag is
     // PRESENT on a text-only post, not where in the head it sat, and OGP is order-insensitive
@@ -590,7 +592,11 @@ function renderSpoof(post: Post, origin: string, mode?: GalleryMode): Response {
   return html(tags.join(''))
 }
 
-export function renderPost(post: Post, client: ClientClass, origin: string, mode?: GalleryMode): Response {
+/**
+ * `site` is the instance's name for og:site_name on both heads (SITE_NAME; render() in ./index.ts says why
+ * it is required). Read through siteLabel at the tag, so a call without it prints the default.
+ */
+export function renderPost(post: Post, client: ClientClass, origin: string, mode: GalleryMode | undefined, site: string): Response {
 
   // The post's OWN media, hoisted quote media deliberately EXCLUDED — this list feeds the
   // plain-og head's single-picture choice, and §7 requires that choice to stay the post's own
@@ -665,7 +671,7 @@ export function renderPost(post: Post, client: ClientClass, origin: string, mode
   // A SLIDESHOW HAS NO VIDEO and always took the spoof; that is unchanged. A video post with only
   // a THUMBNAIL is also unchanged: the normalizer emits the cover as a lone kind:'image' entry and
   // it renders through the activity gallery as a one-image slideshow does.
-  if (client === 'discord') return renderSpoof(post, origin, mode)
+  if (client === 'discord') return renderSpoof(post, origin, mode, site)
 
   const tags: string[] = []
   // str(post.author?.…), not a raw read. deserializePost validates ref, canonical and createdAt
@@ -710,7 +716,7 @@ export function renderPost(post: Post, client: ClientClass, origin: string, mode
   tags.push(`<meta property="og:description" content="${esc(describe(post, buildPlainText(post)))}"/>`)
 
   tags.push(`<meta property="og:url" content="${esc(post.canonical)}"/>`)
-  tags.push(`<meta property="og:site_name" content="mbedfx"/>`)
+  tags.push(`<meta property="og:site_name" content="${esc(siteLabel(site))}"/>`)
   // NEW in Phase 3a, and it STAYS after the video carve-out's removal — for a smaller audience
   // than the argument that added it. It was added because the carve-out made this head what a
   // TikTok VIDEO post rendered through on Discord, so without it the phase's headline post kind

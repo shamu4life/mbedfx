@@ -42,6 +42,16 @@ If your fork's converter page should keep its media-only box, list your `d.` ori
   links and the media and documents a card links to, and marks each answer. This used to be a fixed
   list of mbedfx.app's two domains, so nobody else could add one without editing the source. Unset now
   means none. mbedfx.app sets both in `wrangler.production.jsonc` and works as before.
+- **`SITE_NAME` and `REDDIT_USER_AGENT` are Worker vars.** Every fork used to introduce itself to
+  Reddit's OAuth API as the public instance's app and its owner's Reddit account, and to the Arctic
+  Shift archive as `mbedfx.app`. Set `REDDIT_USER_AGENT` to your own, in Reddit's
+  `web:<host>:<version> (by /u/<you>)` form. It's sent only when your Reddit app credentials are set,
+  and the default, `web:<primary host>:v0.1`, names no account. The archive's user agent now starts
+  with your primary `PUBLIC_ORIGIN` host, or with `mbedfx` when there isn't one, and the Reddit relay
+  takes `ARCHIVE_USER_AGENT` so its `/selftest` can send the same string. `SITE_NAME` is the name your
+  cards give your instance (`og:site_name` on every head, `provider_name` in the oEmbed document). It's
+  `mbedfx` when unset. mbedfx.app sets all of these to what it sent before, so its cards haven't
+  changed by a byte.
 - **pin.it share links work, and the converter swaps the share code out.** Following a pin.it link lands on
   a URL with `sender=` in it, the sharer's Pinterest user id. The converter now turns
   `pin.it/{code}` into `/pin.it/{code}` (the host stays in the path because a bare `/{code}` reads as

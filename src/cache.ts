@@ -1,5 +1,6 @@
 import type { ClientClass, GalleryMode, Post, PostRef } from './types.ts'
 import { refKey, parseRefKey } from './refkey.ts'
+import { DEFAULT_SITE_NAME, siteLabel } from './instance.ts'
 
 /** 15 min. Also the max age of a signed CDN URL we hand out (plus MEDIA_MAX_AGE). */
 export const POST_TTL = 900
@@ -69,8 +70,29 @@ export const postCacheKey = (ref: PostRef) => `post:${refKey(ref)}`
  * card is drawn, never what was fetched, so splitting the post cache on it would double every
  * upstream fetch to buy nothing.
  */
-export const respCacheKey = (ref: PostRef, client: ClientClass, origin: string, gallery?: GalleryMode) =>
-  `resp:${refKey(ref)}:${client}:${origin}${gallery ? `:${gallery}` : ''}`
+/**
+ * THE SITE NAME IS THE FIFTH COMPONENT, since 2026-11-25 (SITE_NAME, src/instance.ts), because it is
+ * printed in the markup: og:site_name on every head. Keyed without it, an operator who renames the
+ * instance keeps serving the old name from this cache for RESP_TTL (PROFILE_TTL on a profile), and
+ * every card Discord crawls in that window keeps the old name for good, since Discord never re-crawls
+ * a message.
+ *
+ * OMITTED FOR THE DEFAULT, by the gallery mode's argument above: the public instance's name is the
+ * default, so none of its keys changes spelling and this deploy cold-starts nothing. Any other name
+ * gets a suffix. It cannot be confused with a gallery suffix because no GalleryMode starts with
+ * `site`, and the name is percent-encoded because ':' is the delimiter here.
+ *
+ * REQUIRED in the type, as renderPostRoute's `direct` is, so a call site that forgets it is a type
+ * error rather than a cache that silently ignores the rename. Read through siteLabel all the same,
+ * because test/*.mjs call these with three arguments and are never typechecked.
+ */
+export const siteKeyPart = (site: unknown): string => {
+  const name = siteLabel(site)
+  return name === DEFAULT_SITE_NAME ? '' : `:site:${encodeURIComponent(name)}`
+}
+
+export const respCacheKey = (ref: PostRef, client: ClientClass, origin: string, gallery: GalleryMode | undefined, site: string) =>
+  `resp:${refKey(ref)}:${client}:${origin}${gallery ? `:${gallery}` : ''}${siteKeyPart(site)}`
 
 /**
  * A SHORT CODE IS A LOOKUP NAME, NOT AN IDENTITY, AND IT GETS ITS OWN NAMESPACE.
@@ -98,9 +120,10 @@ export const respCacheKey = (ref: PostRef, client: ClientClass, origin: string, 
 export const shortPostCacheKey = (p: 'tt', code: string) => `post:short:${p}:${encodeURIComponent(code)}`
 
 /** The rendered-response twin. Same namespace argument, plus the client class — and the origin, for
- *  exactly the reason respCacheKey carries one: this value is rendered markup with a hostname in it. */
-export const shortRespCacheKey = (p: 'tt', code: string, client: ClientClass, origin: string, gallery?: GalleryMode) =>
-  `resp:short:${p}:${encodeURIComponent(code)}:${client}:${origin}${gallery ? `:${gallery}` : ''}`
+ *  exactly the reason respCacheKey carries one: this value is rendered markup with a hostname in it.
+ *  The site name too, for respCacheKey's reason, omitted for the default the same way. */
+export const shortRespCacheKey = (p: 'tt', code: string, client: ClientClass, origin: string, gallery: GalleryMode | undefined, site: string) =>
+  `resp:short:${p}:${encodeURIComponent(code)}:${client}:${origin}${gallery ? `:${gallery}` : ''}${siteKeyPart(site)}`
 
 /** The Cache API needs a full URL as its key; this namespaces ours onto a fake origin. */
 export const cacheUrl = (key: string) => `https://cache.mbedfx.internal/${encodeURIComponent(key)}`
