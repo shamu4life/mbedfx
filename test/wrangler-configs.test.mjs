@@ -403,6 +403,43 @@ test('production\'s PUBLIC_ORIGIN is bare https origins on its own zones, and na
   }
 })
 
+test('production\'s OWN_HOSTS names only served names the other two vars cannot hold', () => {
+  /**
+   * Added 2026-11-25 (self-hosting phase 5). The converter page now takes the hosts it recognises from
+   * PUBLIC_ORIGIN, OWN_HOSTS and GUEST_HOSTS (src/sitepage.ts), and the media-only box from the d. names
+   * they declare. forsen.sex is served and not advertised, so it cannot be in PUBLIC_ORIGIN; the guests'
+   * d. names cannot be there either, because isGuestHost exempts every PUBLIC_ORIGIN host and its parent,
+   * and GUEST_HOSTS is pinned to the two names (test/guesthost.test.mjs). OWN_HOSTS holds the rest.
+   *
+   * Every entry must be a production zone or a guest host, or the d. name of one, so a typo cannot make
+   * the page call a stranger's domain ours. None may already be in PUBLIC_ORIGIN or GUEST_HOSTS, so the
+   * var does not drift into a third copy of those two. And the guard refuses each of them already
+   * through its built-in list, which test/smoke.test.mjs checks with no env at all.
+   */
+  const own = prod.vars.OWN_HOSTS.split(/[\s,]+/).filter(Boolean)
+  const declared = new Set([
+    ...prod.vars.PUBLIC_ORIGIN.split(/[\s,]+/).filter(Boolean).map(e => new URL(e).hostname), ...GUEST_HOSTS,
+  ])
+  assert.ok(own.length > 0)
+  for (const h of own) {
+    assert.match(h, /^[a-z0-9-]+(\.[a-z0-9-]+)+$/, `${h} is a bare hostname`)
+    const apex = h.replace(/^d\./, '')
+    assert.ok(prodZones.includes(apex) || GUEST_HOSTS.includes(apex), `${h} is a production zone or a guest host, or its d. name`)
+    assert.ok(!declared.has(h), `${h} is already in PUBLIC_ORIGIN or GUEST_HOSTS`)
+  }
+  assert.deepEqual(own, ['forsen.sex', 'd.forsen.sex', ...GUEST_HOSTS.map(g => `d.${g}`)],
+    'forsen.sex and the three d. names production serves outside PUBLIC_ORIGIN, and nothing else')
+})
+
+for (const file of GENERIC) {
+  test(`${file} sets no OWN_HOSTS either`, () => {
+    // The same reason the test below gives for PUBLIC_ORIGIN and GUEST_HOSTS: the right value names
+    // somebody's domains and belongs in their dashboard, where keep_vars leaves it alone.
+    const cfg = read(file)
+    for (const vars of [cfg.vars, cfg.previews?.vars]) assert.equal(vars?.OWN_HOSTS, undefined, `${file} sets OWN_HOSTS`)
+  })
+}
+
 test('a Preview runs production\'s vars, all of them', () => {
   /**
    * A Preview is how a branch is measured before it merges, so a var that differs is something measured

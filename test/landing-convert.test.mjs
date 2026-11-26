@@ -42,19 +42,26 @@ const HTML = readFileSync(new URL('../public/index.html', import.meta.url), 'utf
 const GUEST_HOSTS = guestHosts(JSON.parse(readFileSync(new URL('../wrangler.production.jsonc', import.meta.url), 'utf8')
   .replace(/^\s*\/\/.*$/gm, '')).vars.GUEST_HOSTS)
 
-/** Lift the pure-logic block. Its id is a contract between the page and this file. */
-function loadConverter() {
+/**
+ * Lift the pure-logic block. Its id is a contract between the page and this file.
+ *
+ * `config` is what the Worker would have put in front of it (src/sitepage.ts, self-hosting phase 5),
+ * passed in as the MBEDFX_CONFIG global the page reads. Omitted, it is the page as a file:// open or an
+ * old cached copy sees it: no block, the literal arrays, mbedfx.app as the fallback. Every test in this
+ * file that predates phase 5 runs that way, which is the fallback they were written against.
+ */
+function loadConverter(config) {
   const m = HTML.match(/<script id="mbedfx-convert">([\s\S]*?)<\/script>/)
   assert.ok(m, 'public/index.html must carry a <script id="mbedfx-convert"> block')
   const src = m[1]
   assert.ok(!/document\.|window\.|navigator\./.test(src),
     'the converter block must stay DOM-free so it can be tested in isolation')
-  return new Function(`${src}; return {
+  return new Function('MBEDFX_CONFIG', `${src}; return {
     convert: mbedfxConvert, defaultHost: mbedfxDefaultHost, mediaOnly: mbedfxMediaOnly,
     repoint: mbedfxRepoint, isGuest: mbedfxIsGuest, pageGuests: GUEST_HOSTS, publicHosts: PUBLIC_HOSTS,
-    ourHosts: OUR_HOSTS, prepResolved: mbedfxPrepResolved,
+    ourHosts: OUR_HOSTS, prepResolved: mbedfxPrepResolved, hasMediaOnly: mbedfxHasMediaOnly,
     pinId: mbedfxPinId, pinShortCode: PIN_SHORT_CODE, pinRefusal: PIN_IT_REFUSAL,
-  }`)()
+  }`)(config)
 }
 
 /** Lift the documented example paths out of the page's own platform table. */
@@ -67,7 +74,7 @@ function loadPlatformTable() {
 }
 
 const {
-  convert, defaultHost, mediaOnly, repoint, isGuest, pageGuests, publicHosts, ourHosts, prepResolved,
+  convert, defaultHost, mediaOnly, repoint, isGuest, pageGuests, publicHosts, ourHosts, prepResolved, hasMediaOnly,
   pinId, pinShortCode, pinRefusal,
 } = loadConverter()
 const PLATFORMS = loadPlatformTable()
@@ -273,9 +280,67 @@ test('AN UNRECOGNISED HOST FALLS BACK — never emit links to a host that is not
   assert.equal(defaultHost('mbedfx.app.').host, 'mbedfx.app')
 })
 
-test('THE PAGE ACTUALLY USES IT — the default is wired to location, not hardcoded', () => {
-  assert.match(HTML, /mbedfxDefaultHost\(location\.hostname\)/, 'the DOM half must consult the origin')
+test('THE PAGE ACTUALLY USES IT — the default is wired to the arrived-on host, not hardcoded', () => {
+  /**
+   * REWRITTEN 2026-11-25 (self-hosting phase 5). This pinned `mbedfxDefaultHost(location.hostname)`. The
+   * Worker now sends the host the request arrived on, with one leading d. taken off (ARRIVED_HOST, from
+   * src/sitepage.ts), and the page reads that first: on d.mbedfx.app location.hostname is the d. host,
+   * and reading it is the d.d. defect that got the location-derived lists reverted in 2026-08. A copy
+   * with no block still reads location.hostname, so the property this test exists for, that the default
+   * follows the door the visitor came in and is not a constant, is unchanged.
+   */
+  assert.match(HTML, /mbedfxDefaultHost\(ARRIVED_HOST !== null \? ARRIVED_HOST : location\.hostname\)/,
+    'the DOM half must consult the arrived-on host, and location.hostname without a block')
   assert.match(HTML, /origin\.prefix \+ b\.getAttribute\('data-host'\)/, 'a click must preserve staging')
+})
+
+test('WITH A BLOCK, THE FALLBACK IS THE DEPLOYMENT\'S PRIMARY, never mbedfx.app', () => {
+  /**
+   * The unrecognised-host test above pins mbedfx.app as the fallback, and on a copy with no block that
+   * stays right. On a fork it was the defect self-hosting phase 5 exists for: a visitor on any host the
+   * page did not list, every reader of a self-hosted instance included, was handed https://mbedfx.app/...
+   * links, and the fork's own converter sent its readers to the owner's instance. With the Worker's
+   * block the fallback is that deployment's primary, and its own links are recognised as already its own.
+   */
+  const fork = loadConverter({
+    primary: 'https://embed.example.com', host: 'embed.example.com',
+    ours: ['embed.example.com', 'other.example.com'], public: ['embed.example.com'], guests: [], direct: [],
+  })
+  for (const h of ['localhost', '', null, 'evil.example', 'mbedfx.app', 'abc-mbedfx.redevit.workers.dev.evil.example']) {
+    assert.deepEqual(fork.defaultHost(h), { host: 'embed.example.com', prefix: '', family: 'embed.example.com' }, String(h))
+  }
+  assert.deepEqual(fork.defaultHost('other.example.com'), { host: 'other.example.com', prefix: '', family: 'embed.example.com' },
+    'a served host the fork does not offer keeps its own links, as forsen.sex does on mbedfx.app')
+  assert.equal(fork.defaultHost('x-mbedfx.acct.workers.dev').family, 'embed.example.com', 'a preview presses the first button')
+  assert.equal(fork.convert('https://x.com/jack/status/20').url, 'https://embed.example.com/jack/status/20')
+  const back = fork.convert('https://other.example.com/jack/status/20', 'embed.example.com')
+  assert.equal(back.url, 'https://embed.example.com/jack/status/20', 'a link from one of its own hosts is re-pointed')
+  assert.doesNotMatch(back.note, /fediverse/i)
+  assert.equal(fork.convert('https://d.other.example.com/jack/status/20', 'embed.example.com').path, '/jack/status/20',
+    'and so is its media-only link pasted back')
+})
+
+test('MEDIA ONLY IS OFFERED ONLY WHERE A d. NAME IS DECLARED, and everywhere on a copy with no block', () => {
+  /**
+   * A d. name works only once somebody has pointed DNS at it. Before phase 5 the box was offered on every
+   * domain, which is true of all five on mbedfx.app and of no domain at all on a fork that never set one
+   * up, where every media-only link the page handed out resolved nowhere. The Worker sends the d. names
+   * its vars declare, and the page offers the box on exactly those domains. A copy with no block cannot
+   * know, and keeps offering it, which is what it always did.
+   */
+  for (const h of ['mbedfx.app', 'forsen.sex', 'anything.example']) assert.equal(hasMediaOnly(h), true, `${h}, no block`)
+  const fork = loadConverter({
+    primary: 'https://embed.example.com', host: 'embed.example.com',
+    ours: ['embed.example.com', 'guest.example'], public: ['embed.example.com', 'guest.example'],
+    guests: ['guest.example'], direct: ['d.embed.example.com'],
+  })
+  assert.equal(fork.hasMediaOnly('embed.example.com'), true)
+  assert.equal(fork.hasMediaOnly('EMBED.example.com.'), true, 'case and a trailing dot are the same domain')
+  assert.equal(fork.hasMediaOnly('guest.example'), false, 'declared for one domain is not declared for the other')
+  assert.equal(fork.hasMediaOnly('d.embed.example.com'), false, 'and a d. host has no d. of its own: no d.d.')
+  const bare = loadConverter({ primary: 'https://embed.example.com', host: 'embed.example.com',
+    ours: ['embed.example.com'], public: ['embed.example.com'], guests: [], direct: [] })
+  assert.equal(bare.hasMediaOnly('embed.example.com'), false, 'a fork that declared none is offered none')
 })
 
 test('THE TOGGLE SHOWS THE DOMAINS, NOT A NICKNAME FOR THEM', () => {

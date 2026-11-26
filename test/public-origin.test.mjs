@@ -52,6 +52,11 @@ test('cronOrigin is the FIRST entry that is a bare http(s) origin; anything else
     ['https://user:pw@a.example https://b.example', 'https://b.example'],
     ['ftp://a.example mailto:x@a.example https://b.example', 'https://b.example'],
     ['https:// not-a-url https://b.example', 'https://b.example'],
+    // Added 2026-11-25 with publicOrigins (src/instance.ts): a host the URL parser accepts but nothing can
+    // serve is skipped too, because the converter page cannot name it and the two must agree on the primary.
+    // An IPv6 literal is a real host and is kept.
+    ['https://a"b https://x..y https://ok.example. https://b.example', 'https://b.example'],
+    ['http://[::1]:8787', 'http://[::1]:8787'],
     ['embed.example.com', CRON_FALLBACK_ORIGIN],
     ['https://a.example/path', CRON_FALLBACK_ORIGIN],
   ]

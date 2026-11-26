@@ -30,8 +30,9 @@ import { RESP_TTL } from '../src/cache.ts'
  *   - The timing figures in the endpoint description, which live in docs/API.md too.
  *   - Which platform actually emits which count, and which platforms carry a `title`.
  *   - Anything about the LIVE service: this suite never touches the network, so "mbedfx.app answers
- *     this" is out of reach here. The servers block is checked against wrangler.production.jsonc's routes,
- *     which is the desired state rather than an observation.
+ *     this" is out of reach here. The servers block is one relative url, and what is checked is that it
+ *     resolves to the API on every host in wrangler.production.jsonc's routes, which is the desired state
+ *     rather than an observation.
  *
  * NO NETWORK ANYWHERE. Every post is injected through deps.fetchPost, like test/api.test.mjs.
  * EVERY TEST GETS ITS OWN ID: muxInflight and metaInflight are module-level and isolate-lifetime.
@@ -485,18 +486,41 @@ test('EVERY SOURCE CITATION IN docs/API.md STILL NAMES SOMETHING THAT EXISTS', (
     'docs/API.md cites symbols in src/worker.ts, not lines — that file moves every merge')
 })
 
-test('THE SERVERS ARE HOSTS THIS WORKER IS ROUTED TO', () => {
+test('THE SERVER IS WHEREVER THE SPEC WAS READ FROM, and from every routed host that is this API', () => {
   /**
-   * A servers block is where a consumer points a generated client, so a host listed here that the
-   * worker does not answer on is a spec that hands somebody a dead base url. wrangler.production.jsonc's routes
-   * array is the DESIRED STATE — every deploy reconciles Cloudflare to it — which makes it the right
-   * thing to check against; that it is not an observation of the live edge is the limit of this test.
+   * A servers block is where a consumer points a generated client, so a base url the worker does not
+   * answer on is a spec that hands somebody a dead base url.
+   *
+   * REWRITTEN 2026-11-25 (self-hosting phase 5). This held three absolute urls (mbedfx.app,
+   * megapenispoopenfarten.sex, forsen.sex) to wrangler.production.jsonc's routes. Every deployment
+   * serves this same file at /openapi.json, so on a fork those three sent every generated client to the
+   * owner's instance. The block is now one relative url, `/`, which OpenAPI 3.1 resolves against the
+   * document's own location: the deployment the client read the spec from.
+   *
+   * What the old test protected still holds and is checked here: on each routed host the base resolves
+   * to a host this worker serves, and the documented path under it routes as the API rather than as a
+   * post or a chooser. Routes are still the DESIRED STATE (every deploy reconciles Cloudflare to them),
+   * so that it is not an observation of the live edge is still the limit of this test.
    */
+  assert.deepEqual(SPEC.servers.map(s => s.url), ['/'], 'one relative base, the host that served the spec')
+  for (const s of SPEC.servers) assert.ok(s.description, 'each server needs a line saying what it is')
   const cfg = JSON.parse(readFileSync('wrangler.production.jsonc', 'utf8').replace(/^\s*\/\/.*$/gm, ''))
   const routed = cfg.routes.map(r => r.pattern)
-  for (const s of SPEC.servers) {
-    assert.ok(routed.includes(new URL(s.url).hostname),
-      `${s.url} is not in wrangler.production.jsonc's routes — a base url nothing serves`)
-    assert.ok(s.description, 'each server needs a line saying what it is')
+  assert.ok(routed.length > 0, 'there are routes to resolve against')
+  // What each documented path must route as under that base. A path added to the spec fails here until
+  // somebody says what it is, rather than passing because it happens to route somewhere.
+  const KIND = { '/_api/v1': 'api', '/openapi.json': 'site' }
+  assert.deepEqual(Object.keys(SPEC.paths).sort(), Object.keys(KIND).sort())
+  for (const host of routed) {
+    const doc = new URL('/openapi.json', `https://${host}`)
+    for (const s of SPEC.servers) {
+      const base = new URL(s.url, doc)
+      assert.equal(base.host, host, `${s.url} read on ${host} is ${host}`)
+      for (const [p, kind] of Object.entries(KIND)) {
+        const at = new URL(p.replace(/^\//, ''), base.href.endsWith('/') ? base : `${base.href}/`)
+        assert.equal(at.host, host)
+        assert.equal(route(at).kind, kind, `${at.href} routes as ${kind}, not as a post or a chooser`)
+      }
+    }
   }
 })

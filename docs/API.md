@@ -18,7 +18,9 @@ It answers for the thirteen single-host sites the cards cover, plus short links 
 four fediverse platforms need the request form [below](#mastodon-misskey-lemmy-and-peertube).
 
 The machine-readable half of this contract is `public/openapi.json`, served at
-`https://mbedfx.app/openapi.json`: OpenAPI 3.1, every response shape, every error code and the exact
+`https://mbedfx.app/openapi.json` and at `/openapi.json` on every other deployment. Its only server
+is the relative `/`, so a client generated from any copy talks to the deployment that served it.
+It is OpenAPI 3.1, every response shape, every error code and the exact
 nullability of every field, in the form a generator or a schema viewer reads. It is JSON rather than
 YAML because there is no YAML parser in this toolchain, and a spec the suite cannot read is a spec
 nothing checks. `test/openapi.test.mjs` derives what can be derived (the `Platform` union,

@@ -18,7 +18,9 @@ in its deploy command. Pass it to `wrangler secret`, `wrangler tail`, `wrangler 
 and a `wrangler secret put` fed from a file or pipe creates that Worker to hold the secret. Don't
 copy the old names back into `wrangler.jsonc`: `npm run build` fails when that file uses
 mbedfx.app's names or sets `containers[].name`, and the old file did both unless you changed it.
-Nobody else has anything to do.
+If your fork's converter page should keep its media-only box, list your `d.` origin in
+`PUBLIC_ORIGIN`: the box now shows only for a domain whose `d.` name is listed there or in
+`OWN_HOSTS`. Nobody else has anything to do.
 
 ### Added
 
@@ -37,9 +39,11 @@ Nobody else has anything to do.
   `http://localhost`, and its results are the same. The fediverse routes also refuse every host you
   list, as the Node adapter already did. `GUEST_HOSTS` names the domains of another Worker that passes
   this one its post links over a service binding. There mbedfx answers only posts, profiles, share
-  links and the media and documents a card links to, and marks each answer. This used to be a fixed
-  list of mbedfx.app's two domains, so nobody else could add one without editing the source. Unset now
-  means none. mbedfx.app sets both in `wrangler.production.jsonc` and works as before.
+  links and the media and documents a card links to, and marks each answer. On the Node adapter, a
+  request for a guest domain or its `d.` name keeps that host, as it does through Cloudflare's service
+  binding, so leave guest domains out of `PUBLIC_ORIGIN`. This used to be a fixed list of mbedfx.app's
+  two domains, so nobody else could add one without editing the source. Unset now means none.
+  mbedfx.app sets both in `wrangler.production.jsonc` and works as before.
 - **`SITE_NAME` and `REDDIT_USER_AGENT` are Worker vars.** Every fork used to introduce itself to
   Reddit's OAuth API as the public instance's app and its owner's Reddit account, and to the Arctic
   Shift archive as `mbedfx.app`. Set `REDDIT_USER_AGENT` to your own, in Reddit's
@@ -63,6 +67,28 @@ Nobody else has anything to do.
 
 ### Changed
 
+- **The converter page names the deployment it runs on.** Until now every copy carried mbedfx.app's
+  domains, so a fork's page handed out `https://mbedfx.app/...` links, told readers to swap in
+  mbedfx.app, and unfurled with mbedfx.app's link and image. The Worker now adds one script block to
+  the page as it serves it, built from `PUBLIC_ORIGIN`, `OWN_HOSTS`, `GUEST_HOSTS`, `SITE_NAME` and
+  the host the request came in on. The page takes its domain buttons and the domains it counts as its
+  own from that block. Its fallback domain, its instructions and its `og:url`, `og:image` and
+  `twitter:image` use the first `PUBLIC_ORIGIN` entry, and `og:image:alt` no longer names a domain.
+  With that var unset they use the page's own domain, which is then the only button. Links take each
+  domain's scheme from `PUBLIC_ORIGIN`, so the Node adapter on its default `http://localhost:8787` now
+  hands out `http://` links that load, while guest domains stay on `https://`. The preview's footer
+  shows `SITE_NAME`. The media-only box shows only for a domain whose `d.` name is listed. The unfurl
+  image hasn't changed: `public/og.jpg` still shows the mbedfx.app wordmark, so replace it with your
+  own 1200×630 JPEG (`docs/SELF-HOSTING.md` has the details). mbedfx.app gets the same file as before
+  plus the block. Its config adds `OWN_HOSTS` for forsen.sex and the three `d.` names served outside
+  `PUBLIC_ORIGIN`, so all five domains keep the box. Two things do change there. Opened on
+  d.megapenispoopenfarten.sex or d.forsen.sex, the page now starts on the domain under the `d.`, where
+  it used to start on mbedfx.app. On a workers.dev preview the media-only box is greyed out, because a
+  preview has no `d.` name. The page also stops sending an ETag, so a browser downloads it in full on
+  each visit instead of revalidating.
+- **`/openapi.json` points a generated client at the host that served it.** Its `servers` list named
+  mbedfx.app's three domains, so a client built from a fork's copy talked to mbedfx.app. The list is
+  now the relative `/`.
 - **The twice-weekly health check names its instance in repo variables.** `HEALTH_BASE` (the
   instance origin) and `HEALTH_GUESTS` (guest domains, if any) replace the mbedfx.app address and the
   two guest domains written into `.github/scripts/health-check.mjs`. A fork without `HEALTH_BASE`

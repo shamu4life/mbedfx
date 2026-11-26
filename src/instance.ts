@@ -43,31 +43,64 @@ export function siteName(env: Pick<Env, 'SITE_NAME'> | undefined): string {
 }
 
 /**
- * The PRIMARY entry of PUBLIC_ORIGIN: the first that is a bare http(s) origin, as the Node adapter's
- * parseOrigins requires (no path, query, fragment or credentials). Junk is skipped, never thrown. Null
- * when no entry qualifies, so each caller chooses its own fallback: the scheduled check needs SOME
- * origin to render on (cronOrigin in src/worker.ts), and the user agents below need to know that there
- * isn't one. It decides what this instance calls itself and nothing else; it never admits a host
- * anywhere.
+ * WHETHER A URL `host` IS ONE A DEPLOYMENT CAN BE REACHED ON: dot-separated labels of letters, digits and
+ * hyphens, or a bracketed IPv6 literal, either with an optional port. Takes the URL parser's own spelling
+ * (lowercase, punycode, the default port dropped), so it is a shape check and not a second parser.
  *
- * Moved here from cronOrigin on 2026-11-25, unchanged, so the cron and the user agents cannot read
- * "primary" two ways.
+ * WHY THE PARSER IS NOT ENOUGH. WHATWG forbids neither `"` nor an empty label in a host, so
+ * `new URL('https://a"b')` and `new URL('https://x..y')` both parse, and neither names anything DNS can
+ * serve. The converter page writes these names into its head, its buttons and its links
+ * (src/sitepage.ts), where a quote is one step from an attribute. Read here, once, the cron, the user
+ * agents and the page skip the same entries, so they cannot disagree about which origin is the primary.
+ * A trailing dot is refused as well: the page compares hosts as plain strings, and `example.com.` would
+ * be a second spelling of `example.com` there.
  */
-export function primaryOrigin(env: Pick<Env, 'PUBLIC_ORIGIN'> | undefined): string | null {
+export function servableHost(host: string): boolean {
+  return /^(?:[a-z0-9-]+(?:\.[a-z0-9-]+)*|\[[0-9a-f:.]+\])(?::[0-9]+)?$/.test(host)
+}
+
+/**
+ * EVERY ORIGIN PUBLIC_ORIGIN DECLARES, IN ORDER: the one reading of the var (self-hosting phase 5,
+ * 2026-11-25). An entry counts when it is a bare http(s) origin, as the Node adapter's parseOrigins
+ * requires (no path, query, fragment or credentials), and its host passes servableHost. Junk is skipped,
+ * never thrown, because the cron reads this inside the scheduled handler and a throw there is a tick with
+ * no record. Skipping rather than stopping means a typo in one entry falls through to the next real one.
+ *
+ * primaryOrigin below is the first of these, and the converter page's host lists are all of them
+ * (pageConfig in src/sitepage.ts). The page needed the whole list, and reading it a second time there
+ * is how the two came to disagree once: the page filtered `https://a"b` out and the cron did not, so a
+ * value with that entry first put the check on one origin and the page's head on another.
+ */
+export function publicOrigins(env: Pick<Env, 'PUBLIC_ORIGIN'> | undefined): URL[] {
   const list = env?.PUBLIC_ORIGIN
+  const out: URL[] = []
   for (const raw of (typeof list === 'string' ? list : '').split(/[\s,]+/)) {
     if (!raw) continue
     try {
       const u = new URL(raw)
       if ((u.protocol === 'https:' || u.protocol === 'http:') && u.pathname === '/' && !u.search && !u.hash
-        && !u.username && !u.password) {
-        return u.origin
+        && !u.username && !u.password && servableHost(u.host)) {
+        out.push(u)
       }
     } catch {
       // Not a url: skipped, like every other entry that is not an origin.
     }
   }
-  return null
+  return out
+}
+
+/**
+ * The PRIMARY entry of PUBLIC_ORIGIN: the first that publicOrigins keeps. Null when none qualifies, so
+ * each caller chooses its own fallback: the scheduled check needs SOME origin to render on (cronOrigin in
+ * src/worker.ts), the converter page falls back to the origin it was requested on (src/sitepage.ts), and
+ * the user agents below need to know that there isn't one. It decides what this instance calls itself
+ * and nothing else; it never admits a host anywhere.
+ *
+ * Moved here from cronOrigin on 2026-11-25, so the cron and the user agents cannot read "primary" two
+ * ways, and built on publicOrigins the same day, so the converter page cannot either.
+ */
+export function primaryOrigin(env: Pick<Env, 'PUBLIC_ORIGIN'> | undefined): string | null {
+  return publicOrigins(env)[0]?.origin ?? null
 }
 
 /**
