@@ -144,7 +144,10 @@ function checkBody(c, liveVerdict, liveRan) {
  * Every problem this run found, each with a stable `key` (one issue per key) and the issue text.
  * `live` is `{ ran, failed: Map(name -> verdict) }`: only checks that failed in BOTH live runs.
  */
-export function evaluate({ health, live, clients, guests }) {
+// `site` names the checked instance in the issue title (HEALTH_BASE's host, from health-check.mjs). The
+// default keeps the public instance's titles as they were; issues are matched by their marker, never by
+// title, so a rename cannot orphan an open one.
+export function evaluate({ health, live, clients, guests, site = 'mbedfx.app' }) {
   const problems = []
   const liveFailed = live?.failed ?? new Map()
 
@@ -152,7 +155,7 @@ export function evaluate({ health, live, clients, guests }) {
     const liveToo = live && !live.ran ? ` \`/_smoke\` did not answer from GitHub's network either: ${live.error ?? 'no answer'}.` : ''
     const unread = `Without it this run could not judge the scheduled checks, so their open issues were left as they were.${liveToo}`
     problems.push({
-      key: 'site', title: 'mbedfx.app did not answer the health check',
+      key: 'site', title: `${site} did not answer the health check`,
       body: health?.json
         ? `\`/_health\` answered HTTP ${health.status}, but not with the week's checks:\n\n\`\`\`json\n${JSON.stringify(health.json, null, 2).slice(0, 3000)}\n\`\`\`\n\n${unread}`
         : `\`/_health\` failed: ${health?.error ?? 'no answer'}. ${unread}`,
@@ -194,7 +197,7 @@ export function evaluate({ health, live, clients, guests }) {
   }
   if (live && !live.ran && readableWeek(health)) {
     problems.push({
-      key: 'site', title: 'mbedfx.app did not answer the health check',
+      key: 'site', title: `${site} did not answer the health check`,
       body: `\`/_smoke\` failed from GitHub's network: ${live.error ?? 'no answer'}. The week's record answered, so the Worker is up; this may be a timeout of the live run itself. The open check issues were left as they were, since some are opened by the live run alone.`,
     })
   }

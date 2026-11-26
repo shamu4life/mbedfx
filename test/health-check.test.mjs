@@ -196,3 +196,26 @@ test('THE PLATFORM IS CALLED TWITTER, the owner\'s preference, wherever the repo
   const problems = evaluate({ health: healthy([check('x', 'x', 300, 380)]), live: liveOk, clients: clientsOk, guests: guestsOk })
   assert.match(problems[0].title, /^Twitter is failing/)
 })
+
+test('THE SITE ISSUE NAMES THE CHECKED INSTANCE, and the script has no default instance (self-hosting phase 7, 2026-11-25)', async () => {
+  // A fork that ran the check used to probe mbedfx.app and file issues about it in the fork. The
+  // instance now comes from HEALTH_BASE; the title follows it, and the public instance's title is
+  // unchanged by default.
+  const down = { status: 0, error: 'no answer' }
+  const fork = evaluate({ health: down, live: { ran: false, error: 'x' }, clients: null, guests: [], site: 'embed.example.com' })
+  assert.equal(fork.find(p => p.key === 'site').title, 'embed.example.com did not answer the health check')
+  const prod = evaluate({ health: down, live: { ran: false, error: 'x' }, clients: null, guests: [] })
+  assert.equal(prod.find(p => p.key === 'site').title, 'mbedfx.app did not answer the health check')
+  // Run with no HEALTH_BASE, the script refuses before any network call instead of checking mbedfx.app.
+  const { spawnSync } = await import('node:child_process')
+  const env = { ...process.env }
+  delete env.HEALTH_BASE
+  const r = spawnSync(process.execPath, ['.github/scripts/health-check.mjs'], { env, encoding: 'utf8', timeout: 20_000 })
+  assert.equal(r.status, 1)
+  assert.match(r.stderr, /HEALTH_BASE must be the instance origin/)
+  // And the workflow skips the job where the variable is unset, and passes both variables through.
+  const yml = (await import('node:fs')).readFileSync('.github/workflows/health-check.yml', 'utf8')
+  assert.match(yml, /if: \$\{\{ vars\.HEALTH_BASE != '' \}\}/)
+  assert.match(yml, /HEALTH_BASE: \$\{\{ vars\.HEALTH_BASE \}\}/)
+  assert.match(yml, /HEALTH_GUESTS: \$\{\{ vars\.HEALTH_GUESTS \}\}/)
+})

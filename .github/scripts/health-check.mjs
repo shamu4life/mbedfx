@@ -16,8 +16,17 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { containerServing, evaluate, judged, planIssues, renderSummary, smokeFailures, LABEL } from './health-lib.mjs'
 
-const BASE = (process.env.HEALTH_BASE || 'https://mbedfx.app').replace(/\/+$/, '')
-const GUESTS = ['sorryifuckedyour.mom', 'hotsinglesnear.you']
+// WHICH INSTANCE. Both come from the workflow's repo variables (health-check.yml). There is deliberately
+// no default: this used to fall back to https://mbedfx.app with the two guest domains written in, so a
+// fork that ran it checked the owner's instance and filed issues about it in the fork. Run it by hand
+// with HEALTH_BASE=https://your.instance (and HEALTH_GUESTS if you have guest domains).
+const BASE = (process.env.HEALTH_BASE || '').trim().replace(/\/+$/, '')
+if (!/^https?:\/\/[^/\s]+$/.test(BASE)) {
+  console.error('HEALTH_BASE must be the instance origin, e.g. https://mbedfx.app (set the repo variable, or the env var by hand).')
+  process.exit(1)
+}
+// Whitespace- or comma-separated hostnames; none means there are no guest domains to probe.
+const GUESTS = (process.env.HEALTH_GUESTS || '').split(/[\s,]+/).map(h => h.trim().toLowerCase()).filter(Boolean)
 // An image post from src/smoke.ts's list, verified answering a marked 302 on both d. names (2026-10-14).
 const GUEST_POST = '/r/pics/comments/haucpf'
 const CRAWLER = 'Mozilla/5.0 (compatible; Discordbot/2.0; +https://discordapp.com)'
@@ -94,7 +103,7 @@ for (const host of GUESTS) {
   })
 }
 
-const problems = evaluate({ health, live, clients, guests })
+const problems = evaluate({ health, live, clients, guests, site: new URL(BASE).host })
 const summary = renderSummary(problems, { health, live, clients, guests })
 console.log(summary)
 if (process.env.GITHUB_STEP_SUMMARY) appendFileSync(process.env.GITHUB_STEP_SUMMARY, `${summary}\n`)
