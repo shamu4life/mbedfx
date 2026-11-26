@@ -16,9 +16,9 @@
 # unset. Every setting is in docs/SELF-HOSTING.md, "Settings".
 #
 # BUILT AND RUN BY HAND, NOT BY CI: on 2026-11-25, at commit 90fb2d8, this file built both images and
-# ran the pair on a residential Linux host (docs/SELF-HOSTING.md, "The Docker run"). Later commits
-# changed it and nobody has built it again. Nothing in CI builds it, so a change can break it without
-# a red check.
+# ran the pair on a residential Linux host (docs/SELF-HOSTING.md, "The Docker run"), and again on
+# 2026-11-26 at b0c7b31, after the self-hosting changes. Nothing in CI builds it, so a change can break
+# it without a red check.
 
 name: mbedfx
 

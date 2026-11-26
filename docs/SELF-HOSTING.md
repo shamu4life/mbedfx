@@ -9,8 +9,8 @@ was taken.
 > Nobody has deployed mbedfx with the Deploy to Cloudflare button, on Workers Free, or from the generic
 > `wrangler.jsonc` on a real account. Those paths are written from Cloudflare's documentation and this
 > repo's configs, not from a run. The Docker Compose setup was built and run by hand on one residential
-> Linux host on 2026-11-25, at `90fb2d8`. Later changes to the adapter and the compose file haven't
-> been built, and CI builds none of the images ([The Docker run](#the-docker-run)).
+> Linux host twice: at `90fb2d8` on 2026-11-25, and at `b0c7b31` on 2026-11-26 after the self-hosting
+> changes. CI builds none of the images ([The Docker run](#the-docker-run)).
 
 ## Pick a way to run it
 
@@ -18,7 +18,7 @@ was taken.
 |---|---|---|---|---|
 | [Deploy to Cloudflare button](#with-the-deploy-to-cloudflare-button) | A GitHub account, and a Cloudflare account on Workers Paid (Containers need it) | Yes | Workers Paid, plus the container's time awake ([What it costs](#what-it-costs)) | No |
 | [Cloudflare, by hand](#by-hand-from-a-checkout) | Workers Paid, Node 22.18 or later, and Docker running while you deploy | Yes | The same | No |
-| [Docker Compose](#host-it-with-docker-compose) | Docker Engine with Compose v2, an x86_64 host, a domain, and a reverse proxy that terminates TLS | Yes | Your own host | Once by hand, on 2026-11-25 at `90fb2d8`; not rebuilt since later changes to the adapter ([The Docker run](#the-docker-run)) |
+| [Docker Compose](#host-it-with-docker-compose) | Docker Engine with Compose v2, an x86_64 host, a domain, and a reverse proxy that terminates TLS | Yes | Your own host | Twice by hand, most recently on 2026-11-26 at `b0c7b31`, after the self-hosting changes ([The Docker run](#the-docker-run)) |
 | [Node without Docker](#run-it-on-node-without-docker) | Node 22.18 or later. For video, the resolver too: its image, or Python with ffmpeg, yt-dlp and Deno | Only with the resolver | Your own host | The adapter ran once, on 2026-11-25, beside a local `server.py`, before those same adapter changes |
 
 Both Cloudflare ways also deploy on Workers Free through `wrangler.free.jsonc`, which leaves the
@@ -656,9 +656,13 @@ checkout of `main` at `90fb2d8` with a throwaway `.env` holding only `PUBLIC_ORI
 | A muxed video | `/_media/yt%3AjNQXAC9IVRw/0.mp4` served 629,172 bytes. |
 | `docker compose stop adapter` | Under a second, logging `SIGTERM: requests finished, 0 background task(s) pending at stop, all settled`. |
 
-Since then #140, #144, #145, #146 and #148 changed `compose.yaml`, `adapters/node/bindings.ts` or
-`adapters/node/server.ts`, and nobody has built the images again. Nothing builds or runs them in CI,
-so a change can break them without a red check.
+#140, #144, #145, #146 and #148 then changed `compose.yaml`, `adapters/node/bindings.ts` or
+`adapters/node/server.ts`, so on 2026-11-26 the stack was rebuilt at `b0c7b31` and the same checks
+ran again. Everything above held: the same image sizes, no `.env` in the image, the resolver off the
+host's ports, the same four YouTube clients and passing HLS probes, a 629,172-byte mux and a clean
+stop. The Bluesky, Reddit, Mastodon and Twitter cards matched mbedfx.app's titles. The converter page
+named the deployment: primary `http://127.0.0.1:8787`, `http` links, and no mbedfx.app in its og tags.
+Nothing builds or runs the images in CI, so a later change can break them without a red check.
 
 ### The container, on its own
 

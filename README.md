@@ -201,14 +201,14 @@ Other domains can run copies of this code ([Host your own](#host-your-own)), and
 ## Host your own
 
 > [!WARNING]
-> Nobody has deployed mbedfx with the Deploy to Cloudflare button or on the Workers Free plan yet. Both are written from Cloudflare's documentation and this repo's configs, not from a run. The Docker setup was built and run by hand on one Linux host on 2026-11-25, before the latest changes to the adapter, and CI doesn't build it.
+> Nobody has deployed mbedfx with the Deploy to Cloudflare button or on the Workers Free plan yet. Both are written from Cloudflare's documentation and this repo's configs, not from a run. The Docker setup was built and run by hand on one Linux host, most recently on 2026-11-26 after the self-hosting changes, and CI doesn't build it.
 
 | Way | You need | Video | Tested |
 |---|---|---|---|
 | Deploy to Cloudflare button | A GitHub account, and a Cloudflare account on Workers Paid (Containers need it) | Yes | No |
 | Cloudflare, from a checkout | Workers Paid, Node 22.18 or later, and Docker running while you deploy | Yes | No |
-| Docker Compose | Docker with Compose v2 on an x86_64 host, and a reverse proxy that terminates TLS | Yes | Once, before the latest adapter changes |
-| Node, without Docker | Node 22.18 or later, plus the resolver for video (its image, or Python with ffmpeg, yt-dlp and Deno) | Only with the resolver | The adapter ran once, before the same changes |
+| Docker Compose | Docker with Compose v2 on an x86_64 host, and a reverse proxy that terminates TLS | Yes | By hand, most recently on 2026-11-26 |
+| Node, without Docker | Node 22.18 or later, plus the resolver for video (its image, or Python with ffmpeg, yt-dlp and Deno) | Only with the resolver | The same adapter ran under Compose on 2026-11-26; bare Node not since the changes |
 
 Either Cloudflare way also runs on Workers Free through `wrangler.free.jsonc`, without the container, and there a video that needs muxing shows its cover image. [docs/SELF-HOSTING.md](docs/SELF-HOSTING.md) is the full guide: every step, what each way costs, and what each one has been measured doing.
 
