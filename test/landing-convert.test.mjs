@@ -1283,6 +1283,59 @@ test('A QUERY WITHOUT A USABLE ID IS STILL REFUSED, so the branch cannot invent 
   }
 })
 
+test('A SITE PICKED FROM "Read as" ROUTES EXACTLY AS THE LINK IT WAS PICKED FOR, on Facebook\'s query links and Meta\'s share links', () => {
+  /**
+   * FOUND 2026-11-26. The picker forces a reading by putting the site's code in front of the path it
+   * already converted, and the router had no /fb/ twin for Facebook's query-id shapes and no /th/ twin
+   * for the bare /share/{code}. So picking Facebook on a photo or watch paste, or Threads on a
+   * threads.com/share/ paste, replaced a working link with one that answered "Not found". The router
+   * half is pinned in test/router.test.mjs; this is the page half, run on the page's own output.
+   *
+   * The picker's string is read off the page first, so the reconstruction below cannot drift from what
+   * the page actually builds. A Meta share link is forced both ways, because the code does not say
+   * which site minted it and either pick has to keep working. story.php and permalink.php are in the
+   * list though the converter rewrites them to /{owner}/posts/{id}/ first, so a converter that stopped
+   * doing that would be caught here as well.
+   *
+   * Scoped to the two sites the defect was about. The same check over every paste in this file also
+   * fails for /yt/watch?v=…, for /tw/embed?clip=… (read as a Twitch clip whose slug is "embed") and
+   * for links that already carry their code (/dm/{id} forced to /dm/dm/{id}); those are separate
+   * defects, left for changes of their own.
+   */
+  const picker = HTML.slice(HTML.indexOf("picker.addEventListener('click'"), HTML.indexOf('var forced = null;'))
+  assert.match(picker, /var path = r\.ok \? r\.path : pathOf\(input\.value\);/, 'the forced path is the converted one')
+  assert.match(picker, /setResult\(mbedfxScheme\(host\) \+ host \+ '\/' \+ code \+ path\);/, 'with the code in front')
+
+  const KINDS = ['post', 'metashare']
+  let checked = 0
+  for (const [paste, codes] of [
+    ['https://www.facebook.com/photo/?fbid=1596906755391068', ['fb']],
+    ['https://www.facebook.com/photo.php?fbid=1596906755391068&set=a.774304400984645&type=3', ['fb']],
+    ['https://www.facebook.com/photo/.mp4?fbid=1092409469807430', ['fb']],
+    ['https://www.facebook.com/watch/?v=10153231379946729', ['fb']],
+    ['https://www.facebook.com/watch?v=10153231379946729', ['fb']],
+    ['https://www.facebook.com/story.php?story_fbid=1596906778724399&id=100052152768666', ['fb']],
+    ['https://www.facebook.com/permalink.php?story_fbid=1596906778724399&id=100052152768666', ['fb']],
+    ['https://www.facebook.com/share/Fixture08X/', ['fb', 'th']],
+    ['https://www.threads.com/share/Fixture08X', ['th', 'fb']],
+    ['https://www.threads.net/share/_Fixture1X', ['th', 'fb']],
+  ]) {
+    for (const gallery of [undefined, 'stills', 'videos']) {
+      const r = convert(paste, 'mbedfx.app', gallery)
+      assert.ok(r.ok, `${paste} must convert`)
+      assert.equal(r.code, codes[0], `${paste}: the chip names the site the link came from`)
+      const plain = routed(r.path)
+      assert.ok(KINDS.includes(plain.kind), `${r.path} names a post to begin with (got ${plain.kind})`)
+      for (const code of codes) {
+        const forced = '/' + code + r.path
+        assert.deepEqual(routed(forced), plain, `${paste}, read as ${code}: ${forced} must route exactly as ${r.path}`)
+        checked++
+      }
+    }
+  }
+  assert.equal(checked, 39, 'every paste, every gallery mode, every code')
+})
+
 
 /* ============ THE GUEST HOSTS AS DOMAIN BUTTONS (owner's call, 2026-10-11) ============
  *
