@@ -6,6 +6,11 @@
   // file with `-c`. Nothing here may name that instance's zones or resources:
   // test/wrangler-configs.test.mjs reads them out of the production file and fails if one shows up.
   //
+  // THE BUTTON IS UNTESTED: nobody has pressed it on a real account. It needs Workers Paid, because
+  // Containers do. On Workers Free, change the deploy command on the button's setup page to
+  // `npx wrangler deploy -c wrangler.free.jsonc` (also untested; see that file). docs/SELF-HOSTING.md
+  // has the whole walk-through.
+  //
   // LINE COMMENTS ONLY. The tests strip `//` lines with a regex before JSON.parse, so a /* */ block or a
   // comment after a value breaks the parse.
   //
@@ -28,14 +33,19 @@
   "workers_dev": true,
   // NO `vars`, and dashboard vars survive deploys. Without keep_vars, wrangler treats this file as the
   // whole truth and deletes every plain var set in the dashboard on the next deploy. Every setting the
-  // Worker reads has a default (README, "Optional configuration"); secrets survive either way. Two
-  // worth setting there once you have a domain: PUBLIC_ORIGIN, your origin, which the half-hourly check
-  // renders on (unset, it renders on http://localhost) and the fediverse guard refuses; and GUEST_HOSTS,
-  // only if another Worker of yours hands this one its embed paths (src/guesthost.ts).
+  // Worker reads has a default (docs/SELF-HOSTING.md, "Settings"); secrets survive either way. Worth
+  // setting there once you have a domain: PUBLIC_ORIGIN, your origins with the primary first, and the
+  // `d.` name too if you added it as a custom domain. The half-hourly check renders on the primary
+  // (unset, on http://localhost), the fediverse guard refuses every entry, and the converter page
+  // offers each one. Also OWN_HOSTS for any other domain you serve, SITE_NAME for the name on your
+  // cards, and REDDIT_USER_AGENT if you set Reddit credentials. GUEST_HOSTS only if another Worker of
+  // yours hands this one its embed paths (src/guesthost.ts).
   "keep_vars": true,
   // The scheduled check: renders a fixed list of known posts through this Worker and keeps a week of
   // results at /_health. The repo's health workflow treats a run older than 120 minutes as stale, so
-  // keep the interval if anything reads /_health.
+  // keep the interval if anything reads /_health. In your copy of the repository, set the Actions
+  // variable HEALTH_BASE to your primary origin (and HEALTH_GUESTS if you have guest hosts) to turn
+  // that workflow on; without it the job skips.
   "triggers": { "crons": ["*/30 * * * *"] },
   "r2_buckets": [
     // OWN NAME, so a deploy into an account that already runs the public instance cannot share its
@@ -46,6 +56,10 @@
     { "binding": "MEDIA_CACHE", "bucket_name": "mbedfx-selfhost-media" }
   ],
   "containers": [
+    // NO ENVIRONMENT FROM THE WORKER. src/container.ts sets no envVars, so a RESOLVER_SECRET Worker
+    // secret is sent as a header the container ignores. Only the binding reaches the container. See
+    // container/README.md, "Deploying it".
+    //
     // NO `name`: wrangler derives <worker name>-mediaresolver, so the application follows the Worker
     // name and cannot collide with the one the production file pins.
     //
@@ -96,9 +110,10 @@
     // this name in their FROM clauses.
     { "binding": "AE", "dataset": "mbedfx_selfhost_counters" }
   ],
-  // WORKER PREVIEWS. New Workers use them, including the ones the Deploy to Cloudflare button makes:
-  // Workers Builds runs `npx wrangler preview` for every branch other than main, and that reads this
-  // file. Without a `previews` block wrangler stops with an error. Apart from the assets, a Preview gets
+  // WORKER PREVIEWS. Workers Builds runs `npx wrangler preview` for branches other than main on this
+  // project's own Worker (wrangler.production.jsonc). Whether a Worker made by the Deploy to Cloudflare
+  // button gets the same command is unchecked. Where it does, a bare `npx wrangler preview` reads this
+  // file, and without a `previews` block wrangler stops with an error. Apart from the assets, a Preview gets
   // none of the bindings above, so one this block leaves out does not exist there. Cloudflare gives
   // each Preview its own Durable Object namespaces and its own container application, named by
   // wrangler, so nothing here has to be created first.

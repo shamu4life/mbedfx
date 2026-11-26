@@ -8,12 +8,17 @@
 #   PUBLIC_ORIGIN=https://embed.example.com           # what the cards say; a list is allowed, see the doc
 #   RESOLVER_SECRET=<openssl rand -hex 32>             # shared by both services
 #
-# Everything else is optional and listed in docs/SELF-HOSTING.md. An unset variable reaches the adapter
-# as "", which it reads as unset.
+# Compose reads .env only to fill in the ${...} values below; there is no env_file. A variable reaches
+# a container only if it is listed under that service's `environment:`, so DRAIN_MS,
+# RESOLVER_TIMEOUT_MS and the resolver's MAX_SECONDS, MAX_BYTES, PROC_TIMEOUT, MUX_PAGE_TIMEOUT and
+# PROBE_TIMEOUT need a line added here before .env can set them. If you raise DRAIN_MS past about
+# 40 s, raise stop_grace_period with it. An unset variable reaches the adapter as "", which it reads as
+# unset. Every setting is in docs/SELF-HOSTING.md, "Settings".
 #
-# BUILT AND RUN BY HAND, NOT BY CI: on 2026-11-25 this file built both images and ran the pair on a
-# residential Linux host (docs/SELF-HOSTING.md, "The Docker run"). Nothing in CI builds it, so a later
-# change can break it without a red check.
+# BUILT AND RUN BY HAND, NOT BY CI: on 2026-11-25, at commit 90fb2d8, this file built both images and
+# ran the pair on a residential Linux host (docs/SELF-HOSTING.md, "The Docker run"). Later commits
+# changed it and nobody has built it again. Nothing in CI builds it, so a change can break it without
+# a red check.
 
 name: mbedfx
 

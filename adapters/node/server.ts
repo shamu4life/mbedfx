@@ -22,8 +22,8 @@ import {
  *
  *   node adapters/node/server.ts        (Node 22.18 or later: it runs the .ts files as written)
  *
- * Configuration is environment variables, listed in docs/SELF-HOSTING.md under "Running the Node
- * adapter". Every string var and secret the worker reads passes through under its own name.
+ * Configuration is environment variables, listed in docs/SELF-HOSTING.md under "Settings". Every
+ * string var and secret the worker reads passes through under its own name.
  */
 
 const REPO = resolve(fileURLToPath(new URL('../..', import.meta.url)))

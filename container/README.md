@@ -8,7 +8,8 @@ yt-dlp knows. Those posts are cover stills without it.
 
 ## Interface
 
-`POST /resolve`, JSON body, reached over the Worker's container binding, never a public route.
+`POST /resolve`, JSON body. On Cloudflare it is reached over the Worker's container binding, and off
+Cloudflare over the compose network. It is never a public route.
 
 ```jsonc
 { "video": "<url>", "audio": "<url>"|null }  // mux tracks the Worker extracted (a v.redd.it or Bluesky
@@ -112,10 +113,13 @@ in `PROBE_CLIENTS` and then RANGE-FETCHES the format that client chose, reportin
   "serving": ["default", "web_embedded", "tv_simply", "mweb", "web_safari"],
   "clients": [ { "client": "default", "extracted": true, "formats": 24,
                  "gvs": "ok", "bytes": 65536, "ms": 3378 }, … ],
+  "tiktok": { … },
   "hls": { "video": "zp8_bKhhnlw", "extracted": true, "picked": "95-21",   // since 2026-11-24
            "protocols": ["m3u8_native"], "host": "manifest.googlevideo.com",
            "playlist": "ok", "segment": "ok", "bytes": 65536, "ms": 5572 } }
 ```
+
+`tiktok` is the TikTok probe, run on `PROBE_TIKTOK` (`_probe_tiktok` in `server.py`).
 
 **`hls` covers the path the `clients` rows can't see.** Some videos give our three clients no
 direct download at all, only HLS playlists, and `PROBE_VIDEO` isn't one of them. `hls` runs the mux's
@@ -235,8 +239,12 @@ If a change here didn't take effect, check the build log for `Building image` an
 A branch other than `main` gets a Worker Preview instead, built by
 `npx wrangler preview -c wrangler.production.jsonc` since 2026-11-25. Before then it ran
 `versions upload`, which never built the image, so a container change went untested until it
-merged. The `previews` block in that file gives each Preview its own bucket and its own container
-application, built from the branch's `container/Dockerfile`. See [Warm instances](#warm-instances).
+merged. The `previews` block in that file gives every Preview one shared bucket,
+`mbedfx-preview-media`, which has a 7-day expiry rule, and gives each Preview its own container
+application, built from the branch's `container/Dockerfile`. The generic `wrangler.jsonc` gives
+Previews no bucket, so a Preview there shows cover stills instead of muxed video. Nobody has
+measured whether a Preview's container serves a mux from Cloudflare's network (the
+"UPDATE 2026-11-25" note in `wrangler.production.jsonc`). See [Warm instances](#warm-instances).
 
 The Worker side is already committed: the `@cloudflare/containers` dependency, `src/container.ts`
 (the `MediaResolver` DO class), the deploy entry `src/index.ts`, and the `containers` /
@@ -246,16 +254,26 @@ container is live, `/_media/` serves muxed video for posts carrying a `remux` so
 checks the bindings first, so before provisioning finishes, or with no container, those videos
 render the cover still.
 
-To require the shared-secret header on mbedfx.app, run
-`npx wrangler secret put RESOLVER_SECRET -c wrangler.production.jsonc` and set the same
-`RESOLVER_SECRET` on the container as a container secret. Forget the `-c` and the secret goes to
-`mbedfx-selfhost`, the root config's Worker. If that Worker doesn't exist, wrangler asks whether to
-create it with yes as the default, and when the value comes in on a pipe it creates it without
-asking. "Pushing it" in `docs/CREDENTIALS.md` shows how little wrangler says about that. A
-deployment of the generic file leaves the `-c` off.
+On Cloudflare the container doesn't check `X-Resolver-Secret` today. A Cloudflare container gets
+environment variables only through its Container class's `envVars`, and `MediaResolver` in
+`src/container.ts` sets none, so @cloudflare/containers 0.3.7 starts it without any. `server.py`
+then has no `RESOLVER_SECRET` and accepts every `/resolve` that reaches it. On Cloudflare the only
+way in is the Durable Object binding. A Worker secret named `RESOLVER_SECRET` makes the Worker send
+the header, and the container ignores it. Enforcing the secret there would take a code change,
+`envVars` built from the Worker's secret, which nobody has written or tested.
+
+If you set the Worker secret anyway, on mbedfx.app that is
+`npx wrangler secret put RESOLVER_SECRET -c wrangler.production.jsonc`. Forget the `-c` and the
+secret goes to `mbedfx-selfhost`, the root config's Worker. If that Worker doesn't exist, wrangler
+asks whether to create it with yes as the default, and when the value comes in on a pipe it creates
+it without asking. "Pushing it" in `docs/CREDENTIALS.md` shows how little wrangler says about that.
+A deployment of the generic file leaves the `-c` off.
 
 Do not use `containers[].image_vars` for the secret. Wrangler documents that as build-time only, and
 a value set there never reaches the running instance.
+
+Off Cloudflare the secret is enforced. `adapters/node/compose.yaml` and the standalone `docker run`
+below give both halves the same value.
 
 Running it anywhere else is [Running it standalone](#running-it-standalone) below.
 `docs/SELF-HOSTING.md` covers the Worker half: the Node adapter in `adapters/node/` and a compose file
@@ -276,19 +294,20 @@ instances for ten minutes, and six minutes of deliberately not touching the serv
 
 The lever that does work is **`RESOLVER_GENERATION`**. It names the Durable Objects, so bumping it
 sends the next request to a brand-new instance, which boots on the current image. It costs the cached
-meta records — that is a real price, and it is the right one to pay to end an outage. If this keeps
+meta records. That is a real price, and it is the right one to pay to end an outage. If this keeps
 happening, a shorter `sleepAfter` is the cheaper permanent fix; `src/container.ts` already argues 3m
 is available.
 
 ## Running it standalone
 
-Outside Cloudflare is the one case that needs the image built by hand. Nothing in `server.py`
-imports a Cloudflare module or expects a binding: it is stdlib-only Python over
+Outside Cloudflare, `adapters/node/compose.yaml` builds this image and runs it beside the Node
+adapter with no published port (`docs/SELF-HOSTING.md`, "Host it with Docker Compose"). To run it on
+its own, build it by hand. Nothing in `server.py` imports a Cloudflare module or expects a binding: it is stdlib-only Python over
 `ThreadingHTTPServer`, and it holds no state, so there is no volume to mount and nothing to migrate.
 
 ```sh
 docker build --platform linux/amd64 -t media-resolver container/
-docker run --rm -p 8080:8080 -e RESOLVER_SECRET=<a long random string> media-resolver
+docker run --rm -p 127.0.0.1:8080:8080 -e RESOLVER_SECRET=<a long random string> media-resolver
 ```
 
 `--platform linux/amd64` is not optional on an ARM host. The Dockerfile fetches
@@ -307,7 +326,7 @@ curl -s -X POST localhost:8080/resolve \
 
 A few MB of `video/mp4` with a valid `ftyp` means the whole path works. A JSON `{"error"}` body
 means it does not, and the code carries the reason: `401` the secret, `400` a source the SSRF gate
-refused, `502` a failed, empty or incomplete mux, `504` the wall clock — which is `PROC_TIMEOUT` (120s) on
+refused, `502` a failed, empty or incomplete mux, `504` the wall clock. The wall is `PROC_TIMEOUT` (120s) on
 `{video}` and `{page, meta}`, and `MUX_PAGE_TIMEOUT` (360s) on the `{page}` mux, because yt-dlp has
 to extract and then download the whole file before it can send a byte. That was `PROC_TIMEOUT + 60`
 (180s) until 2026-08-29; it is its own variable now because the two walls scale with different
@@ -315,17 +334,17 @@ things, and only one of them is a whole-video download.
 
 **Set `RESOLVER_SECRET`.** Without it, `/resolve` is an open fetch-anything remuxer: it will pull
 whatever url an anonymous caller names, from the host's own network position, and spend up to a
-`MUX_PAGE_TIMEOUT` (360s) of CPU doing it. The Worker deployment can lean on the container binding
-not being a public route; a standalone one is reachable by whatever the host's firewall allows, so
-the secret is the only thing in front of it. `/health` stays unauthenticated by design, since a load
+`MUX_PAGE_TIMEOUT` (360s) of CPU doing it. On Cloudflare only the container binding reaches it. A
+standalone one is reachable by whatever the host's firewall allows, so the secret is the only thing
+in front of it, which is also why the command above publishes the port on `127.0.0.1` only. `/health` stays unauthenticated by design, since a load
 balancer has to reach it.
 
 Give the host disk, not just memory. A mux streams to a temp file before a byte is returned, so
 `/tmp` inside the container needs headroom to `MAX_BYTES` (375 MB) per concurrent call.
 
 The listener is IPv4-only: `server.py`'s one `ThreadingHTTPServer(("0.0.0.0", port), …)` call is the
-whole of it. (This read `server.py:430` until 2026-08-29, by which point the call had moved to 783 —
-the name is cited rather than the line for that reason.) Nothing in the Cloudflare path cares, and
+whole of it. (This read `server.py:430` until 2026-08-29, by which point the call had moved to 783,
+so the name is cited rather than the line.) Nothing in the Cloudflare path cares, and
 `docker run -p` hides it. An IPv6-only host, or a reverse proxy resolving the upstream to `::1`,
 reaches a closed port and reports the container as down.
 
@@ -368,10 +387,10 @@ before 2026-10-04 every one of them failed to mux on this image's ffmpeg (a 7.1 
 than 7.1.1). An ffmpeg that does not list the option (6.1.1 measured) has no check and muxes them as
 is. The full measurement is in the comment at `REDDIT_HLS_HOST` in `server.py`.
 
-## Status (2026-08-28)
+## Status
 
-Reddit and Bluesky single videos play in production, since their HLS muxes to a progressive
-faststart MP4. Both were confirmed live against a real post: 200 `video/mp4` with a valid `ftyp`,
+By 2026-08-28 Reddit and Bluesky single videos played in production, since their HLS muxes to a
+progressive faststart MP4. Both were confirmed live against a real post: 200 `video/mp4` with a valid `ftyp`,
 Range answered 206, the file cached in R2. That was true of Reddit only for some upload dates:
 videos with audio uploaded between about 2024-05 and 2025-11 answered 503 for 8 of 8 when measured
 as Discordbot on 2026-10-04 (see the `-extension_picky` paragraph above). The fix has not yet been
@@ -422,19 +441,19 @@ open `/_media/<refKey>/0`.
   untested here; Meta gates on TLS and UA.
   **"Not blocked" is still true and "it works" is not**, which is worth separating because this
   bullet has read as the second for a month. Measured 2026-08-28: roughly 40-50% of Cloudflare-egress
-  YouTube requests are refused where residential succeeds every time — a RATE, so IP reputation
-  rather than a missing credential, and a PO token buys nothing against it (see `container/Dockerfile`
+  YouTube requests are refused where residential succeeds every time. That is a RATE, so IP
+  reputation rather than a missing credential, and a PO token buys nothing against it (see `container/Dockerfile`
   for that measurement). "Only Deno" is also no longer the whole list: `YT_PLAYER_CLIENTS` in
   `server.py` names the player clients rather than taking yt-dlp's defaults, and the pin in
   `container/Dockerfile` had to move forward to pick up yt-dlp's GVS PO-token handling. No version is
   quoted here on purpose: it is bumped weekly, and a copy in prose goes stale within days.
-- yt-dlp ages fast, YouTube especially — and rebuilding the image does NOT pull a newer one. Since
+- yt-dlp ages fast, YouTube especially, and rebuilding the image does NOT pull a newer one. Since
   2026-08-17 the version is pinned exactly in `container/Dockerfile`, so every build installs that
   release and no other. This bullet said the opposite until 2026-08-29.
   What moves the pin is `.github/workflows/ytdlp-freshness.yml`: each Monday it reads PyPI's newest
   STABLE, and when that is ahead of the pin it pushes a branch and opens a PR, or raises an issue
   saying the branch is ready when the repository forbids it opening one. So to get a newer yt-dlp,
-  merge that PR, or edit the pin yourself and merge — merging is what rebuilds and ships the image,
+  merge that PR, or edit the pin yourself and merge. Merging is what rebuilds and ships the image,
   and nothing else does. Do not put a `>=` floor back; `test/ytdlp-pin.test.mjs` refuses one and the
   Dockerfile carries the reasoning. Only `yt-dlp` itself is pinned: its dependencies, `yt-dlp-ejs`
   among them, still resolve fresh on every build.
@@ -442,9 +461,10 @@ open `/_media/<refKey>/0`.
   available"` without curl_cffi. The image installs `yt-dlp[default,curl-cffi]`, because the plain
   `[default]` extra doesn't include it, and yt-dlp auto-uses it for extractors that request
   browser-TLS impersonation.
-- Threads video doesn't come through here. A Threads post carries a progressive MP4 already, and
-  Meta blocks Cloudflare's datacenter egress for those bytes, so `/_media/` 302s straight to the
-  signed CDN url and Discord's own media proxy fetches it (`src/platforms/threads/normalize.ts`).
-  The format was measured progressive on 2026-07-22 across four live posts, and the 302 is a settled
-  route.
+- Threads video doesn't come through here. A Threads post already carries a progressive MP4
+  (measured on 2026-07-22 across four live posts). Since 2026-08-09 the Worker fetches those
+  `scontent` bytes and serves them itself (`proxyableVideoUrl` in `src/mediaproxy.ts`), with a 302 to
+  the signed CDN url as the fallback. This note used to say Meta blocks Cloudflare's egress for those
+  bytes. That was retired when a Worker fetch of a Threads `scontent` url came back as real video
+  (`src/platforms/threads/normalize.ts`).
 - The image must be linux/amd64, and is (`python:3.12-slim` plus a static Deno binary).
