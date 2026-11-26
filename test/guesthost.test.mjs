@@ -358,3 +358,28 @@ test('EVERY HOST ROUTED AS A GUEST IS REFUSED AS AN INSTANCE, for any value of t
   }
   assert.ok(routed >= 15, `the sweep must actually route some hosts, routed ${routed}`)
 })
+
+test('A HOST THE DEPLOYMENT DECLARES IN PUBLIC_ORIGIN IS NEVER A GUEST, even under a guest parent (review, 2026-11-25)', () => {
+  // A self-hoster runs their own site Worker on example.com and mbedfx on embed.example.com, and sets
+  // GUEST_HOSTS=example.com. Subdomains count as guests, so embed.example.com used to become a guest of
+  // its own deployment: the converter page, /_api/v1, /_card and /_health all 404'd there.
+  const guests = 'example.com'
+  const own = 'https://embed.example.com https://d.embed.example.com'
+  assert.equal(isGuestHost('embed.example.com', guests, own), false, 'the operator\'s own domain')
+  assert.equal(isGuestHost('d.embed.example.com', guests, own), false, 'and its d. alias')
+  assert.equal(isGuestHost('example.com', guests, own), true, 'the guest itself still is one')
+  assert.equal(isGuestHost('d.example.com', guests, own), true, 'and so is its d. name')
+  assert.equal(isGuestHost('other.example.com', guests, own), true, 'and any other subdomain')
+  // Declaring only the bare origin covers its d. alias too (selfHosts reads a d. host's parent), and
+  // never widens upward: example.com stays a guest.
+  assert.equal(isGuestHost('d.embed.example.com', guests, 'https://embed.example.com'), false)
+  assert.equal(isGuestHost('example.com', guests, 'https://embed.example.com'), true)
+  // Production is unchanged: no guest domain is a parent of a serving one.
+  for (const g of GUEST_HOSTS) {
+    assert.equal(isGuestHost(g, PROD_VARS.GUEST_HOSTS, PROD_VARS.PUBLIC_ORIGIN), true, g)
+    assert.equal(isGuestHost(`d.${g}`, PROD_VARS.GUEST_HOSTS, PROD_VARS.PUBLIC_ORIGIN), true, `d.${g}`)
+  }
+  for (const o of PROD_VARS.PUBLIC_ORIGIN.split(/\s+/)) {
+    assert.equal(isGuestHost(new URL(o).hostname, PROD_VARS.GUEST_HOSTS, PROD_VARS.PUBLIC_ORIGIN), false, o)
+  }
+})

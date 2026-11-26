@@ -5747,7 +5747,7 @@ async function serveDirectMedia(
  * this file: a throw reaches the guest Worker unmarked, and that Worker serves its own page.
  */
 export async function handle(req: Request, env: Env, ctx: ExecutionContext, d: Deps): Promise<Response> {
-  if (!isGuestHost(new URL(req.url).hostname, env.GUEST_HOSTS)) return serve(req, env, ctx, d)
+  if (!isGuestHost(new URL(req.url).hostname, env.GUEST_HOSTS, env.PUBLIC_ORIGIN)) return serve(req, env, ctx, d)
   if (!guestServes(route(new URL(req.url)))) return guestDeclined()
   const res = await serve(req, env, ctx, d)
   const marked = new Response(res.body, res)

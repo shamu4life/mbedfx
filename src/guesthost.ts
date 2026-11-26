@@ -1,5 +1,5 @@
 import type { Route } from './types.ts'
-import { declaredHosts } from './platforms/fedihost.ts'
+import { declaredHosts, selfHosts } from './platforms/fedihost.ts'
 
 /**
  * GUEST HOSTS — domains another Worker owns, where mbedfx answers only the embed paths.
@@ -91,9 +91,18 @@ export function guestHosts(spec: string | undefined): string[] {
  * `spec` IS REQUIRED, though it may be undefined. Optional would let a caller drop `env.GUEST_HOSTS`
  * and get "no guest hosts" with nothing failing, and on the public instance that is every guest-host
  * answer going out unmarked, which you-stupid replaces with its own page.
+ *
+ * A HOST THE DEPLOYMENT DECLARES AS ITS OWN IS NEVER A GUEST, d. alias included. Subdomains count as
+ * guests (you-stupid's d. names arrive that way), so without this a guest entry that is the PARENT of
+ * the operator's own domain swallows it: GUEST_HOSTS=example.com with mbedfx on embed.example.com made
+ * embed.example.com a guest, and its converter page, /_api/v1, /_card and /_health all 404'd (review,
+ * 2026-11-25). `publicOrigin` is required for the same reason `spec` is. On mbedfx.app no guest domain
+ * is a parent of a serving one, so production answers exactly as before.
  */
-export function isGuestHost(hostname: string, spec: string | undefined): boolean {
+export function isGuestHost(hostname: string, spec: string | undefined, publicOrigin: string | undefined): boolean {
   const h = hostname.toLowerCase().replace(/\.$/, '')
+  const own = new Set(declaredHosts(publicOrigin).flatMap(o => selfHosts(o)))
+  if (selfHosts(h).some(x => own.has(x))) return false
   return guestHosts(spec).some(g => h === g || h.endsWith(`.${g}`))
 }
 
