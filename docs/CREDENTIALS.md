@@ -54,7 +54,7 @@ there.
 The `MA` verdict comes off the Worker's own page fetch, which carries no jar (`instagramAgeGate`,
 `src/platforms/instagram/normalize.ts:643`). A filled `IG_ACCOUNTS` reaches only the container mux,
 and gate detection stays where it was. `ig`/`pool_unused` (`src/worker.ts`) counts a post that the
-jarless page fetch found walled while `IG_ACCOUNTS` holds an account. If it climbs, the credential is
+jarless page fetch found age-gated (`MA`) while `IG_ACCOUNTS` holds an account. If it climbs, the credential is
 not reaching the request that reads the `MA` verdict, and the count says nothing about whether the
 accounts are still logged in.
 

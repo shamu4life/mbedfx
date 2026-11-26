@@ -376,7 +376,8 @@ wrong one, and passed to argument parsing with the right one. The SSRF gate refu
 `400 invalid source`.
 
 One caveat that build does not cover: on ffmpeg 8.1.2, an input that is not an HLS playlist dies
-before a byte is read. `HTTP_OPTS` sends `-http_persistent 0` with every input, and that option belongs to ffmpeg's
+before a byte is read. `HTTP_OPTS` sends `-http_persistent 0` with every input except a Reddit HLS input muxed with
+connection reuse (`HTTP_OPTS_REUSE` in `server.py`), and that option belongs to ffmpeg's
 HLS demuxer. On ffmpeg 8.1.2 the `dash` demuxer does not define it and a plain MP4 has no demuxer
 that does, so either input dies at `Option http_persistent not found`. Production does reach this,
 and this paragraph used to say otherwise. The Reddit and Bluesky `{video}` sources are HLS playlists
