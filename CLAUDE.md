@@ -4,8 +4,11 @@ mbedfx turns a social-media link into an embed card Discord can draw. Swap the s
 `mbedfx.app` and the same post unfurls with the author, the caption, the counts, and a video that
 plays inline.
 
-- Stack: Cloudflare Workers + R2 + Durable Objects + a `yt-dlp`/`ffmpeg` container.
-- Language: TypeScript, no framework, no bundler. Workers runs the modules directly.
+- Stack: Cloudflare Workers + R2 + Durable Objects + a `yt-dlp`/`ffmpeg` container. Off Cloudflare,
+  `adapters/node/` runs the same `handle()` on Node 22.18+ with a stand-in for each binding, and
+  `adapters/node/compose.yaml` runs it beside the container.
+- Language: TypeScript, no framework and no build step of our own. Wrangler bundles `src/index.ts` at
+  deploy, and Node 22.18+ runs the `.ts` files as written for the tests and the Node adapter.
 - UI: `public/index.html`, one file of hand-written vanilla JS and CSS. Its visible copy carries no
   em dashes and no second person. The owner asked for that, later edits re-broke it within a day,
   and a test now asserts it.
@@ -25,7 +28,7 @@ plays inline.
 - Do not guess. If something can't be determined, say so on the card. Never invent a plausible value
   to fill a hole.
 - Keep fetching and normalising separate. Every platform has a `fetch.ts` for the I/O and a pure
-  `normalize.ts`. Captured fixtures test the pure half, and the whole suite runs offline in ~30s.
+  `normalize.ts`. Captured fixtures test the pure half, and the whole suite runs offline in about 80 s on a GitHub runner (2021 tests, 82 s, 2026-11-26).
   Keep the judgement in the pure half.
 
 ## Layout
@@ -36,7 +39,7 @@ plays inline.
 | `src/refkey.ts` | **the security boundary.** What crosses the wire and comes back; kind lists are allowlists |
 | `src/worker.ts` | dispatch, caching, deadlines, the container calls |
 | `src/platforms/<site>/` | `fetch.ts` (I/O) + `normalize.ts` (pure) |
-| `src/guesthost.ts` | **guest hosts**: two domains of the owner's `you-stupid` Worker that reach this one through its service binding. Which hosts are guests is the `GUEST_HOSTS` var, set in `wrangler.production.jsonc` (unset: none). Only embed routes are answered there, marked `x-mbedfx-guest: served`; everything else is declined so that Worker keeps its own page. The converter offers both as domain buttons and keeps its own copy of the list (tested equal to the var). `d.` works there too: `d.sorryifuckedyour.mom` and `d.hotsinglesnear.you` are custom domains of `you-stupid` as well (shamu4life/you-stupid#22) |
+| `src/guesthost.ts` | **guest hosts**: two domains of the owner's `you-stupid` Worker that reach this one through its service binding. Which hosts are guests is the `GUEST_HOSTS` var, set in `wrangler.production.jsonc` (unset: none). Only embed routes are answered there, marked `x-mbedfx-guest: served`; everything else is declined so that Worker keeps its own page. The converter takes its domain buttons and guest list from the config block the Worker writes into the page (`src/sitepage.ts`); its literal arrays are only the fallback, and `test/sitepage.test.mjs` holds what the page computes under production's vars to them. `d.` works there too: `d.sorryifuckedyour.mom` and `d.hotsinglesnear.you` are custom domains of `you-stupid` as well (shamu4life/you-stupid#22) |
 | `src/fetchretry.ts` | `askTwice`, the one extra ask every platform fetcher goes through. The four exempt call sites say `NO-RETRY` and why |
 | `src/render/` | the two heads, the Mastodon spoof, failure cards |
 | `src/render/embed.ts` | shared predicates: `usable`, `mediaOf`, `themeColor`, `byline` |
@@ -46,6 +49,13 @@ plays inline.
 | `relay/server.mjs` | the Reddit relay, a key-locked forwarder on Google Cloud Run (owner's choice, 2026-10-26) so Reddit and the archive see a non-Cloudflare address. Three allowed hosts, nothing else; `/selftest` measures that egress. Deployed by the owner from Cloud Shell (`relay/README.md`), not by Workers Builds |
 | `public/index.html` | the converter page |
 | `docs/API.md` | the published `/_api/v1` contract. Read it before changing anything it names |
+| `src/index.ts` | the deploy entry: the fetch handler plus the three Durable Object exports |
+| `src/container.ts` | `MediaResolver`, the container's Durable Object, and the only importer of `@cloudflare/containers`. It sets no `envVars`, so `RESOLVER_SECRET` never reaches the container on Cloudflare |
+| `src/instance.ts` | what a deployment calls itself: the one `PUBLIC_ORIGIN` parser, `SITE_NAME`, the Reddit and archive user agents |
+| `src/sitepage.ts` | the config block the Worker writes into the converter page as it serves it |
+| `src/netguard.ts`, `src/platforms/fedihost.ts` | the private-address guard, and the own-host list the fediverse fetchers refuse (additive only) |
+| `adapters/node/` | the Node adapter (`server.ts`, `bindings.ts`, `r2dir.ts`) and the Docker Compose stack beside the resolver |
+| `wrangler.production.jsonc` / `wrangler.jsonc` / `wrangler.free.jsonc` | mbedfx.app's config (Workers Builds deploys it with `-c`) / the generic self-host config / the same without the container |
 
 ## Things that have bitten this project, so you do not repeat them
 
@@ -61,7 +71,7 @@ plays inline.
   kind means adding it here too.
 - Nothing catches that omission, and this guide used to claim otherwise. The round-trip tests in
   `test/refkey.test.mjs` are hand-enumerated (`['watch','reel','share','group','post','photo']` at
-  `:177`), so a new kind stays uncovered until you add it in both places. `test/prep.test.mjs:873`
+  `:177`), so a new kind stays uncovered until you add it in both places. `test/prep.test.mjs:1046`
   parses the `Route` union out of `src/types.ts` and fails on an unlisted kind. Until the refkey
   tests derive their list the same way, treat the allowlist as unguarded.
 - A cache key has to capture what produced the answer. The translation cache was keyed on the post
@@ -192,10 +202,10 @@ a production zone, guest host, bucket, dataset or container application, or if `
 names the production file.
 
 Every other wrangler command that picks its Worker from the config (`secret`, `tail`, `deployments`,
-`versions`, `rollback`) needs `-c wrangler.production.jsonc` to reach production. Without the `-c`
+`versions`, `rollback`, `preview`) needs `-c wrangler.production.jsonc` to reach production. Without the `-c`
 they reach `mbedfx-selfhost`. A `secret put` fed from a pipe or file creates that Worker if it's
 missing and stores the secret there, and production keeps the old value. Naming the Worker also
-works (`--name mbedfx`, or `tail mbedfx`). `containers list` and `containers info` work account-wide
+works (`--name mbedfx`, or `tail mbedfx`; for `preview` it is `--worker-name mbedfx`, because its `--name` names the Preview). `containers list` and `containers info` work account-wide
 and need neither. `test/wrangler-configs.test.mjs` fails when an `npx wrangler` command of that kind
 in this file, `docs/CREDENTIALS.md`, `docs/METRICS.md`, `container/README.md` or
 `wrangler.production.jsonc` does neither.
@@ -223,7 +233,7 @@ here than in a single-platform fixer.
 | Gap | Where it stands |
 |---|---|
 | No public JSON API | Closed. `/_api/v1?url=…` is documented in `docs/API.md` and shares `describeTarget` with `/_card`, so it cannot drift from the other three surfaces. Two rivals publish an API and FxEmbed ships OpenAPI specs; `public/openapi.json` (OpenAPI 3.1) is served at `/openapi.json` since 2026-08-12, and a derive-and-compare test fails when it drifts from the code that answers. Writing it is what found a live wrong answer: a walled TikTok share code was published as `not_a_post` about a post that exists. |
-| No realistic self-hosting | Open, with no known blocker, and the SAFETY half is now closed. The suite runs in stock Node against `src/worker.ts`, `handle()` is already an adapter entry point, six of the eight Cloudflare surfaces it touches need only an object literal, and `container/` has no Cloudflare surface at all. Since 2026-08-12 the corrections that stood between "it would run" and "it would be safe to expose" have landed: the private-address guard the Worker half never had (`src/netguard.ts`, ported from `container/server.py`, with a `RESOLVE_HOST` seam for the DNS half a Worker cannot do), a configurable and additive `OWN_HOSTS`, a Twitter guest-token cache that works where the `cf` fetch option is ignored, a bound on the mux buffering fallback, and the `CacheLike` contract written down. Three rivals hand over a container and this repo documents `wrangler dev`. What's missing is an adapter and somebody to run it. The unknown is egress IP. Plan in `docs/SELF-HOSTING.md`. |
+| No realistic self-hosting | Mostly closed. The suite runs in stock Node against `src/worker.ts`, `handle()` is already an adapter entry point, six of the eight Cloudflare surfaces it touches need only an object literal, and `container/` has no Cloudflare surface at all. Since 2026-08-12 the corrections that stood between "it would run" and "it would be safe to expose" have landed: the private-address guard the Worker half never had (`src/netguard.ts`, ported from `container/server.py`, with a `RESOLVE_HOST` seam for the DNS half a Worker cannot do), a configurable and additive `OWN_HOSTS`, a Twitter guest-token cache that works where the `cf` fetch option is ignored, a bound on the mux buffering fallback, and the `CacheLike` contract written down. Since 2026-11-25 the adapter exists too: `adapters/node/` serves `handle()` from node:http with a stand-in for each binding, and `adapters/node/compose.yaml` runs it beside the resolver. On a residential host four of five posts matched mbedfx.app (Twitter lacked its repost count), and compose built both images and ran them; CI builds neither. On Cloudflare, `wrangler.jsonc` deploys a separate `mbedfx-selfhost` and `wrangler.free.jsonc` the same without the container, and the README carries a Deploy to Cloudflare button, which nobody has clicked on a real account yet. Closed for a first run, still open for a crowd; the unknown is egress IP. The guide is `docs/SELF-HOSTING.md`. |
 | No profile embeds | Closed where it was real, and measured closed where it was not. `/profile/{handle}` renders a Bluesky account (bio, avatar, three counts, join month) because bsky.app hands a crawler `og:title` and nothing else. Measured 2026-08-11 from Cloudflare egress, x.com, tiktok.com and instagram.com all already answer a crawler with a complete profile card, so a route for them would duplicate what Discord draws; Instagram's profile surfaces are additionally walled from this egress (HTTP 429, zero bytes, with a post-page control at 254 KB). Bare `/{handle}` and `/@{handle}` stay choosers: each names an account on two sites at once, so claiming one serves a card from a site nobody pasted. vxTwitter can claim bare handles because it serves one platform. |
 | No operator metrics | Half closed. `docs/METRICS.md` documents the Analytics Engine SQL read path, and since 2026-08-12 a half-hourly cron renders one known post per platform through this worker's own handler and counts whether a real card came back (`src/smoke.ts`, `/_smoke`), added because Facebook was broken for up to a week and the detector was the owner pasting a link. That is a breakage detector, not an uptime monitor: it runs inside the worker it checks. It also told nobody: on 2026-10-14 its counters showed TikTok failing on almost every tick for a week, unread. Since then the cron keeps its own week in R2 (`src/health.ts`, published at `/_health`, with the Cloudflare location of each run), and `.github/workflows/health-check.yml` reads it twice a week, runs the checks again from GitHub's network (which also sees DNS, routes and a failed deploy), tests the container and the guest domains, and files `health-check` issues. There is deliberately no scrape endpoint: an in-Worker one would need an account-scoped API token at the edge, and `pool_unused` publishes whether the account pools are loaded. `/_clients` joined it on 2026-08-28, a sibling probe that runs inside the container on production egress and reports which YouTube player clients actually serve bytes; it takes no input and rides the existing authenticated `/resolve`, so it opens no new surface, and it degrades to 503 or 502 rather than 500 because a diagnostic that crashes tells an operator less than one that says it could not reach the container. It exists because `/_smoke` stayed green through a total container outage the same week. fxTikTok has a `/metrics`; this Worker doesn't. |
 | No card screenshots in the README | Four of the five show the card their project produces. The README shows a designed banner. |
@@ -249,8 +259,9 @@ header:
   twice a week. Chosen 2026-10-14, over an email-only variant and a Discord webhook, knowing it widened
   the first exception. It touches no code, branch, PR or deploy.
 
-Both read the repo variables `HEALTH_BASE` and `HEALTH_GUESTS` since 2026-11-25 (owner-approved; the
-health check skips without `HEALTH_BASE`). Their identity and scope did not change.
+Since 2026-11-25 (owner-approved) the health check reads the repo variables `HEALTH_BASE` and
+`HEALTH_GUESTS` and skips without `HEALTH_BASE`. The yt-dlp bump reads only `HEALTH_BASE`, for the
+verify command in its PR body, and runs either way. Their identity and scope did not change.
 
 Leave both alone, or ask before changing them. Do not restore them to the owner's account unasked, and
 do not widen either to any other job.
