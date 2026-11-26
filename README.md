@@ -198,9 +198,9 @@ FxEmbed goes deeper on Twitter than mbedfx goes on any one site. The remux exist
 
 ## Domains
 
-`mbedfx.app`, `megapenispoopenfarten.sex` and `forsen.sex` all run the same thing. megapenispoopenfarten.sex is where it started, so links people already shared there keep working. `d.` works on all three.
+`mbedfx.app` and `megapenispoopenfarten.sex` run the whole thing. megapenispoopenfarten.sex is where it started, so links people already shared there keep working.
 
-`sorryifuckedyour.mom` and `hotsinglesnear.you` serve the same cards for post links and Bluesky profiles, with `d.` and `.mp4` working there too. Their front pages belong to another site, so the converter page and the JSON API stay on the three domains above.
+`forsen.sex`, `sorryifuckedyour.mom` and `hotsinglesnear.you` work for post links (and Bluesky profiles), with `d.` and `.mp4` too. Their front pages are other sites, so for the converter page and the JSON API, use mbedfx.app.
 
 Other people can run copies on their own domains. This project doesn't run or vouch for them, so a problem with one goes to whoever runs it.
 
