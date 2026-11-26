@@ -73,6 +73,14 @@ mbedfx.app's Reddit app and account, and it names no account at all. Nobody else
   its old pin.it warning. In `/_api/v1`, send it
   as `?url=/pin.it/{code}`. The shortener was measured from a home connection on 2026-11-25. Nobody
   has measured it from Cloudflare's network yet.
+- **A paste test for Discord's component embeds, to be removed once it has answered.**
+  `/_wait/e/{0|1|2}/{tag}/{post path}` takes an X or Bluesky post and serves its normal Discord head
+  with one change per variant. `0` marks the activity link's id. `1` also adds a component embed to
+  the head. `2` adds the component embed and takes the activity link out. Pasted together, the three
+  show which card Discord draws when a page carries both, and whether a component embed works
+  without the activity document. Each fetch of the `0` or `1` document writes a `wait_api` row coded
+  700 or 701 (`docs/METRICS.md`). The routes answer `no-store`, and no other response changes. Nobody
+  has pasted them yet.
 
 ### Changed
 
