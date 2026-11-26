@@ -138,6 +138,12 @@ mbedfx.app's Reddit app and account, and it names no account at all. Nobody else
 
 ### Fixed
 
+- **The `/fb/` and `/th/` site codes work on Facebook query links and Threads share links.**
+  `mbedfx.app/fb/photo/?fbid=…`, `/fb/photo.php?fbid=…`, `/fb/watch/?v=…`, `/fb/story.php?…`,
+  `/fb/permalink.php?…` and `/th/share/{code}` answered "Not found" though the same links without the
+  code worked, and now give the same card as those links. The converter's "Read as" list adds the
+  code to the front of the link, so picking Facebook on a photo or video link, or Threads on a share
+  link, used to swap a working link for a dead one.
 - **`RESOLVER_SECRET` was documented as protecting the Cloudflare container, and it doesn't.**
   `container/README.md` said to set it on the container as well as the Worker, and nothing in this
   repo puts it there: the container's Durable Object passes it no environment, so the container never
