@@ -208,7 +208,7 @@ Other domains can run copies of this code ([Host your own](#host-your-own)), and
 | Deploy to Cloudflare button | A GitHub account, and a Cloudflare account on Workers Paid (Containers need it) | Yes | No |
 | Cloudflare, from a checkout | Workers Paid, Node 22.18 or later, and Docker running while you deploy | Yes | No |
 | Docker Compose | Docker with Compose v2 on an x86_64 host, and a reverse proxy that terminates TLS | Yes | By hand, once |
-| Node, without Docker | Node 22.18 or later, plus the resolver container for video | Only with the resolver | The adapter ran once |
+| Node, without Docker | Node 22.18 or later, plus the resolver for video (its image, or Python with ffmpeg, yt-dlp and Deno) | Only with the resolver | The adapter ran once |
 
 Either Cloudflare way also runs on Workers Free through `wrangler.free.jsonc`, without the container, and there a video that needs muxing shows its cover image. [docs/SELF-HOSTING.md](docs/SELF-HOSTING.md) is the full guide: every step, what each way costs, and what each one has been measured doing.
 
@@ -237,6 +237,7 @@ npx wrangler r2 bucket lifecycle add mbedfx-selfhost-media expire-60d --expire-d
 
 ```bash
 git clone https://github.com/shamu4life/mbedfx.git && cd mbedfx
+umask 077
 printf 'PUBLIC_ORIGIN=https://<YOUR_DOMAIN>\nRESOLVER_SECRET=%s\n' "$(openssl rand -hex 32)" > adapters/node/.env
 docker compose -f adapters/node/compose.yaml up --build -d
 curl -s 'http://127.0.0.1:8787/_api/v1?url=https%3A%2F%2Fbsky.app%2Fprofile%2Fbsky.app%2Fpost%2F3msqpuobiwk2t' | jq .ok

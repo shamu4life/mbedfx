@@ -187,7 +187,7 @@ models that at about $166 a month on `standard-2` and $29 on `basic`, on top of 
 instance costs a fraction of that, but the half-hourly check can wake a container too.
 
 For scale, mbedfx.app's own container bill for 2026-07-27 to 2026-08-26, read on 2026-08-16 with 21
-of the 31 days in, was $21.63, and $21.23 of it was idle uptime. That was with a 10-minute sleep
+of the 31 days in, was $21.63. $21.23 of it was uptime and $0.41 was work. That was with a 10-minute sleep
 timer. The measurement and the reasoning for 5 minutes are the comment on `sleepAfter` in
 `src/container.ts`.
 
@@ -216,6 +216,7 @@ only on `127.0.0.1`.
 - One dedicated CPU core is worth more than several shared ones ([Size the host](#size-the-host)).
 - A domain, DNS pointing at the host, and a reverse proxy that terminates TLS
   ([Put it behind HTTPS](#put-it-behind-https)).
+- `git`, `openssl`, `curl` and `jq` for the commands below.
 
 ### Start it
 
