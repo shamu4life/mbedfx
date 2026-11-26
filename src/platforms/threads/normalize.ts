@@ -8,7 +8,7 @@ type Any = Record<string, any>
  *
  *  - 'ssr' (PRIMARY): the server-rendered post JSON in the logged-out permalink (SSR_PRELOADERS below).
  *    Every field a rich card needs: each carousel slide, video, counts, avatar, the real timestamp,
- *    the quoted post.
+ *    the quoted post, the pictures of a linked Instagram post, and who a reply answers.
  *  - 'html' (FALLBACK): the OG tags of two bot-UA pages, for when the SSR payload is missing. TWO
  *    pages, because no single UA carries both (measured 2026-07-21): `facebookexternalhit/1.1`
  *    renders `name="description"` (the caption) but its `og:image` is only the author's profile
@@ -94,6 +94,35 @@ export function createdAtFromCode(code: string): Date | null {
   }
   const d = new Date(Number((n >> 23n) + 1314220021721n))
   return Number.isNaN(d.getTime()) ? null : d
+}
+
+/**
+ * THE INVERSE OF THE DECODE ABOVE: a numeric post id to its shortcode. Threads names a reply's parent
+ * only by its numeric id (`text_post_app_info.reply_to_post_id`), and a th ref needs the shortcode.
+ *
+ * Measured 2026-11-26 on pages fetched once each with SSR_HEADERS from a Linux workstation, not from a
+ * Worker (the conversion is arithmetic on the payload, so egress cannot change it): every object
+ * carrying both a `pk` and a `code` agreed with this function, 50 of 50 across two captured pages and
+ * 12 of 12 in the committed fixtures (test/threads-normalize.test.mjs walks those). On the same two
+ * pages, each of the three replies (one self-reply, two replies from other accounts) named a parent
+ * that was on the page too, with `pk` equal to `reply_to_post_id`, `code` equal to this function's
+ * answer, and its author equal to `reply_to_author`.
+ *
+ * A STRING OF 1 TO 20 DIGITS, NO LEADING ZERO, OR NOTHING. A pk is a 64-bit integer, so 20 digits is
+ * the most it can have. BigInt() throws on anything that is not digits. And an id that arrived as a JSON
+ * NUMBER is refused rather than converted, because JSON.parse has already rounded it: these ids are 19
+ * digits, past 2^53, so its shortcode would name some other post.
+ */
+const POST_ID = /^[1-9]\d{0,19}$/
+export function codeFromId(id: unknown): string | null {
+  if (typeof id !== 'string' || !POST_ID.test(id)) return null
+  let n = BigInt(id)
+  let code = ''
+  while (n > 0n) {
+    code = B64URL[Number(n % 64n)] + code
+    n /= 64n
+  }
+  return code
 }
 
 /**
@@ -264,8 +293,86 @@ function mediaEntries(m: Any): Media[] {
 }
 
 /**
+ * A TEXT POST THAT LINKS AN INSTAGRAM POST has no media of its own, and Threads draws the linked post's
+ * pictures inline in it. Measured 2026-11-26 on the FIXERS.md carousel example, fetched with
+ * SSR_HEADERS from a Linux workstation (not a Worker): the post is `media_type 19` with an empty
+ * `image_versions2.candidates` and no `carousel_media`. Its ten slides sit under
+ * `text_post_app_info.linked_inline_media`, a `media_type 8` dict whose `permalink` is on
+ * www.instagram.com and whose `user` is a different account from the Threads author, next to a
+ * `link_preview_attachment` for the same Instagram post. mediaEntries read only the top level, so
+ * production answered `media: []` for it, the avatar summary card, while its counts showed the SSR
+ * path had run.
+ *
+ * THE POST'S OWN MEDIA WINS whenever there is any, and only the linked post's MEDIA is read. Its
+ * caption (683 characters on the example) and its author are left alone: the card is the Threads post,
+ * so its text and byline stay the Threads author's. A post with both its own media and a linked post
+ * was not seen; preferring its own is what keeps such a card from showing someone else's pictures in
+ * place of the author's. Not measured: a linked reel. If Threads sends it with no `video_versions`,
+ * mediaFromDict makes it its cover still, the same as any dict without a playable url.
+ */
+function postMedia(m: Any): Media[] {
+  const own = mediaEntries(m)
+  if (own.length) return own
+  const linked = m?.text_post_app_info?.linked_inline_media
+  return linked && typeof linked === 'object' ? mediaEntries(linked) : []
+}
+
+/** A Threads handle, the same charset AUTHOR accepts out of og:title. */
+const HANDLE = /^[A-Za-z0-9._]+$/
+
+/**
+ * THE PARENT OF A REPLY, as little of it as the reply marker needs. Built the way twitter/normalize.ts's
+ * minimalReplyTo builds one: the renderer reads only replyTo.author (text.ts replyPrefix, mastodon.ts
+ * authorName), so this carries the parent's handle and honest empties. The parent's text is never
+ * filled in; the Target block does not carry it.
+ *
+ * Three fields on `text_post_app_info`, measured 2026-11-26 on the FIXERS.md reply example and on two
+ * replies from other accounts on the carousel example's page: `is_reply: true`, `reply_to_author`
+ * (username, id and profile_pic_url, no display name) and `reply_to_post_id` (a numeric string;
+ * codeFromId says how it becomes the parent's shortcode and what proves it does). A post that is not a
+ * reply carried `is_reply: false` and nulls for the other two. buildFromMedia used to read none of
+ * them, so every Threads reply rendered as if it started a thread.
+ *
+ * ALL THREE OR NO REPLY CONTEXT. cache.ts's hasValidIdentity re-checks a nested replyTo when a cached
+ * post is read back, and a replyTo without a valid ref, canonical or createdAt makes the WHOLE post read
+ * back as null, so every view would refetch. A replyTo with the ref or canonical left out is therefore
+ * not a way to degrade. A reply with no usable id or handle gets no replyTo, the rule Twitter follows.
+ *
+ * createdAt is the PARENT's, read from its shortcode by createdAtFromCode, where Twitter has to borrow
+ * the child's. Nothing renders it, but the cache stores it, and the real value is in hand. On the
+ * example it is 145 ms before the child's id time.
+ */
+function replyToFrom(tp: Any): Post | undefined {
+  if (tp?.is_reply !== true) return undefined
+  const handle = tp.reply_to_author?.username
+  if (typeof handle !== 'string' || !HANDLE.test(handle)) return undefined
+  const code = codeFromId(tp.reply_to_post_id)
+  const createdAt = code ? createdAtFromCode(code) : null
+  if (!code || !createdAt) return undefined
+  return {
+    ref: { p: 'th', code },
+    canonical: `https://www.threads.com/@${handle}/post/${code}`,
+    // reply_to_author has no display name, so the name is the handle, as on Twitter's minimal parent.
+    author: { name: handle, handle, url: `https://www.threads.com/@${handle}` },
+    text: '',
+    createdAt,
+    media: [],
+    counts: {},
+    sensitive: false,
+  }
+}
+
+/**
  * Build a Post from an Instagram media dict. `quoted`, when false, blocks the one level of recursion
- * into a quoted/reposted post (share_info) — depth 1, the same cap the other platforms enforce.
+ * into a quoted/reposted post (share_info) and the reply context, both depth 1, the same cap the other
+ * platforms enforce.
+ *
+ * NO META_GENERATION BUMP came with the 2026-11-26 linked-media and reply fixes, because a Threads
+ * Post is never stored under it. META_GENERATION scopes only the R2 meta records (metaCacheKey in
+ * worker.ts, for yt, fb, dm, st and im). A Threads Post lives in the per-colo Cache API, under
+ * postCacheKey for POST_TTL and as a rendered response for RESP_TTL, 900 s each. So a card cached
+ * without its pictures or its marker heals within about half an hour. A bump would not reach it, and
+ * would throw away up to 30 days of other platforms' records.
  */
 function buildFromMedia(m: Any, ref: Extract<PostRef, { p: 'th' }>, quoted = false): Post | null {
   const user = m?.user
@@ -285,7 +392,7 @@ function buildFromMedia(m: Any, ref: Extract<PostRef, { p: 'th' }>, quoted = fal
     },
     text: typeof m.caption?.text === 'string' ? m.caption.text : '',
     createdAt: created,
-    media: mediaEntries(m),
+    media: postMedia(m),
     counts: { likes: num(m.like_count), replies: num(tp.direct_reply_count), reposts: num(tp.repost_count) },
     sensitive: false,
   }
@@ -295,6 +402,8 @@ function buildFromMedia(m: Any, ref: Extract<PostRef, { p: 'th' }>, quoted = fal
       const qp = buildFromMedia(q, { p: 'th', code: typeof q.code === 'string' ? q.code : '' }, true)
       if (qp) post.quote = qp
     }
+    const parent = replyToFrom(tp)
+    if (parent) post.replyTo = parent
   }
   return post
 }

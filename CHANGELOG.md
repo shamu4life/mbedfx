@@ -138,6 +138,13 @@ mbedfx.app's Reddit app and account, and it names no account at all. Nobody else
 
 ### Fixed
 
+- **Threads posts that share an Instagram post show its pictures, and Threads replies say who they
+  answer.** A Threads text post linking an Instagram carousel got a card with no pictures, although
+  Threads shows the carousel inside the post. The card now has those pictures, under the Threads
+  post's own author and text. A reply opens with the ↩ line naming the account it answers, as replies
+  from X and Bluesky already did. FixTweetBot's FIXERS.md comparison (tested 2026-11-08) found both.
+  Neither fix has been pasted into Discord yet. A shared Instagram video wasn't among the examples,
+  and if Threads sends one without a playable link, the card shows its cover picture.
 - **`RESOLVER_SECRET` was documented as protecting the Cloudflare container, and it doesn't.**
   `container/README.md` said to set it on the container as well as the Worker, and nothing in this
   repo puts it there: the container's Durable Object passes it no environment, so the container never
