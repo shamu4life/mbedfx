@@ -335,11 +335,14 @@ test('WAIT e DOCUMENTS: 9700 and 9701 are today\'s document under the wait id, c
     assert.equal(await res.text(), direct.replace(`{"id":"${sid}"`, `{"id":"${code}${sid}"`),
       `${path}: production's document byte for byte, under the id it was fetched as`)
   }
+  // REWRITTEN 2026-11-26 (review): blob1 was 'none', as on every other wait surface, so an X paste and a
+  // Bluesky paste both wrote an anonymous 701 and the rows could not say which card fetched its
+  // document. e's rows now carry the post's platform, read off the real id.
   assert.deepEqual(rows.filter(r => r.blobs[1].startsWith('wait_')).map(r => [r.blobs, r.doubles]), [
-    [['none', 'wait_api', 'discord'], [1, 700]],
-    [['none', 'wait_api', 'discord'], [1, 701]],
-    [['none', 'wait_users', 'discord'], [1, 701]],
-  ], 'a 701 row is what says Discord fetched the document beside a component embed')
+    [['x', 'wait_api', 'discord'], [1, 700]],
+    [['x', 'wait_api', 'discord'], [1, 701]],
+    [['x', 'wait_users', 'discord'], [1, 701]],
+  ], 'a 701 row is what says Discord fetched the document beside a component embed, and it names the post\'s platform')
   // v=2 has no document, so 9702 names nothing; 97 with any other pair is not a wait id either.
   for (const bad of [`/api/v1/statuses/9702${sid}`, `/api/v1/statuses/9705${sid}`, `/api/v1/statuses/9710${sid}`]) {
     const e2 = fakeEnv()

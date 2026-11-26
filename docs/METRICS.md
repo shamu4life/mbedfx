@@ -416,13 +416,18 @@ the head. The link button shows which card Discord drew. The component embed has
 card and the Open Graph card don't.
 
 ```sql
-SELECT blob2 AS path, double2 AS code, SUM(_sample_interval) AS fetches,
-       MIN(timestamp) AS first_seen, MAX(timestamp) AS last_seen
+SELECT blob1 AS platform, blob2 AS path, double2 AS code,
+       intDiv(toUInt32(timestamp), 60) * 60 AS minute, SUM(_sample_interval) AS fetches
 FROM mbedfx_counters
 WHERE blob2 IN ('wait_api', 'wait_users') AND double2 IN (700, 701)
   AND timestamp > NOW() - INTERVAL '1' DAY
-GROUP BY path, code
+GROUP BY platform, path, code, minute
+ORDER BY minute
 ```
+
+Each row names its post's platform (`x` or `bs`) and the minute it landed, so paste the two posts a
+few minutes apart, and run any Embed Debugger check before the pastes, not between them: the
+debugger's fetch writes the same row a paste does.
 
 If a `701` row sits beside a component card, Discord fetched the document and still drew the script.
 If there's a component card and no `701` row, Discord skipped the document once it had the script.

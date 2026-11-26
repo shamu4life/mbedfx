@@ -25,7 +25,7 @@ import {
 import { fetchBluesky, fetchBlueskyProfile } from './platforms/bluesky/fetch.ts'
 import { normalizeBluesky, normalizeBlueskyProfile } from './platforms/bluesky/normalize.ts'
 import type { AwemeResolver } from './platforms/tiktok/fetch.ts'
-import { DEFAULT_GALLERY_MODE, encodeStatusId } from './statusid.ts'
+import { DEFAULT_GALLERY_MODE, decodeStatusId, encodeStatusId } from './statusid.ts'
 import { fetchTikTok, isTikTokCdnHost, resolveTikTokShortlink, TIKTOK_UA, withResolvedVideo } from './platforms/tiktok/fetch.ts'
 import { AWEME_PLAY, normalizeTikTok, tiktokGate, tiktokRefFrom, videoDetailScope } from './platforms/tiktok/normalize.ts'
 import {
@@ -6067,7 +6067,11 @@ async function serve(req: Request, env: Env, ctx: ExecutionContext, d: Deps): Pr
       // the row carries the wait code (surface digit × 100 + n) so a long hold's re-fetches can be
       // read off the timestamps whatever the card did. Counted, not logged: no url, no post id, no
       // user agent leaves here.
-      countWait(env, path === 'api/v1' ? 'wait_api' : 'wait_users', classify(req.headers.get('user-agent')), code)
+      // e's rows also name the post's platform (x or bs, read off the real id) in blob1, where every
+      // other surface writes 'none'. Without it an X paste and a Bluesky paste both write 701, and the
+      // owner reading the rows cannot tell which card fetched its document (review, 2026-11-26).
+      const platform = surface === 'e' ? (decodeStatusId(realSid)?.split(':')[0] || 'none') : 'none'
+      countWait(env, path === 'api/v1' ? 'wait_api' : 'wait_users', classify(req.headers.get('user-agent')), code, platform)
       // a and p hold the DOCUMENT; m, b and c are instant — the whole point of those surfaces is
       // that the crawler waits for nothing and only the media fetch carries the stall.
       if ((surface === 'a' || surface === 'p') && ndoc) await new Promise(r => setTimeout(r, ndoc * 1000))
