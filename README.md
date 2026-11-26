@@ -181,20 +181,23 @@ On Cloudflare, set plain settings as variables in the dashboard and credentials 
 
 ## How it compares
 
-Checked on 2026-08-01 against each project's docs, source and live service. The other projects' columns are frozen at that date. **?** means it couldn't be established either way.
+Checked on 2026-11-26 against each project's docs, source and live service, with the live checks run from a home connection using Discord's user agent. The other projects' columns are frozen at that date.
 
-| | **mbedfx** | [FxEmbed](https://github.com/FxEmbed/FxEmbed) | [vxTwitter](https://github.com/dylanpdx/BetterTwitFix) | [fxTikTok](https://github.com/okdargy/fxTikTok) | [InstaFix](https://github.com/Wikidepia/InstaFix) | [InstaFix Revived](https://github.com/Bl0ck154/InstaFix-Revived) |
-|---|---|---|---|---|---|---|
-| Sites covered | 17 | 2 documented, 4 live | Twitter | TikTok | Instagram | Instagram |
-| Working public instance | ✅ | ✅ + status page | ✅ | ✅ | ❌ archived, self-host only | ✅ |
-| How video reaches Discord | own remux | platform MP4 | CDN redirect | CDN redirect | CDN redirect | streamed |
-| Caption translation | ✅ automatic | opt-in `/en` | opt-in `/en`, undocumented | ❌ | ❌ | ❌ |
-| Card says *why* a post is missing | ✅ private / age / deleted | ? | ? | age only | ❌ redirects | one generic card |
-| Public JSON API | [✅ documented](docs/API.md) + [OpenAPI](public/openapi.json) | ✅ OpenAPI | ✅ documented | ❌ | ❌ | undocumented |
-| Self-host off Cloudflare | [Node adapter, Docker compose](docs/SELF-HOSTING.md#host-it-with-docker-compose) | ❌ Workers | ✅ Docker · systemd · Lambda | Docker, undocumented | ✅ Docker · K8s | ✅ Docker |
-| Operator metrics | [documented queries](docs/METRICS.md), no scrape endpoint | ? | ? | ✅ Prometheus | pprof | pprof |
+| | **mbedfx** | [FxEmbed](https://github.com/FxEmbed/FxEmbed) | [vxTwitter](https://github.com/dylanpdx/BetterTwitFix) | [fxTikTok](https://github.com/okdargy/fxTikTok) | [InstaFix](https://github.com/Wikidepia/InstaFix) | [InstaFix Revived](https://github.com/Bl0ck154/InstaFix-Revived) | [embeds.now](https://embeds.now/) |
+|---|---|---|---|---|---|---|---|
+| Sites covered | 17 | 2 documented, 4 live | Twitter | TikTok | Instagram | Instagram | 14 |
+| Working public instance | ✅ | ✅ + status page | ✅ | ✅ | ❌ archived, domain on hold | ❌ both domains on hold | ✅ closed source |
+| How video reaches Discord | own remux | varies: X redirect, Instagram MP4, TikTok streamed | platform MP4 | CDN redirect | CDN redirect | CDN redirect | varies by site |
+| Caption translation | ✅ automatic | opt-in `/en` | opt-in `/en`, undocumented | ❌ | ❌ | ❌ | ❌ |
+| Card says *why* a post is missing | ✅ private / age / deleted | deleted / private / suspended | one generic card | age, or one deleted-or-private card | ❌ redirects | age / region / unavailable | one generic card |
+| Discord component embeds | ❌ | in code, switched off | for big or mixed galleries | ❌ | ❌ | ❌ | ✅ every card |
+| Public JSON API | [✅ documented](docs/API.md) + [OpenAPI](public/openapi.json) | ✅ OpenAPI | ✅ documented | ❌ | ❌ | minimal, 3 fields | ❌ |
+| Self-host off Cloudflare | [Node adapter, Docker compose](docs/SELF-HOSTING.md#host-it-with-docker-compose) | Docker (runs workerd) | ✅ Docker · systemd · Lambda | ✅ Bun · Docker | ✅ Docker · K8s | ✅ Docker | ❌ closed source |
+| Operator metrics | [documented queries](docs/METRICS.md), no scrape endpoint | Analytics Engine, error reports | stdout logs | ✅ Prometheus, opt-in | pprof | pprof, Telegram report | internal only |
 
 FxEmbed goes deeper on Twitter than mbedfx goes on any one site. The remux exists because most of the seventeen won't hand a bot a playable file, and on Twitter and TikTok, which already do, it buys nothing.
+
+Since August both Instagram fixers lost their public domains to registrar holds, and embeds.now (launched October 2026) became the other multi-site fixer with a public instance. Discord's component embeds, documented in October 2026, are the biggest change. mbedfx doesn't send them yet, because its video cards depend on the Mastodon-style document and nobody has measured what Discord does when a page carries both.
 
 ## Domains
 
