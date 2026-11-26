@@ -133,7 +133,10 @@ export function componentEmbedJson(post: Post, origin: string): string | null {
  * AN IMAGE KEEPS THE EXTENSIONLESS URL. The router would accept `.jpg`, but the format is the CDN's
  * choice per request: cdn.bsky.app answered image/webp for a feed_fullsize/plain url asked with no
  * Accept header (2026-11-26). Any extension would be a guess about bytes this Worker never sees.
- * If Bluesky's gallery is missing from a component card while X's video shows, suspect this first.
+ * The avatar Thumbnail is extensionless on every post too, so if Discord refuses extensionless
+ * media, X's component card can fail with Bluesky's, and the docs warn that some failures show no
+ * embed at all. Check the urls in Discord's Embed Debugger before reading that as "component
+ * embeds don't work".
  * A GIF takes `.gif`, as its media_attachment does.
  */
 function galleryOf(post: Post, origin: string): Item[] {

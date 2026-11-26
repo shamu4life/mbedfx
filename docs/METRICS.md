@@ -431,9 +431,12 @@ ordinary paste of that post writes, and `v=1` and `v=2` then read the post back 
 just warmed, which normally costs no second upstream fetch.
 
 One thing the paste can't separate yet: the video in the component embed uses og:video's `.mp4` url,
-but the pictures use extensionless urls, because the CDN picks their format per request. If X's video
-shows in a component card and Bluesky's pictures don't, suspect those urls before blaming component
-embeds (`src/render/componentembed.ts`).
+but every picture uses an extensionless url, the avatar on both posts included, because the CDN picks
+the format per request. If Discord turns down extensionless media, both component cards could fail
+together, and Discord's docs warn that some failures show no embed at all. That would look like
+"component embeds don't work" when the urls were the problem. Run the `v=1` and `v=2` urls through
+Discord's [Embed Debugger](https://discord.com/developers/embeds) before reading it that way
+(`src/render/componentembed.ts`).
 
 ---
 
