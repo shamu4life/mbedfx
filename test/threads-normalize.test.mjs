@@ -1,6 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { createdAtFromCode, hasThreadsSSR, normalizeThreads, threadsHasPost } from '../src/platforms/threads/normalize.ts'
+import { codeFromId, createdAtFromCode, hasThreadsSSR, normalizeThreads, threadsHasPost } from '../src/platforms/threads/normalize.ts'
+import { deserializePost, serializePost } from '../src/cache.ts'
 import { toMastodonStatus } from '../src/render/mastodon.ts'
 import { readFileSync } from 'node:fs'
 import { renderPost } from '../src/render/discord.ts'
@@ -383,4 +384,221 @@ test('THE th SMOKE ROW TELLS THE TWO PATHS APART: the real page is ok, the OG fa
   const fallbackHead = await renderPost(fallback, 'discord', ORIGIN).text()
   assert.equal(cardVerdict(fallbackHead), 'ok', 'the default verdict cannot see the difference; that was the blind spot')
   assert.equal(cardVerdict(fallbackHead, 'video'), 'no-video')
+})
+
+/**
+ * TWO MORE PAGES, 2026-11-26: the carousel and reply examples from FixTweetBot's FIXERS.md (tested
+ * 2026-11-08), which production drew with no pictures and with no reply marker. Each was fetched once
+ * with SSR_HEADERS from a Linux workstation, not a Worker. They are cut differently from the two above.
+ *
+ * WHAT WAS KEPT: the Target data script's JSON envelope, verbatim, with the preloader's real name and
+ * hash. The script tag lost its nonce and data-content-len attributes. Counts, taken_at and each
+ * slide's width and height are the page's. One real identifier is kept: the reply's `reply_to_post_id`,
+ * because the reply test needs a real id to show that it converts to the real parent's shortcode.
+ * WHAT WAS CHANGED: the media dict is MINIMISED to the fields normalize.ts reads. Every handle, display
+ * name and caption is a placeholder, and so are both posts' own shortcodes and every CDN filename. Each
+ * CDN url keeps only its real path class (t51.*). Its host is the generic scontent.cdninstagram.com,
+ * because the real one names the CDN edge nearest the machine that fetched the page, and its query
+ * string is dropped.
+ * WHAT WAS DROPPED: the og:* head, the Upward, Downward and LoggedOutRelatedPosts scripts, the linked
+ * Instagram post's own caption, author and link preview, and the `pk` of every object.
+ */
+const LINKED = readFileSync(new URL('./fixtures/threads-ssr-linked-carousel.html', import.meta.url), 'utf8')
+const LINKED_REF = { p: 'th', code: 'DtextPost00' }
+const REPLY_PAGE = readFileSync(new URL('./fixtures/threads-ssr-reply.html', import.meta.url), 'utf8')
+const REPLY_REF = { p: 'th', code: 'DreplyPost0' }
+// The reply's parent as the captured page carried it in its Upward block: this code, with a pk equal
+// to the fixture's reply_to_post_id, by the account reply_to_author names.
+const PARENT_CODE = 'DfM7FCMk8ht'
+
+test('A TEXT POST THAT LINKS AN INSTAGRAM CAROUSEL SHOWS ITS TEN SLIDES, not the avatar card', async () => {
+  /**
+   * The defect: the post is media_type 19 with no media of its own, and its slides sit under
+   * text_post_app_info.linked_inline_media. mediaEntries read only the top level, so production
+   * answered media: [] and Discord drew the avatar summary card, although Threads shows the slides
+   * inline. Only the pictures are taken from the linked post: the byline, text and link stay the
+   * Threads post's.
+   */
+  assert.equal(hasThreadsSSR(LINKED), true)
+  const post = normalizeThreads({ source: 'ssr', html: LINKED }, LINKED_REF)
+  assert.ok(post)
+  assert.equal(post.media.length, 10, 'every slide of the linked carousel')
+  assert.ok(post.media.every(m => m.kind === 'image' && m.w > 0 && m.h > 0), 'images with their real dimensions')
+  assert.ok(post.media.every(m => /\/t51\./.test(m.url)), 'real slides, not the t39.92108-6 share card')
+  assert.deepEqual(
+    post.media.map(m => m.url.split('/').pop()),
+    Array.from({ length: 10 }, (_, i) => `linked_slide_${String(i + 1).padStart(2, '0')}.jpg`),
+    'in the order Threads lists them',
+  )
+  assert.equal(post.author.handle, 'threads_author')
+  assert.equal(post.text, 'A text post that links an Instagram carousel.')
+  assert.equal(post.canonical, 'https://www.threads.com/@threads_author/post/DtextPost00')
+  assert.deepEqual(post.counts, { likes: 80, replies: 2, reposts: 4 })
+  assert.equal(post.replyTo, undefined, 'is_reply is false here and both reply fields are null')
+
+  // Discord draws a post with media from the activity document, so the slides have to arrive there.
+  for (const mode of [undefined, 'videos', 'stills']) {
+    const s = toMastodonStatus(post, ORIGIN, mode)
+    assert.equal(s.media_attachments.length, 10, `mode ${mode}: ten attachments`)
+    assert.ok(s.media_attachments.every(a => a.type === 'image'), `mode ${mode}: all images`)
+  }
+  const head = await renderPost(post, 'discord', ORIGIN).text()
+  assert.match(head, /<meta name="twitter:card" content="summary_large_image"\/>/, 'the media head, not the avatar summary card')
+})
+
+test('A POST\'S OWN MEDIA WINS OVER A LINKED POST\'S, and a post with neither keeps an empty list', () => {
+  /**
+   * linked_inline_media is a fallback. A post with pictures of its own shows those, never another
+   * account's in their place. And the fallback goes through mediaEntries, so a linked single picture
+   * works as well as a linked carousel.
+   */
+  const ssr = (over) => normalizeThreads({ source: 'ssr', html: ssrPage(mediaDict(over)) }, { p: 'th', code: 'DDYEM_foiI1' })
+  const linkedCarousel = { media_type: 8, carousel_media: [
+    { media_type: 1, image_versions2: { candidates: [{ url: 'https://cdn.example/linked.jpg', width: 5, height: 5 }] } },
+  ] }
+  const own = ssr({ text_post_app_info: { direct_reply_count: 0, linked_inline_media: linkedCarousel } })
+  assert.deepEqual(own.media, [{ kind: 'image', url: 'https://cdn.example/img.jpg', w: 720, h: 720 }])
+
+  const textOnly = { media_type: 19, image_versions2: { candidates: [] } }
+  const linkedOnly = ssr({ ...textOnly, text_post_app_info: { direct_reply_count: 0, linked_inline_media: linkedCarousel } })
+  assert.deepEqual(linkedOnly.media, [{ kind: 'image', url: 'https://cdn.example/linked.jpg', w: 5, h: 5 }])
+
+  const single = ssr({ ...textOnly, text_post_app_info: { direct_reply_count: 0, linked_inline_media: {
+    media_type: 1, image_versions2: { candidates: [{ url: 'https://cdn.example/one.jpg', width: 3, height: 4 }] },
+  } } })
+  assert.deepEqual(single.media, [{ kind: 'image', url: 'https://cdn.example/one.jpg', w: 3, h: 4 }])
+
+  for (const linked of [null, undefined, 'not a dict']) {
+    const none = ssr({ ...textOnly, text_post_app_info: { direct_reply_count: 0, linked_inline_media: linked } })
+    assert.ok(none, `${linked}: the post is still built`)
+    assert.deepEqual(none.media, [], `${linked}: no media, and none invented`)
+  }
+})
+
+test('A THREADS REPLY SAYS WHO IT ANSWERS, in the head Discord draws a text post from and in the activity document', async () => {
+  /**
+   * The defect: buildFromMedia never read is_reply, reply_to_author or reply_to_post_id, so a reply
+   * rendered as if it started a thread. The renderer already draws the marker for any post.replyTo
+   * with an author (text.ts replyPrefix). This post has no media, so Discord draws it from the
+   * OpenGraph head, and og:description is where the marker has to be. The example is a self-reply, a
+   * post continuing its author's own thread, which is why both handles are the same placeholder.
+   */
+  const post = normalizeThreads({ source: 'ssr', html: REPLY_PAGE }, REPLY_REF)
+  assert.ok(post)
+  assert.deepEqual(post.media, [])
+  const r = post.replyTo
+  assert.ok(r, 'a reply carries its parent')
+  assert.deepEqual(r.ref, { p: 'th', code: PARENT_CODE }, 'the real parent, converted from reply_to_post_id')
+  assert.equal(r.canonical, `https://www.threads.com/@threads_author/post/${PARENT_CODE}`)
+  assert.deepEqual(r.author, { name: 'threads_author', handle: 'threads_author', url: 'https://www.threads.com/@threads_author' })
+  assert.equal(r.text, '', 'the parent text is not in the Target block, so none is invented')
+  assert.deepEqual(r.media, [])
+  assert.deepEqual(r.counts, {})
+  assert.equal(r.replyTo, undefined, 'depth 1')
+  assert.equal(r.quote, undefined, 'depth 1')
+  // The parent's own time, from its shortcode. The child's taken_at is 14:15:02 to the second; the
+  // ids put the parent 145 ms before the child (whose id time is 14:15:02.787).
+  assert.equal(r.createdAt.toISOString(), '2026-11-01T14:15:02.642Z')
+
+  const head = await renderPost(post, 'discord', ORIGIN).text()
+  assert.match(head, /<meta property="og:description" content="↩ threads_author \(@threads_author\)/)
+  const s = toMastodonStatus(post, ORIGIN)
+  assert.ok(
+    s.content.includes('<sub>↩ <a href="https://www.threads.com/@threads_author" class="u-url mention">threads_author (@threads_author)</a></sub>'),
+    `expected the reply marker in: ${s.content}`,
+  )
+})
+
+test('A THREADS REPLY SURVIVES THE POST CACHE: its parent passes the nested identity check', () => {
+  /**
+   * cache.ts's hasValidIdentity re-checks a nested replyTo's ref, canonical and createdAt when a cached
+   * post is read back, and one bad field makes the WHOLE post read back as null, so every view of
+   * every reply would be a fresh fetch. This is the trap that rules out a replyTo with its ref or
+   * canonical left out.
+   */
+  const post = normalizeThreads({ source: 'ssr', html: REPLY_PAGE }, REPLY_REF)
+  const back = deserializePost(serializePost(post))
+  assert.ok(back, 'the reply reads back from the cache')
+  assert.deepEqual(back.replyTo.ref, { p: 'th', code: PARENT_CODE })
+  assert.equal(back.replyTo.canonical, post.replyTo.canonical)
+  assert.equal(back.replyTo.createdAt.toISOString(), post.replyTo.createdAt.toISOString())
+  assert.equal(back.replyTo.author.handle, 'threads_author')
+})
+
+test('NO REPLY CONTEXT WITHOUT ALL THREE FIELDS, and the post itself is still built', () => {
+  /**
+   * Every case below would otherwise need a guess: a parent nobody can name, a shortcode from an id
+   * JSON.parse has already rounded, or a ref the cache would reject. Each gets no replyTo instead, and
+   * keeps its card. The positive control uses an id and code this file already pins (DDYEM_foiI1 is
+   * 3519581593786262069, decoded above).
+   */
+  const ID = '3519581593786262069'
+  const good = { is_reply: true, reply_to_author: { username: 'someoneelse' }, reply_to_post_id: ID }
+  const reply = (tp) => normalizeThreads(
+    { source: 'ssr', html: ssrPage(mediaDict({ text_post_app_info: { direct_reply_count: 0, ...tp } })) },
+    { p: 'th', code: 'DDYEM_foiI1' },
+  )
+  const control = reply(good)
+  assert.deepEqual(control.replyTo.ref, { p: 'th', code: 'DDYEM_foiI1' }, 'positive control')
+  assert.equal(control.replyTo.author.handle, 'someoneelse')
+
+  for (const [why, tp] of [
+    ['is_reply false', { ...good, is_reply: false }],
+    ['is_reply missing', { reply_to_author: good.reply_to_author, reply_to_post_id: ID }],
+    ['is_reply the string "true"', { ...good, is_reply: 'true' }],
+    ['no author', { ...good, reply_to_author: null }],
+    ['an author without a username', { ...good, reply_to_author: { id: '1' } }],
+    ['a username that is not a handle', { ...good, reply_to_author: { username: 'not a handle' } }],
+    ['no id', { ...good, reply_to_post_id: null }],
+    // A number literal this long is already rounded, which is the case being tested.
+    ['an id that arrived as a JSON number', { ...good, reply_to_post_id: Number(ID) }],
+    ['an id that is a shortcode, not digits', { ...good, reply_to_post_id: 'DDYEM_foiI1' }],
+    ['a zero id', { ...good, reply_to_post_id: '0' }],
+    ['an id with a leading zero', { ...good, reply_to_post_id: `0${ID}` }],
+    ['an id longer than 64 bits allows', { ...good, reply_to_post_id: '1'.repeat(21) }],
+  ]) {
+    const post = reply(tp)
+    assert.ok(post, `${why}: the post is still built`)
+    assert.equal(post.replyTo, undefined, `${why}: no reply context`)
+  }
+})
+
+test('A QUOTED POST NEVER CARRIES REPLY CONTEXT OF ITS OWN (depth 1)', () => {
+  const post = normalizeThreads({ source: 'ssr', html: ssrPage(mediaDict({
+    text_post_app_info: { direct_reply_count: 0, share_info: { quoted_post: mediaDict({
+      code: 'QUOTED0code', caption: { text: 'a quoted reply' },
+      user: { username: 'someoneelse', full_name: 'Someone Else' },
+      text_post_app_info: { is_reply: true, reply_to_author: { username: 'thirdparty' }, reply_to_post_id: '3519581593786262069' },
+    }) } },
+  })) }, { p: 'th', code: 'DDYEM_foiI1' })
+  assert.ok(post.quote)
+  assert.equal(post.quote.replyTo, undefined, 'the quote is depth 1 and gets no replyTo')
+  assert.equal(post.replyTo, undefined, 'and the quoting post is not a reply')
+})
+
+test('codeFromId IS THE SHORTCODE: every pk and code pair on the two committed real pages agrees', () => {
+  /**
+   * Threads names a reply's parent only by its numeric id, and a th ref needs the shortcode, so the
+   * reply marker rests on this conversion. The pairs come from data already in the repo: the carousel
+   * post and its ten slides, and the video post, twelve objects that each carry a pk and a code. A pk
+   * is a string on the wire. A JSON number could not hold it, which is why codeFromId refuses one.
+   */
+  const pairs = []
+  const walk = (o) => {
+    if (!o || typeof o !== 'object') return
+    if (Array.isArray(o)) return o.forEach(walk)
+    if ('pk' in o && typeof o.code === 'string') pairs.push([o.pk, o.code])
+    Object.values(o).forEach(walk)
+  }
+  for (const page of [CAROUSEL, VIDEO]) {
+    for (const [, json] of page.matchAll(/<script type="application\/json"[^>]*>([\s\S]*?)<\/script>/g)) walk(JSON.parse(json))
+  }
+  assert.equal(pairs.length, 12)
+  for (const [pk, code] of pairs) {
+    assert.equal(typeof pk, 'string', 'a pk arrives as a string')
+    assert.equal(codeFromId(pk), code, `pk ${pk}`)
+    // And it is the inverse of the decode createdAtFromCode does: the same id gives the same time.
+    assert.equal(createdAtFromCode(codeFromId(pk)).getTime(), createdAtFromCode(code).getTime())
+  }
+  assert.equal(codeFromId('3519581593786262069'), 'DDYEM_foiI1', 'the pair the createdAtFromCode test names')
 })
