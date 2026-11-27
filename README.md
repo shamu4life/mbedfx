@@ -190,14 +190,14 @@ Checked on 2026-11-26 against each project's docs, source and live service, with
 | How video reaches Discord | own remux | varies: X redirect, Instagram MP4, TikTok streamed | platform MP4 | CDN redirect | CDN redirect | CDN redirect | varies by site |
 | Caption translation | ✅ automatic | opt-in `/en` | opt-in `/en`, undocumented | ❌ | ❌ | ❌ | ❌ |
 | Card says *why* a post is missing | ✅ private / age / deleted | deleted / private / suspended | one generic card | age, or one deleted-or-private card | ❌ redirects | age / region / unavailable | one generic card |
-| Discord component embeds | ❌ | in code, switched off | for big or mixed galleries | ❌ | ❌ | ❌ | ✅ every card |
+| Discord component embeds | for galleries over 4 pictures | in code, switched off | for big or mixed galleries | ❌ | ❌ | ❌ | ✅ every card |
 | Public JSON API | [✅ documented](docs/API.md) + [OpenAPI](public/openapi.json) | ✅ OpenAPI | ✅ documented | ❌ | ❌ | minimal, 3 fields | ❌ |
 | Self-host off Cloudflare | [Node adapter, Docker compose](docs/SELF-HOSTING.md#host-it-with-docker-compose) | Docker (runs workerd) | ✅ Docker · systemd · Lambda | ✅ Bun · Docker | ✅ Docker · K8s | ✅ Docker | ❌ closed source |
 | Operator metrics | [documented queries](docs/METRICS.md), no scrape endpoint | Analytics Engine, error reports | stdout logs | ✅ Prometheus, opt-in | pprof | pprof, Telegram report | internal only |
 
 FxEmbed goes deeper on Twitter than mbedfx goes on any one site. The remux exists because most of the seventeen won't hand a bot a playable file, and on Twitter and TikTok, which already do, it buys nothing.
 
-Since August both Instagram fixers lost their public domains to registrar holds, and embeds.now (launched October 2026) became the other multi-site fixer with a public instance. Discord's component embeds, documented in October 2026, are the biggest change. mbedfx doesn't send them yet, because its video cards depend on the Mastodon-style document and nobody has measured what Discord does when a page carries both.
+Since August both Instagram fixers lost their public domains to registrar holds, and embeds.now (launched October 2026) became the other multi-site fixer with a public instance. Discord's component embeds, documented in October 2026, are the biggest change. A paste test on 2026-11-26 found that when a page carries one, Discord draws it and skips the Mastodon-style document mbedfx builds its cards from, and the video in the test lost its poster frame. So mbedfx sends one only for a post with more than four pictures and no video, where it shows up to nine of them in a 3x3 grid, and leaves every other card as it was.
 
 ## Domains
 

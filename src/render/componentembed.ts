@@ -1,13 +1,94 @@
-import type { Post } from '../types.ts'
-import { displayName } from './chooser.ts'
-import { bytesIndex, describe, isSpoiler, mediaOf, mediaUrl, str, themeColor, usable } from './embed.ts'
-import { buildPlainText, statParts } from './text.ts'
+import type { Media, Post } from '../types.ts'
+import { siteLabel } from '../instance.ts'
+import { mediaList } from '../media.ts'
+import { awaitsTranslation } from '../translate.ts'
+import { byline, bytesIndex, isSensitive, isSpoiler, knownDate, mediaOf, mediaUrl, str, themeColor, usable } from './embed.ts'
+import { clampText, hasAuthor, normalizeBreaks, statParts } from './text.ts'
 
 /**
- * A DISCORD COMPONENT EMBED FOR ONE POST, for the `/_wait/e` paste experiment (src/worker.ts). Built
- * for that experiment and nothing else today: no production head carries one. If the paste says
- * Discord draws it, this is the renderer a production head would call, which is why it is a pure
- * module beside the other heads and not a block inside the route.
+ * THE GALLERY CARD: a Discord component embed for a post with MORE THAN FOUR PICTURES AND NO VIDEO,
+ * built to look like the activity card every other post gets. discord.ts's renderSpoof is the only
+ * caller, and it adds this to a head that is otherwise byte for byte today's, activity link included.
+ *
+ * WHAT WAS MEASURED, 2026-11-26, by the owner in the Discord mobile app, through the one-day `/_wait/e`
+ * test route (PR #156, removed once it had answered). Two posts, /X/status/2102147636702634195 (a video)
+ * and /profile/bsky.app/post/3myx7vphq3s2j (four pictures), each pasted three ways:
+ *
+ *   v=0  today's head                         -> today's activity card: author row, text, counts, the
+ *                                                video with its poster frame / a 2x2 grid, and the
+ *                                                footer "mbedfx | {date}".
+ *   v=1  today's head + a component embed     -> the COMPONENT card, in both posts.
+ *   v=2  the component embed, no activity link -> the component card again.
+ *
+ * Analytics Engine had `wait_api` rows coded 700 (x, three fetches, 23:13Z) and NO 701 row at all: with
+ * a component embed in the head, Discord did not fetch the activity document. So when a head carries
+ * both, the component embed REPLACES the activity card. The Bluesky v=0 document fetch also left no 700
+ * row although that card came from the document; that is recorded and was not chased.
+ *
+ * The component card the test built had a Section with the author's avatar as its Thumbnail (both
+ * authors' avatars are their platform's logo, so it read as a large logo at the top right), a "View on
+ * ..." link button, no footer, and for the video a blank white tile with a play button where the
+ * poster frame belongs, although the video did play when tapped. The four pictures drew as a grid from
+ * EXTENSIONLESS /_media/ urls, which settles the question the test's own notes left open: a gallery item
+ * does not need `.jpg` on its url.
+ *
+ * THE OWNER'S DECISION, after seeing the six cards: only the v=0 look is acceptable, but 3x3 galleries
+ * are wanted if they can be had. So this card is used ONLY where the activity card cannot show what
+ * the post has, a post with more than four pictures and no video, and it is built to look like today's
+ * card, not like the test's:
+ *
+ *   - the author line as text, `**Name** (@handle)`, with no Section, no Thumbnail and no logo;
+ *   - the body in buildContentHtml's order (the reply line, the title in bold, the text, the quote as
+ *     a blockquote), then the counts in bold with the activity card's en-space join;
+ *   - a Media Gallery of the first nine pictures, which Discord lays out as a 3x3 grid at nine;
+ *   - a footer line, `-# {SITE_NAME} | {date} {time}`, the activity card's own footer spelled in
+ *     Discord markdown, or just the name for an undated post as that card prints it;
+ *   - the Container's accent colour from themeColor, the head's own theme-color;
+ *   - NO BUTTON. Buttons are optional: the docs' first example ("Option 1: Inline Script") is a
+ *     Container holding a single Text Display and nothing else.
+ *
+ * WHY THE THRESHOLD IS FIVE. Two readings of the activity card disagree, and the threshold is the
+ * owner's call between them rather than either measurement. mastodon.ts records an Instagram carousel
+ * of ten attachments drawing six on 2026-07-20 (client not recorded). The 2026-11-26 reading is that
+ * the activity card shows four. At four or fewer the two cards hold the same pictures, so nothing is
+ * gained by replacing the card the owner approved.
+ *
+ * WHY NO VIDEO, AND NO GIF, AND NO SPOILER. A video costs the poster frame and draws a blank tile
+ * (measured above). A degraded still (Media.posterOnly, pendingMux) is a video whose mux has not
+ * finished, and Discord keeps a message's first embed forever, so it counts as a video here. A gif in a
+ * Media Gallery has not been pasted, and neither has a spoilered gallery item; a spoiler post's head
+ * deliberately names no media (discord.ts), and this card would. All three keep today's head.
+ *
+ * NOR A VIDEO IN THE QUOTED POST (review, 2026-11-26). The activity card hoists a quote's video in
+ * behind the post's own pictures and flattens it to a still, and on /p it then adds the "🎬 Contains
+ * video" line under the counts (mastodon.ts contentWithMarker). This card shows none of the quote's
+ * media, so it would drop that line, and the reader would never learn the post leads to a video. A
+ * Threads or Misskey carousel of six quoting a video, shared as /p, was the case found in review. It
+ * also made /p and /v the same card, though they are meant to differ.
+ *
+ * NOR WHILE THE TRANSLATION IS STILL COMING (review, 2026-11-26). When the head's translation loses its
+ * race (worker.ts withTranslated, `pending`), today's card still gets a second try: the activity document
+ * Discord fetches a moment later asks again, often finding the answer the head's own request has written
+ * to R2 meanwhile, and draws it with the 🌐 marker. This card replaces that document, and Discord never
+ * fetches it, so a gallery built from a lost race would show the untranslated caption for good.
+ * Reproduced in review, before this rule existed: a six-picture post with a Japanese caption arriving at
+ * 4600 ms and a model answering at 800 ms. The head came back with the untranslated text in its gallery
+ * card, while /api/v1/statuses/{id} fetched right after carried the translation. So a head whose post is
+ * still arriving keeps today's card; it is the same head that worker.ts already refuses to
+ * response-cache. A translation that did land in time is in post.text, and this card carries it like the
+ * activity card does.
+ *
+ * WHY OWN MEDIA ONLY. A quoted post's pictures are hoisted into the activity gallery behind the post's
+ * own (mediaList, §7). Here the count and the gallery are the post's own, the rule the test builder
+ * used and the list /_card's preview draws from. The cost: a post with five or more pictures of its own
+ * loses the quote's pictures that today's card would show. The quote's author and text still render.
+ * A quote's video is the exception: it keeps today's card, as above.
+ *
+ * NOT MEASURED YET, and the paste after deploy is the check: `-#` subtext and `<t:…>` timestamps
+ * inside a component embed (the docs say Text Display content uses Discord markdown and link the
+ * message-formatting page, which lists timestamps); the gallery card in a desktop client (the paste was
+ * mobile); a gallery of five to eight, whose mosaic Discord lays out itself; and Discord's 10-second
+ * budget for "the whole fetch, including every image in the payload", which now covers nine pictures.
  *
  * THE SCHEMA, read 2026-11-26 from Discord's own docs source at commit 2d337dbb16 ("Document link
  * previews", discord/discord-api-docs#8606, merged 2026-10-06; the changelog entry is dated
@@ -26,137 +107,153 @@ import { buildPlainText, statParts } from './text.ts'
  *   - "up to 40 components, including the parent Container", from types 1 Action Row, 2 Button,
  *     9 Section, 10 Text Display, 11 Thumbnail, 12 Media Gallery, 14 Separator, 17 Container.
  *   - Button: "must use the link style (`style` of `5`) and may contain `id`, `type`, `url`, `style`,
- *     `label`, `emoji`, and `disabled`, with a `label`, an `emoji`, or both. Any other key invalidates
- *     the entire payload." Label max 80 characters, url max 512 (reference.mdx).
- *   - "Media Gallery items are capped at 10 across the entire embed, not per component. Thumbnails
- *     don't count toward this limit." A gallery holds 1 to 10 items; an item is `{ media: { url },
- *     description?, spoiler? }`, description max 1024 characters.
- *   - Section: one to three Text Displays plus a REQUIRED `accessory`, a Button or a Thumbnail.
- *     Thumbnails "only support images".
- *   - Media urls "must use `http` or `https` and be a max of 2,048 characters". "A video in a Media
- *     Gallery shows a preview frame with play controls but does not autoplay."
+ *     `label`, `emoji`, and `disabled` … Any other key invalidates the entire payload." This card
+ *     sends none.
+ *   - "Media Gallery items are capped at 10 across the entire embed, not per component." A gallery
+ *     holds 1 to 10 items; an item is `{ media: { url }, description?, spoiler? }`, description max
+ *     1024 characters.
+ *   - Media urls "must use `http` or `https` and be a max of 2,048 characters".
  *   - Open Graph tags stay in the page "so a standard preview is available when a component embed
  *     can't be shown". This builder only adds; the head keeps every tag it had.
  *
  * test/component-embed.test.mjs encodes each rule above as a validator and runs every payload this
  * file can produce through it, including a worst case built to overflow the budget.
- *
- * THE LAYOUT. Author row (a Section with the avatar as its Thumbnail, or a bare Text Display when
- * there is no avatar, because a Section without an accessory is invalid), the post text, the counts,
- * a Media Gallery of the post's own media, and one link button to the original post. The button is
- * also the paste's tell: neither the activity card nor the Open Graph card ever draws one, so a
- * button on the card means Discord drew this payload.
- *
- * Returns the JSON text ready to sit between the script tags, or null when no valid payload fits.
- * The route answers null with a 422 rather than a head without the script, which would be a second
- * control posing as the variant.
  */
 export const COMPONENT_EMBED_MAX_BYTES = 3000
 
+/** More than four pictures: the fewest this card is drawn for. */
+export const GALLERY_CARD_MIN = 5
+/** The most it shows. Nine is the 3x3 grid; a post with more shows its first nine. */
+export const GALLERY_CARD_MAX = 9
+
 /** The schema's per-field ceilings, from the pages quoted above. */
-const GALLERY_MAX = 10
 const ALT_MAX = 1024
-const LABEL_MAX = 80
-const BUTTON_URL_MAX = 512
 const MEDIA_URL_MAX = 2048
 
-type Item = { media: { url: string }; description?: string; spoiler?: true }
+type Item = { media: { url: string }; description?: string }
 
-export function componentEmbedJson(post: Post, origin: string): string | null {
-  const button = buttonOf(post)
-  if (!button) return null
-  const author = authorLine(post)
-  const avatar = str(post.author?.avatar) ? mediaUrl(origin, post, 'avatar') : ''
-  const body = describe(post, buildPlainText(post)).trim()
-  const counts = statParts(post).join('   ')
+/**
+ * DOES THIS POST GET THE GALLERY CARD? More than four usable pictures of its own, every usable entry a
+ * plain picture, no video in the quoted post either, no spoiler, and nothing still arriving. The head
+ * (discord.ts) and the converter preview (/_card) both ask, through galleryCardJson, so the page cannot
+ * draw a gallery the card does not carry.
+ *
+ * usable() first, as everywhere: a dead entry (`null`, no url) neither counts toward five nor turns a
+ * gallery into a video post. `kind === 'image'` and the two flags rule out every shape the docstring
+ * lists: a video, a gif, and a video's still standing in until its mux lands.
+ *
+ * THE QUOTE IS ASKED OVER mediaList, the list the activity card hoists from, and only about video: the
+ * quote's pictures and gifs are dropped here at a cost the docstring accepts, but its video is the one
+ * thing the activity card marks in words.
+ *
+ * `pending` IS WHAT THE CALLER KNOWS ABOUT THE REST OF THE HEAD, and it has three values because the
+ * caller can be in three states:
+ *   - true: something on this head is still arriving, a translation that lost its race above all
+ *     (worker.ts renderPostRoute passes the same flags that keep the head out of the response cache).
+ *     The activity document would get a second try at it, so no gallery card.
+ *   - false: the caller ran the translation step and has its final answer: the translation is in
+ *     post.text, or the caption is English, or the model declined, or translation is off. The activity
+ *     document would come to the same answer, so the card may be drawn.
+ *   - left out: the caller never asked, which is the TikTok short-link arm and every test calling this
+ *     with three arguments. Then a caption awaitsTranslation says yes to keeps today's card. Defaulting to
+ *     "drawn" instead would freeze an untranslated caption on that arm, because its head never
+ *     translates and the activity document behind it does.
+ */
+export function takesGalleryCard(post: Post, pending?: boolean): boolean {
+  if (isSpoiler(post)) return false
+  const own = mediaOf(post).filter(usable)
+  if (own.length < GALLERY_CARD_MIN || !own.every(isPlainPicture)) return false
+  if (mediaList(post).some(m => usable(m) && isVideo(m))) return false
+  if (pending === true) return false
+  return pending === false || !awaitsTranslation(post)
+}
+const isPlainPicture = (m: Media): boolean => m.kind === 'image' && !m.posterOnly && !m.pendingMux
+/** A video, or the still of one whose mux has not landed: what the activity card would mark as video. */
+const isVideo = (m: Media): boolean => m.kind === 'video' || !!m.posterOnly || !!m.pendingMux
+
+/**
+ * The gallery card's JSON, ready to sit between the script tags, or null: for every post that does not
+ * take it, and for one that does when no valid card fits in 3,000 bytes. Null means today's head, with
+ * nothing added, so a post this card cannot carry keeps the card the owner approved. `pending` is
+ * takesGalleryCard's.
+ */
+export function galleryCardJson(post: Post, origin: string, site: string, pending?: boolean): string | null {
+  if (!takesGalleryCard(post, pending)) return null
   const items = galleryOf(post, origin)
+  // A url past the schema's 2,048 characters is left out by galleryOf; below five there is no gallery
+  // worth replacing the activity card for.
+  if (items.length < GALLERY_CARD_MIN) return null
+  const author = authorLine(post)
+  const parts = bodyParts(post)
+  const counts = statParts(post)
+  const footer = footerLine(post, site)
   const accent = accentOf(post)
 
-  const build = (text: string, withAlt: boolean, n: number): string => {
+  const build = (limit: number, withAlt: boolean): string => {
     const components: object[] = []
-    if (author) {
-      const line = { type: 10, content: author }
-      // A Section must have an accessory, so the avatar decides between the two shapes.
-      components.push(avatar && avatar.length <= MEDIA_URL_MAX
-        ? { type: 9, components: [line], accessory: { type: 11, media: { url: avatar } } }
-        : line)
-    }
-    if (text) components.push({ type: 10, content: text })
-    if (counts) components.push({ type: 10, content: `**${counts}**` })
-    const shown = items.slice(0, n).map(it => (withAlt ? it : { ...it, description: undefined }))
-    // An empty gallery is invalid, so no media means no gallery component at all.
-    if (shown.length) components.push({ type: 12, items: shown })
-    components.push({ type: 1, components: [button] })
+    if (author) components.push({ type: 10, content: author })
+    // The counts close the body block as they close the activity card's `content`, a blank line below
+    // the text. Joined with U+2002, the `&ensp;` countsHtml joins with, and with no trailing one: the
+    // bold could fail to close on trailing whitespace, and the activity card's trailing space draws as
+    // nothing anyway.
+    const body = [sensitiveMarked(post, renderBody(parts, limit)), counts.length ? `**${counts.join(' ')}**` : '']
+      .filter(Boolean).join('\n\n')
+    if (body) components.push({ type: 10, content: body })
+    components.push({ type: 12, items: withAlt ? items : items.map(({ media }) => ({ media })) })
+    components.push({ type: 10, content: footer })
     return scriptSafeJson({ component: { type: 17, ...(accent === null ? {} : { accent_color: accent }), components } })
   }
   const fits = (s: string) => utf8Bytes(s) <= COMPONENT_EMBED_MAX_BYTES
 
-  // THE TRIM LADDER, in the order that keeps the most of what the paste is about. The media is the
-  // question, so it goes last. Alt text goes first: four 1024-character descriptions are already over
-  // the budget on their own, and the picture still shows without them. Then the text, cut at a
-  // grapheme boundary with the same "..." the other heads use. Then gallery items, from the end.
-  const all = items.length
-  const fullText = md(body)
-  let out = build(fullText, true, all)
+  // THE TRIM LADDER. The pictures are the point, so they are never trimmed: a card that fits only by
+  // dropping some would show fewer than the post has, and today's card is the better answer then.
+  // Alt text goes first, because nine 1024-character descriptions are three times the budget on their
+  // own and the pictures still show without them. Then the body, cut at a grapheme boundary with the
+  // "..." the other heads use, as late as still fits.
+  let out = build(Infinity, true)
   if (fits(out)) return out
-  out = build(fullText, false, all)
+  out = build(Infinity, false)
   if (fits(out)) return out
-  // Largest cut of the RAW text that fits, found by bisection. Escaping happens after the cut, so a
-  // cut can never land inside an escape sequence.
-  let lo = 0
-  let hi = body.length
+  // The largest raw-character budget that fits, by bisection. Escaping happens after the cut, so a cut
+  // can never land inside an escape sequence.
+  let lo = -1
+  let hi = parts.reduce((n, p) => n + p.raw.length, 0)
   while (lo < hi) {
     const mid = Math.ceil((lo + hi) / 2)
-    if (fits(build(md(cut(body, mid)), false, all))) lo = mid
+    if (fits(build(mid, false))) lo = mid
     else hi = mid - 1
   }
-  if (lo > 0) return build(md(cut(body, lo)), false, all)
-  for (let n = all; n >= 1; n--) {
-    out = build('', false, n)
-    if (fits(out)) return out
-  }
-  return null
+  return lo >= 0 ? build(lo, false) : null
+}
+
+/** The script element for the head, or '' when the post keeps today's head unchanged. */
+export function galleryCardScript(post: Post, origin: string, site: string, pending?: boolean): string {
+  const json = galleryCardJson(post, origin, site, pending)
+  return json ? `<script id="discord:component-embed" type="application/json">${json}</script>` : ''
 }
 
 /**
- * The post's OWN media, as the urls mbedfx already publishes for them, at most ten. Quote media is
- * left out: the quote's text still renders, and the activity document drops it too when the post's
- * own media leads with a video (mastodon.ts attachments()).
- *
- * A VIDEO TAKES THE `.mp4` SPELLING, the url the spoof head already publishes as og:video for the
- * same entry. The docs list the formats as ".mp4, .webm, and .mov", and if Discord checks that
- * against the url rather than the bytes, the activity document's bare `/0` would lose the video and
- * the paste would read as "component embeds can't play video". Both spellings are one resource
- * (router.ts, the `.mp4` tolerance), and both 302 to the same twimg file (measured 2026-11-26 on
- * /_media/x%3A2102147636702634195/0 and /0.mp4).
- *
- * AN IMAGE KEEPS THE EXTENSIONLESS URL. The router would accept `.jpg`, but the format is the CDN's
- * choice per request: cdn.bsky.app answered image/webp for a feed_fullsize/plain url asked with no
- * Accept header (2026-11-26). Any extension would be a guess about bytes this Worker never sees.
- * The avatar Thumbnail is extensionless on every post too, so if Discord refuses extensionless
- * media, X's component card can fail with Bluesky's, and the docs warn that some failures show no
- * embed at all. Check the urls in Discord's Embed Debugger before reading that as "component
- * embeds don't work".
- * A GIF takes `.gif`, as its media_attachment does.
+ * The post's first nine usable pictures, as the urls media_attachments already publishes for them:
+ * bytesIndex on the source index, extensionless. The extensionless spelling is measured, not assumed:
+ * the 2026-11-26 paste drew Bluesky's four pictures from exactly these urls inside a component embed.
  */
 function galleryOf(post: Post, origin: string): Item[] {
-  const spoiler = isSpoiler(post)
   const out: Item[] = []
   mediaOf(post).forEach((m, i) => {
-    if (out.length >= GALLERY_MAX || !usable(m)) return
-    const url = m.kind === 'video'
-      ? `${mediaUrl(origin, post, i)}.mp4`
-      : `${mediaUrl(origin, post, bytesIndex(m, i))}${m.kind === 'gif' ? '.gif' : ''}`
+    if (out.length >= GALLERY_CARD_MAX || !usable(m)) return
+    const url = mediaUrl(origin, post, bytesIndex(m, i))
     if (url.length > MEDIA_URL_MAX) return
     const alt = cut(str(m.alt).trim(), ALT_MAX, '')
-    out.push({ media: { url }, ...(alt ? { description: alt } : {}), ...(spoiler ? { spoiler: true as const } : {}) })
+    out.push({ media: { url }, ...(alt ? { description: alt } : {}) })
   })
   return out
 }
 
 /**
- * `**Name** (@handle)`: byline()'s spelling with the name in bold, built from the same two fields so
- * an empty handle prints no `(@)` here either.
+ * `**Name** (@handle)`: byline()'s spelling with the name in bold, built from the same two fields so an
+ * empty handle prints no `(@)` here either. The activity card's author row draws the avatar beside it;
+ * this one draws none, because the only way to put a picture there is a Section Thumbnail, and that is
+ * the large top-right image the owner turned down.
  */
 function authorLine(post: Post): string {
   const name = str(post.author?.name).trim()
@@ -165,18 +262,77 @@ function authorLine(post: Post): string {
   return handle ? `**${md(name)}** (@${md(handle)})` : `**${md(name)}**`
 }
 
-/** The one link button: style 5, a label, the post's own url, and no other key. */
-function buttonOf(post: Post): { type: 2; style: 5; label: string; url: string } | null {
-  const url = str(post.canonical)
-  let protocol = ''
-  try {
-    protocol = new URL(url).protocol
-  } catch {
-    return null
+/**
+ * The body, as parts, in buildContentHtml's order and with its separators: the reply line, the title,
+ * the text, then the quote's head and the quote's text. Each part is kept RAW until renderBody cuts and
+ * formats it, so the trim ladder can measure and cut plain text and escape afterwards.
+ *
+ * The reply line is `-#` subtext, the markdown for the `<sub>` the activity card puts it in. The quote
+ * is a blockquote, as the activity card draws it: the bold head, an empty quoted line for the break
+ * buildContentHtml puts there, then each line of the quote. md() runs first, so a quoted line that opens
+ * with `>` stays text inside the quote.
+ */
+type Part = { sep: string; raw: string; fmt: (s: string) => string }
+function bodyParts(post: Post): Part[] {
+  const parts: Part[] = []
+  const r = post.replyTo
+  if (r && hasAuthor(r)) parts.push({ sep: '', raw: `↩ ${byline(r.author)}`, fmt: s => `-# ${md(s)}` })
+  const title = str(post.title)
+  if (title) parts.push({ sep: '\n', raw: title, fmt: s => `**${md(s)}**` })
+  const text = normalizeBreaks(clampText(str(post.text)))
+  if (text) parts.push({ sep: title ? '\n\n' : '\n', raw: text, fmt: md })
+  const q = post.quote
+  if (q && hasAuthor(q)) {
+    parts.push({ sep: '\n\n', raw: `Quoting ${byline(q.author)}`, fmt: s => `> **${md(s)}**` })
+    const quoted = normalizeBreaks(str(q.text))
+    if (quoted) parts.push({ sep: '\n> \n', raw: quoted, fmt: s => md(s).split('\n').map(l => `> ${l}`).join('\n') })
   }
-  if ((protocol !== 'https:' && protocol !== 'http:') || url.length > BUTTON_URL_MAX) return null
-  const label = cut(`View on ${displayName(post.ref.p)}`, LABEL_MAX, '')
-  return { type: 2, style: 5, label, url }
+  return parts
+}
+
+/**
+ * The parts, joined, keeping at most `limit` raw characters: the part that crosses the limit is cut with
+ * "..." and nothing after it is kept. A separator belongs to the part after it and is dropped when that
+ * part comes first, the ownership rule buildContentHtml states.
+ */
+function renderBody(parts: Part[], limit: number): string {
+  let out = ''
+  let room = limit
+  for (const p of parts) {
+    if (room <= 0) break
+    const kept = p.raw.length <= room ? p.raw : cut(p.raw, room)
+    if (!kept) break
+    out += (out ? p.sep : '') + p.fmt(kept)
+    if (kept !== p.raw) break
+    room -= p.raw.length
+  }
+  return out
+}
+
+/**
+ * describe()'s `[sensitive] ` label, outside the trim budget so no cut can lose it. On its own line when
+ * the body opens with the `-#` reply line, which only reads as subtext at the start of a line.
+ */
+function sensitiveMarked(post: Post, body: string): string {
+  if (!isSensitive(post)) return body
+  const label = md('[sensitive]')
+  if (!body) return label
+  return body.startsWith('-# ') ? `${label}\n${body}` : `${label} ${body}`
+}
+
+/**
+ * THE FOOTER. The activity card's reads "mbedfx | 06/12/2026 2:54 PM" on the client the converter page
+ * was compared against (public/index.html footLine), and "mbedfx" alone for an undated post
+ * (toMastodonStatus, 2026-11-25). Discord prints that date in the READER's time zone and locale, which a
+ * string built here cannot do, so the date is two Discord timestamps: style `d` (short date) and `t`
+ * (short time), joined with a space where style `s` would put a comma. Built raw, because md() escapes
+ * the `<` they open with.
+ */
+function footerLine(post: Post, site: string): string {
+  const name = md(siteLabel(site))
+  const d = knownDate(post)
+  const s = d ? Math.floor(d.getTime() / 1000) : 0
+  return s > 0 ? `-# ${name} | <t:${s}:d> <t:${s}:t>` : `-# ${name}`
 }
 
 /** themeColor's `#rrggbb` as the integer accent_color takes, or null to leave the key out. */

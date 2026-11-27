@@ -73,14 +73,17 @@ mbedfx.app's Reddit app and account, and it names no account at all. Nobody else
   its old pin.it warning. In `/_api/v1`, send it
   as `?url=/pin.it/{code}`. The shortener was measured from a home connection on 2026-11-25. Nobody
   has measured it from Cloudflare's network yet.
-- **A paste test for Discord's component embeds, to be removed once it has answered.**
-  `/_wait/e/{0|1|2}/{tag}/{post path}` takes an X or Bluesky post and serves its normal Discord head
-  with one change per variant. `0` marks the activity link's id. `1` also adds a component embed to
-  the head. `2` adds the component embed and takes the activity link out. Pasted together, the three
-  show which card Discord draws when a page carries both, and whether a component embed works
-  without the activity document. Each fetch of the `0` or `1` document writes a `wait_api` row coded
-  700 or 701 (`docs/METRICS.md`). The routes answer `no-store`, and no other response changes. Nobody
-  has pasted them yet.
+- **Posts with more than four pictures show up to nine in Discord, in a 3x3 grid.** This covers
+  Instagram and Threads carousels, Reddit galleries, Facebook posts, Imgur albums and TikTok photo
+  posts. Their card is now a Discord component embed laid out like the usual card, with the author,
+  the text, the counts, the pictures and a footer with the site name and date. A post with a video, a
+  GIF or a spoiler tag keeps the usual card. So does a post quoting a video, a post whose translation
+  hasn't come back yet (the usual card picks it up a moment later), and any post with four pictures or
+  fewer. Other apps see no change. The converter's preview draws the same grid. On 2026-11-26 posts were pasted
+  into the Discord mobile app through a temporary test route, `/_wait/e`. Wherever a page had a
+  component embed, Discord drew it instead of the usual card, and on a video post the card lost its
+  poster frame and its date. The route never reached a release and is gone. Nobody has checked
+  Discord's desktop app or a gallery of five to eight pictures yet.
 
 ### Changed
 

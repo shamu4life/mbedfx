@@ -2258,8 +2258,14 @@ test('WAIT GUARDS: humans go to YouTube, n past 60 is refused, malformed paths f
   // d's head route went the same way on 2026-11-25, the day its one paste answered issue #49. Its
   // two heads were production's Facebook head with the activity id marked 9600/9601; a leftover
   // that still marked one would send a crawler to a document nothing answers any more.
+  // e's went on 2026-11-26, the day its paste answered (render/componentembed.ts has the reading). Its
+  // heads were production's X or Bluesky head with the id marked 9700/9701, a component embed added,
+  // or the activity link swapped for one. The X video is the post asked for here because a video post
+  // never takes the gallery card, so any component embed in its answer could only be a leftover.
   for (const path of ['/_wait/act/0/1121116', '/_wait/mact/0/1121116', '/_wait/bact/0/1121116', '/_wait/cact/0/1121116',
-    '/_wait/d/0/t1/ExpPage/posts/1000000000000011', '/_wait/d/1/t1/ExpPage/posts/1000000000000011']) {
+    '/_wait/d/0/t1/ExpPage/posts/1000000000000011', '/_wait/d/1/t1/ExpPage/posts/1000000000000011',
+    '/_wait/e/0/t0/X/status/2102147636702634195', '/_wait/e/1/t1/X/status/2102147636702634195',
+    '/_wait/e/2/t2/X/status/2102147636702634195', '/_wait/e/1/p1126/profile/bsky.app/post/3myx7vphq3s2j']) {
     const res = await stockServing(() => handle(req(path, DISCORD), fakeEnv(), ctx, {}))
     // Content, not status: an unrouted path falls to the site assets at 200. What must be true
     // is that nothing status-shaped comes back.
@@ -2267,16 +2273,22 @@ test('WAIT GUARDS: humans go to YouTube, n past 60 is refused, malformed paths f
     const text = await res.text()
     assert.ok(!text.includes('media_attachments'), path)
     assert.ok(!text.includes('/statuses/960'), `${path}: no head marked for the retired d surface`)
+    assert.ok(!text.includes('/statuses/970'), `${path}: nor for the retired e surface`)
+    assert.ok(!text.includes('discord:component-embed'), `${path}: and no experiment's component embed`)
   }
   // A 9-prefixed id that is not a wait id is an ordinary bad status id. 5 became p on 2026-09-02,
   // and the guard moved to digit 6. 6 was d for one day (2026-11-25, 9600 control and 9601
   // variant), and since d was removed every `96nn` id is unassigned again, those two included: a
-  // Discord crawler that re-asks for one gets the same 404 as any other bad id. Digit 7 had no
-  // surface until 2026-11-26, when it became e (the component-embed paste); e takes only 00 and 01,
-  // so `9705` stays here as an id that must still 404, and test/component-embed.test.mjs covers the
-  // two it does take. The last two have no sentinel after the prefix.
+  // Discord crawler that re-asks for one gets the same 404 as any other bad id. Digit 7 was e for
+  // one day the same way (2026-11-26, 9700 control and 9701 variant, the component-embed paste), and
+  // REWRITTEN that day when e was removed: this list used to keep only `9705` for digit 7, because e
+  // still answered 00 and 01. Now those two must 404 with no row like every other `97nn` id, on both
+  // status paths, since a crawler that cached the paste's document url may ask again. The last two have
+  // no sentinel after the prefix.
   for (const path of ['/users/youtube/statuses/9605' + '1121116', '/api/v1/statuses/9600' + '1121116', '/api/v1/statuses/9601' + '1121116',
     '/users/ExpPage/statuses/9601' + '1121116', '/api/v1/statuses/9602' + '1121116', '/api/v1/statuses/9705' + '1121116',
+    '/api/v1/statuses/9700' + '1121116', '/api/v1/statuses/9701' + '1121116', '/users/X/statuses/9700' + '1121116',
+    '/users/X/statuses/9701' + '1121116', '/api/v1/statuses/9702' + '1121116',
     '/api/v1/statuses/9105' + '2121116', '/api/v1/statuses/950406' + '2121116']) {
     const env = fakeEnv()
     const res = await handle(req(path, DISCORD), env, ctx, {})
