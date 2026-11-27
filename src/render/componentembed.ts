@@ -1,5 +1,7 @@
 import type { Media, Post } from '../types.ts'
 import { siteLabel } from '../instance.ts'
+import { mediaList } from '../media.ts'
+import { awaitsTranslation } from '../translate.ts'
 import { byline, bytesIndex, isSensitive, isSpoiler, knownDate, mediaOf, mediaUrl, str, themeColor, usable } from './embed.ts'
 import { clampText, hasAuthor, normalizeBreaks, statParts } from './text.ts'
 
@@ -57,10 +59,30 @@ import { clampText, hasAuthor, normalizeBreaks, statParts } from './text.ts'
  * Media Gallery has not been pasted, and neither has a spoilered gallery item; a spoiler post's head
  * deliberately names no media (discord.ts), and this card would. All three keep today's head.
  *
+ * NOR A VIDEO IN THE QUOTED POST (review, 2026-11-26). The activity card hoists a quote's video in
+ * behind the post's own pictures and flattens it to a still, and on /p it then adds the "🎬 Contains
+ * video" line under the counts (mastodon.ts contentWithMarker). This card shows none of the quote's
+ * media, so it would drop that line, and the reader would never learn the post leads to a video. A
+ * Threads or Misskey carousel of six quoting a video, shared as /p, was the case found in review. It
+ * also made /p and /v the same card, though they are meant to differ.
+ *
+ * NOR WHILE THE TRANSLATION IS STILL COMING (review, 2026-11-26). When the head's translation loses its
+ * race (worker.ts withTranslated, `pending`), today's card still gets a second try: the activity document
+ * Discord fetches a moment later asks again, often finding the answer the head's own request has written
+ * to R2 meanwhile, and draws it with the 🌐 marker. This card replaces that document, and Discord never
+ * fetches it, so a gallery built from a lost race would show the untranslated caption for good.
+ * Reproduced in review, before this rule existed: a six-picture post with a Japanese caption arriving at
+ * 4600 ms and a model answering at 800 ms. The head came back with the untranslated text in its gallery
+ * card, while /api/v1/statuses/{id} fetched right after carried the translation. So a head whose post is
+ * still arriving keeps today's card; it is the same head that worker.ts already refuses to
+ * response-cache. A translation that did land in time is in post.text, and this card carries it like the
+ * activity card does.
+ *
  * WHY OWN MEDIA ONLY. A quoted post's pictures are hoisted into the activity gallery behind the post's
  * own (mediaList, §7). Here the count and the gallery are the post's own, the rule the test builder
  * used and the list /_card's preview draws from. The cost: a post with five or more pictures of its own
  * loses the quote's pictures that today's card would show. The quote's author and text still render.
+ * A quote's video is the exception: it keeps today's card, as above.
  *
  * NOT MEASURED YET, and the paste after deploy is the check: `-#` subtext and `<t:…>` timestamps
  * inside a component embed (the docs say Text Display content uses Discord markdown and link the
@@ -112,27 +134,51 @@ type Item = { media: { url: string }; description?: string }
 
 /**
  * DOES THIS POST GET THE GALLERY CARD? More than four usable pictures of its own, every usable entry a
- * plain picture, and no spoiler. The head (discord.ts) and the converter preview (/_card) both ask,
- * through galleryCardJson, so the page cannot draw a gallery the card does not carry.
+ * plain picture, no video in the quoted post either, no spoiler, and nothing still arriving. The head
+ * (discord.ts) and the converter preview (/_card) both ask, through galleryCardJson, so the page cannot
+ * draw a gallery the card does not carry.
  *
  * usable() first, as everywhere: a dead entry (`null`, no url) neither counts toward five nor turns a
  * gallery into a video post. `kind === 'image'` and the two flags rule out every shape the docstring
  * lists: a video, a gif, and a video's still standing in until its mux lands.
+ *
+ * THE QUOTE IS ASKED OVER mediaList, the list the activity card hoists from, and only about video: the
+ * quote's pictures and gifs are dropped here at a cost the docstring accepts, but its video is the one
+ * thing the activity card marks in words.
+ *
+ * `pending` IS WHAT THE CALLER KNOWS ABOUT THE REST OF THE HEAD, and it has three values because the
+ * caller can be in three states:
+ *   - true: something on this head is still arriving, a translation that lost its race above all
+ *     (worker.ts renderPostRoute passes the same flags that keep the head out of the response cache).
+ *     The activity document would get a second try at it, so no gallery card.
+ *   - false: the caller ran the translation step and has its final answer: the translation is in
+ *     post.text, or the caption is English, or the model declined, or translation is off. The activity
+ *     document would come to the same answer, so the card may be drawn.
+ *   - left out: the caller never asked, which is the TikTok short-link arm and every test calling this
+ *     with three arguments. Then a caption awaitsTranslation says yes to keeps today's card. Defaulting to
+ *     "drawn" instead would freeze an untranslated caption on that arm, because its head never
+ *     translates and the activity document behind it does.
  */
-export function takesGalleryCard(post: Post): boolean {
+export function takesGalleryCard(post: Post, pending?: boolean): boolean {
   if (isSpoiler(post)) return false
   const own = mediaOf(post).filter(usable)
-  return own.length >= GALLERY_CARD_MIN && own.every(isPlainPicture)
+  if (own.length < GALLERY_CARD_MIN || !own.every(isPlainPicture)) return false
+  if (mediaList(post).some(m => usable(m) && isVideo(m))) return false
+  if (pending === true) return false
+  return pending === false || !awaitsTranslation(post)
 }
 const isPlainPicture = (m: Media): boolean => m.kind === 'image' && !m.posterOnly && !m.pendingMux
+/** A video, or the still of one whose mux has not landed: what the activity card would mark as video. */
+const isVideo = (m: Media): boolean => m.kind === 'video' || !!m.posterOnly || !!m.pendingMux
 
 /**
  * The gallery card's JSON, ready to sit between the script tags, or null: for every post that does not
  * take it, and for one that does when no valid card fits in 3,000 bytes. Null means today's head, with
- * nothing added, so a post this card cannot carry keeps the card the owner approved.
+ * nothing added, so a post this card cannot carry keeps the card the owner approved. `pending` is
+ * takesGalleryCard's.
  */
-export function galleryCardJson(post: Post, origin: string, site: string): string | null {
-  if (!takesGalleryCard(post)) return null
+export function galleryCardJson(post: Post, origin: string, site: string, pending?: boolean): string | null {
+  if (!takesGalleryCard(post, pending)) return null
   const items = galleryOf(post, origin)
   // A url past the schema's 2,048 characters is left out by galleryOf; below five there is no gallery
   // worth replacing the activity card for.
@@ -181,8 +227,8 @@ export function galleryCardJson(post: Post, origin: string, site: string): strin
 }
 
 /** The script element for the head, or '' when the post keeps today's head unchanged. */
-export function galleryCardScript(post: Post, origin: string, site: string): string {
-  const json = galleryCardJson(post, origin, site)
+export function galleryCardScript(post: Post, origin: string, site: string, pending?: boolean): string {
+  const json = galleryCardJson(post, origin, site, pending)
   return json ? `<script id="discord:component-embed" type="application/json">${json}</script>` : ''
 }
 

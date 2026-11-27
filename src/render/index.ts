@@ -45,7 +45,8 @@ export function render(outcome: Outcome, client: ClientClass, origin: string, mo
       // one. That gate deliberately does NOT live here: it is a statement about which meta
       // tags suppress which others, so it belongs beside the tags, and hoisting it would put a
       // Discord-shaped concern in front of 'ambiguous' and 'failure', which must ignore it.
-      return renderPost(outcome.post, client, origin, mode, site)
+      // `pending` reaches only the Discord head's gallery card; see Outcome for its three values.
+      return renderPost(outcome.post, client, origin, mode, site, outcome.pending)
 
     /**
      * AN ACCOUNT. One head for every bot client — see render/profile.ts for why there is no

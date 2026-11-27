@@ -203,7 +203,22 @@ test('WHO GETS THE GALLERY CARD: more than four plain pictures of the post\'s ow
     ['two of its own and four hoisted from the quote', carousel(2, { quote: carousel(4, { ref: { p: 'ig', kind: 'p', code: 'GaLQuoted0001' } }) })],
     ['no media at all', carousel(0)],
     ['a cache record with no media array', carousel(0, { media: undefined })],
+    // REVIEW, 2026-11-26. Six pictures of its own, quoting a post with a video: the activity card hoists
+    // that video in as a still and, on /p, says "🎬 Contains video" under the counts. The gallery card
+    // shows none of the quote's media, so it would drop that line and make /p and /v the same card.
+    ['six quoting a post with a video: the activity card marks it', carousel(6, {
+      quote: carousel(0, { ref: { p: 'ig', kind: 'p', code: 'GaLQuoted0002' }, media: [{ kind: 'video', url: 'https://v.example/q.mp4', w: 720, h: 1280, poster: 'https://v.example/q.jpg' }] }),
+    })],
+    ['six quoting a video whose mux has not landed', carousel(6, {
+      quote: carousel(0, { ref: { p: 'ig', kind: 'p', code: 'GaLQuoted0003' }, media: [img(0, { posterOnly: true, poster: 'https://v.example/q.jpg' })] }),
+    })],
   ]
+  // The quote's pictures and gifs do not stop the card: they are dropped from it at the cost the module
+  // docstring accepts, and the activity card marks neither in words.
+  yes.push(
+    ['six quoting a post with pictures', carousel(6, { quote: carousel(2, { ref: { p: 'ig', kind: 'p', code: 'GaLQuoted0004' } }) })],
+    ['six quoting a gif', carousel(6, { quote: carousel(0, { ref: { p: 'ig', kind: 'p', code: 'GaLQuoted0005' }, media: [{ kind: 'gif', url: 'https://v.example/q.gif', w: 1, h: 1 }] }) })],
+  )
   for (const [what, post] of yes) {
     assert.equal(takesGalleryCard(post), true, what)
     shape(validate(galleryCardJson(post, ORIGIN, 'mbedfx')))
@@ -342,5 +357,41 @@ test('A TRANSLATED GALLERY POST SAYS WHAT ITS ACTIVITY DOCUMENT SAYS: the transl
   const content = toMastodonStatus(post, ORIGIN, 'videos', 'mbedfx').content
   for (const line of ['Chinese cabbage is delicious', `${TRANSLATION_MARKER} from Japanese`, '白菜おいしいね']) {
     assert.ok(content.includes(line), `the activity document carries "${line}" too`)
+  }
+})
+
+test('A HEAD STILL WAITING ON ITS TRANSLATION KEEPS TODAY\'S CARD, and the caller says which state it is in', () => {
+  /**
+   * REVIEW, 2026-11-26. Today's card heals a translation that missed the head's deadline: the activity
+   * document Discord fetches next asks again and carries it. The gallery card replaces that document and
+   * Discord never fetches it, so a gallery built from a lost race keeps the untranslated caption for
+   * good. `pending` is how the caller says where the race stands; test/gallery-card-pending.test.mjs
+   * drives the same rule through the worker.
+   */
+  const ja = carousel(6, { text: '白菜おいしいね' })
+  const translated = withTranslation(ja, 'Chinese cabbage is delicious', 'ja')
+  const english = carousel(6)
+  // Latin text sourceLanguage cannot rule out as foreign (AUTO): Portuguese here, and as often English.
+  const auto = carousel(6, { text: 'Seis fotos da viagem à praia, que saudade' })
+  const cases = [
+    // [what, post, pending, takes the card]
+    ['a lost race, Japanese caption', ja, true, false],
+    ['a lost race even on an English caption: something else may be arriving', english, true, false],
+    ['a translation that landed, then a pending flag anyway', translated, true, false],
+    ['settled with no translation: English, a decline, or translation off', ja, false, true],
+    ['settled and translated', translated, false, true],
+    ['settled on Latin text: the detector has answered, whatever it said', auto, false, true],
+    // Left out: the caller never ran the translation (the short-link arm). The caption decides.
+    ['never asked, Japanese caption: the activity document would translate it', ja, undefined, false],
+    ['never asked, Latin text that may be foreign', auto, undefined, false],
+    ['never asked, but the marker is already in the text', translated, undefined, true],
+    ['never asked, English caption', english, undefined, true],
+  ]
+  for (const [what, post, pending, takes] of cases) {
+    assert.equal(takesGalleryCard(post, pending), takes, what)
+    const json = galleryCardJson(post, ORIGIN, 'mbedfx', pending)
+    assert.equal(json !== null, takes, `${what}: the builder agrees`)
+    if (takes) shape(validate(json))
+    else assert.equal(galleryCardScript(post, ORIGIN, 'mbedfx', pending), '', `${what}: nothing goes into the head`)
   }
 })

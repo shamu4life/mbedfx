@@ -72,7 +72,12 @@ for (const c of CASES) {
       'today\'s head with the script taken out: every tag, the activity link and the oEmbed link survive')
     const origin = c.origin || ORIGIN
     const ref = route(new URL(origin + c.path)).ref
-    assert.equal(scripts[0][1], galleryCardJson(c.make(ref), origin, 'mbedfx'), 'the builder\'s payload for this post, on this origin')
+    // `false`, the head's own answer: renderPostRoute ran the translation step and it settled (translation
+    // is off in this env, so nothing is pending). Added 2026-11-26 with the pending rule. Asked with no
+    // fourth argument, the builder judges from the caption alone, and "five, marked sensitive" is Latin
+    // text sourceLanguage cannot rule out as foreign, so that call would answer null for a head that
+    // rightly carries the card.
+    assert.equal(scripts[0][1], galleryCardJson(c.make(ref), origin, 'mbedfx', false), 'the builder\'s payload for this post, on this origin')
   })
 }
 

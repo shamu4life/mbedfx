@@ -373,7 +373,7 @@ function stockPlayerTags(post: Post, origin: string, vid: string): string[] {
  * nothing. Everything reads through str(): a renderer's input comes from the cache unvalidated
  * (see embed.ts), and esc() throws on a non-string.
  */
-function renderSpoof(post: Post, origin: string, mode: GalleryMode | undefined, site: string): Response {
+function renderSpoof(post: Post, origin: string, mode: GalleryMode | undefined, site: string, pending: boolean | undefined): Response {
   /**
    * THE MODE IS MINTED INTO THE {id}, AND THAT IS THE WHOLE MECHANISM BEHIND /p AND /v.
    *
@@ -610,19 +610,28 @@ function renderSpoof(post: Post, origin: string, mode: GalleryMode | undefined, 
      * gallery card needs none (takesGalleryCard). A spoiler post keeps today's head: it names no media here
      * on purpose, and this card would.
      *
+     * AND NOT WHILE THE DOCUMENT WOULD STILL DO BETTER. `pending` (Outcome) says part of the post is still
+     * arriving, a lost translation race above all. Today's card heals that, because the document is
+     * fetched after this head and translates again; with the script in, it is never fetched and the
+     * untranslated caption stays in the message. So a pending head keeps today's card, and a head whose
+     * caller never ran the translation (the short-link arm) keeps it for a caption still awaiting one.
+     *
      * THE GALLERY MODE (/p, /v) CHANGES NOTHING HERE. It decides what happens to a gallery's videos, and
-     * this card is only drawn for a post without one; the activity id above still carries the mode, as
-     * it always has.
+     * this card is only drawn for a post without one, a quoted post's video included: that one is what
+     * the activity card flattens on /p and marks "🎬 Contains video", a line this card has no place for.
+     * The activity id above still carries the mode, as it always has.
      *
      * GUEST HOSTS GET IT TOO, with /_media/ urls on the guest origin, which guestServes answers. A d. host
      * answers with the post's file and never renders a head.
      *
      * NO CACHE KEY CHANGES. The script depends on the post (how many pictures, of what kind), on `origin`
      * and on `site`, and the response cache key already holds the ref, the client, the origin, the mode
-     * and the site name (cache.ts respCacheKey). The one lag is deploy-time: a head cached before the
-     * deploy keeps serving without the script for up to RESP_TTL (900 s).
+     * and the site name (cache.ts respCacheKey). It also depends on `pending`: renderPostRoute never
+     * response-caches a pending head, and the short-link arm passes none, so a cached head carries the
+     * answer a fresh render would give. The one lag is deploy-time: a head cached before the deploy keeps
+     * serving without the script for up to RESP_TTL (900 s).
      */
-    ...((card => (card ? [card] : []))(galleryCardScript(post, origin, site))),
+    ...((card => (card ? [card] : []))(galleryCardScript(post, origin, site, pending))),
   ]
   return html(tags.join(''))
 }
@@ -631,7 +640,9 @@ function renderSpoof(post: Post, origin: string, mode: GalleryMode | undefined, 
  * `site` is the instance's name for og:site_name on both heads (SITE_NAME; render() in ./index.ts says why
  * it is required). Read through siteLabel at the tag, so a call without it prints the default.
  */
-export function renderPost(post: Post, client: ClientClass, origin: string, mode: GalleryMode | undefined, site: string): Response {
+export function renderPost(
+  post: Post, client: ClientClass, origin: string, mode: GalleryMode | undefined, site: string, pending?: boolean,
+): Response {
 
   // The post's OWN media, hoisted quote media deliberately EXCLUDED — this list feeds the
   // plain-og head's single-picture choice, and §7 requires that choice to stay the post's own
@@ -706,7 +717,7 @@ export function renderPost(post: Post, client: ClientClass, origin: string, mode
   // A SLIDESHOW HAS NO VIDEO and always took the spoof; that is unchanged. A video post with only
   // a THUMBNAIL is also unchanged: the normalizer emits the cover as a lone kind:'image' entry and
   // it renders through the activity gallery as a one-image slideshow does.
-  if (client === 'discord') return renderSpoof(post, origin, mode, site)
+  if (client === 'discord') return renderSpoof(post, origin, mode, site, pending)
 
   const tags: string[] = []
   // str(post.author?.…), not a raw read. deserializePost validates ref, canonical and createdAt

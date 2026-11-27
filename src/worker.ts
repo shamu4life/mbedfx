@@ -5666,17 +5666,28 @@ async function renderPostRoute(
     ),
   ])
   const shown = link.linked ? withLinked(post, settled.post) : settled.post
+  /**
+   * PART OF THIS POST IS STILL ARRIVING, and the next render will have it. One value, read twice: by the
+   * cache gate below and by the renderer (Outcome.pending), which leaves the gallery card out of such a
+   * head (render/componentembed.ts takesGalleryCard). That card replaces the activity document, the one
+   * request after this head that could still bring the missing part, so a head the cache will not keep
+   * must not freeze the same gap into the message either. Measured on the translation: a Japanese
+   * caption whose answer missed this head's slice reached the activity document a moment later, and
+   * never reached a gallery card. The same flags /_card reports as `pending` (describeTarget).
+   */
+  const pending = xlate.pending || link.pending || incomplete
   const res = render(
-    { kind: 'post', post: withTranslation(shown, xlate.translated, xlate.source) },
+    { kind: 'post', post: withTranslation(shown, xlate.translated, xlate.source), pending },
     client, origin, gallery, site,
   )
   // `pending` joins `degraded` for the same reason: caching a card that is missing something still
-  // arriving would pin the incomplete version for RESP_TTL.
+  // arriving would pin the incomplete version for RESP_TTL. It carries the translation that lost its race,
+  // and two more:
+  // `link.pending`: the linked post did not load in time, and the next render will have it.
+  // `incomplete`: the post itself loaded with a part that may still arrive (FetchReport.incomplete).
   // `promised` too: inert on this seam today (the head never promises), and the line that would
   // otherwise pin a promised card for RESP_TTL the day the scope widens.
-  // `link.pending` likewise: the linked post did not load in time, and the next render will have it.
-  // `incomplete` too: the post itself loaded with a part that may still arrive (FetchReport.incomplete).
-  if (!settled.degraded && !settled.promised && !xlate.pending && !link.pending && !incomplete) {
+  if (!settled.degraded && !settled.promised && !pending) {
     // clone() tees the body, so `res` stays readable after we cache a copy.
     const toCache = new Response(res.clone().body, res)
     toCache.headers.set('cache-control', `max-age=${RESP_TTL}`)
@@ -6956,8 +6967,13 @@ async function serve(req: Request, env: Env, ctx: ExecutionContext, d: Deps): Pr
          * function the head calls, so the page cannot draw a grid the card does not carry, or miss one it
          * does; a copy of the five-picture rule in the page is how the two would drift. Present only when
          * true, like `direct`, so every other answer is byte-identical.
+         *
+         * `described.pending` is the head's `pending` too (renderPostRoute ORs the same three flags), so
+         * a preview whose translation lost its race draws today's card, as Discord would for that head.
+         * The page asks once more when `pending` is set, and that answer carries the translation and the
+         * grid together.
          */
-        ...(galleryCardJson(post, origin, site) ? { componentGallery: true as const } : {}),
+        ...(galleryCardJson(post, origin, site, described.pending) ? { componentGallery: true as const } : {}),
         /**
          * THE ONE THING THE PAGE COULD NOT PREVIOUSLY LEARN: that this answer is incomplete.
          *
@@ -7596,6 +7612,10 @@ async function serve(req: Request, env: Env, ctx: ExecutionContext, d: Deps): Pr
        */
       if (direct) return serveDirectMedia(post.ref, d, env, ctx, client, origin)
 
+      // NO `pending`, on purpose: this arm never runs the translation step, so it has no race to report.
+      // Left out, the gallery card judges from the caption itself (componentembed.ts takesGalleryCard),
+      // and a TikTok slideshow whose caption still awaits translation keeps today's card, whose activity
+      // document translates. Passing `false` here would freeze that caption untranslated in Discord.
       const res = render({ kind: 'post', post }, client, origin, undefined, site)
       const toCache = new Response(res.clone().body, res)
       toCache.headers.set('cache-control', `max-age=${RESP_TTL}`)
