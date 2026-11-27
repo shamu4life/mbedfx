@@ -782,10 +782,11 @@ export async function liveFetchPost(
       return normalizeTwitter(got, ref)
     }
     case 'th': {
-      // Threads gives a logged-out crawler no way to tell private / age / deleted apart (all render
-      // the same no-og:type shell), so there is no gate to report — every failure is a plain
-      // fetch_fail and renders the generic "couldn't load" card, which is the honest answer. The
-      // only distinct counter is assert_fail: the page did not arrive (both UAs missed the marker).
+      // Threads gives a logged-out crawler no way to tell private / age / deleted apart (all rendered
+      // the same no-og:type shell on 2026-07-21; a deleted post got the login wall on 2026-11-27), so
+      // there is no gate to report — every failure is a plain fetch_fail and renders the generic
+      // "couldn't load" card, which is the honest answer. The only distinct counter is assert_fail:
+      // no post page arrived (neither UA's page passed threadsHasPost).
       const got = await fetchThreads(ref)
       if (!got.ok) {
         count(env, 'th', got.reason, client)

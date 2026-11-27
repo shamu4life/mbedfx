@@ -496,14 +496,23 @@ const IG_NOT_A_USER = new Set([...KNOWN, 'settings'])
  * "Read as Threads" on a /t/ link), and it answered notfound until 2026-11-26.
  *
  * NO RESOLVER, BECAUSE A /t/ CODE IS THE POST'S OWN SHORTCODE, measured rather than assumed:
- *   - From the dev host this work ran on (not a Worker), 2026-11-27 03:51 UTC (11-26 Eastern), with a
- *     curl, a Discordbot or no user agent, threads.com/t/{code} answered 301 to
- *     /@{author}/post/{the same code} for all five live codes tried: DTI1vjIEi5y (@mosseri),
- *     DbWxxQjFe4u (@dexerto), DDYEM_foiI1 (@pmestevez), DeEFGTkCLxz (@bradandthegoat), DbkwmbMEt6u
- *     (@bisniscom). threads.net/t/{code} answered 301 to threads.com/t/{code} for each.
+ *   - From the dev host this work ran on (not a Worker), in one run at 2026-11-27 03:51 UTC (11-26
+ *     Eastern), threads.com/t/{code} answered 301 to /@{author}/post/{the same code} for all five
+ *     live codes tried, to a curl user agent, to Discordbot and to a request with none: DTI1vjIEi5y
+ *     (@mosseri), DbWxxQjFe4u (@dexerto), DDYEM_foiI1 (@pmestevez), DeEFGTkCLxz (@bradandthegoat),
+ *     DbkwmbMEt6u (@bisniscom). threads.net/t/{code} answered 301 to threads.com/t/{code} for each.
+ *     That run is the evidence, and it did not repeat: a verifier's later run from the same host the
+ *     same day got 429s, and with no user agent a 302 to facebook.com/unsupportedbrowser, and at
+ *     05:04 UTC every threads.com page this host asked for answered 429. What the run showed is that
+ *     a /t/ code and the post's shortcode are one string, which is all this arm relies on.
  *   - A sixth, DbcSwYaEa9r, is a deleted post. Its /t/ answered 200 with no Location, the soft-404 the
  *     1.0.0 design spec warns about, and /@{author}/post/ and /@i/post/ both 302 to ?error=invalid_post.
- *     A deleted post gets the failure card through this arm, as it does through /@i/post/.
+ *   - A DELETED POST DID NOT GET THE FAILURE CARD, which this paragraph used to claim. At 05:04 UTC
+ *     the same day, production's /_api/v1 (Worker egress) answered threads.com/@i/post/DbcSwYaEa9r
+ *     with ok:true and a post by "Threads • Log in": Threads' login wall, read as the post by the OG
+ *     fallback. A made-up code did the same. platforms/threads/normalize.ts threadsHasPost now
+ *     requires the page to name the post's author, so such a code, through this arm or through
+ *     /@i/post/, is the failure card (tested offline against a page rebuilt from that answer).
  *   - With a desktop Chrome user agent, /t/ answered 200 with no Location for all six. The redirect
  *     depends on the user agent, which is one more reason not to follow it: the code is all that's
  *     needed.

@@ -66,9 +66,11 @@ export type ThreadsFetch =
 
 /**
  * ASSERT ON CONTENT, NEVER ON STATUS — a deleted code was seen to 302 and another to 200, and a
- * browser UA gets a healthy-looking 200 shell with no post in it. The one marker is og:type=article
- * (threadsHasPost). The username is DECORATION: `/@i/post/{code}` resolves by shortcode regardless
- * (verified), which is why the ref needs to carry only the code.
+ * browser UA gets a healthy-looking 200 shell with no post in it. The marker is og:type=article AND an
+ * og:title naming the post's author (threadsHasPost). og:type alone was the marker until 2026-11-27,
+ * when production drew Threads' login wall as a post by "Threads • Log in" for a deleted post and for
+ * a made-up code; threadsHasPost has the measurement. The username is DECORATION: `/@i/post/{code}`
+ * resolves by shortcode regardless (verified), which is why the ref needs to carry only the code.
  *
  * A thrown fetch is deliberately NOT caught — worker.ts's loadPost already treats a thrown live
  * fetch as null, and a transport failure is not evidence about Threads' gate, the same rule

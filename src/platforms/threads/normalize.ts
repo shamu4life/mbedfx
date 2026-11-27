@@ -59,20 +59,48 @@ function metaContent(html: string, attr: 'property' | 'name', val: string): stri
   return undefined
 }
 
-/**
- * "A REAL POST PAGE ARRIVED." The one liveness marker, and it is `og:type=article`: a valid post
- * renders it, while a deleted/private/age-gated/profile URL renders the contentless JS shell with no
- * og:type at all (measured 2026-07-21 — status is UNRELIABLE, one bad code 302'd and another 200'd).
- * Threads gives a logged-out crawler no way to tell private from deleted from age here, so all of
- * them correctly fall to the generic "couldn't load" card, which is the honest answer to "we cannot
- * see why".
- */
-export function threadsHasPost(html: unknown): boolean {
-  return typeof html === 'string' && metaContent(html, 'property', 'og:type') === 'article'
-}
-
 /** og:title is `Name (@handle) on Threads`; pull the display name and handle back out of it. */
 const AUTHOR = /^(.*) \(@([A-Za-z0-9._]+)\) on Threads$/
+
+/** The author a page's og:title names, or null when the title is not the `Name (@handle) on Threads` form. */
+function pageAuthor(html: string): { name: string; handle: string } | null {
+  const title = metaContent(html, 'property', 'og:title')
+  const am = title ? AUTHOR.exec(title) : null
+  return am ? { name: am[1], handle: am[2] } : null
+}
+
+/**
+ * "A REAL POST PAGE ARRIVED." Two markers, and both are required: `og:type=article`, and an og:title
+ * that names the post's author as `Name (@handle) on Threads`. Status is UNRELIABLE (measured
+ * 2026-07-21: one bad code 302'd and another 200'd), so neither marker is a status.
+ *
+ * og:type ALONE WAS THE CHECK UNTIL 2026-11-27, and it let Threads' login wall through as a post. On
+ * 2026-07-21 a deleted/private/age-gated/profile URL rendered the contentless JS shell with no og:type
+ * at all, so og:type=article was enough. By 2026-11-27 it was not. Measured that day at 05:04 UTC
+ * through production's /_api/v1 (Worker egress): a deleted post, threads.com/@i/post/DbcSwYaEa9r,
+ * and a code nobody minted, ZTSw2mYwR, both came back `ok: true` as a post by "Threads • Log in"
+ * with no handle. The text was "Join Threads to share ideas, ask questions, post random thoughts,
+ * find your people and more. Log in with your Instagram." and the one picture was a static
+ * cdninstagram rsrc.php asset, not a post's media. That card can only come from the OG fallback
+ * (buildFromHtml): the SSR path needs a `user.username`. fetch.ts let it through only because
+ * og:type=article held on at least one of the two pages, so the login wall carries it. Which of the
+ * two pages, and what else is on them, is not known: the raw bytes were not captured, and the dev host
+ * this was worked on got 429 from threads.com for every ask at 05:04 UTC.
+ *
+ * WHY THE AUTHOR AND NOT A BLOCKLIST OF "Log in": the byline is what the card needs, and a brand
+ * title is not one. A post page names its author in og:title: the two SSR fixtures, cut from post
+ * pages captured 2026-10-04, keep their og:* head and it is that form, and the fallback has parsed
+ * its byline out of exactly that form since 2026-07-21. A login wall, a feed, a profile or a page
+ * Threads invents next names no `(@handle) on Threads`, so it fails this without anyone having to
+ * have seen it first. If Threads ever renames its post titles, the fallback card turns into the
+ * failure card, which is the direction to fail in: a wrong byline is a guess shown as fact.
+ *
+ * Threads gives a logged-out crawler no way to tell private from deleted from age, so all of them
+ * fall to the generic "couldn't load" card, which is the honest answer to "we cannot see why".
+ */
+export function threadsHasPost(html: unknown): boolean {
+  return typeof html === 'string' && metaContent(html, 'property', 'og:type') === 'article' && pageAuthor(html) !== null
+}
 
 /**
  * Threads/Instagram-Barcelona post ids are snowflakes: the creation time is the high bits of the id,
@@ -130,16 +158,31 @@ export function codeFromId(id: unknown): string | null {
  * `text` the fbhit-UA page (caption in name=description). The handle is parsed out of og:title so the
  * canonical is rebuilt from the PAYLOAD — the same "normalizer owns its canonical" rule TikTok and
  * Instagram follow, because the ref carries only the shortcode (the pasted username was decoration).
+ *
+ * EACH FIELD COMES ONLY FROM A PAGE THAT IS THE POST (threadsHasPost), and the Post exists only if one
+ * of them is. Until 2026-11-27 the title was taken from whichever page had one and used whole when it
+ * was not a byline, so Threads' login wall became a post by "Threads • Log in" (threadsHasPost has the
+ * production measurement). Per page, because the two are separate requests and either can be the wall
+ * on its own: with only the fbhit page walled, a real post's caption would have been "Join Threads to
+ * share ideas…", and with only the Discordbot page walled, its picture the wall's static asset. Such a
+ * card loses that field instead. Two pages naming DIFFERENT authors for one code means one of them is
+ * not this post, and nothing says which, so that is null too.
+ *
+ * createdAt IS READ AFTER THAT CHECK, never before. It is decoded from the shortcode, so it is only as
+ * true as the claim that the code is a post: for the made-up ZTSw2mYwR it decodes to 2011-09-03, a
+ * date production showed on the login-wall card. Once a page names the post's author, the code is
+ * Threads' own and the decode is its creation time (createdAtFromCode has the measurement).
  */
 function buildFromHtml(mediaHtml: unknown, textHtml: unknown, ref: Extract<PostRef, { p: 'th' }>): Post | null {
-  const media = typeof mediaHtml === 'string' ? mediaHtml : ''
-  const text = typeof textHtml === 'string' ? textHtml : ''
-  const title = metaContent(media, 'property', 'og:title') ?? metaContent(text, 'property', 'og:title')
-  if (!title) return null
+  const media = threadsHasPost(mediaHtml) ? mediaHtml as string : ''
+  const text = threadsHasPost(textHtml) ? textHtml as string : ''
+  const fromMedia = media ? pageAuthor(media) : null
+  const fromText = text ? pageAuthor(text) : null
+  if (fromMedia && fromText && fromMedia.handle !== fromText.handle) return null
+  const author = fromMedia ?? fromText
+  if (!author) return null
+  const { name, handle } = author
 
-  const am = AUTHOR.exec(title)
-  const name = am ? am[1] : title
-  const handle = am ? am[2] : ''
   const caption = metaContent(text, 'name', 'description') ?? metaContent(text, 'name', 'twitter:description') ?? ''
   const image = metaContent(media, 'property', 'og:image')
   const createdAt = createdAtFromCode(ref.code)
@@ -148,11 +191,11 @@ function buildFromHtml(mediaHtml: unknown, textHtml: unknown, ref: Extract<PostR
   const items: Media[] = typeof image === 'string' && image ? [{ kind: 'image', url: image, w: 0, h: 0 }] : []
   return {
     ref,
-    canonical: `https://www.threads.com/@${handle || 'i'}/post/${ref.code}`,
+    canonical: `https://www.threads.com/@${handle}/post/${ref.code}`,
     author: {
       name,
       handle,
-      url: handle ? `https://www.threads.com/@${handle}` : 'https://www.threads.com',
+      url: `https://www.threads.com/@${handle}`,
     },
     text: caption,
     createdAt,

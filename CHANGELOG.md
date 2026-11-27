@@ -233,6 +233,14 @@ mbedfx.app's Reddit app and account, and it names no account at all. Nobody else
   code. So `/th/t/{code}` now draws that post, and the converter turns a Threads short link into it.
   A `/t/{code}` link without `/th/` still asks TikTok first, and `/_api/v1` answers `/th/t/{code}` the
   way it answers `threads.com/@i/post/{code}`.
+- **A deleted Threads post gets the "Couldn't load" card.** On 2026-11-27 mbedfx.app drew a deleted
+  Threads post, and a code Threads never issued, as a post by "Threads • Log in", with "Join Threads
+  to share ideas…" as its text, a picture from no post, and a date worked out from the code. Threads
+  had answered with its login page, and `/_api/v1` returned that page as `ok: true`. A page now
+  counts as the post only when its title names the post's author, so these links get the failure
+  card (not yet pasted into Discord) and `/_api/v1` answers `fetch_fail`. A real post can now come
+  out without its caption: when only the page mbedfx reads the caption from is the login page, the
+  card leaves the caption out instead of showing the login text.
 - **`RESOLVER_SECRET` was documented as protecting the Cloudflare container, and it doesn't.**
   `container/README.md` said to set it on the container as well as the Worker, and nothing in this
   repo puts it there: the container's Durable Object passes it no environment, so the container never
