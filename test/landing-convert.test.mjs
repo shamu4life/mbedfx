@@ -63,7 +63,7 @@ function loadConverter(config) {
     ourHosts: OUR_HOSTS, prepResolved: mbedfxPrepResolved, hasMediaOnly: mbedfxHasMediaOnly,
     pinId: mbedfxPinId, pinShortCode: PIN_SHORT_CODE, pinRefusal: PIN_IT_REFUSAL, forcedPath: mbedfxForcedPath,
     pathWords: PATH_WORDS, reservedWords: RESERVED_WORDS, siteCodes: SITE_CODES, pageStIdShape: ST_ID,
-    pageImIdShape: IM_ID, pageTwitchSlug: TWITCH_SLUG, pageThCode: TH_CODE,
+    pageImIdShape: IM_ID, pageTwitchSlug: TWITCH_SLUG, pageThCode: TH_CODE, queryArms: QUERY_ARMS,
   }`)(config)
 }
 
@@ -79,7 +79,7 @@ function loadPlatformTable() {
 const {
   convert, defaultHost, mediaOnly, repoint, isGuest, pageGuests, publicHosts, ourHosts, prepResolved, hasMediaOnly,
   pinId, pinShortCode, pinRefusal, forcedPath, pathWords, reservedWords, siteCodes, pageStIdShape, pageImIdShape,
-  pageTwitchSlug, pageThCode,
+  pageTwitchSlug, pageThCode, queryArms,
 } = loadConverter()
 const PLATFORMS = loadPlatformTable()
 
@@ -980,18 +980,49 @@ test('A PASTED-BACK mbedfx LINK /{code}/{word} KEEPS THE POST IT NAMED, or is re
    *
    * THE RULES:
    *   - A link that named post S/id converts to S/id in every mode, or is refused, and only where no
-   *     spelling the router has reads S/id now (Twitch's "Embed" and "EMBED").
+   *     spelling the router has reads S/id now (Twitch's "Embed" and "EMBED", and the clip "embed").
    *   - A link that named no post converts to one that names none, in every mode. A refusal is allowed
    *     there too: a Streamable or Imgur id that is a RESERVED row, as pasted from the site, and "embed".
    *   - A mode never changes the site: the moded link names the unmoded link's post, or nothing.
+   *
+   * WITH A KEPT QUERY TOO, since 2026-11-27 (review of the branch). Every cell is pasted again with each
+   * of QUERIES, one valid and one junk value per parameter the page keeps, on mbedfx.app alone: the
+   * hosts are one branch, and three of them would triple the file's slowest test for nothing. The
+   * branch used to skip its /{code}/{word} handling for ANY kept parameter, so /st/reel?v=abc with
+   * stills on came out /st/reel/p?v=abc (the Instagram post "p"), /tw/status?clip=Foo an X post and
+   * /rd/gallery?v=abc the Reddit post "p", and an unmoded /st/{word}?v=… that named a Streamable video
+   * at 97bebca came out "Not found". Swept outside the suite over the same grid on all three hosts
+   * (370,260 conversions): 32,769 lost a post and 3,660 gained one before the fix, none of either after.
+   *
+   * WHAT A QUERY NAMED AT 97bebca: the three query arms HEAD has (youtubeQuery, facebookQuery,
+   * twitchEmbed), on an exact word, and twitchEmbed did not yet refuse a clip called "embed". Anywhere
+   * else the query changed nothing and the path model above applies. READ_AT_97BEBCA lists each pair
+   * the arms read. Checked, with the path model, against 97bebca's router outside the suite: 0
+   * differences over all 45,254 paths, 41,140 of them with a query.
    */
   const casings = w => [...new Set([w, w.toUpperCase(), w[0].toUpperCase() + w.slice(1)])]
   const words = [...PATH_WORDS].flatMap(casings)
   const codes = escapeTokens()
   const hosts = ['mbedfx.app', ...GUEST_HOSTS]
   const SHAPE = { st: ST_ID, im: IM_ID, tw: TWITCH_SLUG }
-  const namedAt97bebca = (c, w) =>
-    SHAPE[c] && SHAPE[c].test(w) && !RESERVED.has(w) && !(c === 'tw' && w === 'embed') ? `${c}:${w}` : null
+  const QUERIES = ['v=dQw4w9WgXcQ', 'v=1234567890123', 'v=abc', 'fbid=1234567890', 'fbid=abc',
+    'clip=AwkwardHelplessSalamanderSwiftRage', 'clip=embed', 'story_fbid=1234567890&id=1234567',
+    'story_fbid=abc&id=1234567', 'multi_permalinks=1234567890']
+  const READ_AT_97BEBCA = {
+    '/yt/watch?v=dQw4w9WgXcQ': 'yt:dQw4w9WgXcQ',
+    '/fb/watch?v=1234567890123': 'fb:1234567890123',
+    '/fb/photo?fbid=1234567890': 'fb:1234567890',
+    '/fb/photo.php?fbid=1234567890': 'fb:1234567890',
+    '/fb/story.php?story_fbid=1234567890&id=1234567': 'fb:1234567_1234567890',
+    '/fb/permalink.php?story_fbid=1234567890&id=1234567': 'fb:1234567_1234567890',
+    '/tw/embed?clip=AwkwardHelplessSalamanderSwiftRage': 'tw:AwkwardHelplessSalamanderSwiftRage',
+    '/tw/embed?clip=embed': 'tw:embed',
+  }
+  const namedAt97bebca = (c, w, q = '') => READ_AT_97BEBCA[`/${c}/${w}?${q}`] ??
+    (SHAPE[c] && SHAPE[c].test(w) && !RESERVED.has(w) && !(c === 'tw' && w === 'embed') ? `${c}:${w}` : null)
+  // The page's own table says where the query and the mode stay on; the test below holds it to route().
+  const armReads = (c, w, q) => Object.hasOwn(queryArms, c) && Object.hasOwn(queryArms[c], w) &&
+    queryArms[c][w].every(k => new URLSearchParams(q).has(k)) && !(c === 'tw' && q === 'clip=embed')
   const named = got => got.kind === 'post' ? `${got.ref.p}:${got.ref.id ?? got.ref.slug ?? got.ref.code}` : null
   const spellings = (c, w) => ({
     st: [`/st/${w}`, `/st/e/${w}`, `/st/s/${w}`, `/e/${w}`, `/s/${w}`],
@@ -1000,12 +1031,12 @@ test('A PASTED-BACK mbedfx LINK /{code}/{word} KEEPS THE POST IT NAMED, or is re
   })[c] ?? []
   const tally = {}
   const count = k => { tally[k] = (tally[k] || 0) + 1 }
-  for (const c of codes) for (const w of words) {
-    const was = namedAt97bebca(c, w)
-    if (!was) assert.equal(named(routed(`/${c}/${w}`)), null, `/${c}/${w} names no post on HEAD (router.ts PATH_WORDS)`)
-    const reads = was !== null && spellings(c, w).some(p => named(routed(p)) === was)
-    for (const host of hosts) {
-      const paste = `https://${host}/${c}/${w}`
+  for (const c of codes) for (const w of words) for (const q of ['', ...QUERIES]) {
+    const was = namedAt97bebca(c, w, q)
+    if (!was && !q) assert.equal(named(routed(`/${c}/${w}`)), null, `/${c}/${w} names no post on HEAD (router.ts PATH_WORDS)`)
+    const reads = was !== null && [...spellings(c, w), ...(q ? [`/${c}/${w}?${q}`] : [])].some(p => named(routed(p)) === was)
+    for (const host of q ? ['mbedfx.app'] : hosts) {
+      const paste = `https://${host}/${c}/${w}${q ? '?' + q : ''}`
       const plain = convert(paste, 'mbedfx.app')
       for (const mode of [undefined, 'stills', 'videos']) {
         const r = mode ? convert(paste, 'mbedfx.app', mode) : plain
@@ -1016,7 +1047,7 @@ test('A PASTED-BACK mbedfx LINK /{code}/{word} KEEPS THE POST IT NAMED, or is re
             assert.ok((c === 'st' || c === 'im') && SHAPE[c].test(w) && RESERVED.has(w) || c === 'tw' && w.toLowerCase() === 'embed',
               `${paste} is refused ("${r.why}") though it named no post and nothing about it is unreachable`)
           }
-          count(was ? `refused ${c}` : `refused ${c} (named none)`)
+          count(`${was ? `refused ${c}` : `refused ${c} (named none)`}${q ? ' ?' : ''}`)
           continue
         }
         assert.equal(r.url, `https://mbedfx.app${r.path}`, `${paste}: re-pointed at the selected domain`)
@@ -1024,31 +1055,47 @@ test('A PASTED-BACK mbedfx LINK /{code}/{word} KEEPS THE POST IT NAMED, or is re
         if (was) {
           assert.equal(named(got), was, `${paste} (mode ${mode}) converts to ${r.path}, which must be ${was}, not ${JSON.stringify(got)}`)
           assert.equal(got.gallery, mode, `${paste}: ${r.path} carries the mode where the router reads it`)
-          count(`respelled ${c}`)
+          count(READ_AT_97BEBCA[`/${c}/${w}?${q}`] ? `query arm ${c}` : `respelled ${c}`)
         } else {
           assert.equal(named(got), null, `${paste} (mode ${mode}) named no post, and ${r.path} must not name one (${JSON.stringify(got)})`)
           // As pasted and without the mode, which is what keeps it naming none: respelled, or with /p on,
           // the router has another reading of it (the paragraph above). A lowercase p or v is the one
           // exception, older than this: the branch strips a trailing p or v as a mode it is about to
           // replace, which leaves the bare code (the ['x','ig'] chooser) and then the box's own mode.
+          // The kept query stays on as pasted. On the code's own query arm with a value it does not
+          // read (/yt/watch?v=abc) the mode goes on as well, as it always has there, and names nothing.
           const suffix = w === 'p' || w === 'v'
-          const want = suffix ? `/${c}${mode ? (mode === 'stills' ? '/p' : '/v') : ''}` : `/${c}/${w}`
+          const m = mode ? (mode === 'stills' ? '/p' : '/v') : ''
+          const tail = q ? `?${q}` : ''
+          const want = suffix ? `/${c}${m}${tail}` : armReads(c, w, q) ? `/${c}/${w}${m}${tail}` : `/${c}/${w}${tail}`
           assert.equal(r.path, want, `${paste} (mode ${mode}) is passed through as pasted`)
-          count('names none')
+          count(q ? 'names none ?' : 'names none')
         }
         // The mode never moves the link: same post, or nothing, as the unmoded link.
         assert.equal(named(got), named(routed(plain.path)), `${paste}: mode ${mode} changed the site (${plain.path} vs ${r.path})`)
       }
     }
   }
-  // Exact, so a new reason or a site dropping out of the grid fails here. Per word, 3 hosts x 3 modes:
-  // 12 Streamable and 6 Imgur RESERVED rows fit their shapes, and "embed" has three casings.
+  // Exact, so a new reason or a site dropping out of the grid fails here. Per word, 3 hosts x 3 modes
+  // with no query (9), and 10 queries x 3 modes on one host (30): 12 Streamable and 6 Imgur RESERVED
+  // rows fit their shapes, and "embed" has three casings. Under a query, "Embed" and "EMBED" named a
+  // clip for all ten (60), lowercase "embed" named one for its two clip queries, of which the clip
+  // "embed" is refused (3) and the real clip is read, and the other eight named none (24).
   const respelled = Object.entries(tally).filter(([k]) => k.startsWith('respelled')).map(([, v]) => v)
   assert.ok(respelled.length === 3 && respelled.every(v => v > 500), `st, im and tw each respell (${JSON.stringify(tally)})`)
   assert.deepEqual(
     Object.fromEntries(Object.entries(tally).filter(([k]) => k.startsWith('refused'))),
-    { 'refused tw': 2 * 9, 'refused st (named none)': 12 * 9, 'refused im (named none)': 6 * 9, 'refused tw (named none)': 9 },
+    {
+      'refused tw': 2 * 9, 'refused st (named none)': 12 * 9, 'refused im (named none)': 6 * 9, 'refused tw (named none)': 9,
+      'refused tw ?': 2 * 30 + 3, 'refused st (named none) ?': 12 * 30, 'refused im (named none) ?': 6 * 30,
+      'refused tw (named none) ?': 8 * 3,
+    },
     `refused (${JSON.stringify(tally)})`)
+  // Every pair the arms read at 97bebca is still read through its own arm, mode and all, except the
+  // clip "embed": yt 1, fb 5 and tw 1 pair, 3 modes each.
+  assert.deepEqual(
+    Object.fromEntries(Object.entries(tally).filter(([k]) => k.startsWith('query arm'))),
+    { 'query arm yt': 3, 'query arm fb': 15, 'query arm tw': 3 }, `query arm (${JSON.stringify(tally)})`)
 
   // The reported links by name, built from a variable so the paste sweeps above do not pick them up.
   const MB = 'https://mbedfx.app'
@@ -1069,13 +1116,48 @@ test('A PASTED-BACK mbedfx LINK /{code}/{word} KEEPS THE POST IT NAMED, or is re
     // A kept query is a post's id, and the mode goes on as before.
     [`${MB}/tw/embed?clip=AwkwardHelplessSalamanderSwiftRage`, 'stills', '/tw/embed/p?clip=AwkwardHelplessSalamanderSwiftRage'],
     [`${MB}/yt/watch?v=dQw4w9WgXcQ`, 'stills', '/yt/watch/p?v=dQw4w9WgXcQ'],
+    // A kept query that is not this code's own arm, as reported on 2026-11-27: it no longer stops the
+    // handling above. These were /st/reel/p?v=abc (Instagram "p"), /tw/status/p?clip=Foo (an X post),
+    // /rd/gallery/p?v=abc (Reddit "p") and /st/video?fbid=… ("Not found").
+    [`${MB}/st/reel?v=abc`, 'stills', '/st/e/reel/p'],
+    [`${MB}/tw/status?clip=Foo`, 'stills', '/tw/embed/p?clip=status'],
+    [`${MB}/rd/gallery?v=abc`, 'stills', '/rd/gallery?v=abc'],
+    [`${MB}/st/video?fbid=1234567890`, undefined, '/st/e/video'],
     // Not a word: untouched.
     [`${MB}/st/moo`, 'stills', '/st/moo/p'],
   ]) assert.equal(convert(paste, 'mbedfx.app', mode).path, path, `${paste} with ${mode}`)
   assert.equal(routed('/yt/watch/p?v=dQw4w9WgXcQ').gallery, 'stills')
-  for (const paste of [`${MB}/tw/Embed`, `${HS}/tw/EMBED`, `${MB}/st/followers`, `${MB}/im/gallery`]) {
+  for (const paste of [`${MB}/tw/Embed`, `${HS}/tw/EMBED`, `${MB}/st/followers`, `${MB}/im/gallery`,
+    `${MB}/tw/embed?clip=embed`, `${MB}/tw/embed?clip=EMBED`]) {
     assert.equal(convert(paste, 'mbedfx.app').ok, false, paste)
   }
+})
+
+test('THE PAGE\'S QUERY_ARMS ARE THE ROUTER\'S: a query names a post under /{code}/{word} exactly where the table says', () => {
+  /**
+   * The already-ours branch keeps a pasted /{code}/{word}?{query} as it is, mode and all, only where
+   * QUERY_ARMS says the router reads that query under that code and word. A copy that lists an arm the
+   * router lacks would hand /st/reel?v=abc its mode again (the Instagram post "p"); one that misses an
+   * arm would respell or strip a real /fb/photo?fbid=… link. So the table is derived back from route():
+   * for every site code, every PATH_WORDS word in three casings and every parameter set the page keeps,
+   * with values each arm reads, the query changes route()'s answer to a post exactly where the table
+   * names the pair.
+   */
+  const casings = w => [...new Set([w, w.toUpperCase(), w[0].toUpperCase() + w.slice(1)])]
+  const VALUES = {
+    v: ['v=dQw4w9WgXcQ', 'v=1234567890123'], fbid: ['fbid=1234567890'], clip: ['clip=AwkwardHelplessSalamanderSwiftRage'],
+    'story_fbid,id': ['story_fbid=1234567890&id=1234567'], multi_permalinks: ['multi_permalinks=1234567890'],
+  }
+  const named = got => got.kind === 'post' ? `${got.ref.p}:${got.ref.id ?? got.ref.slug ?? got.ref.code}` : null
+  const seen = []
+  for (const c of escapeTokens()) for (const w of [...PATH_WORDS].flatMap(casings)) for (const [keys, qs] of Object.entries(VALUES)) {
+    const routerReads = qs.some(q => { const n = named(routed(`/${c}/${w}?${q}`)); return n !== null && n !== named(routed(`/${c}/${w}`)) })
+    const table = Object.hasOwn(queryArms, c) && Object.hasOwn(queryArms[c], w) && queryArms[c][w].join(',') === keys
+    assert.equal(table, routerReads, `/${c}/${w}?${keys}: the page says ${table}, route() says ${routerReads}`)
+    if (routerReads) seen.push(`${c}/${w}?${keys}`)
+  }
+  assert.deepEqual(seen.sort(), ['fb/permalink.php?story_fbid,id', 'fb/photo.php?fbid', 'fb/photo?fbid', 'fb/story.php?story_fbid,id',
+    'fb/watch?v', 'tw/embed?clip', 'yt/watch?v'])
 })
 
 test('THE PAGE\'S SITE CODES AND ID SHAPES ARE THE ROUTER\'S, character for character', () => {

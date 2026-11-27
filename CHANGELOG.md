@@ -201,7 +201,9 @@ mbedfx.app's Reddit app and account, and it names no account at all. Nobody else
   refuses `/tw/Embed`, since no clip has that name. A site code in front of a word that names no post,
   such as `/x/status` or `/rd/gallery`, comes back as it was pasted, without the stills or videos
   ending. With that ending added, the Worker read the `p` or `v` as an id, so `/x/status` with "all as
-  stills" ticked became `/x/status/p`, the X post "p".
+  stills" ticked became `/x/status/p`, the X post "p". The same goes for a link with a query left on
+  it, such as `/st/video?v=…`. Only a query that holds the post's id, like `?v=` on `/yt/watch?v=…`,
+  leaves the link and its ending alone.
 - **The converter refuses the few ids no link can reach.** A Streamable id, or an Imgur album or
   gallery id, that is one of the Worker's lowercase "which site?" words (`settings`, `followers`,
   `gallery` and ten more) has no spelling the Worker reads. The converter says so now instead of
@@ -209,7 +211,9 @@ mbedfx.app's Reddit app and account, and it names no account at all. Nobody else
   offering X and Instagram. The same words are refused on a bare `imgur.com/` link, such as
   `imgur.com/gallery` or `imgur.com/search?q=cats`, and on an mbedfx link that carries one, such as
   `/st/followers`. `imgur.com/gallery` and `imgur.com/search` are Imgur's own pages, and no image has
-  any of these names. Each of these links used to convert to one that said "Not found".
+  any of these names. Before this, `followers` and `following` came out as that "which site?" page
+  (an mbedfx link like `/st/followers` came back unchanged), and the other words as a link that said
+  "Not found".
 - **Picking Reddit on a Reddit gallery link works.** `mbedfx.app/rd/gallery/{id}` answered "Not
   found", so for a `/gallery/{id}` link, which Reddit and Imgur both use, the "which site?" choice
   for Reddit went nowhere. It now draws the same card as `/comments/{id}`, and the converter turns a

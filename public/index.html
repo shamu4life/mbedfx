@@ -959,6 +959,38 @@ var IM_ID = /^[A-Za-z0-9]{5,7}$/;
 var TWITCH_SLUG = /^[A-Za-z0-9][A-Za-z0-9_-]{2,99}$/;
 var TH_CODE = /^[A-Za-z0-9_-]{1,64}$/;
 
+/**
+ * THE QUERY ARMS A FORCED /{code}/{word} HAS, copied from router.ts: youtubeQuery() under /yt/,
+ * facebookQuery() under /fb/ and twitchEmbed() under /tw/, each with the parameters it reads an id
+ * from. A word is compared in exact case, as those three compare it. test/landing-convert.test.mjs
+ * holds this table to route() row by row, so a new arm or a dropped one fails there.
+ *
+ * WHY IT EXISTS: the already-ours branch skipped its /{code}/{word} handling whenever ANY id parameter
+ * was kept, and the kept list is every site's (v, fbid, clip, story_fbid with id, multi_permalinks).
+ * So /st/reel?v=abc with stills on came out /st/reel/p?v=abc, the Instagram post "p", /tw/status?clip=Foo
+ * an X post, /rd/gallery?v=abc the Reddit post "p", and an unmoded /st/{word}?v=… that named a
+ * Streamable video at 97bebca came out "Not found". A kept parameter names a post only on the arm that
+ * reads it. (/fb/groups/{gid}?multi_permalinks= is three segments and never reaches this table.)
+ */
+var QUERY_ARMS = {
+  yt: { watch: ['v'] },
+  fb: { watch: ['v'], photo: ['fbid'], 'photo.php': ['fbid'], 'story.php': ['story_fbid', 'id'], 'permalink.php': ['story_fbid', 'id'] },
+  tw: { embed: ['clip'] }
+};
+/**
+ * Does /{code}/{word} have a query arm, and does `keep` carry every parameter it reads? One value is
+ * checked too, the one the router refuses beyond a shape: twitchEmbed() reads no clip called "embed",
+ * in any case. 97bebca read /tw/embed?clip=embed as that clip, so with the arm exempting it the link
+ * came back naming nothing; now it reaches the block's "embed" refusal, as clips.twitch.tv/embed?clip=embed
+ * pasted from Twitch is refused below.
+ */
+function mbedfxQueryArm(code, word, keep) {
+  var arms = Object.prototype.hasOwnProperty.call(QUERY_ARMS, code) ? QUERY_ARMS[code] : null;
+  var keys = arms && Object.prototype.hasOwnProperty.call(arms, word) ? arms[word] : null;
+  if (code === 'tw' && String(keep.get('clip')).toLowerCase() === 'embed') return false;
+  return !!keys && keys.every(function (k) { return keep.has(k); });
+}
+
 /** Would the router refuse this segment as an id under a site code? router.ts pathWord(), case-folded. */
 function mbedfxPathWord(s) { return PATH_WORDS.indexOf(String(s).toLowerCase()) >= 0; }
 /** Would every Streamable arm, and Imgur's album and gallery arms, refuse it? router.ts reserved(). */
@@ -1198,11 +1230,17 @@ function mbedfxConvert(input, host, gallery) {
      * /x/reel/p the Instagram post "p", /tt/t/p a TikTok short code "p", and /rd/gallery/p, since that
      * arm landed, the Reddit post "p". Without it each answers what the pasted link answered.
      *
-     * NOT WITH A KEPT QUERY: /tw/embed?clip=…, /yt/watch?v=… and /fb/photo?fbid=… are posts, and the
-     * query is where their id lives.
+     * NOT WHEN THE QUERY IS THIS CODE'S OWN ARM (QUERY_ARMS): /tw/embed?clip=…, /yt/watch?v=… and
+     * /fb/photo?fbid=… are posts, the query is where their id lives, and they keep it and the mode. Any
+     * other kept parameter is one the router does not read under this code and word, so the link is
+     * handled as if it had none. Until 2026-11-27 any kept parameter at all skipped this, which is how
+     * /st/reel?v=abc with stills on became /st/reel/p?v=abc, the Instagram post "p", and how an unmoded
+     * /st/{word}?v=…, /im/{word}?v=… or /tw/{word}?clip=… that named its site's post at 97bebca came out
+     * "Not found". The respelled link drops the parameter, since its spelling reads none; the link
+     * passed through as pasted keeps it, because the router ignores it there.
      */
     var cw = stripped.replace(/^\/+|\/+$/g, '').split('/');
-    if (!kept && cw.length === 2 && SITE_CODES.indexOf(cw[0]) >= 0 && mbedfxPathWord(cw[1])) {
+    if (cw.length === 2 && SITE_CODES.indexOf(cw[0]) >= 0 && mbedfxPathWord(cw[1]) && !mbedfxQueryArm(cw[0], cw[1], keep)) {
       var w = cw[1];
       if (cw[0] === 'st' && ST_ID.test(w)) {
         if (mbedfxReservedWord(w)) return no(mbedfxReservedRefusal(w, 'a Streamable video'));
@@ -1218,7 +1256,7 @@ function mbedfxConvert(input, host, gallery) {
       if (cw[0] === 'tw' && TWITCH_SLUG.test(w) && !mbedfxReservedWord(w)) {
         return out('/tw/embed?clip=' + w, null, REPOINTED);
       }
-      var asPasted = '/' + cw.join('/');
+      var asPasted = '/' + cw.join('/') + (kept ? '?' + kept : '');
       return { ok: true, url: mbedfxScheme(host) + host + asPasted, platform: null, note: REPOINTED, code: null, path: asPasted, token: null };
     }
     return out(stripped === '/' ? '/' : stripped + (kept ? '?' + kept : ''), null, REPOINTED);
