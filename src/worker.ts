@@ -43,7 +43,7 @@ import { normalizeTwitter } from './platforms/twitter/normalize.ts'
 import { fetchThreads } from './platforms/threads/fetch.ts'
 import { normalizeThreads } from './platforms/threads/normalize.ts'
 import { fetchReddit, resolveRedditShareUrl } from './platforms/reddit/fetch.ts'
-import { modelInput, sourceLanguage, splitNotes, translateBest, withTranslation } from './translate.ts'
+import { modelInput, sourceLanguage, splitNotes, TRANSLATION_MARKER, translateBest, withTranslation } from './translate.ts'
 import { displayName } from './render/chooser.ts'
 import { metaPlatformOf, resolveMetaShare, stripMetaTracking } from './platforms/metashare/fetch.ts'
 import { normalizeReddit, redditCaptionSource, redditIncomplete } from './platforms/reddit/normalize.ts'
@@ -6957,6 +6957,19 @@ async function serve(req: Request, env: Env, ctx: ExecutionContext, d: Deps): Pr
       const post = described.post
       // PAIRED WITH ITS UNFILTERED POSITION — see usableWithIndex for the off-by-one this replaced.
       const own = usableWithIndex(post)
+      /**
+       * THE GALLERY CARD'S `pending`, AS THE HEAD FOR THIS LINK WOULD HAVE IT. For every path but one that
+       * is `described.pending`, the flags renderPostRoute passes. A TikTok short link is the one: its head
+       * comes from the short-link arm, which never translates and passes no `pending`, so the card there
+       * judges from the raw caption. This post, though, arrives translated, and the builder would read the
+       * marker as settled and answer with a grid that head leaves out (caught in review, 2026-11-26, with
+       * a Japanese slideshow behind /t/{code}). A marker here means the raw caption was sent for
+       * translation, so that head keeps today's card; with no marker the text is the raw caption, and the
+       * builder's own check answers as it does for the head.
+       */
+      const galleryPending = target?.kind === 'shortlink' && target.p === 'tt'
+        ? (described.pending || str(post.text).includes(TRANSLATION_MARKER) ? true : undefined)
+        : described.pending
       return Response.json({
         ok: true,
         ...directOf,
@@ -6968,12 +6981,12 @@ async function serve(req: Request, env: Env, ctx: ExecutionContext, d: Deps): Pr
          * does; a copy of the five-picture rule in the page is how the two would drift. Present only when
          * true, like `direct`, so every other answer is byte-identical.
          *
-         * `described.pending` is the head's `pending` too (renderPostRoute ORs the same three flags), so
-         * a preview whose translation lost its race draws today's card, as Discord would for that head.
-         * The page asks once more when `pending` is set, and that answer carries the translation and the
-         * grid together.
+         * `galleryPending` (above) is the head's `pending`: renderPostRoute ORs the same three flags that
+         * make `described.pending`, so a preview whose translation lost its race draws today's card, as
+         * Discord would for that head. The page asks once more when `pending` is set, and that answer
+         * carries the translation and the grid together.
          */
-        ...(galleryCardJson(post, origin, site, described.pending) ? { componentGallery: true as const } : {}),
+        ...(galleryCardJson(post, origin, site, galleryPending) ? { componentGallery: true as const } : {}),
         /**
          * THE ONE THING THE PAGE COULD NOT PREVIOUSLY LEARN: that this answer is incomplete.
          *

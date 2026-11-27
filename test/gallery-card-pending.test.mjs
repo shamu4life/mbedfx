@@ -229,6 +229,22 @@ test('A TIKTOK SHORT LINK, WHOSE HEAD NEVER TRANSLATES, KEEPS TODAY\'S CARD FOR 
   const en = { cache: fakeCache(), fetchPost: async () => null, resolveShortlink: async () => ({ kind: 'post', post: slides('7000000000000000302', 'seven slides from the trip') }) }
   const control = await (await handle(ask('/t/GaLPndTT02'), env, ctx, en)).text()
   assert.ok(scriptOf(control), 'an English caption: nothing to wait for, so the grid')
+
+  /**
+   * AND THE PREVIEW SAYS THE SAME. /_card resolves the short code and runs the translation, so its post
+   * arrives translated, with the marker, and the builder alone would call it settled and answer with
+   * the grid that the head above leaves out. The preview has to answer for the head this link gets.
+   */
+  // The preview loads the resolved post through the post route, so the stub answers there too.
+  const preview = async (code, post) => (await handle(ask(`/_card?p=${encodeURIComponent(`/t/${code}`)}`, BROWSER), env, ctx, {
+    cache: fakeCache(), fetchPost: async () => post, resolveShortlink: async () => ({ kind: 'post', post }),
+  })).json()
+  const jaPreview = await preview('GaLPndTT03', slides('7000000000000000303', JA))
+  assert.equal(jaPreview.ok, true)
+  assert.ok(jaPreview.text.includes(EN), 'the preview did translate it')
+  assert.equal(jaPreview.componentGallery, undefined, 'but draws no grid, because the short link\'s head carries none')
+  const enPreview = await preview('GaLPndTT04', slides('7000000000000000304', 'seven slides from the trip'))
+  assert.equal(enPreview.componentGallery, true, 'an English caption: the grid on both')
 })
 
 test('SIX PICTURES QUOTING A VIDEO KEEP TODAY\'S CARD, and with it the /p card\'s "Contains video" line', async () => {
