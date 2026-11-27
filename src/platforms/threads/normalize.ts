@@ -84,8 +84,9 @@ function pageAuthor(html: string): { name: string; handle: string } | null {
  * cdninstagram rsrc.php asset, not a post's media. That card can only come from the OG fallback
  * (buildFromHtml): the SSR path needs a `user.username`. fetch.ts let it through only because
  * og:type=article held on at least one of the two pages, so the login wall carries it. Which of the
- * two pages, and what else is on them, is not known: the raw bytes were not captured, and the dev host
- * this was worked on got 429 from threads.com for every ask at 05:04 UTC.
+ * two pages, and what else is on them, is not known: the raw bytes were not captured, and at 05:04 UTC
+ * every www.threads.com request from the dev host this was worked on got 429 (only the 301s from
+ * threads.net and the bare threads.com came back).
  *
  * WHY THE AUTHOR AND NOT A BLOCKLIST OF "Log in": the byline is what the card needs, and a brand
  * title is not one. A post page names its author in og:title: the two SSR fixtures, cut from post

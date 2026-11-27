@@ -73,6 +73,12 @@ test('threadsHasPost needs og:type=article AND an og:title naming the author, so
   assert.equal(threadsHasPost('<meta property="og:type" content="article" />'), false)
   // A deleted/private/profile page as measured 2026-07-21: the shell with no article type.
   assert.equal(threadsHasPost('<html><head><meta property="og:type" content="profile" /></head></html>'), false)
+  // Real post heads still pass: the two pages captured 2026-10-04 keep their own og:* head. They were
+  // fetched with SSR_HEADERS (a browser UA), not the bot UAs the fallback sends, which could not be
+  // fetched while this was written (429); that their og:title has the same form is what the fallback's
+  // byline parse has relied on since 2026-07-21.
+  assert.equal(threadsHasPost(readFileSync(new URL('./fixtures/threads-ssr-carousel.html', import.meta.url), 'utf8')), true)
+  assert.equal(threadsHasPost(readFileSync(new URL('./fixtures/threads-ssr-video.html', import.meta.url), 'utf8')), true)
   assert.equal(threadsHasPost('<html><head><title>nothing</title></head></html>'), false)
   assert.equal(threadsHasPost(null), false)
   assert.equal(threadsHasPost(undefined), false)

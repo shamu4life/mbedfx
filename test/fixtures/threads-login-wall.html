@@ -1,7 +1,8 @@
 <!--
   NOT A CAPTURE. Threads' login wall as the OG fallback saw it, REBUILT from what production returned,
-  because the Worker's raw bytes cannot be captured and the dev host was refused (429) for every
-  threads.com ask while this was written.
+  because the Worker's raw bytes cannot be captured and every www.threads.com request from the dev
+  host got 429 while this was written (only the 301s from threads.net and the bare threads.com came
+  back).
 
   Measured 2026-11-27 05:03:59 to 05:04:07 UTC through production's /_api/v1 (Worker egress, served
   from the BOS colo): threads.com/@i/post/DbcSwYaEa9r (a deleted post) and /@i/post/ZTSw2mYwR (a code

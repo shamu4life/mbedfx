@@ -503,7 +503,7 @@ const IG_NOT_A_USER = new Set([...KNOWN, 'settings'])
  *     DbkwmbMEt6u (@bisniscom). threads.net/t/{code} answered 301 to threads.com/t/{code} for each.
  *     That run is the evidence, and it did not repeat: a verifier's later run from the same host the
  *     same day got 429s, and with no user agent a 302 to facebook.com/unsupportedbrowser, and at
- *     05:04 UTC every threads.com page this host asked for answered 429. What the run showed is that
+ *     05:04 UTC every www.threads.com request this host made answered 429. What the run showed is that
  *     a /t/ code and the post's shortcode are one string, which is all this arm relies on.
  *   - A sixth, DbcSwYaEa9r, is a deleted post. Its /t/ answered 200 with no Location, the soft-404 the
  *     1.0.0 design spec warns about, and /@{author}/post/ and /@i/post/ both 302 to ?error=invalid_post.
