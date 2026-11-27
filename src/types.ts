@@ -769,7 +769,15 @@ export type Route =
   | { kind: 'notfound' }
 
 export type Outcome =
-  | { kind: 'post'; post: Post }
+  /**
+   * `pending` is true when part of this post is still arriving and the next render will have it: a
+   * translation that lost its race, a post that loaded incomplete, a linked post that missed its budget.
+   * It is the same condition that keeps renderPostRoute's head out of the response cache. false means the
+   * caller ran the translation step and nothing is still coming. Left out means the caller never asked
+   * (the short-link arm). Only the Discord head reads it, to decide on the gallery card
+   * (render/componentembed.ts takesGalleryCard, which says what each value does and why).
+   */
+  | { kind: 'post'; post: Post; pending?: boolean }
   /**
    * A rendered ACCOUNT. Separate from 'post' for the reason ProfileRef is separate from PostRef:
    * render()'s post arm reaches renderPost/renderTelegram/renderSpoof, all of which read a Post,

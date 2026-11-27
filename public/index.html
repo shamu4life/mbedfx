@@ -407,6 +407,15 @@ pre s { color: var(--faint); }
 .pv .shot img { display: block; width: 100%; height: auto; max-height: 350px; object-fit: cover; background: var(--line); }
 .pv .shots.n1 .shot { max-width: 350px; }
 .pv .shots.n1 .shot img { max-height: 500px; object-fit: contain; background: none; }
+/* THE GALLERY CARD'S GRID (src/render/componentembed.ts, 2026-11-26): five to nine pictures on six
+   columns, three to a row, any left over from a multiple of three on the first row (galleryCells). Nine
+   is the 3x3 grid the owner asked for. Five to eight are Discord's own mosaic, drawn here the way the
+   Discord client lays out a message's attachments; no component gallery that size has been pasted yet,
+   so this part is an approximation, and the real card is the reference. */
+.pv .shots.g { grid-template-columns: repeat(6, 1fr); }
+.pv .shots.g .shot img { aspect-ratio: 1; max-height: none; }
+.pv .shots.g .shot.w3 img { aspect-ratio: 3 / 2; }
+.pv .shots.g .shot.w6 img { aspect-ratio: 2 / 1; }
 /* A SPOILER-TAGGED POST'S MEDIA, blurred because the card asks Discord to blur it (render/mastodon.ts).
    This draws the request, not a measured result: whether Discord honours it is the owner's paste test.
    Scaled so the blur does not show a hard edge inside the rounded box. The media-only preview is not
@@ -1917,6 +1926,17 @@ function mbedfxPrepResolved(asked, answer) {
   }
 
   /**
+   * HOW MANY OF SIX COLUMNS EACH GALLERY PICTURE TAKES, in order: three to a row, and the one or two left
+   * over from a multiple of three share the first row (5 is 2 + 3, 7 is 1 + 3 + 3, 9 is 3 + 3 + 3). The
+   * stylesheet's note on `.shots.g` says which part of this is measured and which is not.
+   */
+  function galleryCells(n) {
+    var lead = n % 3, out = [];
+    for (var i = 0; i < n; i++) out.push(i < lead ? 6 / lead : 2);
+    return out;
+  }
+
+  /**
    * WHERE A LINK A GUEST HOST TURNS AWAY ACTUALLY LANDS, said beside "doesn't resolve to a post".
    *
    * A guest host answers only post, profile and share links; anything else (a bare handle the router
@@ -1959,12 +1979,22 @@ function mbedfxPrepResolved(asked, answer) {
      * one fails SILENTLY, which is how a YouTube card came out as a title and a blank space. Images
      * use `url` because for them the bytes are the picture.
      */
-    var shots = (j.media || []).slice(0, 4).map(function (m) {
+    /**
+     * THE GALLERY CARD, when the worker says Discord draws it (`componentGallery`, the same function the
+     * head calls): up to nine pictures in a grid where the activity card shows four, and no avatar beside
+     * the author, because that card has none (render/componentembed.ts says why). Everything else on the
+     * preview, the text, the counts and the footer, is the same on both cards, so it is drawn the same.
+     */
+    var gallery = !!j.componentGallery;
+    var shots = (j.media || []).slice(0, gallery ? 9 : 4).map(function (m) {
       return { still: m.kind === 'video' ? m.poster : (m.poster || m.url), video: m.kind === 'video' };
     }).filter(function (m) { return !!m.still; });
+    var cells = gallery ? galleryCells(shots.length) : [];
     var media = shots.length
-      ? '<div class="shots n' + shots.length + (j.spoiler ? ' spoiler' : '') + '">' + shots.map(function (m) {
-          return '<span class="shot">'
+      ? '<div class="shots ' + (gallery ? 'g' : 'n' + shots.length) + (j.spoiler ? ' spoiler' : '') + '">' + shots.map(function (m, i) {
+          return (gallery
+            ? '<span class="shot w' + cells[i] + '" style="grid-column: span ' + cells[i] + '">'
+            : '<span class="shot">')
             + '<img src="' + esc2(m.still) + '" alt="" loading="lazy">'
             /**
              * THE SPINNER GOES ON THE STILL, WHICH IS THE ENTRY THAT IS NOT A VIDEO.
@@ -2016,7 +2046,7 @@ function mbedfxPrepResolved(asked, answer) {
       + '<button type="button" id="copy2">Copy</button></div>'
       + '<div class="pv" style="--pvc:' + esc2(j.color || '#5865f2') + '">'
       + '<div class="who">'
-      + (j.author && j.author.avatar ? '<img src="' + esc2(j.author.avatar) + '" alt="">' : '')
+      + (!gallery && j.author && j.author.avatar ? '<img src="' + esc2(j.author.avatar) + '" alt="">' : '')
       + '<b>' + esc2(j.author && (j.author.byline || j.author.name) || '') + '</b>'
       + '</div>'
       + '<div class="body">' + body + '</div>'

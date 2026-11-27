@@ -440,6 +440,28 @@ export async function translateToEnglish(
 export const TRANSLATION_MARKER = '🌐 Translated'
 
 /**
+ * WOULD THIS CAPTION STILL BE SENT FOR TRANSLATION? True when worker.ts's withTranslated would ask about
+ * it (the same three gates: splitNotes' body, sourceLanguage, modelInput) and the text does not already
+ * carry withTranslation's marker.
+ *
+ * For a caller that never ran the translation step, which today is the TikTok short-link arm: its head
+ * is rendered straight from the resolved post, while the activity document Discord fetches next does
+ * translate. The gallery card (render/componentembed.ts) replaces that document, so it asks this when
+ * it is not told how the race went, and keeps today's card when the answer is yes.
+ *
+ * AUTO COUNTS AS YES. sourceLanguage returns it for Latin text it cannot rule out as foreign, and most of
+ * that is English, which costs those posts the gallery card on that one arm. The other answer would put
+ * a Portuguese caption into a card Discord never re-reads, untranslated. Telling the two apart takes the
+ * detector's answer, and that lives in withTranslated, not here.
+ */
+export function awaitsTranslation(post: Post): boolean {
+  const text = typeof post?.text === 'string' ? post.text : ''
+  if (text.includes(TRANSLATION_MARKER)) return false
+  const body = splitNotes(text).body
+  return sourceLanguage(body) !== null && modelInput(body) !== ''
+}
+
+/**
  * Compose the translated card: ENGLISH FIRST, then the marker, then the author's original.
  *
  *     Chinese cabbage is delicious, isn't it?
