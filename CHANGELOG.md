@@ -204,9 +204,10 @@ mbedfx.app's Reddit app and account, and it names no account at all. Nobody else
   refuses `/tw/Embed`, since no clip has that name. A site code in front of a word that names no post,
   such as `/x/status` or `/rd/gallery`, comes back as it was pasted, without the stills or videos
   ending. With that ending added, the Worker read the `p` or `v` as an id, so `/x/status` with "all as
-  stills" ticked became `/x/status/p`, the X post "p". The same goes for a link with a query left on
-  it, such as `/st/video?v=…`. Only a query that holds the post's id, like `?v=` on `/yt/watch?v=…`,
-  leaves the link and its ending alone.
+  stills" ticked became `/x/status/p`, the X post "p". A query left on the link doesn't change any
+  of this: `/st/video?v=…` becomes `/st/e/video` without the query, and `/x/status?v=…` comes back as
+  pasted. Only a query that holds the post's id, like `?v=` on `/yt/watch?v=…`, leaves the link and
+  its ending alone.
 - **The converter refuses the few ids no link can reach.** A Streamable id, or an Imgur album or
   gallery id, that is one of the Worker's lowercase "which site?" words (`settings`, `followers`,
   `gallery` and ten more) has no spelling the Worker reads. The converter says so now instead of
@@ -214,9 +215,9 @@ mbedfx.app's Reddit app and account, and it names no account at all. Nobody else
   offering X and Instagram. The same words are refused on a bare `imgur.com/` link, such as
   `imgur.com/gallery` or `imgur.com/search?q=cats`, and on an mbedfx link that carries one, such as
   `/st/followers`. `imgur.com/gallery` and `imgur.com/search` are Imgur's own pages, and no image has
-  any of these names. Before this, `followers` and `following` came out as that "which site?" page
-  (an mbedfx link like `/st/followers` came back unchanged), and the other words as a link that said
-  "Not found".
+  any of these names. Before this, `followers` and `following` came out as that "which site?" page,
+  except as an Imgur gallery id (`imgur.com/gallery/followers`), where they said "Not found" like
+  every other word. An mbedfx link like `/st/followers` came back unchanged.
 - **Picking Reddit on a Reddit gallery link works.** `mbedfx.app/rd/gallery/{id}` answered "Not
   found", so for a `/gallery/{id}` link, which Reddit and Imgur both use, the "which site?" choice
   for Reddit went nowhere. It now draws the same card as `/comments/{id}`, and the converter turns a
@@ -245,9 +246,9 @@ mbedfx.app's Reddit app and account, and it names no account at all. Nobody else
   to share ideas…" as its text, a picture from no post, and a date worked out from the code. Threads
   had answered with its login page, and `/_api/v1` returned that page as `ok: true`. A page now
   counts as the post only when its title names the post's author, so these links get the failure
-  card (not yet pasted into Discord) and `/_api/v1` answers `fetch_fail`. A real post can now come
-  out without its caption: when only the page mbedfx reads the caption from is the login page, the
-  card leaves the caption out instead of showing the login text.
+  card and `/_api/v1` answers `fetch_fail`. A real post can now come out without its caption or its
+  picture: when only one of the two pages mbedfx reads is the login page, the card leaves out what
+  that page would have given instead of showing the login page's text or image.
 - **`RESOLVER_SECRET` was documented as protecting the Cloudflare container, and it doesn't.**
   `container/README.md` said to set it on the container as well as the Worker, and nothing in this
   repo puts it there: the container's Durable Object passes it no environment, so the container never
