@@ -1459,6 +1459,10 @@ test('EVERY SITE IN "Read as", ON EVERY PASTE IN THIS FILE: the chip\'s own site
   assert.equal(player.ok, false, 'clips.twitch.tv/embed names no clip')
   assert.ok(!/—|\byou\b/i.test(player.why), 'visible copy, held to the page rules')
   assert.notEqual(routed(forcedPath(player, 'tw', '/embed')).ref?.slug, 'embed')
+  // On twitch.tv a single segment is a channel, and "embed" is a legal login, so that paste keeps the
+  // channel refusal it had before the player refusal existed.
+  assert.equal(convert('https://www.twitch.tv/embed', 'mbedfx.app').why,
+    'That looks like a Twitch channel rather than a clip. Clips only.')
 })
 
 

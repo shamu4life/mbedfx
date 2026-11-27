@@ -1243,8 +1243,10 @@ function mbedfxConvert(input, host, gallery) {
        * forced reading of a clip whose slug is "embed", though that segment is the player's own path and
        * names no clip. The worker stopped reading it that way on 2026-11-26 (router.ts twitch()) and
        * answers notfound, so the link is refused here instead of being handed out as ready to paste.
+       * clips.twitch.tv only: on twitch.tv a single segment is read as a channel name just below, and
+       * "embed" is a legal login there, so that paste keeps the channel refusal it always had.
        */
-      if (seg.length === 1 && seg[0] === 'embed') return no("That's Twitch's clip player, and the link doesn't say which clip.");
+      if (bare === 'clips.twitch.tv' && seg.length === 1 && seg[0] === 'embed') return no("That's Twitch's clip player, and the link doesn't say which clip.");
       if (seg.length === 1) {
         // A single segment means opposite things on the two hosts: on clips.twitch.tv it IS the clip
         // slug; on twitch.tv it is almost always a channel name, which names no post.
