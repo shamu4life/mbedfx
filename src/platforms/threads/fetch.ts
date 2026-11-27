@@ -1,4 +1,5 @@
 import type { PostRef } from '../../types.ts'
+import { TH_CODE } from '../../refkey.ts'
 import { hasThreadsSSR, threadsHasPost } from './normalize.ts'
 import { askTwice } from '../../fetchretry.ts'
 
@@ -51,8 +52,12 @@ const SSR_HEADERS: Record<string, string> = {
  * Guards the URL the same way fetchInstagram's SHORTCODE does: route() only requires the segment be
  * truthy, and `..`/`.` would traverse out of the pinned path during URL parsing (encodeURIComponent
  * escapes '/' but not '.'), so refusing a non-shortcode BEFORE the fetch is what pins the URL.
+ *
+ * refkey.ts's TH_CODE since 2026-11-26, when router.ts's forced /th/t/{code} arm started applying the
+ * same shape. Still checked here for every ref, because a /@{user}/post/{code} route requires only
+ * that the code segment be truthy.
  */
-const SHORTCODE = /^[A-Za-z0-9_-]{1,64}$/
+const SHORTCODE = TH_CODE
 
 export type ThreadsFetch =
   | { ok: true; source: 'ssr'; html: string }

@@ -946,6 +946,19 @@ var PATH_WORDS = ['_alt', '_api', '_card', '_media', '_oembed', '_prep', 'a', 'a
 var RESERVED_WORDS = ['settings', 'search', 'explore', 'messages', 'notifications', 'hashtag', 'followers',
   'following', 'i', 'lists', 'bookmarks', 'moments', 'gallery'];
 
+/**
+ * THE ROUTER'S SITE CODES AND ID SHAPES, copies too, held equal to router.ts ESCAPE and refkey.ts by
+ * test/landing-convert.test.mjs. The already-ours branch of mbedfxConvert reads them to tell a pasted
+ * mbedfx link /st/{id}, /im/{id} or /tw/{slug} whose id spells a PATH_WORDS word (which the router read
+ * at 97bebca and refuses now) from a /{code}/{word} that never named a post at all. TH_CODE is the
+ * Threads shortcode the forced /th/t/{code} arm accepts.
+ */
+var SITE_CODES = ['x', 'tt', 'ig', 'th', 'rd', 'bs', 'yt', 'fb', 'dm', 'st', 'im', 'tw', 'lm', 'ms', 'mk', 'pt', 'pn'];
+var ST_ID = /^[A-Za-z0-9]{2,16}$/;
+var IM_ID = /^[A-Za-z0-9]{5,7}$/;
+var TWITCH_SLUG = /^[A-Za-z0-9][A-Za-z0-9_-]{2,99}$/;
+var TH_CODE = /^[A-Za-z0-9_-]{1,64}$/;
+
 /** Would the router refuse this segment as an id under a site code? router.ts pathWord(), case-folded. */
 function mbedfxPathWord(s) { return PATH_WORDS.indexOf(String(s).toLowerCase()) >= 0; }
 /** Would every Streamable arm, and Imgur's album and gallery arms, refuse it? router.ts reserved(). */
@@ -1156,8 +1169,59 @@ function mbedfxConvert(input, host, gallery) {
     }
     if (/^\d{5,}$/.test(u.searchParams.get('multi_permalinks') || '')) keep.set('multi_permalinks', u.searchParams.get('multi_permalinks'));
     var kept = keep.toString();
-    return out(stripped === '/' ? '/' : stripped + (kept ? '?' + kept : ''), null,
-      'Already an mbedfx link. Re-pointed at the selected domain.');
+    var REPOINTED = 'Already an mbedfx link. Re-pointed at the selected domain.';
+    /**
+     * A SITE CODE IN FRONT OF ONE PATH WORD, /{code}/{word} with no id in the query. Since 2026-11-26 the
+     * router never reads such a word as the code's id (router.ts PATH_WORDS), so a pasted link of that
+     * shape is one of two things, and each needs handling here (second review of 2026-11-26, on
+     * mbedfx.app and the guest hosts alike):
+     *
+     * AN ID THE ROUTER USED TO READ. /st/{id}, /im/{id} and /tw/{slug} were Streamable, Imgur and Twitch
+     * posts at 97bebca whenever the id fit the site's shape and was not a lowercase RESERVED_WORDS row,
+     * and this page handed out exactly those for streamable.com/video, imgur.com/share and
+     * clips.twitch.tv/watch. Passed through as pasted, each now answered "Not found". They get the
+     * spelling the direct branch below writes for the same id, which reads it into the same post:
+     * /st/e/{id}, /im/{id}.gifv, /tw/embed?clip={slug}. "embed" in any case is refused: the router
+     * reads no clip of that name, so no spelling would. The mode goes on after the respelling, where
+     * the router peels it, so it stays on the pasted site. Passed through, /st/reel with stills on was
+     * /st/reel/p, and with /st/reel refused the router read it as the Instagram post "p" by @st.
+     *
+     * A STREAMABLE OR IMGUR ID THAT IS A RESERVED_WORDS ROW is refused, as the same id pasted from the
+     * site is below. 97bebca never read it (ytdlpId() consults reserved()), so the link named no post:
+     * /st/followers was the X-or-Instagram followers page for an account called "st", and /im/gallery
+     * "Not found". Twitch's are passed through instead: the /{channel}/clip/ arm refuses them, so
+     * /tw/settings named no clip either, and reading it as one now would change what the link names.
+     *
+     * EVERY OTHER /{code}/{word} NAMES NO POST, and is passed through without the gallery mode, for the
+     * reason the bare root gets none (withGallery). The mode is a /p or /v segment, and on a path that
+     * names nothing the router reads it as an id: /x/status + stills was /x/status/p, the X post "p",
+     * /x/reel/p the Instagram post "p", /tt/t/p a TikTok short code "p", and /rd/gallery/p, since that
+     * arm landed, the Reddit post "p". Without it each answers what the pasted link answered.
+     *
+     * NOT WITH A KEPT QUERY: /tw/embed?clip=…, /yt/watch?v=… and /fb/photo?fbid=… are posts, and the
+     * query is where their id lives.
+     */
+    var cw = stripped.replace(/^\/+|\/+$/g, '').split('/');
+    if (!kept && cw.length === 2 && SITE_CODES.indexOf(cw[0]) >= 0 && mbedfxPathWord(cw[1])) {
+      var w = cw[1];
+      if (cw[0] === 'st' && ST_ID.test(w)) {
+        if (mbedfxReservedWord(w)) return no(mbedfxReservedRefusal(w, 'a Streamable video'));
+        return out('/st/e/' + w, null, REPOINTED);
+      }
+      if (cw[0] === 'im' && IM_ID.test(w)) {
+        if (mbedfxReservedWord(w)) return no(mbedfxReservedRefusal(w, 'an Imgur image'));
+        return out('/im/' + w + '.gifv', null, REPOINTED);
+      }
+      if (cw[0] === 'tw' && w.toLowerCase() === 'embed') {
+        return no('No Twitch clip is called "embed". That\'s the address of Twitch\'s clip player.');
+      }
+      if (cw[0] === 'tw' && TWITCH_SLUG.test(w) && !mbedfxReservedWord(w)) {
+        return out('/tw/embed?clip=' + w, null, REPOINTED);
+      }
+      var asPasted = '/' + cw.join('/');
+      return { ok: true, url: mbedfxScheme(host) + host + asPasted, platform: null, note: REPOINTED, code: null, path: asPasted, token: null };
+    }
+    return out(stripped === '/' ? '/' : stripped + (kept ? '?' + kept : ''), null, REPOINTED);
   }
 
   // Strip the sub-domains that are pure presentation. i. and clips. are MEANINGFUL and stay.
@@ -1283,6 +1347,18 @@ function mbedfxConvert(input, host, gallery) {
      * of Imgur's /im/gallery/{id} below, and its token lets "Read as Imgur" give /im/gallery/{id}.
      */
     if (platform === 'Reddit' && seg[0] === 'gallery' && seg.length === 2) return out('/rd/gallery/' + seg[1], 'Reddit', '', 'rd', 'rd');
+    /*
+     * A THREADS SHORT LINK IS THE THREADS POST. threads.com/t/{code} (and threads.net/t/{code}) came out
+     * as /t/{code}, which the worker hands to TikTok first, and for a code TikTok does not claim, the
+     * "which site?" page, for a link whose host had already said Threads. A Threads /t/ code is the post's
+     * own shortcode (router.ts threads() has the redirects measured on 2026-11-26), so it now comes out
+     * as /th/t/{code}, which the worker routes straight to that post. Its token lets "Read as TikTok" give
+     * /tt/t/{code}, the short link again. A code outside the router's TH_CODE, or one that spells a
+     * PATH_WORDS word, is not one the router reads there, so it keeps the old /t/{code}.
+     */
+    if (platform === 'Threads' && seg.length === 2 && seg[0] === 't' && TH_CODE.test(seg[1]) && !mbedfxPathWord(seg[1])) {
+      return out('/th/t/' + seg[1], 'Threads', '', 'th', 'th');
+    }
     if (platform === 'Instagram' && seg[0] === 'stories') {
       return no("Instagram stories aren't routed. They expire, so there's no stable post to draw.");
     }
@@ -1356,7 +1432,18 @@ function mbedfxConvert(input, host, gallery) {
       // A bare imgur.com/{id} is undecidable once the host is gone, so force it. An id that spells a
       // PATH_WORDS word takes .gifv: /im/{id} is "Not found" for it, and /im/{id}.gifv is the same ref
       // and the same canonical (router.ts imgur()'s .gifv arm, which consults neither list).
+      //
+      // EXCEPT A RESERVED_WORDS ROW, which is refused. The .gifv arm would read it, so this is not the
+      // "no spelling reads it" refusal of an album or gallery id: imgur.com/{word} for those rows is
+      // Imgur's own page, not an image. Until 2026-11-26 imgur.com/gallery came out as
+      // /im/gallery.gifv, the Imgur post "gallery", and imgur.com/search?q=cats as the post "search"
+      // (review of this branch). Measured 2026-11-27 (UTC) from the dev host, not a Worker:
+      // imgur.com/gallery 301s to imgur.com/ and imgur.com/search is a 44 KB page of its own, while
+      // i.imgur.com/{w}.jpg 302s to removed.png for all six rows that fit IM_ID (gallery, search,
+      // explore, lists, hashtag, moments), as it does for an id nobody minted. The rest are too long
+      // to be an Imgur id at all, and their .gifv was "Not found".
       if (h === 'imgur.com' && seg.length === 1 && !/\.[a-z0-9]+$/i.test(seg[0])) {
+        if (mbedfxReservedWord(seg[0])) return no(mbedfxReservedRefusal(seg[0], 'an Imgur image'));
         return out('/im/' + seg[0] + (mbedfxPathWord(seg[0]) ? '.gifv' : ''), 'Imgur', '', 'im', 'im');
       }
     }
@@ -1422,7 +1509,11 @@ function mbedfxConvert(input, host, gallery) {
  */
 function mbedfxForcedPath(r, code, pasted) {
   if (!r || !r.ok) return pasted ? '/' + code + pasted : null;
-  return '/' + code + (r.token ? r.path.slice(r.token.length + 1) : r.path);
+  var p = '/' + code + (r.token ? r.path.slice(r.token.length + 1) : r.path);
+  // A TIKTOK SHORT LINK TAKES NO MODE (withGallery's /t/ rule), and /tt/t/{code}/p is "Not found". It
+  // became reachable on 2026-11-26, when threads.com/t/{code} started converting to the Threads post
+  // /th/t/{code}, which does take one: with stills on, "Read as TikTok" built /tt/t/{code}/p from it.
+  return /^\/tt\/t\/[^\/?]+\/[pv]$/.test(p) ? p.slice(0, -2) : p;
 }
 
 /**

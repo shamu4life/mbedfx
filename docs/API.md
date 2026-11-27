@@ -721,7 +721,12 @@ that lands on TikTok's own "video currently unavailable" page.
 
 The last row is `ambiguous` rather than a dead end because `tiktok.com/t/` and `threads.com/t/` are
 the same path on two different products, so a code TikTok disclaims may well be Threads'. The render
-arm has offered that chooser since the route was written.
+arm has offered that chooser since the route was written. Re-ask the Threads candidate as
+`?url=/th/t/{code}`: that is the Threads post with that shortcode, the same answer
+`?url=https://www.threads.com/@i/post/{code}` gets, because a Threads `/t/` code is the post's own
+shortcode (`src/router.ts` `threads()` has the redirects measured on 2026-11-26). Until then
+`/th/t/{code}` answered `notfound`, so the Threads choice led nowhere. `?url=/tt/t/{code}` asks
+TikTok again.
 
 All four rows used to answer `not_a_post`. The walls were corrected on 2026-08-11 and the other two
 rows on 2026-08-12, each after measuring the same code through both surfaces. On a walled code that

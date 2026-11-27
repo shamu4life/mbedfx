@@ -2,9 +2,10 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { route, PATH_WORDS } from '../src/router.ts'
-import { refKey, parseRefKey, DM_ID } from '../src/refkey.ts'
+import { refKey, parseRefKey, DM_ID, TH_CODE } from '../src/refkey.ts'
 import { mediaUrl } from '../src/render/embed.ts'
 import { encodeStatusId } from '../src/statusid.ts'
+import { SHORTLINK_CANDIDATES } from '../src/worker.ts'
 
 const r = (p) => route(new URL(`https://staging.megapenispoopenfarten.sex${p}`))
 
@@ -826,6 +827,55 @@ test('/tt/t/{code} — the documented escape hatch reaches the shortlink route t
   // Forcing a DIFFERENT platform must not mint a TikTok resolver call. /bs/t/{code} is not a
   // Bluesky shape and there is no Bluesky short form, so it stays what it was.
   assert.notEqual(r('/bs/t/ZTSw2mYwR').kind, 'shortlink')
+})
+
+test('/th/t/{code} IS THE THREADS POST WITH THAT SHORTCODE, and /t/{code} is still asked of TikTok first', () => {
+  /**
+   * The /t/ chooser's Threads choice. When TikTok does not claim a code, the worker offers ['tt','th']
+   * (worker.ts SHORTLINK_CANDIDATES), and the Threads link it builds, /th/t/{code}, answered notfound
+   * until 2026-11-26. A Threads /t/ code is the post's own shortcode (router.ts threads() has the five
+   * redirects and the production check), so the forced arm is the route /@i/post/{code} gets, byte for
+   * byte: one cache entry and one redirect target for both spellings.
+   *
+   * A before/after sweep of router.ts without this arm against router.ts with it, 4,668,416 paths (some
+   * listed twice) under /th/, /x/, /tt/ and no code at depths 1 to 4 with /p, /v and .mp4 forms, moved 80
+   * answers. Every one was a /th/t/{code} path, notfound before and this post now.
+   */
+  for (const code of ['DTI1vjIEi5y', 'DDYEM_foiI1', 'DbkwmbMEt6u']) {
+    assert.deepEqual(r(`/th/t/${code}`), r(`/@i/post/${code}`), code)
+    assert.deepEqual(r(`/th/t/${code}`), {
+      kind: 'post', ref: { p: 'th', code }, canonical: `https://www.threads.com/@i/post/${code}`,
+    }, code)
+    assert.equal(r(`/th/t/${code}/p`).gallery, 'stills', `${code}: a Threads post takes a mode`)
+    // FORCED ONLY: unforced, the same code is still a request to ask TikTok.
+    assert.deepEqual(r(`/t/${code}`), {
+      kind: 'shortlink', p: 'tt', code, canonical: `https://www.tiktok.com/t/${code}`,
+    }, `/t/${code}`)
+  }
+  // A code the fetcher would refuse (refkey.ts TH_CODE) is not routed.
+  for (const bad of ['a.b', '@jack', 'x'.repeat(65)]) assert.equal(r(`/th/t/${bad}`).kind, 'notfound', bad)
+  // Nor is a path word, in any case. Without that, bare /th/t with a mode on, /th/t/p, would be Threads post "p".
+  const cased = w => [w, w.toUpperCase(), w[0].toUpperCase() + w.slice(1)]
+  for (const w of [...PATH_WORDS].filter(v => /^[A-Za-z0-9_-]+$/.test(v)).flatMap(cased)) {
+    assert.notEqual(r(`/th/t/${w}`).ref?.p, 'th', `/th/t/${w}`)
+  }
+  assert.equal(r('/th/t/p').kind, 'notfound')
+  assert.equal(r('/th/t/v').kind, 'notfound')
+  // Exactly depth 2 under the code.
+  assert.equal(r('/th/t').kind, 'notfound')
+  assert.notEqual(r('/th/t/DTI1vjIEi5y/extra/more').ref?.p, 'th')
+})
+
+test('THE ROUTER, THE PAGE AND THE THREADS FETCHER HOLD ONE THREADS SHORTCODE SHAPE', () => {
+  /**
+   * The forced /th/t/{code} arm reads refkey.ts TH_CODE, and platforms/threads/fetch.ts refuses any code
+   * outside it before it builds a url. One constant, so the router cannot mint a code the fetcher would
+   * refuse. Checked here because the fetcher's is a re-export, which a later edit could quietly replace.
+   */
+  const fetchSrc = readFileSync(new URL('../src/platforms/threads/fetch.ts', import.meta.url), 'utf8')
+  assert.match(fetchSrc, /^import \{ TH_CODE \} from '\.\.\/\.\.\/refkey\.ts'$/m)
+  assert.match(fetchSrc, /^const SHORTCODE = TH_CODE$/m)
+  assert.ok(TH_CODE.test('DDYEM_foiI1') && !TH_CODE.test('a.b'))
 })
 
 test('/t alone is still not a shortlink', () => {
@@ -2385,10 +2435,14 @@ test('EVERY CHOICE A CHOOSER OFFERS FOR A POST ROUTES TO A POST, and the account
    * THE RULE: in every row, every candidate routes, or none does. None is the account and page rows
    * (a bare handle, /hashtag/{tag}, /settings…), where the chooser exists to send a human to the right
    * site and a forced link has no post to name (docs/API.md: "On a profile url every candidate answers
-   * notfound"). The /t/{code} chooser worker.ts shows when TikTok does not claim a short code is not
-   * route()'s and is not covered here. It breaks the rule, knowingly: its Threads choice, /th/t/{code},
-   * is notfound while Threads does mint /t/{code}. router.ts threads() has the measurement and the open
-   * owner decision.
+   * notfound").
+   *
+   * THE /t/{code} CHOOSER IS A ROW TOO, since 2026-11-26. It is not route()'s: route() answers a /t/ code
+   * as a TikTok short link, and worker.ts shows SHORTLINK_CANDIDATES when TikTok does not claim the code.
+   * Every short link the sweep finds is put in that row with those candidates. This test used to exempt
+   * it, because its Threads choice, /th/t/{code}, was notfound. The forced arm in router.ts threads()
+   * closed that, and the row now has to route on every choice like the rest. A shortlink carries no ref,
+   * so the fallthrough check below compares kind and code as well.
    */
   const { words } = routerWords()
   const IDS = ['haucpf', '1x2voz0', 'YcAQlkx', 'abc123', 'jack', 'Rq7Lm3Zx9', '@jack', '2209468366484962']
@@ -2409,13 +2463,16 @@ test('EVERY CHOICE A CHOOSER OFFERS FOR A POST ROUTES TO A POST, and the account
    * no X reading of /status/followers. The same path with a made-up account in front gives that reading
    * too, so a forced link whose post matches it is not counted as the choice working.
    */
+  const reading = got => JSON.stringify([got.kind, got.ref ?? got.code ?? null])
   const routesOn = (path, c) => {
     const got = r(`/${c}${path}`)
-    return on(got, c) && JSON.stringify(got.ref) !== JSON.stringify(r(`/zz9account${path}`).ref)
+    return on(got, c) && reading(got) !== reading(r(`/zz9account${path}`))
   }
   const rows = new Map()
   for (const p of paths) {
-    const got = r(p)
+    let got = r(p)
+    // A TikTok short link degrades to worker.ts's chooser when TikTok does not claim the code.
+    if (got.kind === 'shortlink' && got.p === 'tt') got = { kind: 'ambiguous', path: p, candidates: SHORTLINK_CANDIDATES }
     if (got.kind !== 'ambiguous') continue
     const key = rowOf(got)
     if (!rows.has(key)) rows.set(key, { candidates: got.candidates, routes: new Set() })
@@ -2430,8 +2487,10 @@ test('EVERY CHOICE A CHOOSER OFFERS FOR A POST ROUTES TO A POST, and the account
       `${key}: every choice must route to a post, since ${[...row.routes]} does`)
     postRows.push(key)
   }
-  // Not vacuous: the row the defect was found on is a post row, and routes on every choice.
+  // Not vacuous: the row the defect was found on is a post row, and routes on every choice, and so is
+  // the /t/ short-link row (found through the sweep: 't' is a router word and the ids are codes).
   assert.ok(postRows.includes(rowOf(r('/gallery/YcAQlkx'))), `the gallery row is among the post rows: ${postRows}`)
+  assert.ok(postRows.includes(`depth 2 [${SHORTLINK_CANDIDATES.join(',')}]`), `the /t/ row is among the post rows: ${postRows}`)
 })
 
 test('NO TWITCH CLIP IS NAMED "embed", in any case, at any depth, with /tw/ or without', () => {

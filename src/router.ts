@@ -1,7 +1,7 @@
 import type { GalleryMode, Platform, PostRef, Route } from './types.ts'
 import {
   BS_ACTOR, DM_ID, FB_OWNER, FEDI_HOST, IM_ID, LEMMY_ID, MASTO_ID, PEERTUBE_ID, PIN_ID, PIN_SHORT_CODE, ST_ID,
-  TWITCH_SLUG, parseRefKey,
+  TH_CODE, TWITCH_SLUG, parseRefKey,
 } from './refkey.ts'
 import { decodeStatusId, statusIdMode } from './statusid.ts'
 
@@ -485,29 +485,52 @@ const IG_NOT_A_USER = new Set([...KNOWN, 'settings'])
  * the same "normalizer owns its canonical" split TikTok and Instagram use. `canonical` here keeps
  * the caller's spelling, because that is where worker.ts 302s a human.
  *
- * SHORT LINKS (/t/{code}) ARE NOT HERE. Threads mints them too and they are byte-shape-identical to
- * TikTok's, so a synchronous matcher cannot tell them apart — they stay the ['tt','th'] chooser
- * until a resolver claims them, exactly as the shortlink() docstring describes.
+ * UNFORCED SHORT LINKS (/t/{code}) ARE NOT HERE. Threads mints them too and they are byte-shape-identical
+ * to TikTok's, so a synchronous matcher cannot tell them apart. Bare /t/{code} stays a request to ask
+ * TikTok, and a code TikTok disclaims gets the ['tt','th'] chooser (worker.ts SHORTLINK_CANDIDATES),
+ * exactly as the shortlink() docstring describes.
  *
- * AND THAT CHOOSER'S THREADS CHOICE IS A DEAD END, recorded 2026-11-26 rather than fixed. When TikTok
- * disclaims a code, worker.ts SHORTLINK_CANDIDATES offers ['tt','th'], and the forced link for Threads,
- * /th/t/{code}, is notfound: no arm here reads it and no resolver asks Threads. The human chooser's
- * threads.com/t/{code} link does work. 'th' stays a candidate because Threads really has the shape: the
- * 1.0.0 design spec measured threads.com/t/{code} 301-ing to the post, and on 2026-11-26, from a
- * residential connection and NOT from a Worker, threads.com/t/DTI1vjIEi5y answered 301 to
- * /@mosseri/post/DTI1vjIEi5y, the same code (threads.net/t/ 301s to threads.com/t/ first; a second
- * code, CuP48CiS5sx, answered 200 with no og tags, the soft-404 the spec warns about). If that holds
- * from Worker egress, a /t/ code is a post shortcode and /th/t/{code} could be this function's
- * { p: 'th', code } with no resolver at all (fetch.ts already asks for /@i/post/{code}, which 301s to
- * the right author). That is an owner decision, left open: one code, measured residentially.
+ * /th/t/{code}, FORCED ONLY, IS THE THREADS POST WITH THAT SHORTCODE: the route /@i/post/{code} gets,
+ * ref and canonical both, so the two spellings share one cache entry and a human is sent where
+ * /@i/post/{code} sends them. It is the link that chooser's Threads choice builds (and the converter's
+ * "Read as Threads" on a /t/ link), and it answered notfound until 2026-11-26.
+ *
+ * NO RESOLVER, BECAUSE A /t/ CODE IS THE POST'S OWN SHORTCODE, measured rather than assumed:
+ *   - From the dev host this work ran on (not a Worker), 2026-11-27 03:51 UTC (11-26 Eastern), with a
+ *     curl, a Discordbot or no user agent, threads.com/t/{code} answered 301 to
+ *     /@{author}/post/{the same code} for all five live codes tried: DTI1vjIEi5y (@mosseri),
+ *     DbWxxQjFe4u (@dexerto), DDYEM_foiI1 (@pmestevez), DeEFGTkCLxz (@bradandthegoat), DbkwmbMEt6u
+ *     (@bisniscom). threads.net/t/{code} answered 301 to threads.com/t/{code} for each.
+ *   - A sixth, DbcSwYaEa9r, is a deleted post. Its /t/ answered 200 with no Location, the soft-404 the
+ *     1.0.0 design spec warns about, and /@{author}/post/ and /@i/post/ both 302 to ?error=invalid_post.
+ *     A deleted post gets the failure card through this arm, as it does through /@i/post/.
+ *   - With a desktop Chrome user agent, /t/ answered 200 with no Location for all six. The redirect
+ *     depends on the user agent, which is one more reason not to follow it: the code is all that's
+ *     needed.
+ *   - From production (Worker egress), mbedfx.app/_api/v1 on threads.com/@i/post/DTI1vjIEi5y and
+ *     /@i/post/DeEFGTkCLxz drew each post under its real author (@mosseri, @bradandthegoat), the same
+ *     day. platforms/threads/fetch.ts asks /@i/post/{code} for every ref, so the arm needs nothing more.
+ *     The same API answered threads.com/t/DTI1vjIEi5y with the ['tt','th'] chooser, which is why the
+ *     choice had to route.
+ *
+ * THE CODE IS HELD TO TH_CODE, the fetcher's own shape (refkey.ts), and is never a PATH_WORDS word: a
+ * bare /th/t with a mode on is /th/t/p, and peelSuffixes reads the raw path once the peeled /th/t
+ * misses, so without that check it was Threads post "p". 'p' fits TH_CODE, and no path word is a code
+ * anybody pasted.
+ *
+ * WHY FORCED ONLY. matchPost runs threads() before routeInner reaches shortlink(), so an unforced arm
+ * here would read every TikTok /t/{code} as a Threads post.
  */
-function threads(seg: string[]): Route | null {
+function threads(seg: string[], forced = false): Route | null {
   if (seg.length === 3 && seg[0].startsWith('@') && seg[0].length > 1 && seg[1] === 'post' && seg[2]) {
     return {
       kind: 'post',
       ref: { p: 'th', code: seg[2] },
       canonical: canonical(`https://www.threads.com/${seg[0]}/post/${seg[2]}`),
     }
+  }
+  if (forced && seg.length === 2 && seg[0] === 't' && TH_CODE.test(seg[1]) && !pathWord(seg[1])) {
+    return threads(['@i', 'post', seg[1]])
   }
   return null
 }
@@ -1025,7 +1048,8 @@ function facebookQuery(seg: string[], q: URLSearchParams): Route | null {
  *                      and imgur.com all collapse here) and partly pre-owned by youtube()'s bare
  *                      11-char arm. Claiming it would silently serve the wrong post. It stays the
  *                      ['x','ig'] chooser; the /dm//st//im escape hatches are the answer instead.
- *   /gallery/{id}      already the ['rd','ig'] chooser, AND yt-dlp answers it video-OR-playlist
+ *   /gallery/{id}      already a chooser (['rd','ig'] when this was written, ['rd','im'] since
+ *                      2026-11-26, see AMBIGUOUS), AND yt-dlp answers it video-OR-playlist
  *                      unpredictably (/gallery/YcAQlkx is a video, /t/unmuted/6lAn9VQ is a playlist)
  *                      — a synchronous matcher cannot tell, and guessing serves a title-only card.
  *   /a/{id}            free, but ALWAYS a playlist: a title and nothing else.
@@ -1155,6 +1179,18 @@ const imId = (segment: string): string | null => {
  * '{id}.gifv', which the table never names (it is the generic bare-username row), so the row this arm
  * takes is the dead end argued above and not a reserved token. `/search.gifv` is a legal i.imgur.com
  * video url and stays one; `/st/search` is not a Streamable id position we are willing to guess in.
+ *
+ * NOR DOES IT CONSULT PATH_WORDS, and the forced /im/{word}.gifv and /im/gallery.gifv answer the Imgur
+ * post that word names, on purpose (kept 2026-11-26). Whoever typed `.gifv` named a FILE on i.imgur.com,
+ * an extension no other site here uses, so nothing about the link is ambiguous, and the converter
+ * writes /im/{id}.gifv for a real id that spells a word because /im/{id} refuses it. A file that does
+ * not exist is the failure card, never somebody else's post: on 2026-11-27 (UTC), from the dev host,
+ * not a Worker, i.imgur.com/{w}.jpg 302'd to removed.png for each of gallery, search, explore, lists,
+ * hashtag and moments, as it did for a made-up id, while a real id (QAcLnaf) served 439,810 bytes of
+ * image/jpeg. What the arm does not do is turn a bare imgur.com/{word} into a file: imgur.com/gallery
+ * (which 301s to imgur.com/) and imgur.com/search (a 44 KB page of its own) are Imgur's pages, and
+ * the converter refuses a bare imgur.com/{w} for those six lowercase AMBIGUOUS rows rather than write
+ * /im/{w}.gifv for them (public/index.html).
  */
 function imgur(seg: string[], forced = false): Route | null {
   if (seg.length === 1) {
@@ -1610,7 +1646,7 @@ function pinterest(seg: string[]): Route | null {
  * EVERY WORD THIS ROUTER READS AS STRUCTURE: each literal a matcher or routeInner compares a path segment
  * against, each member of the surface sets above, each AMBIGUOUS row and each ESCAPE token. All lowercase.
  * Read by pathWord(), which the four FORCED DEPTH-1 arms consult before taking a segment as an id:
- * /dm/{id}, /st/{id}, /im/{id} and /tw/{slug}.
+ * /dm/{id}, /st/{id}, /im/{id} and /tw/{slug}. The forced /th/t/{code} arm consults it too (threads()).
  *
  * THE DEFECT, found 2026-11-26 while fixing the converter's "Read as" picker (#162) and reproduced
  * offline with route() at 97bebca. Each of those arms read ANY single segment of the right shape as an
@@ -1664,7 +1700,8 @@ function pinterest(seg: string[]): Route | null {
  * picker produced, and was Streamable id "dm"; it matters only under /st/, the one id shape that admits
  * two characters.
  *
- * ONLY THE FORCED DEPTH-1 ARMS READ THIS. A depth-2 shape that names its site (/e/{id}, /a/{id},
+ * ONLY THE FORCED DEPTH-1 ARMS READ THIS, and /th/t/{code}, the one forced arm added after them (see
+ * threads() for the /th/t/p it stops). A depth-2 shape that names its site (/e/{id}, /a/{id},
  * /clip/{slug}) is that site's own path, and the forced /im/gallery/{id} exists to override the
  * chooser, so each keeps reading what it read.
  */
@@ -1772,7 +1809,8 @@ function matchPost(seg: string[], forced?: Platform): Route | null {
   if (forced === 'x') return x(seg)
   if (forced === 'tt') return tiktok(seg)
   if (forced === 'ig') return instagram(seg)
-  if (forced === 'th') return threads(seg)
+  // `true` unlocks /th/t/{code}, forced-only because unforced /t/{code} is TikTok's to answer first.
+  if (forced === 'th') return threads(seg, true)
   // `true` unlocks /rd/gallery/{id}, forced-only because unforced it is the ['rd','im'] chooser.
   if (forced === 'rd') return reddit(seg, true)
   if (forced === 'yt') return youtube(seg)

@@ -4901,14 +4901,19 @@ async function withTranslated(
  * render arm has served this chooser since the route was written; describeTarget now returns the same
  * pair, and it is a constant so the two cannot drift into offering different links for one url.
  *
- * THE THREADS CHOICE DEAD-ENDS AS A FORCED LINK, and is kept anyway (checked 2026-11-26). /th/t/{code},
- * the link the converter's "which site?" buttons and the API build from 'th', answers notfound: the
- * router has no arm for it and nothing here asks Threads about a code. 'th' is not a mistake, though:
- * Threads does mint /t/{code}. router.ts threads() has the measurement (residential, not a Worker) and
- * the cheap fix it suggests, which is the owner's call. Dropping 'th' instead would turn a link that
- * may well be a Threads post into a TikTok-only answer.
+ * EACH CHOICE ROUTES TO A POST since 2026-11-26. /tt/t/{code} is the TikTok short link again, and
+ * /th/t/{code}, the link the converter's "which site?" buttons and the API build from 'th', is the
+ * Threads post with that shortcode (router.ts threads()). Until then the Threads choice answered
+ * notfound, because the router had no arm for it and nothing here asks Threads about a code.
+ *
+ * NO THREADS RESOLVER WAS NEEDED, which is what made the fix cheap. A Threads /t/ code is the post's own
+ * shortcode: five live codes all 301'd from threads.com/t/{code} to /@{author}/post/{the same code}
+ * (dev host, not a Worker, 2026-11-27 UTC), and from production the API drew /@i/post/{code} under the
+ * real author for two of them. router.ts threads() has every code and the deleted-post case.
+ *
+ * EXPORTED for test/router.test.mjs, whose chooser rule holds every candidate here to routing.
  */
-const SHORTLINK_CANDIDATES: Platform[] = ['tt', 'th']
+export const SHORTLINK_CANDIDATES: Platform[] = ['tt', 'th']
 
 /**
  * WHAT A SHORTLINK RESOLUTION CANNOT SAY THROUGH A `Route`, carried out of unwrapToPost instead.

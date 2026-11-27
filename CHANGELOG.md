@@ -193,11 +193,23 @@ mbedfx.app's Reddit app and account, and it names no account at all. Nobody else
   `imgur.com/share` as `/im/share.gifv` and `clips.twitch.tv/watch` as `/tw/embed?clip=watch`.
   `clips.twitch.tv/videos` is read as a clip too. It used to be refused as a video, but Twitch keeps
   its videos on twitch.tv.
+- **mbedfx links pasted back into the converter keep their post.** The converter used to pass one of
+  its own links through unchanged. So `mbedfx.app/st/video`, `/im/share` and `/tw/watch`, which it
+  handed out in 1.17.0 for `streamable.com/video`, `imgur.com/share` and `clips.twitch.tv/watch`, would
+  have said "Not found" after the change above, on the guest domains too. Now it rewrites each one the
+  way it writes the site's own link: `/st/e/video`, `/im/share.gifv` and `/tw/embed?clip=watch`. It
+  refuses `/tw/Embed`, since no clip has that name. A site code in front of a word that names no post,
+  such as `/x/status` or `/rd/gallery`, comes back as it was pasted, without the stills or videos
+  ending. With that ending added, the Worker read the `p` or `v` as an id, so `/x/status` with "all as
+  stills" ticked became `/x/status/p`, the X post "p".
 - **The converter refuses the few ids no link can reach.** A Streamable id, or an Imgur album or
   gallery id, that is one of the Worker's lowercase "which site?" words (`settings`, `followers`,
   `gallery` and ten more) has no spelling the Worker reads. The converter says so now instead of
   handing out a dead link, and `streamable.com/followers` no longer comes out as a "which site?" page
-  offering X and Instagram.
+  offering X and Instagram. The same words are refused on a bare `imgur.com/` link, such as
+  `imgur.com/gallery` or `imgur.com/search?q=cats`, and on an mbedfx link that carries one, such as
+  `/st/followers`. Those `imgur.com` links are Imgur's own pages, and no image has those names. They
+  used to come out as links that said "Not found".
 - **Picking Reddit on a Reddit gallery link works.** `mbedfx.app/rd/gallery/{id}` answered "Not
   found", so for a `/gallery/{id}` link, which Reddit and Imgur both use, the "which site?" choice
   for Reddit went nowhere. It now draws the same card as `/comments/{id}`, and the converter turns a
@@ -205,7 +217,7 @@ mbedfx.app's Reddit app and account, and it names no account at all. Nobody else
   site?" question. Instagram isn't offered for these links any more. No Instagram post has a
   `/gallery/` link, so that choice could only say "Not found", and the API now lists `["rd","im"]`
   as their `candidates`. For the same reason the converter refuses an `instagram.com/gallery/…` link,
-  which it used to turn into the Reddit-or-Imgur question.
+  which it used to turn into a "which site?" page.
 - **No Twitch clip is called "embed".** `/clip/embed`, `/{channel}/clip/embed`, the same two with
   `/tw/` in front, and `/embed?clip=embed` gave a card for a clip called "embed". That's the address
   of Twitch's clip player, so no clip has the name. The path forms now say "Not found" however
@@ -214,6 +226,13 @@ mbedfx.app's Reddit app and account, and it names no account at all. Nobody else
   `/embed` link with no usable clip. The converter refuses `clips.twitch.tv/embed`,
   `clips.twitch.tv/embed?clip=embed` and `twitch.tv/{channel}/clip/embed` however they're capitalised,
   and reads `clips.twitch.tv/Embed?clip=…` as the clip it names.
+- **Threads short links open the Threads post.** `threads.com/t/{code}` and `threads.net/t/{code}`
+  went to TikTok first, and when TikTok didn't know the code the card was a "which site?" page. Its
+  Threads choice, `mbedfx.app/th/t/{code}`, said "Not found". A Threads `/t/` code is the post's own
+  code: on 2026-11-26 the `/t/` links of five Threads posts each redirected to the post with the same
+  code. So `/th/t/{code}` now draws that post, and the converter turns a Threads short link into it.
+  A `/t/{code}` link without `/th/` still asks TikTok first, and `/_api/v1` answers `/th/t/{code}` the
+  way it answers `threads.com/@i/post/{code}`.
 - **`RESOLVER_SECRET` was documented as protecting the Cloudflare container, and it doesn't.**
   `container/README.md` said to set it on the container as well as the Worker, and nothing in this
   repo puts it there: the container's Durable Object passes it no environment, so the container never
