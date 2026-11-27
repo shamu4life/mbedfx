@@ -562,8 +562,8 @@ const YT_SURFACE = new Set(['shorts', 'embed', 'live', 'v'])
 
 /**
  * YouTube PATHNAME forms: /shorts/{id}, /embed/{id}, /live/{id}, /v/{id}, and the bare /{id} that a
- * youtu.be short link maps to. The /watch?v={id} form is query-based and handled in route() itself,
- * where url.searchParams is in scope. The id is validated to EXACTLY 11 url-safe chars, which is what
+ * youtu.be short link maps to. The /watch?v={id} form is query-based and read by youtubeQuery() below,
+ * which routeInner calls where url.searchParams is in scope. The id is validated to EXACTLY 11 url-safe chars, which is what
  * makes the bare form safe: the only thing a bare /{11-char} otherwise means is a PROFILE on x/ig — a
  * shape we do not render (it dead-ends in the ambiguity chooser), so claiming it for YouTube trades a
  * dead end for a working video. A bare handle of any other length is untouched and still chooses.
@@ -573,6 +573,38 @@ function youtube(seg: string[]): Route | null {
   if (seg.length === 2 && YT_SURFACE.has(seg[0]) && YT_ID.test(seg[1])) return ytPost(seg[1])
   if (seg.length === 1 && YT_ID.test(seg[0])) return ytPost(seg[0])
   return null
+}
+
+/**
+ * YouTube's QUERY form, `/watch?v={id}`, the only YouTube shape whose id lives in the query and the only
+ * query this router reads for YouTube (grep for searchParams: the other readers are Facebook's, Twitch's
+ * ?clip= and the /_prep, /_card and /_api parameters). Guarded on the exact 11-char id, so a bare /watch
+ * or a junk `v` returns null and the caller falls through.
+ *
+ * TOLERATE TRAILING JUNK on the v param: a real paste can carry `?v={id}/…` or a hand-appended
+ * cache-buster, and a strict full-string match turned those into the ambiguity chooser (reported
+ * 2026-07-24). The id is a FIXED 11 chars, so taking the leading 11 and requiring the next character
+ * to be a non-id one is exact, not a guess — `?v={12-char-id}` still refuses rather than truncating a
+ * longer token into a different video.
+ *
+ * A FUNCTION SINCE 2026-11-26, for facebookQuery()'s reason: two callers, routeInner's unforced query
+ * block and the /yt/ escape hatch, which hands this `seg.slice(1)`. Inline and keyed on
+ * `seg.length === 1`, it could not fire under the prefix, so /yt/watch?v={id} was notfound while
+ * /watch?v={id} played, and picking YouTube in the converter's "Read as" list on a youtube.com/watch
+ * paste handed out that dead link. Found offline with route() while the /fb/ twins were added; routing
+ * reads no network, so no egress could change that answer.
+ *
+ * FACEBOOK IS NOT HERE, and the forced twin does not reach it. /watch?v={long numeric} is Facebook's
+ * unforced, through facebookQuery(); /yt/watch?v={long numeric} is not a YouTube id, so it falls through
+ * to notfound instead of becoming a Facebook post the reader did not pick. That mirrors /fb/watch?v=
+ * {11-char YouTube id}, which is notfound for the same reason.
+ */
+function youtubeQuery(seg: string[], q: URLSearchParams): Route | null {
+  if (seg.length !== 1 || seg[0] !== 'watch') return null
+  const raw = q.get('v') || ''
+  const v = YT_ID.test(raw) ? raw
+    : (raw.length > 11 && YT_ID.test(raw.slice(0, 11)) && !/[A-Za-z0-9_-]/.test(raw[11]) ? raw.slice(0, 11) : '')
+  return v ? ytPost(v) : null
 }
 
 /**
@@ -1212,10 +1244,39 @@ function twitch(seg: string[], forced = false): Route | null {
   // /{slug} — clips.twitch.tv's own share output. Shape-gated unless the caller FORCED /tw/{slug},
   // which is the user saying which platform they mean and needs no recogniser — but even forced, the
   // refkey shape still binds, for reason 1 above.
-  if (seg.length === 1 && twSlug(seg[0]) && (forced || twitchClipSlug(seg[0]))) {
+  //
+  // NEVER 'embed', which is the clip PLAYER's own path on clips.twitch.tv (twitchEmbed() below reads the
+  // clip out of its query), so it names no clip. Until 2026-11-26 the forced arm took it as the slug:
+  // /tw/embed?clip={slug} answered a Twitch clip whose slug is "embed", the wrong post with no error,
+  // and that is exactly the link the converter's "Read as Twitch" built from a clips.twitch.tv/embed
+  // paste. Unforced this changes nothing, because twitchClipSlug() needs 16 characters.
+  if (seg.length === 1 && seg[0] !== 'embed' && twSlug(seg[0]) && (forced || twitchClipSlug(seg[0]))) {
     return twPost(seg[0], `https://clips.twitch.tv/${seg[0]}`)
   }
   return null
+}
+
+/**
+ * `clips.twitch.tv/embed?clip={slug}&parent=…` — the EMBED IFRAME url. The id lives in the QUERY, which
+ * the segment matchers never see, so this takes the segments AND the query, like facebookQuery().
+ *
+ * It is worth claiming because that page carries NO og: metadata AT ALL (measured 2026-07-27: the
+ * player shell titles itself 'Twitch' and emits no og:title/description/image), so a paste of it is
+ * a link that previews as nothing anywhere — including on Twitch itself.
+ *
+ * NO SHAPE GATE, because there is no ambiguity to resolve: `?clip=` on /embed names the platform
+ * outright. TWITCH_SLUG (the loose safety shape, not the tight recogniser) still bounds it, so a
+ * junk parameter falls through rather than minting a ref. TWITCH_SLUG and not twSlug(): the arm has
+ * read `?clip=settings` as a clip since it landed, and the forced twin must not answer differently.
+ *
+ * A FUNCTION SINCE 2026-11-26, because it gained the /tw/ escape hatch as a second caller. Inline in
+ * routeInner and keyed on `seg.length === 1`, it could not fire under the prefix, and the forced
+ * depth-1 arm in twitch() took 'embed' as the slug instead (see there).
+ */
+function twitchEmbed(seg: string[], q: URLSearchParams): Route | null {
+  if (seg.length !== 1 || seg[0] !== 'embed') return null
+  const clip = q.get('clip') || ''
+  return TWITCH_SLUG.test(clip) ? twPost(clip, `https://clips.twitch.tv/${clip}`) : null
 }
 
 /**
@@ -2169,26 +2230,44 @@ function routeInner(url: URL): Route {
       const forcedShare = metaShare(seg.slice(1))
       if (forcedShare) return forcedShare
     }
+    /**
+     * /yt/watch?v={id} and /tw/embed?clip={slug}, the YouTube and Twitch query shapes, read by the same
+     * youtubeQuery() and twitchEmbed() the unforced block below calls; their docstrings have the
+     * reports. Both were found 2026-11-26 with the /fb/ shapes above: the converter's "Read as" picker
+     * builds `/{code}{path}`, so picking YouTube on a watch link handed out a notfound, and picking
+     * Twitch on an embed link handed out a clip named "embed" (twitch() now refuses that slug, which is
+     * what lets this arm see the path at all; matchPost runs first).
+     *
+     * Each is guarded on its own token, so /st/watch?v=… and /yt/embed?clip=… answer what they did. A
+     * forced miss (no v, a junk clip) falls through like every other one: /tw/embed with no usable clip
+     * reaches the unforced reading of ['tw', 'embed'] and answers notfound, the answer /tw/{segment}
+     * already gets when the forced arm refuses the segment, rather than the /embed chooser, which would
+     * offer x.com and instagram.com links to a reader who picked Twitch.
+     *
+     * NOTHING IS SHADOWED. Unforced, both are depth-2 paths no matcher claims. A before/after sweep of
+     * 14,540,244 paths (numbers in test/router.test.mjs) moved 608 answers, every one a /yt/watch or
+     * /tw/embed path: now routed as the path without the prefix, or, for a forced miss, notfound where
+     * it used to be the clip "embed". Nothing moved unforced or under any other token.
+     */
+    if (forced === 'yt') {
+      const forcedWatch = youtubeQuery(seg.slice(1), url.searchParams)
+      if (forcedWatch) return forcedWatch
+    }
+    if (forced === 'tw') {
+      const forcedEmbed = twitchEmbed(seg.slice(1), url.searchParams)
+      if (forcedEmbed) return forcedEmbed
+    }
     // seg[0] may be a real handle rather than an escape token (e.g. x.com/x/status/…),
     // so fall through to the normal unforced interpretation instead of dead-ending.
   }
 
   // YouTube's /watch?v={id} — the id lives in the QUERY, which the segment matchers never see. Handled
   // here, where url.searchParams is in scope, at matchPost's priority (above the KNOWN dead-end set and
-  // ambiguity). Guarded on the exact 11-char id, so a bare /watch or a junk `v` falls through to notfound.
-  if (seg.length === 1 && seg[0] === 'watch') {
-    // TOLERATE TRAILING JUNK on the v param: a real paste can carry `?v={id}/…` or a hand-appended
-    // cache-buster, and a strict full-string match turned those into the ambiguity chooser (reported
-    // 2026-07-24). The id is a FIXED 11 chars, so taking the leading 11 and requiring the next character
-    // to be a non-id one is exact, not a guess — `?v={12-char-id}` still refuses rather than truncating a
-    // longer token into a different video.
-    const raw = url.searchParams.get('v') || ''
-    const v = YT_ID.test(raw) ? raw
-      : (raw.length > 11 && YT_ID.test(raw.slice(0, 11)) && !/[A-Za-z0-9_-]/.test(raw[11]) ? raw.slice(0, 11) : '')
-    if (v) return ytPost(v)
-    // Facebook's /watch/?v={id} shares the shape, and a long NUMERIC v is Facebook's. facebookQuery()
-    // just below reads it; a real yt id never gets that far, because it returned above.
-  }
+  // ambiguity). youtubeQuery() reads it, and the /yt/ escape hatch above calls it too. Facebook's
+  // /watch/?v={id} shares the shape, and a long NUMERIC v is Facebook's: facebookQuery() just below reads
+  // that one, and a real yt id never gets that far, because it returned here.
+  const ytWatch = youtubeQuery(seg, url.searchParams)
+  if (ytWatch) return ytWatch
 
   /**
    * FACEBOOK'S QUERY-ID SHAPES, /watch?v={numeric}, /story.php and /permalink.php, /photo and
@@ -2210,22 +2289,11 @@ function routeInner(url: URL): Route {
     if (fbQuery) return fbQuery
   }
 
-  /**
-   * `clips.twitch.tv/embed?clip={slug}&parent=…` — the EMBED IFRAME url, handled here for the same
-   * reason /watch?v= is: the id lives in the QUERY, which the segment matchers never see.
-   *
-   * It is worth claiming because that page carries NO og: metadata AT ALL (measured 2026-07-27: the
-   * player shell titles itself 'Twitch' and emits no og:title/description/image), so a paste of it is
-   * a link that previews as nothing anywhere — including on Twitch itself.
-   *
-   * NO SHAPE GATE, because there is no ambiguity to resolve: `?clip=` on /embed names the platform
-   * outright. TWITCH_SLUG (the loose safety shape, not the tight recogniser) still bounds it, so a
-   * junk parameter falls through to notfound rather than minting a ref.
-   */
-  if (seg.length === 1 && seg[0] === 'embed') {
-    const clip = url.searchParams.get('clip') || ''
-    if (TWITCH_SLUG.test(clip)) return twPost(clip, `https://clips.twitch.tv/${clip}`)
-  }
+  // `clips.twitch.tv/embed?clip={slug}`, Twitch's embed player url. The clip lives in the QUERY, so this
+  // sits here for the /watch?v= reason. twitchEmbed() reads it, the /tw/ escape hatch above calls it too,
+  // and its docstring has the measurement.
+  const twEmbed = twitchEmbed(seg, url.searchParams)
+  if (twEmbed) return twEmbed
 
   const hit = matchPost(seg)
   if (hit) return hit

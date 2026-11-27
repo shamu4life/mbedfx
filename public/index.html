@@ -1046,9 +1046,16 @@ function mbedfxConvert(input, host, gallery) {
     return head.replace(/\/+$/, '') + (gallery === 'stills' ? '/p' : '/v') + tail;
   };
 
-  var out = function (p, platform, note, code) {
+  /**
+   * `token` is set only where THIS CONVERTER put the router's escape token in front of the path itself
+   * (/dm/{id}, /st/{id}, /im/{id}, /im/gallery/{id}, /tw/{slug}), so the "Read as" picker can replace it
+   * instead of stacking a second one in front (mbedfxForcedPath). It is never read off the path: the
+   * first segment of x.com/tw/status/20 is a handle that happens to spell a token, and only the
+   * converter knows which of the two it wrote.
+   */
+  var out = function (p, platform, note, code, token) {
     var full = withGallery(p);
-    return { ok: true, url: mbedfxScheme(host) + host + full, platform: platform, note: note || '', code: code || null, path: full };
+    return { ok: true, url: mbedfxScheme(host) + host + full, platform: platform, note: note || '', code: code || null, path: full, token: token || null };
   };
   var no = function (why) { return { ok: false, kind: 'unsupported', why: why }; };
 
@@ -1124,7 +1131,7 @@ function mbedfxConvert(input, host, gallery) {
 
   if (bare === 'youtu.be' && seg.length === 1) return out('/' + seg[0], 'YouTube', '', 'yt');
   // Dailymotion + Reddit + Streamable + Imgur shorthands all have a routable equivalent.
-  if (bare === 'dai.ly' && seg.length === 1) return out('/dm/' + seg[0], 'Dailymotion', '', 'dm');
+  if (bare === 'dai.ly' && seg.length === 1) return out('/dm/' + seg[0], 'Dailymotion', '', 'dm', 'dm');
   if (bare === 'redd.it' && seg.length === 1) {
     return out('/comments/' + seg[0], 'Reddit',
       'No subreddit in a bare Reddit link, so the card comes out a bit thinner than usual.', 'rd');
@@ -1240,34 +1247,43 @@ function mbedfxConvert(input, host, gallery) {
       if (seg[0] === 'embed' && u.searchParams.get('clip')) {
         return out('/embed?clip=' + u.searchParams.get('clip'), 'Twitch', '', 'tw');
       }
+      /*
+       * THE PLAYER WITH NO CLIP IN IT. clips.twitch.tv/embed used to come out as /tw/embed below, the
+       * forced reading of a clip whose slug is "embed", though that segment is the player's own path and
+       * names no clip. The worker stopped reading it that way on 2026-11-26 (router.ts twitch()) and
+       * answers notfound, so the link is refused here instead of being handed out as ready to paste.
+       * clips.twitch.tv only: on twitch.tv a single segment is read as a channel name just below, and
+       * "embed" is a legal login there, so that paste keeps the channel refusal it always had.
+       */
+      if (bare === 'clips.twitch.tv' && seg.length === 1 && seg[0] === 'embed') return no("That's Twitch's clip player, and the link doesn't say which clip.");
       if (seg.length === 1) {
         // A single segment means opposite things on the two hosts: on clips.twitch.tv it IS the clip
         // slug; on twitch.tv it is almost always a channel name, which names no post.
         // The /tw/ prefix forces the Twitch reading, so older and shorter slugs work too rather than
         // having to pass the worker's shape recogniser on their own.
-        if (bare === 'clips.twitch.tv') return out('/tw/' + seg[0], 'Twitch', '', 'tw');
+        if (bare === 'clips.twitch.tv') return out('/tw/' + seg[0], 'Twitch', '', 'tw', 'tw');
         var head = seg[0].slice(0, 16);
         var looksLikeClip = seg[0].length >= 16 && /^[A-Z]/.test(seg[0]) &&
           (head.match(/[A-Z]/g) || []).length >= 4;
         if (!looksLikeClip) return no('That looks like a Twitch channel rather than a clip. Clips only.');
-        return out('/tw/' + seg[0], 'Twitch', '', 'tw');
+        return out('/tw/' + seg[0], 'Twitch', '', 'tw', 'tw');
       }
     }
     if (platform === 'Imgur') {
       // An album is its own shape; a gallery needs the prefix because /gallery/ is contested with
       // Reddit and Instagram, and neither of those links should be quietly stolen.
       if (seg[0] === 'a' && seg.length === 2) return out('/a/' + seg[1], 'Imgur', '', 'im');
-      if (seg[0] === 'gallery' && seg.length === 2) return out('/im/gallery/' + seg[1], 'Imgur', '', 'im');
+      if (seg[0] === 'gallery' && seg.length === 2) return out('/im/gallery/' + seg[1], 'Imgur', '', 'im', 'im');
       // A bare imgur.com/{id} is undecidable once the host is gone, so force it.
       if (h === 'imgur.com' && seg.length === 1 && !/\.[a-z0-9]+$/i.test(seg[0])) {
-        return out('/im/' + seg[0], 'Imgur', '', 'im');
+        return out('/im/' + seg[0], 'Imgur', '', 'im', 'im');
       }
     }
     // Bare streamable.com/{id} is likewise undecidable without a forcing prefix.
     if (platform === 'Streamable' && seg.length === 1 && seg[0] !== 'e' && seg[0] !== 's') {
-      return out('/st/' + seg[0], 'Streamable', '', 'st');
+      return out('/st/' + seg[0], 'Streamable', '', 'st', 'st');
     }
-    if (platform === 'Dailymotion' && seg.length === 1) return out('/dm/' + seg[0], 'Dailymotion', '', 'dm');
+    if (platform === 'Dailymotion' && seg.length === 1) return out('/dm/' + seg[0], 'Dailymotion', '', 'dm', 'dm');
     // A pin comes out as the bare /pin/{id}, without `sent` or a slug. See mbedfxPinId.
     if (platform === 'Pinterest') {
       var pinId = mbedfxPinId(seg);
@@ -1292,6 +1308,33 @@ function mbedfxConvert(input, host, gallery) {
   if (seg.length === 0) return no("That's a server's front page, not a post.");
   return out('/' + h + path, 'Fediverse',
     "Unrecognised host, treated as a fediverse instance. That's the right guess for Mastodon, Misskey, Lemmy, PieFed and PeerTube.");
+}
+
+/**
+ * THE "READ AS" LINK: the path to hand out when a site is picked from the chip's list. `r` is what
+ * mbedfxConvert returned, `code` the picked site's escape token, and `pasted` the pasted url's own path,
+ * which is forced only when nothing converted (a refusal, where the raw path is all there is). Returns
+ * null when there is no path at all, and the picker then does nothing.
+ *
+ * A TOKEN THIS CONVERTER PUT IN FRONT ITSELF IS REPLACED, NOT STACKED. The picker used to build
+ * '/' + code + r.path whatever r.path started with, so on the five shapes that already carry their
+ * site's token (/dm/{id}, /st/{id}, /im/{id}, /im/gallery/{id}, /tw/{slug}) picking the site the chip
+ * already showed gave /dm/dm/{id}, and picking another site gave /st/dm/{id}. The worker answers
+ * notfound to both, since no forced matcher reads a second token as part of an id. Found 2026-11-26 by
+ * feeding the picker's output for every paste in test/landing-convert.test.mjs to route(). Now the
+ * converter's own token is taken off first, so re-picking the shown site gives back the path it
+ * converted, byte for byte, and another site's pick reads the id under that site's token (/st/{id}).
+ *
+ * KEYED ON r.token, WHICH ONLY THE CONVERTER SETS, never on what the first segment spells. Instagram
+ * and X put a handle there, and a handle can spell a token: x.com/tw/status/20 converts to
+ * /tw/status/20, a post by @tw, and stripping "tw" off it would force X onto /status/20 and lose the
+ * account. A refusal's raw path is the other site's own path, so its first segment is that site's too.
+ * A pasted mbedfx link gets no chip at all, and reaches the picker only through the worker's "which
+ * site?" answer, which the router gives after reading that first segment as a handle (/x/followers).
+ */
+function mbedfxForcedPath(r, code, pasted) {
+  if (!r || !r.ok) return pasted ? '/' + code + pasted : null;
+  return '/' + code + (r.token ? r.path.slice(r.token.length + 1) : r.path);
 }
 
 /**
@@ -1633,9 +1676,10 @@ function mbedfxPrepResolved(asked, answer) {
     if (!b) return;
     var code = b.getAttribute('data-force');
     var r = mbedfxConvert(input.value, host, sendGallery());
-    // Force by prefixing the router's escape token onto the path we already computed. A path we could
-    // not read at all has none, so fall back to the pasted url's own path.
-    var path = r.ok ? r.path : pathOf(input.value);
+    // Force by putting the router's escape token in front of the path already computed, replacing the
+    // converter's own token rather than stacking a second one (mbedfxForcedPath has the defect). A link
+    // that did not convert has no computed path, so the pasted url's own path is forced instead.
+    var path = mbedfxForcedPath(r, code, pathOf(input.value));
     if (!path) return;
     forced = code;
     /**
@@ -1646,7 +1690,7 @@ function mbedfxPrepResolved(asked, answer) {
      * compares base with base (see there), which ends the false caption and would have left the forced
      * link without its d. for good, so the link is shown right the first time instead.
      */
-    setResult(mbedfxScheme(host) + host + '/' + code + path);
+    setResult(mbedfxScheme(host) + host + path);
     result.style.display = ''; copy.style.display = '';
     note.className = 'msgline';
     note.innerHTML = 'Forced to <b>' + esc((BY_CODE[code] || {}).name || code) + '</b>.';

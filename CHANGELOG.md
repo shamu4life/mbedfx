@@ -172,6 +172,15 @@ mbedfx.app's Reddit app and account, and it names no account at all. Nobody else
   code worked, and now give the same card as those links. The converter's "Read as" list adds the
   code to the front of the link, so picking Facebook on a photo or video link, or Threads on a share
   link, used to swap a working link for a dead one.
+- **Three picks in the converter's "Read as" list handed out a dead or wrong link, and now don't.**
+  Picking YouTube on a `youtube.com/watch?v=…` link gave `/yt/watch?v=…`, which answered "Not found",
+  and now plays like `/watch?v=…`. Twitch was worse. On a `clips.twitch.tv/embed?clip=…` link the card
+  was for a clip named "embed", the player's own path, instead of the clip the link names. Dailymotion,
+  Streamable, Imgur and some Twitch links already come out of the converter with their site code
+  (`/dm/…`, `/st/…`, `/im/…`, `/tw/…`), and picking a site on one of them put a second code in front:
+  `/dm/dm/…`, also "Not found". The picked code now replaces the one already there, and a
+  `clips.twitch.tv/embed` link with no clip in it is refused. Picking Reddit for a
+  `reddit.com/gallery/…` link still answers "Not found".
 - **`RESOLVER_SECRET` was documented as protecting the Cloudflare container, and it doesn't.**
   `container/README.md` said to set it on the container as well as the Worker, and nothing in this
   repo puts it there: the container's Durable Object passes it no environment, so the container never
