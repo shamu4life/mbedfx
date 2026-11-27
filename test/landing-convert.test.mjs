@@ -60,7 +60,7 @@ function loadConverter(config) {
     convert: mbedfxConvert, defaultHost: mbedfxDefaultHost, mediaOnly: mbedfxMediaOnly,
     repoint: mbedfxRepoint, isGuest: mbedfxIsGuest, pageGuests: GUEST_HOSTS, publicHosts: PUBLIC_HOSTS,
     ourHosts: OUR_HOSTS, prepResolved: mbedfxPrepResolved, hasMediaOnly: mbedfxHasMediaOnly,
-    pinId: mbedfxPinId, pinShortCode: PIN_SHORT_CODE, pinRefusal: PIN_IT_REFUSAL,
+    pinId: mbedfxPinId, pinShortCode: PIN_SHORT_CODE, pinRefusal: PIN_IT_REFUSAL, forcedPath: mbedfxForcedPath,
   }`)(config)
 }
 
@@ -75,7 +75,7 @@ function loadPlatformTable() {
 
 const {
   convert, defaultHost, mediaOnly, repoint, isGuest, pageGuests, publicHosts, ourHosts, prepResolved, hasMediaOnly,
-  pinId, pinShortCode, pinRefusal,
+  pinId, pinShortCode, pinRefusal, forcedPath,
 } = loadConverter()
 const PLATFORMS = loadPlatformTable()
 
@@ -1298,13 +1298,19 @@ test('A SITE PICKED FROM "Read as" ROUTES EXACTLY AS THE LINK IT WAS PICKED FOR,
    * doing that would be caught here as well.
    *
    * Scoped to the two sites the defect was about. The same check over every paste in this file also
-   * fails for /yt/watch?v=…, for /tw/embed?clip=… (read as a Twitch clip whose slug is "embed") and
-   * for links that already carry their code (/dm/{id} forced to /dm/dm/{id}); those are separate
-   * defects, left for changes of their own.
+   * failed for /yt/watch?v=…, for /tw/embed?clip=… (read as a Twitch clip whose slug is "embed") and
+   * for links that already carry their code (/dm/{id} forced to /dm/dm/{id}). Those were fixed the
+   * same day, and the next test runs that check over every paste.
+   *
+   * REWRITTEN 2026-11-26 with that fix. This used to pin the picker's own string, '/' + code + r.path,
+   * and rebuild it here. That string was the third defect, so the page now builds the forced path in
+   * the pure block (mbedfxForcedPath), the handler is pinned to call it, and the check runs on what it
+   * returns. None of these pastes carries a token of the converter's own, so the paths checked are the
+   * same ones as before.
    */
   const picker = HTML.slice(HTML.indexOf("picker.addEventListener('click'"), HTML.indexOf('var forced = null;'))
-  assert.match(picker, /var path = r\.ok \? r\.path : pathOf\(input\.value\);/, 'the forced path is the converted one')
-  assert.match(picker, /setResult\(mbedfxScheme\(host\) \+ host \+ '\/' \+ code \+ path\);/, 'with the code in front')
+  assert.match(picker, /var path = mbedfxForcedPath\(r, code, pathOf\(input\.value\)\);/, 'the forced path comes from the pure block')
+  assert.match(picker, /setResult\(mbedfxScheme\(host\) \+ host \+ path\);/, 'and is handed out whole')
 
   const KINDS = ['post', 'metashare']
   let checked = 0
@@ -1327,13 +1333,132 @@ test('A SITE PICKED FROM "Read as" ROUTES EXACTLY AS THE LINK IT WAS PICKED FOR,
       const plain = routed(r.path)
       assert.ok(KINDS.includes(plain.kind), `${r.path} names a post to begin with (got ${plain.kind})`)
       for (const code of codes) {
-        const forced = '/' + code + r.path
+        const forced = forcedPath(r, code, null)
+        assert.equal(forced, '/' + code + r.path, `${paste}: no token of the converter's own to replace`)
         assert.deepEqual(routed(forced), plain, `${paste}, read as ${code}: ${forced} must route exactly as ${r.path}`)
         checked++
       }
     }
   }
   assert.equal(checked, 39, 'every paste, every gallery mode, every code')
+})
+
+test('EVERY SITE IN "Read as", ON EVERY PASTE IN THIS FILE: the chip\'s own site routes as the link it converted, and no token is stacked', () => {
+  /**
+   * FOUND 2026-11-26 by running the check above over every paste in this file rather than the Facebook
+   * ones. Three more defects, fixed the same day:
+   *
+   *   youtube.com/watch?v={id}, read as YouTube   /yt/watch?v={id}       notfound: the router had no /yt/
+   *                                                                     twin for the query shape
+   *   twitch.tv/embed?clip={slug}, read as Twitch /tw/embed?clip={slug}  a clip whose slug is "embed", the
+   *                                                                     wrong post with no error
+   *   dai.ly/{id}, streamable.com/{id}, imgur.com/{id}, imgur.com/gallery/{id}, clips.twitch.tv/{slug},
+   *     read as the site the chip shows           /dm/dm/{id} and so on   notfound: the picker stacked a
+   *                                                                     second token on the converter's own
+   *
+   * THE PASTES ARE READ OUT OF THIS FILE'S SOURCE, every quoted http(s) url in it, rather than listed
+   * again here, so a paste added to any test above is checked here without a second edit. A hand-kept
+   * list is how test/refkey.test.mjs stopped covering new ref kinds (CLAUDE.md).
+   *
+   * WHAT IS ASSERTED:
+   *  - Every paste that shows a chip and names a post (or one of the share routes that resolve to one):
+   *    picking the chip's own site routes deepEqual to the link it converted, in all three gallery
+   *    modes. The chip's site is r.code, or for the fediverse guess, which has none, the platform the
+   *    router read.
+   *  - Every site in the picker, on every paste that converted: the converter's own token is never left
+   *    behind the picked one. It is replaced, so picking the shown site gives back the converted path
+   *    byte for byte, and another site's pick reads the same id under its own token.
+   *  - A refusal forces the pasted path as it was, and a pasted mbedfx link shows no chip and carries no
+   *    token. Both are the reasons mbedfxForcedPath leaves a first segment alone when it did not write it.
+   *
+   * NOT ASSERTED: that a DIFFERENT site's pick reaches the same post. No picker can promise that: forcing
+   * Streamable on a YouTube watch link asks for Streamable's reading of /watch, and there is no YouTube
+   * post in that answer to keep.
+   */
+  // What makes a pasted mbedfx link chipless: render() draws the chip only for a detected platform.
+  assert.match(HTML, /var chip = r\.platform \? chipFor\(r\.code, r\.platform\) : '';/, 'no platform, no chip')
+
+  const src = readFileSync(new URL(import.meta.url), 'utf8')
+  const pastes = [...new Set([...src.matchAll(/['"`](https?:\/\/[^'"`\s$]+)['"`]/g)].map(m => m[1]))]
+  assert.ok(pastes.length > 150, `the scan finds this file's pastes (found ${pastes.length})`)
+
+  // The picker's list is CODE_OF's values, read off the page the way the site table is.
+  const CODE_OF = new Function(`return ${HTML.match(/var CODE_OF = (\{[\s\S]*?\});/)[1]}`)()
+  const PICKER = Object.values(CODE_OF)
+  assert.deepEqual([...PICKER].sort(), Object.values(CODE).sort(), 'every site the page names, once')
+
+  const NAMES_A_POST = ['post', 'metashare', 'shortlink', 'redditshare', 'profile']
+  const pathOf = v => { try { const p = new URL(v).pathname; return p && p !== '/' ? p : null } catch { return null } }
+  let same = 0, picks = 0, tokened = 0, refused = 0, chipless = 0
+  for (const paste of pastes) {
+    for (const gallery of [undefined, 'stills', 'videos']) {
+      const r = convert(paste, 'mbedfx.app', gallery)
+      if (!r.ok) {
+        const raw = pathOf(paste)
+        if (!raw) continue
+        for (const code of PICKER) assert.equal(forcedPath(r, code, raw), '/' + code + raw, `${paste}: a refusal forces its own path`)
+        refused++
+        continue
+      }
+      if (!r.platform) {
+        assert.equal(r.token, null, `${paste}: a pasted mbedfx link carries no token of the converter's own`)
+        chipless++
+        continue
+      }
+      if (r.token) {
+        assert.equal(r.token, r.code, `${paste}: the token the converter wrote is the chip's own site`)
+        assert.ok(r.path.startsWith(`/${r.token}/`), `${paste}: and it is at the front of ${r.path}`)
+        tokened++
+      }
+      const rest = r.token ? r.path.slice(r.token.length + 1) : r.path
+      for (const code of PICKER) {
+        const forced = forcedPath(r, code, pathOf(paste))
+        assert.ok(forced.startsWith(`/${code}/`), `${paste}, read as ${code}: ${forced} leads with the picked token`)
+        if (r.token) assert.notEqual(forced.split('/')[2], r.token, `${paste}, read as ${code}: ${forced} stacks a token`)
+        assert.equal(forced.slice(code.length + 1), rest, `${paste}, read as ${code}: the rest is the converted path`)
+        if (code === r.token) assert.equal(forced, r.path, `${paste}: re-picking the shown site gives back ${r.path}`)
+        picks++
+      }
+      const plain = routed(r.path)
+      if (!NAMES_A_POST.includes(plain.kind)) continue
+      const site = r.code || plain.ref?.p
+      assert.ok(site, `${paste}: the chip names a site`)
+      const forced = forcedPath(r, site, pathOf(paste))
+      assert.deepEqual(routed(forced), plain, `${paste} [${gallery}], read as ${site}: ${forced} must route exactly as ${r.path}`)
+      same++
+    }
+  }
+  // Floors, not exact counts, because the paste list grows with this file. Measured 2026-11-26 over 172
+  // pastes in three gallery modes: 261 same-site checks, 21 conversions carrying a token of the converter's
+  // own (seven pastes), 5,202 picks, 36 refusals and 156 pasted mbedfx links.
+  assert.ok(same >= 261, `same-site checks (${same})`)
+  assert.ok(tokened >= 21, `conversions carrying the converter's own token (${tokened})`)
+  assert.ok(refused > 0 && chipless > 0, `refusals (${refused}) and pasted mbedfx links (${chipless}) were both seen`)
+  assert.ok(picks >= 5202, `picks (${picks})`)
+
+  // The three defects by name, so a failure says which one came back.
+  const yt = convert('https://www.youtube.com/watch?v=dQw4w9WgXcQ', 'mbedfx.app')
+  assert.deepEqual(routed(forcedPath(yt, 'yt', null)).ref, { p: 'yt', id: 'dQw4w9WgXcQ' }, '/yt/watch?v= plays')
+  const tw = convert('https://clips.twitch.tv/embed?clip=DeliciousDelightfulPicklesWOOP', 'mbedfx.app')
+  assert.equal(routed(forcedPath(tw, 'tw', null)).ref.slug, 'DeliciousDelightfulPicklesWOOP', '/tw/embed?clip= is that clip')
+  const dm = convert('https://dai.ly/xaqwy7q', 'mbedfx.app')
+  assert.equal(forcedPath(dm, 'dm', null), '/dm/xaqwy7q', 'Dailymotion re-picked is the same link')
+  assert.equal(forcedPath(dm, 'st', null), '/st/xaqwy7q', 'and Streamable reads the id under its own token')
+  const gal = convert('https://imgur.com/gallery/YcAQlkx', 'mbedfx.app', 'stills')
+  assert.equal(forcedPath(gal, 'im', null), '/im/gallery/YcAQlkx/p', 'an Imgur gallery re-picked keeps its mode')
+
+  // A HANDLE THAT SPELLS A TOKEN IS NOT ONE. @tw is an X account name; its tweet converts to /tw/status/20,
+  // and forcing X must keep the handle, which only works because the strip is keyed on r.token.
+  const handle = convert('https://x.com/tw/status/20', 'mbedfx.app')
+  assert.equal(handle.token, null, 'the converter did not write that tw')
+  assert.equal(forcedPath(handle, 'x', null), '/x/tw/status/20')
+  assert.deepEqual(routed(forcedPath(handle, 'x', null)), routed(handle.path), 'read as X, the same post by @tw')
+
+  // The player with no clip is refused now, and forcing Twitch on it never reads "embed" as a slug.
+  const player = convert('https://clips.twitch.tv/embed', 'mbedfx.app')
+  assert.equal(player.ok, false, 'clips.twitch.tv/embed names no clip')
+  assert.ok(!/—|\byou\b/i.test(player.why), 'visible copy, held to the page rules')
+  assert.notEqual(routed(forcedPath(player, 'tw', '/embed')).ref?.slug, 'embed')
 })
 
 

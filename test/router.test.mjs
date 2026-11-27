@@ -2051,6 +2051,134 @@ test('THE /fb/ QUERY TWIN CLAIMS ONLY A USABLE ID, and the two places it differs
   assert.deepEqual(r(`/fb${slashed}`).ref, { p: 'fb', kind: 'post', id: '100071151613394_1092409469807430' })
 })
 
+/* ===================== THE /yt/ AND /tw/ PREFIX ON THE YOUTUBE AND TWITCH QUERY SHAPES =====================
+ *
+ * FOUND 2026-11-26 with the /fb/ and /th/ twins above, by the same check run over every paste in
+ * test/landing-convert.test.mjs. Reproduced offline with route() at f449bb5:
+ *
+ *   /yt/watch?v={id}             notfound, while /watch?v={id} played
+ *   /tw/embed?clip={slug}        a Twitch clip whose slug is "embed", while /embed?clip={slug} was that clip
+ *
+ * Both query arms sat inline in routeInner keyed on `seg.length === 1`, so neither fired under a prefix,
+ * and the forced depth-1 Twitch arm took the leftover 'embed' as the slug. The converter's "Read as"
+ * picker builds `/{code}{path}`, so picking YouTube or Twitch on those pastes handed out these links.
+ * Now youtubeQuery() and twitchEmbed() have the escape hatch as a second caller, and twitch() refuses
+ * 'embed' as a slug.
+ *
+ * Checked by a before/after sweep (the router at f449bb5 against this one) over 14,540,244 unique paths:
+ * no prefix and every escape token (plus xqc, embed and watch as a first segment), followed by one or two
+ * of 55 surface words and ids with 18 queries (v and clip in every usable and junk spelling, fbid, the
+ * story pair) and 11 suffixes (/, /p, /v, .mp4, /.mp4, /p.mp4, ||, %7C%7C, //, ).), or by three of 20
+ * with 4 queries and 3 suffixes. 608 answers changed:
+ *   132  /yt/watch…     notfound -> the YouTube post /watch… gets
+ *   347  /tw/embed…     the clip "embed" -> exactly what /embed… gets (106 of them the clip in ?clip=)
+ *   129  /tw/embed…     the clip "embed" -> notfound, a forced miss with no usable clip
+ * No answer changed unforced or under any other token. The sweep script and the f449bb5 snapshot are not
+ * in the repo; these numbers are the record.
+ */
+
+/** The YouTube watch shapes the converter and real pastes produce: both slash spellings, a pasted tail
+ *  route() tolerates, and a tracker. */
+const YT_WATCH_SHAPES = [
+  '/watch?v=dQw4w9WgXcQ',
+  '/watch/?v=dQw4w9WgXcQ',
+  '/watch?v=dQw4w9WgXcQ/extra',
+  '/watch?v=dQw4w9WgXcQ&t=42s',
+]
+const TW_EMBED_SHAPES = [
+  `/embed?clip=${TW}`,
+  `/embed/?clip=${TW}`,
+  `/embed?clip=${TW}&parent=example.com`,
+  '/embed?clip=settings',
+]
+
+test('/yt/watch?v={id} ROUTES EXACTLY AS /watch?v={id}, in every suffix the converter and Discord add', () => {
+  let checked = 0
+  for (const shape of YT_WATCH_SHAPES) {
+    for (const sfx of [...PATH_SUFFIXES, '||']) {
+      const p = suffixed(shape, sfx)
+      const bare = r(p)
+      assert.equal(bare.kind, 'post', `${p} is a YouTube post to begin with`)
+      assert.deepEqual(bare.ref, { p: 'yt', id: 'dQw4w9WgXcQ' }, p)
+      assert.deepEqual(r(`/yt${p}`), bare, `/yt${p} must route exactly as ${p}`)
+      checked++
+    }
+  }
+  assert.equal(checked, YT_WATCH_SHAPES.length * (PATH_SUFFIXES.length + 1))
+})
+
+test('/yt/watch CLAIMS ONLY A YOUTUBE ID, and never hands a Facebook id to Facebook', () => {
+  /**
+   * The mirror of /fb/watch?v={YouTube id} above. Bare, /watch?v={long numeric} is Facebook's video,
+   * through facebookQuery(). Under /yt/ the reader has said YouTube, and that v is no YouTube id, so it
+   * falls through to notfound rather than becoming a Facebook post nobody picked.
+   */
+  assert.equal(r('/watch?v=10153231379946729').ref.p, 'fb')
+  assert.equal(r('/yt/watch?v=10153231379946729').kind, 'notfound')
+  // An 11-digit v is a YouTube id under both, as it is bare.
+  assert.deepEqual(r('/yt/watch?v=12345678901').ref, { p: 'yt', id: '12345678901' })
+  // The id guard holds: a 12-char v is refused rather than cut down to a different video, and no v is no claim.
+  for (const p of ['/yt/watch', '/yt/watch?v=', '/yt/watch?v=junk', '/yt/watch?v=dQw4w9WgXcQx']) {
+    assert.equal(r(p).kind, 'notfound', p)
+  }
+})
+
+test('/tw/embed?clip={slug} IS CLIP {slug}, never a clip named "embed"', () => {
+  /**
+   * The defect was the wrong post with no error: /tw/embed?clip=X answered `{ slug: 'embed' }`, a ref
+   * that fetches nothing, for a link that names clip X outright. The equivalence covers the suffixes the
+   * picker can add (the gallery box puts /p or /v before the query) and `?clip=settings`, which the
+   * bare arm has always read as a clip (TWITCH_SLUG, not twSlug) and the twin must not answer otherwise.
+   */
+  for (const shape of TW_EMBED_SHAPES) {
+    for (const sfx of [...PATH_SUFFIXES, '||']) {
+      const p = suffixed(shape, sfx)
+      const bare = r(p)
+      assert.equal(bare.kind, 'post', `${p} is a Twitch clip to begin with`)
+      assert.equal(bare.ref.p, 'tw', p)
+      assert.notEqual(bare.ref.slug, 'embed', p)
+      assert.deepEqual(r(`/tw${p}`), bare, `/tw${p} must route exactly as ${p}`)
+    }
+  }
+  assert.equal(r(`/tw/embed?clip=${TW}`).ref.slug, TW)
+
+  /**
+   * NO USABLE CLIP. Bare, /embed falls to the ['x','ig'] chooser, which offers x.com/embed and
+   * instagram.com/embed. A reader who picked Twitch is not offered those: the forced miss falls through
+   * the escape hatch to notfound, the answer /tw/{segment} gets whenever the forced arm refuses it.
+   */
+  for (const q of ['', '?clip=', '?clip=ab', '?clip=a%20b', '?v=dQw4w9WgXcQ']) {
+    for (const sfx of ['', '/', '/p', '.mp4']) {
+      const p = suffixed(`/tw/embed${q}`, sfx)
+      const got = r(p)
+      assert.notEqual(got.ref?.slug, 'embed', `${p} must not be a clip named "embed"`)
+      assert.equal(got.kind, 'notfound', p)
+    }
+  }
+  assert.equal(r('/tw/ab').kind, 'notfound', 'the same answer a refused segment gets')
+  assert.equal(r('/embed').kind, 'ambiguous', 'and bare /embed keeps its chooser')
+
+  // The refusal is the literal 'embed' and nothing wider: a forced slug that merely contains it still routes.
+  assert.equal(r('/tw/embedded').ref.slug, 'embedded')
+  assert.equal(r('/tw/shortlowercaseslug').ref.slug, 'shortlowercaseslug')
+})
+
+test('NO OTHER PREFIX PICKS UP THE YOUTUBE WATCH SHAPE OR THE TWITCH EMBED SHAPE', () => {
+  /**
+   * The twins are guarded on `forced === 'yt'` and `forced === 'tw'`. Asserted as "not that platform's
+   * post" rather than as notfound, because some of these were posts before this change and still are:
+   * the forced depth-1 arms of /st/ and /im/ read any single segment as an id, so /st/watch?v=… is
+   * Streamable id 'watch'. That is a defect of its own (left for its own change); the sweep above found
+   * none of these answers changed.
+   */
+  for (const tok of ['x', 'tt', 'ig', 'th', 'rd', 'bs', 'fb', 'dm', 'st', 'im', 'tw', 'lm', 'ms', 'mk', 'pt', 'pn']) {
+    for (const shape of YT_WATCH_SHAPES) assert.notEqual(r(`/${tok}${shape}`).ref?.p, 'yt', `/${tok}${shape} must not be read as YouTube`)
+  }
+  for (const tok of ['x', 'tt', 'ig', 'th', 'rd', 'bs', 'yt', 'fb', 'dm', 'st', 'im', 'lm', 'ms', 'mk', 'pt', 'pn']) {
+    for (const shape of TW_EMBED_SHAPES) assert.notEqual(r(`/${tok}${shape}`).ref?.p, 'tw', `/${tok}${shape} must not be read as Twitch`)
+  }
+})
+
 test("DISCORD'S SPOILER BARS DO NOT BREAK A LINK", () => {
   /**
    * REPORTED 2026-08-01: `||https://mbedfx.app/hepi01967211/status/2083545767893983385||` rendered

@@ -408,7 +408,11 @@ test('THE DOM HALF READS THE BLOCK: the arrived-on host, the primary in the copy
   // 2026-11-25: the scheme in the fediverse instructions, the forced link, and the preview's footer.
   assert.match(HTML, /querySelectorAll\('\[data-primary-scheme\]'\)[\s\S]{0,120}el\.textContent = mbedfxScheme\(PRIMARY_HOST\);/)
   assert.equal((HTML.match(/data-primary-scheme>https:\/\/</g) || []).length, 3, 'the three spots that wrote https:// in front of the primary')
-  assert.match(HTML, /setResult\(mbedfxScheme\(host\) \+ host \+ '\/' \+ code \+ path\);/, 'a forced link takes the chosen host\'s scheme')
+  // REWRITTEN 2026-11-26: the forced path used to be spelled here as '/' + code + path. It now comes whole
+  // from mbedfxForcedPath (its leading '/' and code included), which replaces the converter's own token
+  // instead of stacking a second one, so the line reads host + path. The scheme rule pinned is the same.
+  assert.match(HTML, /var path = mbedfxForcedPath\(r, code, pathOf\(input\.value\)\);/, 'the forced path is built by the pure block')
+  assert.match(HTML, /setResult\(mbedfxScheme\(host\) \+ host \+ path\);/, 'a forced link takes the chosen host\'s scheme')
   const foot = HTML.slice(HTML.indexOf('function footLine(j) {'), HTML.indexOf('function hidePreview() {'))
   assert.equal((foot.match(/SITE_NAME/g) || []).length, 3, 'all three footer lines print SITE_NAME')
   assert.doesNotMatch(foot, /'mbedfx/, 'and none prints the literal')
