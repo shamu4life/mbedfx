@@ -172,7 +172,7 @@ mbedfx.app's Reddit app and account, and it names no account at all. Nobody else
   code worked, and now give the same card as those links. The converter's "Read as" list adds the
   code to the front of the link, so picking Facebook on a photo or video link, or Threads on a share
   link, used to swap a working link for a dead one.
-- **Picking a site from the converter's "Read as" list no longer hands out a dead or wrong link.**
+- **Three picks in the converter's "Read as" list handed out a dead or wrong link, and now don't.**
   Picking YouTube on a `youtube.com/watch?v=…` link gave `/yt/watch?v=…`, which answered "Not found",
   and now plays like `/watch?v=…`. Twitch was worse. On a `clips.twitch.tv/embed?clip=…` link the card
   was for a clip named "embed", the player's own path, instead of the clip the link names. Dailymotion,
