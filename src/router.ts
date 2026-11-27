@@ -1649,7 +1649,8 @@ function pinterest(seg: string[]): Route | null {
  * For an id that spells a word here it now writes /st/e/{id}, /im/{id}.gifv and /tw/embed?clip={slug}
  * instead (public/index.html mbedfxPathWord, its copy of this set, held equal in
  * test/landing-convert.test.mjs with a test that every link it hands out routes). Where no spelling
- * reads the id, a Streamable id that is one of the lowercase AMBIGUOUS rows, the page refuses it.
+ * reads the id, a Streamable id or an Imgur album or gallery id that is one of the lowercase AMBIGUOUS
+ * rows (every arm that reads those consults reserved()), the page refuses it.
  * The two mistakes are not the same size. A refused id is a "Not found" card the reader can see, and
  * the site's own spelling of that id still works. A word read as an id is a card for a post nobody
  * named, under the site the reader picked, with nothing to say it is wrong: the failure this file says

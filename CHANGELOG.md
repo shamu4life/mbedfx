@@ -211,9 +211,9 @@ mbedfx.app's Reddit app and account, and it names no account at all. Nobody else
   of Twitch's clip player, so no clip has the name. The path forms now say "Not found" however
   "embed" is capitalised, apart from a few longer links that are read another way, such as
   `/tw/status/clip/embed`, a post on X. `/embed?clip=embed` gets the same "which site?" page as an
-  `/embed` link with no usable clip. The converter refuses any Twitch link that names "embed" as the
-  clip, however it's capitalised (`clips.twitch.tv/Embed` too), and reads `clips.twitch.tv/Embed?clip=…`
-  as the clip it names.
+  `/embed` link with no usable clip. The converter refuses `clips.twitch.tv/embed`,
+  `clips.twitch.tv/embed?clip=embed` and `twitch.tv/{channel}/clip/embed` however they're capitalised,
+  and reads `clips.twitch.tv/Embed?clip=…` as the clip it names.
 - **`RESOLVER_SECRET` was documented as protecting the Cloudflare container, and it doesn't.**
   `container/README.md` said to set it on the container as well as the Worker, and nothing in this
   repo puts it there: the container's Durable Object passes it no environment, so the container never
