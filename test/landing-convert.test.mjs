@@ -864,8 +864,9 @@ test('A STREAMABLE, IMGUR, DAILYMOTION, TWITCH OR REDDIT ID THAT SPELLS A WORD C
    *
    * WITH ONE EXCEPTION SINCE A SECOND REVIEW THE SAME DAY: a bare imgur.com/{row} is refused although
    * /{row}.gifv reads it. This test pinned imgur.com/gallery as the Imgur post "gallery", which is what
-   * the .gifv respelling made it, and imgur.com/search?q=cats the post "search". Those are Imgur's own
-   * pages, and no image has any of those six ids (measured, public/index.html at the Imgur branch). The
+   * the .gifv respelling made it, and imgur.com/search?q=cats the post "search". No image has any of
+   * those six ids, and gallery and search are Imgur's own pages (measured, public/index.html at the
+   * Imgur branch). The
    * row now names that exception (`page`), and the exception is checked both ways: such a paste must be
    * refused, and nothing else may lean on it.
    */

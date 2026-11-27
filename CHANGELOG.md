@@ -208,8 +208,8 @@ mbedfx.app's Reddit app and account, and it names no account at all. Nobody else
   handing out a dead link, and `streamable.com/followers` no longer comes out as a "which site?" page
   offering X and Instagram. The same words are refused on a bare `imgur.com/` link, such as
   `imgur.com/gallery` or `imgur.com/search?q=cats`, and on an mbedfx link that carries one, such as
-  `/st/followers`. Those `imgur.com` links are Imgur's own pages, and no image has those names. They
-  used to come out as links that said "Not found".
+  `/st/followers`. `imgur.com/gallery` and `imgur.com/search` are Imgur's own pages, and no image has
+  any of these names. Each of these links used to convert to one that said "Not found".
 - **Picking Reddit on a Reddit gallery link works.** `mbedfx.app/rd/gallery/{id}` answered "Not
   found", so for a `/gallery/{id}` link, which Reddit and Imgur both use, the "which site?" choice
   for Reddit went nowhere. It now draws the same card as `/comments/{id}`, and the converter turns a

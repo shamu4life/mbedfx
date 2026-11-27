@@ -1434,14 +1434,16 @@ function mbedfxConvert(input, host, gallery) {
       // and the same canonical (router.ts imgur()'s .gifv arm, which consults neither list).
       //
       // EXCEPT A RESERVED_WORDS ROW, which is refused. The .gifv arm would read it, so this is not the
-      // "no spelling reads it" refusal of an album or gallery id: imgur.com/{word} for those rows is
-      // Imgur's own page, not an image. Until 2026-11-26 imgur.com/gallery came out as
+      // "no spelling reads it" refusal of an album or gallery id: no image has any of those ids, and
+      // two of them are Imgur's own pages. Until 2026-11-26 imgur.com/gallery came out as
       // /im/gallery.gifv, the Imgur post "gallery", and imgur.com/search?q=cats as the post "search"
       // (review of this branch). Measured 2026-11-27 (UTC) from the dev host, not a Worker:
       // imgur.com/gallery 301s to imgur.com/ and imgur.com/search is a 44 KB page of its own, while
       // i.imgur.com/{w}.jpg 302s to removed.png for all six rows that fit IM_ID (gallery, search,
-      // explore, lists, hashtag, moments), as it does for an id nobody minted. The rest are too long
-      // to be an Imgur id at all, and their .gifv was "Not found".
+      // explore, lists, hashtag, moments), as it does for an id nobody minted. imgur.com/explore, /lists,
+      // /hashtag and /moments answered the same 5,478-byte shell as that made-up id, so they are not
+      // known to be pages, only not images. The rest are too long to be an Imgur id at all, and their
+      // .gifv was "Not found".
       if (h === 'imgur.com' && seg.length === 1 && !/\.[a-z0-9]+$/i.test(seg[0])) {
         if (mbedfxReservedWord(seg[0])) return no(mbedfxReservedRefusal(seg[0], 'an Imgur image'));
         return out('/im/' + seg[0] + (mbedfxPathWord(seg[0]) ? '.gifv' : ''), 'Imgur', '', 'im', 'im');
