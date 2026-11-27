@@ -185,21 +185,35 @@ mbedfx.app's Reddit app and account, and it names no account at all. Nobody else
   `mbedfx.app/st/watch?v=…` was a Streamable video called "watch", `/im/watch` an Imgur image, and
   `/tw/watch` and `/tw/Embed` Twitch clips. Picking Streamable, Imgur or Twitch in the converter's
   "Read as" list on a YouTube link handed out links like these. Any word a supported site uses in its
-  links, and any site code, is now refused there however it's capitalised. A real Streamable or Imgur
-  id that happens to spell one of those words is refused too as `/st/{id}` or `/im/{id}`, and still
-  works as `/e/{id}` or `/{id}.gifv`.
+  links, and any site code, is now refused there however it's capitalised. Most of these links now say
+  "Not found". One that ends in `/p`, `/v` or `.mp4` can be read another way, with the site code as an
+  account name: `/st/reel/p` is the Instagram post "p" by @st. A real Streamable, Imgur or Twitch id
+  that spells one of those words is refused too as `/st/{id}`, `/im/{id}` or `/tw/{id}`, so the
+  converter now writes it the site's other way: `streamable.com/video` comes out as `/st/e/video`,
+  `imgur.com/share` as `/im/share.gifv` and `clips.twitch.tv/watch` as `/tw/embed?clip=watch`.
+  `clips.twitch.tv/videos` is read as a clip too. It used to be refused as a video, but Twitch keeps
+  its videos on twitch.tv.
+- **The converter refuses the few ids no link can reach.** A Streamable id, or an Imgur album or
+  gallery id, that is one of the Worker's lowercase "which site?" words (`settings`, `followers`,
+  `gallery` and ten more) has no spelling the Worker reads. The converter says so now instead of
+  handing out a dead link, and `streamable.com/followers` no longer comes out as a "which site?" page
+  offering X and Instagram.
 - **Picking Reddit on a Reddit gallery link works.** `mbedfx.app/rd/gallery/{id}` answered "Not
   found", so for a `/gallery/{id}` link, which Reddit and Imgur both use, the "which site?" choice
   for Reddit went nowhere. It now draws the same card as `/comments/{id}`, and the converter turns a
   `reddit.com/gallery/{id}` link into `/rd/gallery/{id}` instead of a link that stops at the "which
   site?" question. Instagram isn't offered for these links any more. No Instagram post has a
   `/gallery/` link, so that choice could only say "Not found", and the API now lists `["rd","im"]`
-  as their `candidates`.
+  as their `candidates`. For the same reason the converter refuses an `instagram.com/gallery/…` link,
+  which it used to turn into the Reddit-or-Imgur question.
 - **No Twitch clip is called "embed".** `/clip/embed`, `/{channel}/clip/embed`, the same two with
   `/tw/` in front, and `/embed?clip=embed` gave a card for a clip called "embed". That's the address
   of Twitch's clip player, so no clip has the name. The path forms now say "Not found" however
-  "embed" is capitalised, and `/embed?clip=embed` gets the same "which site?" page as an `/embed` link
-  with no usable clip.
+  "embed" is capitalised, apart from a few longer links that are read another way, such as
+  `/tw/status/clip/embed`, a post on X. `/embed?clip=embed` gets the same "which site?" page as an
+  `/embed` link with no usable clip. The converter refuses any Twitch link that names "embed" as the
+  clip, however it's capitalised (`clips.twitch.tv/Embed` too), and reads `clips.twitch.tv/Embed?clip=…`
+  as the clip it names.
 - **`RESOLVER_SECRET` was documented as protecting the Cloudflare container, and it doesn't.**
   `container/README.md` said to set it on the container as well as the Worker, and nothing in this
   repo puts it there: the container's Durable Object passes it no environment, so the container never

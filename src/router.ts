@@ -170,7 +170,10 @@ const AMBIGUOUS: Record<string, readonly Platform[]> = {
   // to one, for an id that site can hold.
   gallery: ['rd', 'im'],
 }
-const RESERVED = new Set(Object.keys(AMBIGUOUS))
+// Exported for test/landing-convert.test.mjs, which holds the converter page's copy (RESERVED_WORDS in
+// public/index.html) equal to it. The page refuses a Streamable id, or an Imgur album or gallery id, that
+// is one of these, because every arm that reads those ids consults reserved() and none would answer.
+export const RESERVED: ReadonlySet<string> = new Set(Object.keys(AMBIGUOUS))
 
 /**
  * Does this SEGMENT spell a token the ambiguity table reserves? Asked by the yt-dlp tier before it
@@ -485,6 +488,18 @@ const IG_NOT_A_USER = new Set([...KNOWN, 'settings'])
  * SHORT LINKS (/t/{code}) ARE NOT HERE. Threads mints them too and they are byte-shape-identical to
  * TikTok's, so a synchronous matcher cannot tell them apart — they stay the ['tt','th'] chooser
  * until a resolver claims them, exactly as the shortlink() docstring describes.
+ *
+ * AND THAT CHOOSER'S THREADS CHOICE IS A DEAD END, recorded 2026-11-26 rather than fixed. When TikTok
+ * disclaims a code, worker.ts SHORTLINK_CANDIDATES offers ['tt','th'], and the forced link for Threads,
+ * /th/t/{code}, is notfound: no arm here reads it and no resolver asks Threads. The human chooser's
+ * threads.com/t/{code} link does work. 'th' stays a candidate because Threads really has the shape: the
+ * 1.0.0 design spec measured threads.com/t/{code} 301-ing to the post, and on 2026-11-26, from a
+ * residential connection and NOT from a Worker, threads.com/t/DTI1vjIEi5y answered 301 to
+ * /@mosseri/post/DTI1vjIEi5y, the same code (threads.net/t/ 301s to threads.com/t/ first; a second
+ * code, CuP48CiS5sx, answered 200 with no og tags, the soft-404 the spec warns about). If that holds
+ * from Worker egress, a /t/ code is a post shortcode and /th/t/{code} could be this function's
+ * { p: 'th', code } with no resolver at all (fetch.ts already asks for /@i/post/{code}, which 301s to
+ * the right author). That is an owner decision, left open: one code, measured residentially.
  */
 function threads(seg: string[]): Route | null {
   if (seg.length === 3 && seg[0].startsWith('@') && seg[0].length > 1 && seg[1] === 'post' && seg[2]) {
@@ -1627,6 +1642,14 @@ function pinterest(seg: string[]): Route | null {
  *                refuses every casing. /im/{id} is now notfound for those; /{id}.gifv still reads them.
  *   Twitch       nothing measured. 697 of 697 real slugs ran 18 characters or more (TW_SLUG) and the
  *                longest word here is 13, so no measured slug is lost; /clip/{slug} reads any other.
+ * THE CONVERTER PAGE HANDS OUT THOSE OTHER SPELLINGS, so the cost above is never paid by a pasted link.
+ * Until 2026-11-26 it wrote streamable.com/{id}, imgur.com/{id} and clips.twitch.tv/{slug} as /st/{id},
+ * /im/{id} and /tw/{slug} whatever the id was, so the day this guard landed, streamable.com/video and
+ * imgur.com/share converted to links that answered "Not found" (review of this change, route() offline).
+ * For an id that spells a word here it now writes /st/e/{id}, /im/{id}.gifv and /tw/embed?clip={slug}
+ * instead (public/index.html mbedfxPathWord, its copy of this set, held equal in
+ * test/landing-convert.test.mjs with a test that every link it hands out routes). Where no spelling
+ * reads the id, a Streamable id that is one of the lowercase AMBIGUOUS rows, the page refuses it.
  * The two mistakes are not the same size. A refused id is a "Not found" card the reader can see, and
  * the site's own spelling of that id still works. A word read as an id is a card for a post nobody
  * named, under the site the reader picked, with nothing to say it is wrong: the failure this file says

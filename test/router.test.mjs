@@ -1192,9 +1192,10 @@ test('ACCEPTANCE: the ambiguity table is COMPLETELY UNCHANGED by this task', () 
   // Instagram is the platform the depth rule is written ABOUT, so the instinct to touch this
   // table is strongest here and is wrong: /p/ and /reel/ are Instagram's OWN routes, which makes
   // segment-1 shadowing moot by construction (spec §Routing). Re-asserted in full so an
-  // accidental change cannot ride along — /gallery/{id} especially, which stays contested
-  // because @gallery is a live Instagram account. (Since 2026-11-26 it is contested between Reddit
-  // and Imgur only: no Instagram post lives at /gallery/{id}, see router.ts AMBIGUOUS.)
+  // accidental change cannot ride along — /gallery/{id} especially, which stays contested because
+  // Reddit and Imgur both mint it. (Until 2026-11-26 this said "because @gallery is a live Instagram
+  // account". That account is real, but no Instagram post lives at /gallery/{id}, so Instagram left the
+  // row that day; see router.ts AMBIGUOUS.)
   const unchanged = [
     ['/mrbeast', ['x', 'ig']],
     ['/hashtag/nfl', ['x', 'bs']],
@@ -1371,9 +1372,11 @@ test('THE DELIBERATE NON-CLAIMS: bare ids, galleries and albums are left exactly
    *
    *   "yt-dlp answers /gallery/{id} video-or-playlist unpredictably" dissolved with the container.
    *
-   * The ROUTER-level objection to /gallery/ did not dissolve, and is honoured: reddit.com/gallery
-   * and @gallery on Instagram are both real, so the row is still a chooser. Imgur is ADDED to it
-   * rather than taking it, which is additive — no existing link changes meaning.
+   * The ROUTER-level objection to /gallery/ did not dissolve, and is honoured: reddit.com/gallery/{id}
+   * is a real Reddit post, so the row is still a chooser. Imgur is ADDED to it rather than taking it,
+   * which is additive — no existing link changes meaning. (This also named @gallery on Instagram as a
+   * reason until 2026-11-26. The account is real, but no Instagram POST lives at /gallery/{id}, so
+   * Instagram left the row that day; see router.ts AMBIGUOUS.)
    */
   // ['rd', 'ig', 'im'] until 2026-11-26, when Instagram left the row: /ig/gallery/{id} answered notfound and
   // instagram.com/gallery/{id} names no post, so offering it was offering a dead end (router.ts AMBIGUOUS).
@@ -2383,7 +2386,9 @@ test('EVERY CHOICE A CHOOSER OFFERS FOR A POST ROUTES TO A POST, and the account
    * (a bare handle, /hashtag/{tag}, /settings…), where the chooser exists to send a human to the right
    * site and a forced link has no post to name (docs/API.md: "On a profile url every candidate answers
    * notfound"). The /t/{code} chooser worker.ts shows when TikTok does not claim a short code is not
-   * route()'s and is not covered here.
+   * route()'s and is not covered here. It breaks the rule, knowingly: its Threads choice, /th/t/{code},
+   * is notfound while Threads does mint /t/{code}. router.ts threads() has the measurement and the open
+   * owner decision.
    */
   const { words } = routerWords()
   const IDS = ['haucpf', '1x2voz0', 'YcAQlkx', 'abc123', 'jack', 'Rq7Lm3Zx9', '@jack', '2209468366484962']

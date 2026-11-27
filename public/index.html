@@ -920,6 +920,41 @@ var PIN_IT_REFUSAL = 'pin.it hides the pin behind a random code. Open it once an
 var PIN_TRAILING = ['sent', 'feedback', 'visual-search'];
 
 /**
+ * THE ROUTER'S WORDS, copies of router.ts's because this page cannot import it. test/landing-convert
+ * .test.mjs holds each equal to its source, and holds every link this converter hands out to routing.
+ *
+ * PATH_WORDS is router.ts PATH_WORDS: every word the router reads as part of a link. Since 2026-11-26 a
+ * site code in front of one of them, in any case, is never read as that site's id, so /st/video,
+ * /im/share and /tw/watch answer "Not found" (router.ts has why). The converter wrote exactly those for
+ * streamable.com/video, imgur.com/share and clips.twitch.tv/watch, and Imgur's 5-7 character ids make a
+ * real image with such an id likely (not measured). So for an id that spells one, it writes the site's other spelling
+ * instead, which reads the same id into the same post: /st/e/{id}, /im/{id}.gifv, /tw/embed?clip={slug}.
+ *
+ * RESERVED_WORDS is router.ts RESERVED, the rows of its "which site?" table, compared in exact case as
+ * reserved() compares them. Every arm that reads a Streamable id, and Imgur's album and gallery arms,
+ * refuse these, so no link can carry one and the converter says so rather than hand out a dead link.
+ * Imgur's .gifv arm and Twitch's ?clip= reader do not consult the table, which is why the respellings
+ * above cover the rest.
+ */
+var PATH_WORDS = ['_alt', '_api', '_card', '_media', '_oembed', '_prep', 'a', 'api', 'avatar', 'bookmarks', 'bs',
+  'c', 'clip', 'comment', 'comments', 'dm', 'e', 'embed', 'explore', 'fb', 'feedback', 'followers', 'following',
+  'gallery', 'groups', 'hashtag', 'http:', 'https:', 'i', 'ig', 'im', 'lists', 'live', 'lm', 'messages', 'mk',
+  'moments', 'ms', 'notes', 'notice', 'notifications', 'p', 'permalink', 'permalink.php', 'photo', 'photo.php',
+  'photos', 'pin', 'pin.it', 'pn', 'post', 'posts', 'profile', 'pt', 'r', 'rd', 'reel', 'reels', 's', 'search',
+  'sent', 'settings', 'share', 'shorts', 'st', 'status', 'statuses', 'stories', 'story.php', 't', 'th', 'tt',
+  'tv', 'tw', 'u', 'user', 'users', 'v', 'v1', 'video', 'videos', 'visual-search', 'w', 'watch', 'web', 'x', 'yt'];
+var RESERVED_WORDS = ['settings', 'search', 'explore', 'messages', 'notifications', 'hashtag', 'followers',
+  'following', 'i', 'lists', 'bookmarks', 'moments', 'gallery'];
+
+/** Would the router refuse this segment as an id under a site code? router.ts pathWord(), case-folded. */
+function mbedfxPathWord(s) { return PATH_WORDS.indexOf(String(s).toLowerCase()) >= 0; }
+/** Would every Streamable arm, and Imgur's album and gallery arms, refuse it? router.ts reserved(). */
+function mbedfxReservedWord(s) { return RESERVED_WORDS.indexOf(String(s)) >= 0; }
+function mbedfxReservedRefusal(word, what) {
+  return '"' + word + '" is a page name on several sites, so mbedfx never reads it as ' + what + '.';
+}
+
+/**
  * THE PIN ID OF A /pin/… PATH the router accepts, or null. `seg` is the path split on '/'.
  *
  * WHY: a "shared with you" link, pinterest.com/pin/{id}/sent/?invite_code=…&sender=…&sfo=1, came out as
@@ -1048,7 +1083,8 @@ function mbedfxConvert(input, host, gallery) {
 
   /**
    * `token` is set only where THIS CONVERTER put the router's escape token in front of the path itself
-   * (/dm/{id}, /st/{id}, /im/{id}, /im/gallery/{id}, /rd/gallery/{id}, /tw/{slug}), so the "Read as" picker can replace it
+   * (/dm/{id}, /st/{id}, /st/e/{id}, /im/{id}, /im/{id}.gifv, /im/gallery/{id}, /rd/gallery/{id}, /tw/{slug},
+   * /tw/embed?clip={slug}), so the "Read as" picker can replace it
    * instead of stacking a second one in front (mbedfxForcedPath). It is never read off the path: the
    * first segment of x.com/tw/status/20 is a handle that happens to spell a token, and only the
    * converter knows which of the two it wrote.
@@ -1250,26 +1286,55 @@ function mbedfxConvert(input, host, gallery) {
     if (platform === 'Instagram' && seg[0] === 'stories') {
       return no("Instagram stories aren't routed. They expire, so there's no stable post to draw.");
     }
+    /*
+     * instagram.com/gallery/{id} NAMES NO POST. Instagram's post links are /p/, /reel/, /reels/ and /tv/
+     * (router.ts instagram()), and a two-segment /{user}/{x} is at most a profile tab. With only the
+     * host swapped this came out as /gallery/{id} labelled Instagram, which the worker reads as the
+     * Reddit-or-Imgur chooser: Instagram left that row on 2026-11-26 because its choice could only
+     * dead-end (router.ts AMBIGUOUS). Refused like a story, and "Read as" still offers Reddit and Imgur
+     * on the pasted path.
+     */
+    if (platform === 'Instagram' && seg[0] === 'gallery' && seg.length === 2) {
+      return no("No Instagram post has a link like instagram.com/gallery/…, so there's no post here to draw.");
+    }
     if (platform === 'Twitch') {
-      if (seg[0] === 'videos') return no("Twitch VODs aren't supported. Clips only.");
-      if (seg[0] === 'embed' && u.searchParams.get('clip')) {
-        return out('/embed?clip=' + u.searchParams.get('clip'), 'Twitch', '', 'tw');
-      }
+      // VODs live at twitch.tv/videos/{id}. clips.twitch.tv serves clips only, so a "videos" there is a
+      // clip's slug, and it goes the way of every other slug below.
+      if (seg[0] === 'videos' && bare !== 'clips.twitch.tv') return no("Twitch VODs aren't supported. Clips only.");
       /*
-       * THE PLAYER WITH NO CLIP IN IT. clips.twitch.tv/embed used to come out as /tw/embed below, the
-       * forced reading of a clip whose slug is "embed", though that segment is the player's own path and
-       * names no clip. The worker stopped reading it that way on 2026-11-26 (router.ts twitch()) and
-       * answers notfound, so the link is refused here instead of being handed out as ready to paste.
-       * clips.twitch.tv only: on twitch.tv a single segment is read as a channel name just below, and
-       * "embed" is a legal login there, so that paste keeps the channel refusal it always had.
+       * "embed" IS THE PLAYER, IN ANY CASE, AND NEVER A CLIP. The worker refuses a clip of that name at
+       * every depth and in every case since 2026-11-26 (router.ts twSlug() and twitchEmbed()), so each
+       * shape that would carry it as the clip is refused here rather than handed out as ready to paste:
+       * the bare player (clips.twitch.tv/embed, /Embed), the player asked for clip "embed"
+       * (?clip=embed, which came out as /embed?clip=embed, the ['x','ig'] chooser), and a clip page
+       * whose slug is "embed" (twitch.tv/{channel}/clip/embed, which came out as itself and answered
+       * "Not found"). The player's path is folded too, so clips.twitch.tv/Embed?clip={slug} reads the
+       * clip it names. clips.twitch.tv only for the bare player: on twitch.tv a single segment is read as
+       * a channel name just below, and "embed" is a legal login there, so that paste keeps the channel
+       * refusal it always had.
        */
-      if (bare === 'clips.twitch.tv' && seg.length === 1 && seg[0] === 'embed') return no("That's Twitch's clip player, and the link doesn't say which clip.");
+      var twPlayer = function (s) { return String(s).toLowerCase() === 'embed'; };
+      var qclip = u.searchParams.get('clip');
+      if (twPlayer(seg[0]) && qclip) {
+        if (twPlayer(qclip)) return no("That's Twitch's clip player, and the link doesn't say which clip.");
+        return out('/embed?clip=' + qclip, 'Twitch', '', 'tw');
+      }
+      if (bare === 'clips.twitch.tv' && seg.length === 1 && twPlayer(seg[0])) return no("That's Twitch's clip player, and the link doesn't say which clip.");
+      if (seg.length === 3 && seg[1] === 'clip') {
+        if (twPlayer(seg[2])) return no('No Twitch clip is called "embed". That\'s the address of Twitch\'s clip player.');
+        // /{channel}/clip/{slug} reads every slug but a RESERVED_WORDS row (twSlug() consults reserved()),
+        // and the ?clip= reader reads those too, so a slug that is one goes that way instead.
+        if (mbedfxReservedWord(seg[2])) return out('/tw/embed?clip=' + seg[2], 'Twitch', '', 'tw', 'tw');
+      }
       if (seg.length === 1) {
         // A single segment means opposite things on the two hosts: on clips.twitch.tv it IS the clip
         // slug; on twitch.tv it is almost always a channel name, which names no post.
         // The /tw/ prefix forces the Twitch reading, so older and shorter slugs work too rather than
-        // having to pass the worker's shape recogniser on their own.
-        if (bare === 'clips.twitch.tv') return out('/tw/' + seg[0], 'Twitch', '', 'tw', 'tw');
+        // having to pass the worker's shape recogniser on their own. A slug that spells a PATH_WORDS
+        // word is the one exception: /tw/{word} is "Not found" (router.ts PATH_WORDS), and
+        // /tw/embed?clip={word} is the same clip in the player's own spelling, which reads any slug but
+        // "embed". No measured slug is that short (router.ts TW_SLUG), so this is for the hand-typed ones.
+        if (bare === 'clips.twitch.tv') return out((mbedfxPathWord(seg[0]) ? '/tw/embed?clip=' : '/tw/') + seg[0], 'Twitch', '', 'tw', 'tw');
         var head = seg[0].slice(0, 16);
         var looksLikeClip = seg[0].length >= 16 && /^[A-Z]/.test(seg[0]) &&
           (head.match(/[A-Z]/g) || []).length >= 4;
@@ -1278,18 +1343,33 @@ function mbedfxConvert(input, host, gallery) {
       }
     }
     if (platform === 'Imgur') {
-      // An album is its own shape; a gallery needs the prefix because /gallery/ is contested with
-      // Reddit and Instagram, and neither of those links should be quietly stolen.
+      // An album is its own shape; a gallery needs the prefix because Reddit mints /gallery/{id} too,
+      // and a Reddit gallery link should not be quietly stolen.
+      if ((seg[0] === 'a' || seg[0] === 'gallery') && seg.length === 2) {
+        // The id is what follows the slug's last '-', router.ts imId()'s seam, and imId() refuses a
+        // RESERVED_WORDS row under every spelling of an album or a gallery.
+        var imTail = seg[1].slice(seg[1].lastIndexOf('-') + 1);
+        if (mbedfxReservedWord(imTail)) return no(mbedfxReservedRefusal(imTail, seg[0] === 'a' ? 'an Imgur album' : 'an Imgur gallery'));
+      }
       if (seg[0] === 'a' && seg.length === 2) return out('/a/' + seg[1], 'Imgur', '', 'im');
       if (seg[0] === 'gallery' && seg.length === 2) return out('/im/gallery/' + seg[1], 'Imgur', '', 'im', 'im');
-      // A bare imgur.com/{id} is undecidable once the host is gone, so force it.
+      // A bare imgur.com/{id} is undecidable once the host is gone, so force it. An id that spells a
+      // PATH_WORDS word takes .gifv: /im/{id} is "Not found" for it, and /im/{id}.gifv is the same ref
+      // and the same canonical (router.ts imgur()'s .gifv arm, which consults neither list).
       if (h === 'imgur.com' && seg.length === 1 && !/\.[a-z0-9]+$/i.test(seg[0])) {
-        return out('/im/' + seg[0], 'Imgur', '', 'im', 'im');
+        return out('/im/' + seg[0] + (mbedfxPathWord(seg[0]) ? '.gifv' : ''), 'Imgur', '', 'im', 'im');
       }
     }
-    // Bare streamable.com/{id} is likewise undecidable without a forcing prefix.
-    if (platform === 'Streamable' && seg.length === 1 && seg[0] !== 'e' && seg[0] !== 's') {
-      return out('/st/' + seg[0], 'Streamable', '', 'st', 'st');
+    if (platform === 'Streamable') {
+      // The id of streamable.com/{id}, /e/{id} or /s/{id}. Every Streamable arm refuses a RESERVED_WORDS
+      // row (ytdlpId()), so no link reads one and it is refused here. streamable.com/followers came out
+      // as /st/followers, which falls through to the ['x','ig'] followers chooser.
+      var stId = seg.length === 1 && seg[0] !== 'e' && seg[0] !== 's' ? seg[0]
+        : seg.length === 2 && (seg[0] === 'e' || seg[0] === 's') ? seg[1] : null;
+      if (stId !== null && mbedfxReservedWord(stId)) return no(mbedfxReservedRefusal(stId, 'a Streamable video'));
+      // Bare streamable.com/{id} is likewise undecidable without a forcing prefix. An id that spells a
+      // PATH_WORDS word goes under /st/e/, Streamable's own embed path, because /st/{word} is "Not found".
+      if (seg.length === 1 && stId !== null) return out((mbedfxPathWord(stId) ? '/st/e/' : '/st/') + stId, 'Streamable', '', 'st', 'st');
     }
     if (platform === 'Dailymotion' && seg.length === 1) return out('/dm/' + seg[0], 'Dailymotion', '', 'dm', 'dm');
     // A pin comes out as the bare /pin/{id}, without `sent` or a slug. See mbedfxPinId.

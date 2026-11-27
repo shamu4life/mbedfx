@@ -4900,6 +4900,13 @@ async function withTranslated(
  * code that TikTok does not claim is genuinely ambiguous and the honest answer is to offer both. The
  * render arm has served this chooser since the route was written; describeTarget now returns the same
  * pair, and it is a constant so the two cannot drift into offering different links for one url.
+ *
+ * THE THREADS CHOICE DEAD-ENDS AS A FORCED LINK, and is kept anyway (checked 2026-11-26). /th/t/{code},
+ * the link the converter's "which site?" buttons and the API build from 'th', answers notfound: the
+ * router has no arm for it and nothing here asks Threads about a code. 'th' is not a mistake, though:
+ * Threads does mint /t/{code}. router.ts threads() has the measurement (residential, not a Worker) and
+ * the cheap fix it suggests, which is the owner's call. Dropping 'th' instead would turn a link that
+ * may well be a Threads post into a TikTok-only answer.
  */
 const SHORTLINK_CANDIDATES: Platform[] = ['tt', 'th']
 
