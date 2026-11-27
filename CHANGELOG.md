@@ -82,8 +82,10 @@ mbedfx.app's Reddit app and account, and it names no account at all. Nobody else
   fewer. Other apps see no change. The converter's preview draws the same grid. On 2026-11-26 posts were pasted
   into the Discord mobile app through a temporary test route, `/_wait/e`. Wherever a page had a
   component embed, Discord drew it instead of the usual card, and on a video post the card lost its
-  poster frame and its date. The route never reached a release and is gone. Nobody has checked
-  Discord's desktop app or a gallery of five to eight pictures yet.
+  poster frame and its date. The route never reached a release and is gone. After the deploy that
+  evening, a 10-picture Threads post and a 10-picture Reddit gallery came out as intended in both the
+  phone and desktop apps: nine pictures in a 3x3 grid, the footer's date, no logo and no button. A
+  gallery of five to eight pictures hasn't been checked yet.
 
 ### Changed
 
