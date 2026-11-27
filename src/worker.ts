@@ -6747,8 +6747,9 @@ async function serve(req: Request, env: Env, ctx: ExecutionContext, d: Deps): Pr
          * AN AMBIGUOUS PATH HANDS BACK ITS CANDIDATES, so the page can offer a choice instead of a
          * dead end. This is the router's own answer — the same list renderChooser shows a human —
          * rather than anything the page guesses, which is the point: route() is the only thing that
-         * knows /gallery/{id} is contested between Reddit and Imgur. Every choice it offers there routes
-         * to a post since 2026-11-26 (test/router.test.mjs holds that as a rule).
+         * knows /gallery/{id} is contested between Reddit and Imgur. Since 2026-11-26 each choice it
+         * offers there routes to a post for an id that site can hold (test/router.test.mjs holds that as a
+         * rule); /im/gallery/{id} with an id Imgur cannot mint is still notfound.
          *
          * The forced url is built here too, because the ESCAPE token that disambiguates each one is
          * router vocabulary and the page has no business re-spelling it.

@@ -167,7 +167,7 @@ const AMBIGUOUS: Record<string, readonly Platform[]> = {
   // name nothing (the decoy twitchClipSlug's docstring records), so a request could not settle it.
   // Reddit's door was dead too until the same day; reddit() now has the forced /rd/gallery/{id} arm.
   // test/router.test.mjs holds the rule this came from: every choice a chooser offers for a post routes
-  // to one.
+  // to one, for an id that site can hold.
   gallery: ['rd', 'im'],
 }
 const RESERVED = new Set(Object.keys(AMBIGUOUS))
