@@ -68,18 +68,24 @@ test('AN ALBUM URL ROUTES, and carries the kind that picks its API endpoint', ()
   assert.deepEqual(parseRefKey(refKey(ref)), ref)
 })
 
-test('/gallery/ IS OFFERED, NOT TAKEN — Reddit and Instagram galleries are real posts', () => {
+test('/gallery/ IS OFFERED, NOT TAKEN — Reddit galleries are real posts', () => {
   /**
    * The .gifv arm could claim the bare-username row because that row is a DEAD END: no profile route
    * exists, so the chooser could only ever hand a human two links. /gallery/{id} is not that —
    * reddit.com/gallery/{id} is a live permalink — so Imgur joins the chooser instead of stealing it.
    * Before this, an Imgur gallery link reached a chooser that could not resolve it at all.
+   *
+   * REWRITTEN 2026-11-26. This pinned ['rd', 'ig', 'im'] and was titled "Reddit and Instagram
+   * galleries are real posts". Instagram has no post at /gallery/{id} and its choice could only answer
+   * notfound, so it left the row (router.ts AMBIGUOUS). The Reddit half is now asserted the way the
+   * Imgur half always was: naming the platform resolves it.
    */
   const got = r('/gallery/YcAQlkx')
   assert.equal(got.kind, 'ambiguous')
-  assert.deepEqual(got.candidates, ['rd', 'ig', 'im'])
+  assert.deepEqual(got.candidates, ['rd', 'im'])
   // And naming the platform resolves it.
   assert.deepEqual(r('/im/gallery/YcAQlkx').ref, { p: 'im', kind: 'gallery', id: 'YcAQlkx' })
+  assert.deepEqual(r('/rd/gallery/YcAQlkx').ref, { p: 'rd', sub: '', id: 'YcAQlkx' })
 })
 
 test('A BARE IMGUR ID IS STILL FORCED-ONLY, stills included', () => {

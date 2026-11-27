@@ -782,10 +782,11 @@ export async function liveFetchPost(
       return normalizeTwitter(got, ref)
     }
     case 'th': {
-      // Threads gives a logged-out crawler no way to tell private / age / deleted apart (all render
-      // the same no-og:type shell), so there is no gate to report — every failure is a plain
-      // fetch_fail and renders the generic "couldn't load" card, which is the honest answer. The
-      // only distinct counter is assert_fail: the page did not arrive (both UAs missed the marker).
+      // Threads gives a logged-out crawler no way to tell private / age / deleted apart (all rendered
+      // the same no-og:type shell on 2026-07-21; a deleted post got the login wall on 2026-11-27), so
+      // there is no gate to report — every failure is a plain fetch_fail and renders the generic
+      // "couldn't load" card, which is the honest answer. The only distinct counter is assert_fail:
+      // no post page arrived (neither UA's page passed threadsHasPost).
       const got = await fetchThreads(ref)
       if (!got.ok) {
         count(env, 'th', got.reason, client)
@@ -4900,8 +4901,20 @@ async function withTranslated(
  * code that TikTok does not claim is genuinely ambiguous and the honest answer is to offer both. The
  * render arm has served this chooser since the route was written; describeTarget now returns the same
  * pair, and it is a constant so the two cannot drift into offering different links for one url.
+ *
+ * EACH CHOICE ROUTES TO A POST since 2026-11-26. /tt/t/{code} is the TikTok short link again, and
+ * /th/t/{code}, the link the converter's "which site?" buttons and the API build from 'th', is the
+ * Threads post with that shortcode (router.ts threads()). Until then the Threads choice answered
+ * notfound, because the router had no arm for it and nothing here asks Threads about a code.
+ *
+ * NO THREADS RESOLVER WAS NEEDED, which is what made the fix cheap. A Threads /t/ code is the post's own
+ * shortcode: five live codes all 301'd from threads.com/t/{code} to /@{author}/post/{the same code}
+ * (dev host, not a Worker, 2026-11-27 UTC), and from production the API drew /@i/post/{code} under the
+ * real author for two of them. router.ts threads() has every code and the deleted-post case.
+ *
+ * EXPORTED for test/router.test.mjs, whose chooser rule holds every candidate here to routing.
  */
-const SHORTLINK_CANDIDATES: Platform[] = ['tt', 'th']
+export const SHORTLINK_CANDIDATES: Platform[] = ['tt', 'th']
 
 /**
  * WHAT A SHORTLINK RESOLUTION CANNOT SAY THROUGH A `Route`, carried out of unwrapToPost instead.
@@ -6747,7 +6760,9 @@ async function serve(req: Request, env: Env, ctx: ExecutionContext, d: Deps): Pr
          * AN AMBIGUOUS PATH HANDS BACK ITS CANDIDATES, so the page can offer a choice instead of a
          * dead end. This is the router's own answer — the same list renderChooser shows a human —
          * rather than anything the page guesses, which is the point: route() is the only thing that
-         * knows /gallery/{id} is contested between Reddit, Instagram and Imgur.
+         * knows /gallery/{id} is contested between Reddit and Imgur. Since 2026-11-26 each choice it
+         * offers there routes to a post for an id that site can hold (test/router.test.mjs holds that as a
+         * rule); /im/gallery/{id} with an id Imgur cannot mint is still notfound.
          *
          * The forced url is built here too, because the ESCAPE token that disambiguates each one is
          * router vocabulary and the page has no business re-spelling it.
@@ -7142,7 +7157,7 @@ async function serve(req: Request, env: Env, ctx: ExecutionContext, d: Deps): Pr
        * for a missing or unreadable `url`, 405 for a write verb — and never about the post.
        *
        * THE HOST IN `url` IS IGNORED, and the tie it could break is left unbroken. `/gallery/abc` is
-       * Reddit, Instagram or Imgur, and this endpoint is handed a full url that says which — so it
+       * Reddit or Imgur, and this endpoint is handed a full url that says which — so it
        * looks like free disambiguation. It is not free: it would make the answer depend on a string
        * the caller controls, on a service where a hostname is a thing we FETCH (the fediverse arm
        * turns one into a request, and refkey.ts is explicit that Cloudflare is not relied on to block

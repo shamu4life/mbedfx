@@ -258,16 +258,19 @@ test('THE PAGE DEBOUNCES AND DOES NOT REPEAT ITSELF', () => {
 test('AN AMBIGUOUS PATH HANDS BACK THE ROUTER\'S OWN CANDIDATES', () => {
   /**
    * The picker on the fixer page is only honest if its options come from route() rather than from
-   * anything the page guesses — only the router knows /gallery/{id} is contested between Reddit,
-   * Instagram and Imgur, and that Imgur joined that row when albums shipped.
+   * anything the page guesses — only the router knows /gallery/{id} is contested between Reddit and
+   * Imgur, that Imgur joined that row when albums shipped, and that Instagram left it on 2026-11-26.
+   *
+   * REWRITTEN 2026-11-26: this pinned ['rd', 'ig', 'im'] and the names with Instagram. Instagram's
+   * choice, /ig/gallery/{id}, could only answer notfound, so the router no longer offers it.
    */
   return (async () => {
     const { ctx: c } = ctx()
     const j = await (await handle(prep('/gallery/YcAQlkx'), envWith(fakeResolver().binding), c, deps())).json()
     assert.equal(j.ok, false)
     assert.equal(j.reason, 'ambiguous')
-    assert.deepEqual(j.candidates.map(x => x.platform), ['rd', 'ig', 'im'])
-    assert.deepEqual(j.candidates.map(x => x.name), ['Reddit', 'Instagram', 'Imgur'],
+    assert.deepEqual(j.candidates.map(x => x.platform), ['rd', 'im'])
+    assert.deepEqual(j.candidates.map(x => x.name), ['Reddit', 'Imgur'],
       'named for a human, not by code')
     for (const cand of j.candidates) {
       assert.equal(cand.url, `https://mbedfx.app/${cand.platform}/gallery/YcAQlkx`,

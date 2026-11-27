@@ -921,6 +921,86 @@ var PIN_IT_REFUSAL = 'pin.it hides the pin behind a random code. Open it once an
 var PIN_TRAILING = ['sent', 'feedback', 'visual-search'];
 
 /**
+ * THE ROUTER'S WORDS, copies of router.ts's because this page cannot import it. test/landing-convert
+ * .test.mjs holds each equal to its source, and holds every link this converter hands out to routing.
+ *
+ * PATH_WORDS is router.ts PATH_WORDS: every word the router reads as part of a link. Since 2026-11-26 a
+ * site code in front of one of them, in any case, is never read as that site's id, so /st/video,
+ * /im/share and /tw/watch answer "Not found" (router.ts has why). The converter wrote exactly those for
+ * streamable.com/video, imgur.com/share and clips.twitch.tv/watch, and Imgur's 5-7 character ids make a
+ * real image with such an id likely (not measured). So for an id that spells one, it writes the site's other spelling
+ * instead, which reads the same id into the same post: /st/e/{id}, /im/{id}.gifv, /tw/embed?clip={slug}.
+ *
+ * RESERVED_WORDS is router.ts RESERVED, the rows of its "which site?" table, compared in exact case as
+ * reserved() compares them. Every arm that reads a Streamable id, and Imgur's album and gallery arms,
+ * refuse these, so no link can carry one and the converter says so rather than hand out a dead link.
+ * Imgur's .gifv arm and Twitch's ?clip= reader do not consult the table, which is why the respellings
+ * above cover the rest.
+ */
+var PATH_WORDS = ['_alt', '_api', '_card', '_media', '_oembed', '_prep', 'a', 'api', 'avatar', 'bookmarks', 'bs',
+  'c', 'clip', 'comment', 'comments', 'dm', 'e', 'embed', 'explore', 'fb', 'feedback', 'followers', 'following',
+  'gallery', 'groups', 'hashtag', 'http:', 'https:', 'i', 'ig', 'im', 'lists', 'live', 'lm', 'messages', 'mk',
+  'moments', 'ms', 'notes', 'notice', 'notifications', 'p', 'permalink', 'permalink.php', 'photo', 'photo.php',
+  'photos', 'pin', 'pin.it', 'pn', 'post', 'posts', 'profile', 'pt', 'r', 'rd', 'reel', 'reels', 's', 'search',
+  'sent', 'settings', 'share', 'shorts', 'st', 'status', 'statuses', 'stories', 'story.php', 't', 'th', 'tt',
+  'tv', 'tw', 'u', 'user', 'users', 'v', 'v1', 'video', 'videos', 'visual-search', 'w', 'watch', 'web', 'x', 'yt'];
+var RESERVED_WORDS = ['settings', 'search', 'explore', 'messages', 'notifications', 'hashtag', 'followers',
+  'following', 'i', 'lists', 'bookmarks', 'moments', 'gallery'];
+
+/**
+ * THE ROUTER'S SITE CODES AND ID SHAPES, copies too, held equal to router.ts ESCAPE and refkey.ts by
+ * test/landing-convert.test.mjs. The already-ours branch of mbedfxConvert reads them to tell a pasted
+ * mbedfx link /st/{id}, /im/{id} or /tw/{slug} whose id spells a PATH_WORDS word (which the router read
+ * at 97bebca and refuses now) from a /{code}/{word} that never named a post at all. TH_CODE is the
+ * Threads shortcode the forced /th/t/{code} arm accepts.
+ */
+var SITE_CODES = ['x', 'tt', 'ig', 'th', 'rd', 'bs', 'yt', 'fb', 'dm', 'st', 'im', 'tw', 'lm', 'ms', 'mk', 'pt', 'pn'];
+var ST_ID = /^[A-Za-z0-9]{2,16}$/;
+var IM_ID = /^[A-Za-z0-9]{5,7}$/;
+var TWITCH_SLUG = /^[A-Za-z0-9][A-Za-z0-9_-]{2,99}$/;
+var TH_CODE = /^[A-Za-z0-9_-]{1,64}$/;
+
+/**
+ * THE QUERY ARMS A FORCED /{code}/{word} HAS, copied from router.ts: youtubeQuery() under /yt/,
+ * facebookQuery() under /fb/ and twitchEmbed() under /tw/, each with the parameters it reads an id
+ * from. A word is compared in exact case, as those three compare it. test/landing-convert.test.mjs
+ * holds this table to route() row by row, so a new arm or a dropped one fails there.
+ *
+ * WHY IT EXISTS: the already-ours branch skipped its /{code}/{word} handling whenever ANY id parameter
+ * was kept, and the kept list is every site's (v, fbid, clip, story_fbid with id, multi_permalinks).
+ * So /st/reel?v=abc with stills on came out /st/reel/p?v=abc, the Instagram post "p", /tw/status?clip=Foo
+ * an X post, /rd/gallery?v=abc the Reddit post "p", and an unmoded /st/{word}?v=… that named a
+ * Streamable video at 97bebca came out "Not found". A kept parameter names a post only on the arm that
+ * reads it. (/fb/groups/{gid}?multi_permalinks= is three segments and never reaches this table.)
+ */
+var QUERY_ARMS = {
+  yt: { watch: ['v'] },
+  fb: { watch: ['v'], photo: ['fbid'], 'photo.php': ['fbid'], 'story.php': ['story_fbid', 'id'], 'permalink.php': ['story_fbid', 'id'] },
+  tw: { embed: ['clip'] }
+};
+/**
+ * Does /{code}/{word} have a query arm, and does `keep` carry every parameter it reads? One value is
+ * checked too, the one the router refuses beyond a shape: twitchEmbed() reads no clip called "embed",
+ * in any case. 97bebca read /tw/embed?clip=embed as that clip, so with the arm exempting it the link
+ * came back naming nothing; now it reaches the block's "embed" refusal, as clips.twitch.tv/embed?clip=embed
+ * pasted from Twitch is refused below.
+ */
+function mbedfxQueryArm(code, word, keep) {
+  var arms = Object.prototype.hasOwnProperty.call(QUERY_ARMS, code) ? QUERY_ARMS[code] : null;
+  var keys = arms && Object.prototype.hasOwnProperty.call(arms, word) ? arms[word] : null;
+  if (code === 'tw' && String(keep.get('clip')).toLowerCase() === 'embed') return false;
+  return !!keys && keys.every(function (k) { return keep.has(k); });
+}
+
+/** Would the router refuse this segment as an id under a site code? router.ts pathWord(), case-folded. */
+function mbedfxPathWord(s) { return PATH_WORDS.indexOf(String(s).toLowerCase()) >= 0; }
+/** Would every Streamable arm, and Imgur's album and gallery arms, refuse it? router.ts reserved(). */
+function mbedfxReservedWord(s) { return RESERVED_WORDS.indexOf(String(s)) >= 0; }
+function mbedfxReservedRefusal(word, what) {
+  return '"' + word + '" is a page name on several sites, so mbedfx never reads it as ' + what + '.';
+}
+
+/**
  * THE PIN ID OF A /pin/… PATH the router accepts, or null. `seg` is the path split on '/'.
  *
  * WHY: a "shared with you" link, pinterest.com/pin/{id}/sent/?invite_code=…&sender=…&sfo=1, came out as
@@ -1049,7 +1129,8 @@ function mbedfxConvert(input, host, gallery) {
 
   /**
    * `token` is set only where THIS CONVERTER put the router's escape token in front of the path itself
-   * (/dm/{id}, /st/{id}, /im/{id}, /im/gallery/{id}, /tw/{slug}), so the "Read as" picker can replace it
+   * (/dm/{id}, /st/{id}, /st/e/{id}, /im/{id}, /im/{id}.gifv, /im/gallery/{id}, /rd/gallery/{id}, /tw/{slug},
+   * /tw/embed?clip={slug}), so the "Read as" picker can replace it
    * instead of stacking a second one in front (mbedfxForcedPath). It is never read off the path: the
    * first segment of x.com/tw/status/20 is a handle that happens to spell a token, and only the
    * converter knows which of the two it wrote.
@@ -1121,8 +1202,65 @@ function mbedfxConvert(input, host, gallery) {
     }
     if (/^\d{5,}$/.test(u.searchParams.get('multi_permalinks') || '')) keep.set('multi_permalinks', u.searchParams.get('multi_permalinks'));
     var kept = keep.toString();
-    return out(stripped === '/' ? '/' : stripped + (kept ? '?' + kept : ''), null,
-      'Already an mbedfx link. Re-pointed at the selected domain.');
+    var REPOINTED = 'Already an mbedfx link. Re-pointed at the selected domain.';
+    /**
+     * A SITE CODE IN FRONT OF ONE PATH WORD, /{code}/{word} with no id in the query. Since 2026-11-26 the
+     * router never reads such a word as the code's id (router.ts PATH_WORDS), so a pasted link of that
+     * shape is one of two things, and each needs handling here (second review of 2026-11-26, on
+     * mbedfx.app and the guest hosts alike):
+     *
+     * AN ID THE ROUTER USED TO READ. /st/{id}, /im/{id} and /tw/{slug} were Streamable, Imgur and Twitch
+     * posts at 97bebca whenever the id fit the site's shape and was not a lowercase RESERVED_WORDS row,
+     * and this page handed out exactly those for streamable.com/video, imgur.com/share and
+     * clips.twitch.tv/watch. Passed through as pasted, each now answered "Not found". They get the
+     * spelling the direct branch below writes for the same id, which reads it into the same post:
+     * /st/e/{id}, /im/{id}.gifv, /tw/embed?clip={slug}. "embed" in any case is refused: the router
+     * reads no clip of that name, so no spelling would. The mode goes on after the respelling, where
+     * the router peels it, so it stays on the pasted site. Passed through, /st/reel with stills on was
+     * /st/reel/p, and with /st/reel refused the router read it as the Instagram post "p" by @st.
+     *
+     * A STREAMABLE OR IMGUR ID THAT IS A RESERVED_WORDS ROW is refused, as the same id pasted from the
+     * site is below. 97bebca never read it (ytdlpId() consults reserved()), so the link named no post:
+     * /st/followers was the X-or-Instagram followers page for an account called "st", and /im/gallery
+     * "Not found". Twitch's are passed through instead: the /{channel}/clip/ arm refuses them, so
+     * /tw/settings named no clip either, and reading it as one now would change what the link names.
+     *
+     * EVERY OTHER /{code}/{word} NAMES NO POST, and is passed through without the gallery mode, for the
+     * reason the bare root gets none (withGallery). The mode is a /p or /v segment, and on a path that
+     * names nothing the router reads it as an id: /x/status + stills was /x/status/p, the X post "p",
+     * /x/reel/p the Instagram post "p", /tt/t/p a TikTok short code "p", and /rd/gallery/p, since that
+     * arm landed, the Reddit post "p". Without it each answers what the pasted link answered.
+     *
+     * NOT WHEN THE QUERY IS THIS CODE'S OWN ARM (QUERY_ARMS): /tw/embed?clip=…, /yt/watch?v=… and
+     * /fb/photo?fbid=… are posts, the query is where their id lives, and they keep it and the mode. Any
+     * other kept parameter is one the router does not read under this code and word, so the link is
+     * handled as if it had none. Until 2026-11-27 any kept parameter at all skipped this, which is how
+     * /st/reel?v=abc with stills on became /st/reel/p?v=abc, the Instagram post "p", and how an unmoded
+     * /st/{word}?v=…, /im/{word}?v=… or /tw/{word}?clip=… that named its site's post at 97bebca came out
+     * "Not found". The respelled link drops the parameter, since its spelling reads none; the link
+     * passed through as pasted keeps it, because the router ignores it there.
+     */
+    var cw = stripped.replace(/^\/+|\/+$/g, '').split('/');
+    if (cw.length === 2 && SITE_CODES.indexOf(cw[0]) >= 0 && mbedfxPathWord(cw[1]) && !mbedfxQueryArm(cw[0], cw[1], keep)) {
+      var w = cw[1];
+      if (cw[0] === 'st' && ST_ID.test(w)) {
+        if (mbedfxReservedWord(w)) return no(mbedfxReservedRefusal(w, 'a Streamable video'));
+        return out('/st/e/' + w, null, REPOINTED);
+      }
+      if (cw[0] === 'im' && IM_ID.test(w)) {
+        if (mbedfxReservedWord(w)) return no(mbedfxReservedRefusal(w, 'an Imgur image'));
+        return out('/im/' + w + '.gifv', null, REPOINTED);
+      }
+      if (cw[0] === 'tw' && w.toLowerCase() === 'embed') {
+        return no('No Twitch clip is called "embed". That\'s the address of Twitch\'s clip player.');
+      }
+      if (cw[0] === 'tw' && TWITCH_SLUG.test(w) && !mbedfxReservedWord(w)) {
+        return out('/tw/embed?clip=' + w, null, REPOINTED);
+      }
+      var asPasted = '/' + cw.join('/') + (kept ? '?' + kept : '');
+      return { ok: true, url: mbedfxScheme(host) + host + asPasted, platform: null, note: REPOINTED, code: null, path: asPasted, token: null };
+    }
+    return out(stripped === '/' ? '/' : stripped + (kept ? '?' + kept : ''), null, REPOINTED);
   }
 
   // Strip the sub-domains that are pure presentation. i. and clips. are MEANINGFUL and stay.
@@ -1240,29 +1378,78 @@ function mbedfxConvert(input, host, gallery) {
         return out('/groups/' + ghome[1] + '/posts/' + gpid + '/' + qsuf, 'Facebook', '', 'fb');
       }
     }
+    /*
+     * A REDDIT GALLERY KEEPS ITS SITE. reddit.com/gallery/{id} names post {id}, but with only the host
+     * swapped it came out as /gallery/{id}, which the worker reads as the Reddit-or-Imgur chooser, so a
+     * link whose host already said Reddit landed on a "which site?" page. /rd/gallery/{id} is the forced
+     * spelling the worker routes straight to that post (router.ts reddit(), since 2026-11-26), the twin
+     * of Imgur's /im/gallery/{id} below, and its token lets "Read as Imgur" give /im/gallery/{id}.
+     */
+    if (platform === 'Reddit' && seg[0] === 'gallery' && seg.length === 2) return out('/rd/gallery/' + seg[1], 'Reddit', '', 'rd', 'rd');
+    /*
+     * A THREADS SHORT LINK IS THE THREADS POST. threads.com/t/{code} (and threads.net/t/{code}) came out
+     * as /t/{code}, which the worker hands to TikTok first, and for a code TikTok does not claim, the
+     * "which site?" page, for a link whose host had already said Threads. A Threads /t/ code is the post's
+     * own shortcode (router.ts threads() has the redirects measured on 2026-11-26), so it now comes out
+     * as /th/t/{code}, which the worker routes straight to that post. Its token lets "Read as TikTok" give
+     * /tt/t/{code}, the short link again. A code outside the router's TH_CODE, or one that spells a
+     * PATH_WORDS word, is not one the router reads there, so it keeps the old /t/{code}.
+     */
+    if (platform === 'Threads' && seg.length === 2 && seg[0] === 't' && TH_CODE.test(seg[1]) && !mbedfxPathWord(seg[1])) {
+      return out('/th/t/' + seg[1], 'Threads', '', 'th', 'th');
+    }
     if (platform === 'Instagram' && seg[0] === 'stories') {
       return no("Instagram stories aren't routed. They expire, so there's no stable post to draw.");
     }
+    /*
+     * instagram.com/gallery/{id} NAMES NO POST. Instagram's post links are /p/, /reel/, /reels/ and /tv/
+     * (router.ts instagram()), and a two-segment /{user}/{x} is at most a profile tab. With only the
+     * host swapped this came out as /gallery/{id} labelled Instagram, which the worker reads as the
+     * Reddit-or-Imgur chooser: Instagram left that row on 2026-11-26 because its choice could only
+     * dead-end (router.ts AMBIGUOUS). Refused like a story, and "Read as" still offers Reddit and Imgur
+     * on the pasted path.
+     */
+    if (platform === 'Instagram' && seg[0] === 'gallery' && seg.length === 2) {
+      return no("No Instagram post has a link like instagram.com/gallery/…, so there's no post here to draw.");
+    }
     if (platform === 'Twitch') {
-      if (seg[0] === 'videos') return no("Twitch VODs aren't supported. Clips only.");
-      if (seg[0] === 'embed' && u.searchParams.get('clip')) {
-        return out('/embed?clip=' + u.searchParams.get('clip'), 'Twitch', '', 'tw');
-      }
+      // VODs live at twitch.tv/videos/{id}. clips.twitch.tv serves clips only, so a "videos" there is a
+      // clip's slug, and it goes the way of every other slug below.
+      if (seg[0] === 'videos' && bare !== 'clips.twitch.tv') return no("Twitch VODs aren't supported. Clips only.");
       /*
-       * THE PLAYER WITH NO CLIP IN IT. clips.twitch.tv/embed used to come out as /tw/embed below, the
-       * forced reading of a clip whose slug is "embed", though that segment is the player's own path and
-       * names no clip. The worker stopped reading it that way on 2026-11-26 (router.ts twitch()) and
-       * answers notfound, so the link is refused here instead of being handed out as ready to paste.
-       * clips.twitch.tv only: on twitch.tv a single segment is read as a channel name just below, and
-       * "embed" is a legal login there, so that paste keeps the channel refusal it always had.
+       * "embed" IS THE PLAYER, IN ANY CASE, AND NEVER A CLIP. The worker refuses a clip of that name at
+       * every depth and in every case since 2026-11-26 (router.ts twSlug() and twitchEmbed()), so each
+       * shape that would carry it as the clip is refused here rather than handed out as ready to paste:
+       * the bare player (clips.twitch.tv/embed, /Embed), the player asked for clip "embed"
+       * (?clip=embed, which came out as /embed?clip=embed, the ['x','ig'] chooser), and a clip page
+       * whose slug is "embed" (twitch.tv/{channel}/clip/embed, which came out as itself and answered
+       * "Not found"). The player's path is folded too, so clips.twitch.tv/Embed?clip={slug} reads the
+       * clip it names. clips.twitch.tv only for the bare player: on twitch.tv a single segment is read as
+       * a channel name just below, and "embed" is a legal login there, so that paste keeps the channel
+       * refusal it always had.
        */
-      if (bare === 'clips.twitch.tv' && seg.length === 1 && seg[0] === 'embed') return no("That's Twitch's clip player, and the link doesn't say which clip.");
+      var twPlayer = function (s) { return String(s).toLowerCase() === 'embed'; };
+      var qclip = u.searchParams.get('clip');
+      if (twPlayer(seg[0]) && qclip) {
+        if (twPlayer(qclip)) return no("That's Twitch's clip player, and the link doesn't say which clip.");
+        return out('/embed?clip=' + qclip, 'Twitch', '', 'tw');
+      }
+      if (bare === 'clips.twitch.tv' && seg.length === 1 && twPlayer(seg[0])) return no("That's Twitch's clip player, and the link doesn't say which clip.");
+      if (seg.length === 3 && seg[1] === 'clip') {
+        if (twPlayer(seg[2])) return no('No Twitch clip is called "embed". That\'s the address of Twitch\'s clip player.');
+        // /{channel}/clip/{slug} reads every slug but a RESERVED_WORDS row (twSlug() consults reserved()),
+        // and the ?clip= reader reads those too, so a slug that is one goes that way instead.
+        if (mbedfxReservedWord(seg[2])) return out('/tw/embed?clip=' + seg[2], 'Twitch', '', 'tw', 'tw');
+      }
       if (seg.length === 1) {
         // A single segment means opposite things on the two hosts: on clips.twitch.tv it IS the clip
         // slug; on twitch.tv it is almost always a channel name, which names no post.
         // The /tw/ prefix forces the Twitch reading, so older and shorter slugs work too rather than
-        // having to pass the worker's shape recogniser on their own.
-        if (bare === 'clips.twitch.tv') return out('/tw/' + seg[0], 'Twitch', '', 'tw', 'tw');
+        // having to pass the worker's shape recogniser on their own. A slug that spells a PATH_WORDS
+        // word is the one exception: /tw/{word} is "Not found" (router.ts PATH_WORDS), and
+        // /tw/embed?clip={word} is the same clip in the player's own spelling, which reads any slug but
+        // "embed". No measured slug is that short (router.ts TW_SLUG), so this is for the hand-typed ones.
+        if (bare === 'clips.twitch.tv') return out((mbedfxPathWord(seg[0]) ? '/tw/embed?clip=' : '/tw/') + seg[0], 'Twitch', '', 'tw', 'tw');
         var head = seg[0].slice(0, 16);
         var looksLikeClip = seg[0].length >= 16 && /^[A-Z]/.test(seg[0]) &&
           (head.match(/[A-Z]/g) || []).length >= 4;
@@ -1271,18 +1458,46 @@ function mbedfxConvert(input, host, gallery) {
       }
     }
     if (platform === 'Imgur') {
-      // An album is its own shape; a gallery needs the prefix because /gallery/ is contested with
-      // Reddit and Instagram, and neither of those links should be quietly stolen.
+      // An album is its own shape; a gallery needs the prefix because Reddit mints /gallery/{id} too,
+      // and a Reddit gallery link should not be quietly stolen.
+      if ((seg[0] === 'a' || seg[0] === 'gallery') && seg.length === 2) {
+        // The id is what follows the slug's last '-', router.ts imId()'s seam, and imId() refuses a
+        // RESERVED_WORDS row under every spelling of an album or a gallery.
+        var imTail = seg[1].slice(seg[1].lastIndexOf('-') + 1);
+        if (mbedfxReservedWord(imTail)) return no(mbedfxReservedRefusal(imTail, seg[0] === 'a' ? 'an Imgur album' : 'an Imgur gallery'));
+      }
       if (seg[0] === 'a' && seg.length === 2) return out('/a/' + seg[1], 'Imgur', '', 'im');
       if (seg[0] === 'gallery' && seg.length === 2) return out('/im/gallery/' + seg[1], 'Imgur', '', 'im', 'im');
-      // A bare imgur.com/{id} is undecidable once the host is gone, so force it.
+      // A bare imgur.com/{id} is undecidable once the host is gone, so force it. An id that spells a
+      // PATH_WORDS word takes .gifv: /im/{id} is "Not found" for it, and /im/{id}.gifv is the same ref
+      // and the same canonical (router.ts imgur()'s .gifv arm, which consults neither list).
+      //
+      // EXCEPT A RESERVED_WORDS ROW, which is refused. The .gifv arm would read it, so this is not the
+      // "no spelling reads it" refusal of an album or gallery id: no image has any of those ids, and
+      // two of them are Imgur's own pages. Until 2026-11-26 imgur.com/gallery came out as
+      // /im/gallery.gifv, the Imgur post "gallery", and imgur.com/search?q=cats as the post "search"
+      // (review of this branch). Measured 2026-11-27 (UTC) from the dev host, not a Worker:
+      // imgur.com/gallery 301s to imgur.com/ and imgur.com/search is a 44 KB page of its own, while
+      // i.imgur.com/{w}.jpg 302s to removed.png for all six rows that fit IM_ID (gallery, search,
+      // explore, lists, hashtag, moments), as it does for an id nobody minted. imgur.com/explore, /lists,
+      // /hashtag and /moments answered the same 5,478-byte shell as that made-up id, so they are not
+      // known to be pages, only not images. The rest are too long to be an Imgur id at all, and their
+      // .gifv was "Not found".
       if (h === 'imgur.com' && seg.length === 1 && !/\.[a-z0-9]+$/i.test(seg[0])) {
-        return out('/im/' + seg[0], 'Imgur', '', 'im', 'im');
+        if (mbedfxReservedWord(seg[0])) return no(mbedfxReservedRefusal(seg[0], 'an Imgur image'));
+        return out('/im/' + seg[0] + (mbedfxPathWord(seg[0]) ? '.gifv' : ''), 'Imgur', '', 'im', 'im');
       }
     }
-    // Bare streamable.com/{id} is likewise undecidable without a forcing prefix.
-    if (platform === 'Streamable' && seg.length === 1 && seg[0] !== 'e' && seg[0] !== 's') {
-      return out('/st/' + seg[0], 'Streamable', '', 'st', 'st');
+    if (platform === 'Streamable') {
+      // The id of streamable.com/{id}, /e/{id} or /s/{id}. Every Streamable arm refuses a RESERVED_WORDS
+      // row (ytdlpId()), so no link reads one and it is refused here. streamable.com/followers came out
+      // as /st/followers, which falls through to the ['x','ig'] followers chooser.
+      var stId = seg.length === 1 && seg[0] !== 'e' && seg[0] !== 's' ? seg[0]
+        : seg.length === 2 && (seg[0] === 'e' || seg[0] === 's') ? seg[1] : null;
+      if (stId !== null && mbedfxReservedWord(stId)) return no(mbedfxReservedRefusal(stId, 'a Streamable video'));
+      // Bare streamable.com/{id} is likewise undecidable without a forcing prefix. An id that spells a
+      // PATH_WORDS word goes under /st/e/, Streamable's own embed path, because /st/{word} is "Not found".
+      if (seg.length === 1 && stId !== null) return out((mbedfxPathWord(stId) ? '/st/e/' : '/st/') + stId, 'Streamable', '', 'st', 'st');
     }
     if (platform === 'Dailymotion' && seg.length === 1) return out('/dm/' + seg[0], 'Dailymotion', '', 'dm', 'dm');
     // A pin comes out as the bare /pin/{id}, without `sent` or a slug. See mbedfxPinId.
@@ -1335,7 +1550,11 @@ function mbedfxConvert(input, host, gallery) {
  */
 function mbedfxForcedPath(r, code, pasted) {
   if (!r || !r.ok) return pasted ? '/' + code + pasted : null;
-  return '/' + code + (r.token ? r.path.slice(r.token.length + 1) : r.path);
+  var p = '/' + code + (r.token ? r.path.slice(r.token.length + 1) : r.path);
+  // A TIKTOK SHORT LINK TAKES NO MODE (withGallery's /t/ rule), and /tt/t/{code}/p is "Not found". It
+  // became reachable on 2026-11-26, when threads.com/t/{code} started converting to the Threads post
+  // /th/t/{code}, which does take one: with stills on, "Read as TikTok" built /tt/t/{code}/p from it.
+  return /^\/tt\/t\/[^\/?]+\/[pv]$/.test(p) ? p.slice(0, -2) : p;
 }
 
 /**
@@ -1800,7 +2019,8 @@ function mbedfxPrepResolved(asked, answer) {
         /**
          * AN AMBIGUOUS PATH BECOMES A CHOICE. The candidates are the ROUTER'S — the same list a human
          * gets from the chooser page — not something guessed here: only route() knows /gallery/{id}
-         * is contested between Reddit, Instagram and Imgur.
+         * is contested between Reddit and Imgur (and that Instagram was dropped from that row on
+         * 2026-11-26, because its choice could only dead-end).
          */
         if (!j.ok && j.reason === 'ambiguous' && j.candidates && j.candidates.length) {
           result.style.display = 'none'; copy.style.display = 'none';

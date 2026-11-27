@@ -182,8 +182,73 @@ mbedfx.app's Reddit app and account, and it names no account at all. Nobody else
   Streamable, Imgur and some Twitch links already come out of the converter with their site code
   (`/dm/…`, `/st/…`, `/im/…`, `/tw/…`), and picking a site on one of them put a second code in front:
   `/dm/dm/…`, also "Not found". The picked code now replaces the one already there, and a
-  `clips.twitch.tv/embed` link with no clip in it is refused. Picking Reddit for a
-  `reddit.com/gallery/…` link still answers "Not found".
+  `clips.twitch.tv/embed` link with no clip in it is refused.
+- **A site code no longer reads another site's path word as an id.** With `/st/`,
+  `/im/` or `/tw/` in front of a single word, the Worker read the word as that site's id, so
+  `mbedfx.app/st/watch?v=…` was a Streamable video called "watch", `/im/watch` an Imgur image, and
+  `/tw/watch` and `/tw/Embed` Twitch clips. Picking Streamable, Imgur or Twitch in the converter's
+  "Read as" list on a YouTube link handed out links like these. Any word a supported site uses in its
+  links, and any site code, is now refused there however it's capitalised. Most of these links now say
+  "Not found". One that ends in `/p`, `/v` or `.mp4` can be read another way, with the site code as an
+  account name: `/st/reel/p` is the Instagram post "p" by @st. A real Streamable, Imgur or Twitch id
+  that spells one of those words is refused too as `/st/{id}`, `/im/{id}` or `/tw/{id}`, so the
+  converter now writes it the site's other way: `streamable.com/video` comes out as `/st/e/video`,
+  `imgur.com/share` as `/im/share.gifv` and `clips.twitch.tv/watch` as `/tw/embed?clip=watch`.
+  `clips.twitch.tv/videos` is read as a clip too. It used to be refused as a video, but Twitch keeps
+  its videos on twitch.tv.
+- **mbedfx links pasted back into the converter keep their post.** The converter used to pass one of
+  its own links through unchanged. So `mbedfx.app/st/video`, `/im/share` and `/tw/watch`, which it
+  handed out in 1.17.0 for `streamable.com/video`, `imgur.com/share` and `clips.twitch.tv/watch`, would
+  have said "Not found" after the change above, on the guest domains too. Now it rewrites each one the
+  way it writes the site's own link: `/st/e/video`, `/im/share.gifv` and `/tw/embed?clip=watch`. It
+  refuses `/tw/Embed`, since no clip has that name. A site code in front of a word that names no post,
+  such as `/x/status` or `/rd/gallery`, comes back as it was pasted, without the stills or videos
+  ending. With that ending added, the Worker read the `p` or `v` as an id, so `/x/status` with "all as
+  stills" ticked became `/x/status/p`, the X post "p". A query left on the link doesn't change any
+  of this: `/st/video?v=…` becomes `/st/e/video` without the query, and `/x/status?v=…` comes back as
+  pasted. Only a query that holds the post's id, like `?v=` on `/yt/watch?v=…`, leaves the link and
+  its ending alone.
+- **The converter refuses the few ids no link can reach.** A Streamable id, or an Imgur album or
+  gallery id, that is one of the Worker's lowercase "which site?" words (`settings`, `followers`,
+  `gallery` and ten more) has no spelling the Worker reads. The converter says so now instead of
+  handing out a dead link, and `streamable.com/followers` no longer comes out as a "which site?" page
+  offering X and Instagram. The same words are refused on a bare `imgur.com/` link, such as
+  `imgur.com/gallery` or `imgur.com/search?q=cats`, and on an mbedfx link that carries one, such as
+  `/st/followers`. `imgur.com/gallery` and `imgur.com/search` are Imgur's own pages, and no image has
+  any of these names. Before this, `followers` and `following` came out as that "which site?" page,
+  except as an Imgur gallery id (`imgur.com/gallery/followers`), where they said "Not found" like
+  every other word. An mbedfx link like `/st/followers` came back unchanged.
+- **Picking Reddit on a Reddit gallery link works.** `mbedfx.app/rd/gallery/{id}` answered "Not
+  found", so for a `/gallery/{id}` link, which Reddit and Imgur both use, the "which site?" choice
+  for Reddit went nowhere. It now draws the same card as `/comments/{id}`, and the converter turns a
+  `reddit.com/gallery/{id}` link into `/rd/gallery/{id}` instead of a link that stops at the "which
+  site?" question. Instagram isn't offered for these links any more. No Instagram post has a
+  `/gallery/` link, so that choice could only say "Not found", and the API now lists `["rd","im"]`
+  as their `candidates`. For the same reason the converter refuses an `instagram.com/gallery/…` link,
+  which it used to turn into a "which site?" page.
+- **No Twitch clip is called "embed".** `/clip/embed`, `/{channel}/clip/embed`, the same two with
+  `/tw/` in front, and `/embed?clip=embed` gave a card for a clip called "embed". That's the address
+  of Twitch's clip player, so no clip has the name. The path forms now say "Not found" however
+  "embed" is capitalised, apart from a few longer links that are read another way, such as
+  `/tw/status/clip/embed`, a post on X. `/embed?clip=embed` gets the same "which site?" page as an
+  `/embed` link with no usable clip. The converter refuses `clips.twitch.tv/embed`,
+  `clips.twitch.tv/embed?clip=embed` and `twitch.tv/{channel}/clip/embed` however they're capitalised,
+  and reads `clips.twitch.tv/Embed?clip=…` as the clip it names.
+- **Threads short links open the Threads post.** `threads.com/t/{code}` and `threads.net/t/{code}`
+  went to TikTok first, and when TikTok didn't know the code the card was a "which site?" page. Its
+  Threads choice, `mbedfx.app/th/t/{code}`, said "Not found". A Threads `/t/` code is the post's own
+  code: on 2026-11-26 the `/t/` links of five Threads posts each redirected to the post with the same
+  code. So `/th/t/{code}` now draws that post, and the converter turns a Threads short link into it.
+  A `/t/{code}` link without `/th/` still asks TikTok first, and `/_api/v1` answers `/th/t/{code}` the
+  way it answers `threads.com/@i/post/{code}`.
+- **A deleted Threads post gets the "Couldn't load" card.** On 2026-11-27 mbedfx.app drew a deleted
+  Threads post, and a code Threads never issued, as a post by "Threads • Log in", with "Join Threads
+  to share ideas…" as its text, a picture from no post, and a date worked out from the code. Threads
+  had answered with its login page, and `/_api/v1` returned that page as `ok: true`. A page now
+  counts as the post only when its title names the post's author, so these links get the failure
+  card and `/_api/v1` answers `fetch_fail`. A real post can now come out without its caption or its
+  picture: when only one of the two pages mbedfx reads is the login page, the card leaves out what
+  that page would have given instead of showing the login page's text or image.
 - **`RESOLVER_SECRET` was documented as protecting the Cloudflare container, and it doesn't.**
   `container/README.md` said to set it on the container as well as the Worker, and nothing in this
   repo puts it there: the container's Durable Object passes it no environment, so the container never

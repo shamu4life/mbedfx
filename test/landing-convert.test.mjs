@@ -1,7 +1,8 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
-import { route } from '../src/router.ts'
+import { route, PATH_WORDS, RESERVED } from '../src/router.ts'
+import { ST_ID, IM_ID, DM_ID, TWITCH_SLUG } from '../src/refkey.ts'
 import { guestHosts, guestServes } from '../src/guesthost.ts'
 
 /**
@@ -61,6 +62,8 @@ function loadConverter(config) {
     repoint: mbedfxRepoint, isGuest: mbedfxIsGuest, pageGuests: GUEST_HOSTS, publicHosts: PUBLIC_HOSTS,
     ourHosts: OUR_HOSTS, prepResolved: mbedfxPrepResolved, hasMediaOnly: mbedfxHasMediaOnly,
     pinId: mbedfxPinId, pinShortCode: PIN_SHORT_CODE, pinRefusal: PIN_IT_REFUSAL, forcedPath: mbedfxForcedPath,
+    pathWords: PATH_WORDS, reservedWords: RESERVED_WORDS, siteCodes: SITE_CODES, pageStIdShape: ST_ID,
+    pageImIdShape: IM_ID, pageTwitchSlug: TWITCH_SLUG, pageThCode: TH_CODE, queryArms: QUERY_ARMS,
   }`)(config)
 }
 
@@ -75,7 +78,8 @@ function loadPlatformTable() {
 
 const {
   convert, defaultHost, mediaOnly, repoint, isGuest, pageGuests, publicHosts, ourHosts, prepResolved, hasMediaOnly,
-  pinId, pinShortCode, pinRefusal, forcedPath,
+  pinId, pinShortCode, pinRefusal, forcedPath, pathWords, reservedWords, siteCodes, pageStIdShape, pageImIdShape,
+  pageTwitchSlug, pageThCode, queryArms,
 } = loadConverter()
 const PLATFORMS = loadPlatformTable()
 
@@ -95,6 +99,14 @@ const RESOLVES = {
 }
 
 const routed = p => route(new URL('https://mbedfx.app' + (p.startsWith('/') ? p : '/' + p)))
+
+/** router.ts's ESCAPE tokens, read out of its source the way test/router.test.mjs routerWords() reads them. */
+const escapeTokens = () => {
+  const src = readFileSync(new URL('../src/router.ts', import.meta.url), 'utf8')
+    .replace(/(^|\s)\/\/.*$/gm, '$1').replace(/\/\*[\s\S]*?\*\//g, '')
+  const block = src.match(/const ESCAPE\b[^=]*=\s*\{([\s\S]*?)\n\}/)[1]
+  return [...block.matchAll(/\b(\w+): '\w+'/g)].map(m => m[1])
+}
 
 test('EVERY EXAMPLE PATH PRINTED ON THE PAGE ACTUALLY ROUTES', () => {
   /**
@@ -646,7 +658,8 @@ test('IMGUR ALBUMS AND GALLERIES CONVERT — they used to be on the refusal list
    * "#nope" list have to agree, which the test above is what enforces.
    *
    * The two shapes convert DIFFERENTLY on purpose. /a/ is Imgur's alone. /gallery/ is contested with
-   * Reddit and Instagram, so it gets the /im/ prefix rather than silently claiming their row.
+   * Reddit, so it gets the /im/ prefix rather than silently claiming the row. (It said "Reddit and
+   * Instagram" until 2026-11-26, when Instagram left the row: no Instagram post lives at /gallery/.)
    */
   const album = convert('https://imgur.com/a/iX265HX', 'mbedfx.app')
   assert.equal(album.url, 'https://mbedfx.app/a/iX265HX')
@@ -677,6 +690,567 @@ test('IMGUR ALBUMS AND GALLERIES CONVERT — they used to be on the refusal list
   // A still photo still needs the prefix — a bare id is undecidable against Dailymotion.
   assert.equal(convert('https://imgur.com/QAcLnaf', 'mbedfx.app').url, 'https://mbedfx.app/im/QAcLnaf')
   assert.deepEqual(routed('/im/QAcLnaf').ref, { p: 'im', kind: 'post', id: 'QAcLnaf' })
+})
+
+test('A REDDIT GALLERY LINK CONVERTS TO THE REDDIT POST, never to the "which site?" chooser', () => {
+  /**
+   * FOUND 2026-11-26 while fixing the "Read as" picker. reddit.com/gallery/{id} names Reddit post {id},
+   * and the converter swapped only the host, so it handed out /gallery/{id}: the Reddit-or-Imgur chooser,
+   * for a link whose host had already said Reddit. Picking Reddit on that chooser then gave
+   * /rd/gallery/{id}, which the worker answered "Not found". Now the converter writes /rd/gallery/{id}
+   * itself, the forced spelling the worker routes to the post (router.ts reddit()), as it writes
+   * /im/gallery/{id} for Imgur's twin.
+   */
+  for (const [paste, id] of [
+    ['https://www.reddit.com/gallery/haucpf', 'haucpf'],
+    ['https://old.reddit.com/gallery/1x2voz0/', '1x2voz0'],
+    ['reddit.com/gallery/haucpf?utm_source=share', 'haucpf'],
+  ]) {
+    const r = convert(paste, 'mbedfx.app')
+    assert.ok(r.ok, `${paste} must convert`)
+    assert.equal(r.url, `https://mbedfx.app/rd/gallery/${id}`, paste)
+    assert.equal(r.platform, 'Reddit', paste)
+    assert.equal(r.token, 'rd', `${paste}: the converter wrote the code, so "Read as" replaces it`)
+    assert.deepEqual(routed(r.path), routed(`/comments/${id}`), `${r.path} is the post /comments/${id} names`)
+    assert.equal(routed(r.path).kind, 'post', r.path)
+  }
+  const r = convert('https://www.reddit.com/gallery/haucpf', 'mbedfx.app')
+  // Re-picking Reddit gives the same link back, and Imgur reads the same id as its own gallery.
+  assert.equal(forcedPath(r, 'rd', null), '/rd/gallery/haucpf')
+  assert.equal(forcedPath(r, 'im', null), '/im/gallery/haucpf')
+  assert.deepEqual(routed('/im/gallery/haucpf').ref, { p: 'im', kind: 'gallery', id: 'haucpf' })
+  // The stills box adds its mode after the id, where the router reads it.
+  const stills = convert('https://www.reddit.com/gallery/haucpf', 'mbedfx.app', 'stills')
+  assert.equal(stills.path, '/rd/gallery/haucpf/p')
+  assert.equal(routed(stills.path).gallery, 'stills')
+})
+
+test('NO SITE IN "Read as" TURNS ANOTHER SITE\'S PATH WORD INTO A POST, on every paste in this file', () => {
+  /**
+   * The converter's half of router.ts PATH_WORDS. Picking a site builds /{code}{path} on whatever the
+   * paste converted to, so picking Streamable, Imgur or Twitch on a youtube.com/watch paste gave
+   * /st/watch?v=…, /im/watch?v=… and /tw/watch?v=…, each a post on the picked site whose id was
+   * "watch". The worker now refuses those words under a forced code, so no pick on any paste in this
+   * file may route to a post on the picked site whose id is one of them. (A pick may still be a dead
+   * end: forcing Streamable on a YouTube link has no YouTube post to keep, and "Not found" is the honest
+   * answer.)
+   *
+   * REWRITTEN 2026-11-26, in review: the pasted site's own pick is not a cross-site read. This asserted
+   * the rule for every pick, and that was right while no paste here carried a word-shaped id. The tests
+   * below added streamable.com/video and its kin, and there re-picking Streamable gives /st/e/video,
+   * Streamable's "video": the id the paste named, on the site it named, which the converter now writes
+   * on purpose. So a pick of the paste's own code whose id is a segment of the pasted path is let through;
+   * every other pick is held to the rule as before.
+   */
+  const src = readFileSync(new URL(import.meta.url), 'utf8')
+  const pastes = [...new Set([...src.matchAll(/['"`](https?:\/\/[^'"`\s$]+)['"`]/g)].map(m => m[1]))]
+  const CODE_OF = new Function(`return ${HTML.match(/var CODE_OF = (\{[\s\S]*?\});/)[1]}`)()
+  const pathOf = v => { try { const p = new URL(v).pathname; return p && p !== '/' ? p : null } catch { return null } }
+  let picks = 0
+  let own = 0
+  for (const paste of pastes) {
+    const r = convert(paste, 'mbedfx.app')
+    for (const code of Object.values(CODE_OF)) {
+      const forced = forcedPath(r, code, pathOf(paste))
+      if (!forced) continue
+      const got = routed(forced)
+      const id = got.ref?.id ?? got.ref?.slug ?? got.ref?.code
+      const carried = r.ok && [...(pathOf(paste) || '').split(/[/.]/), ...new URL(paste).searchParams.values()]
+      if (r.ok && code === r.code && carried.includes(id)) { own++; continue }
+      assert.ok(!(got.kind === 'post' && got.ref.p === code && typeof id === 'string' && PATH_WORDS.has(id.toLowerCase())),
+        `${paste}, read as ${code}: ${forced} is a ${code} post whose id is the path word "${id}"`)
+      picks++
+    }
+  }
+  assert.ok(picks > 2000, `every paste, every site (${picks})`)
+  assert.ok(own < picks / 10, `the exemption stays the narrow one (${own} of ${picks})`)
+  // The reported one by name.
+  const yt = convert('https://www.youtube.com/watch?v=dQw4w9WgXcQ', 'mbedfx.app')
+  for (const code of ['st', 'im', 'tw']) assert.equal(routed(forcedPath(yt, code, null)).kind, 'notfound', code)
+})
+
+test('THE PAGE\'S PATH_WORDS AND RESERVED_WORDS ARE router.ts\'S, word for word', () => {
+  /**
+   * The converter keeps copies because the page has no build step, and a copy that drifts hands out the
+   * links this file exists to stop: a word the router learns and the page does not comes out as
+   * /st/{word}, "Not found" (review of 2026-11-26). Held the way PIN_SHORT_CODE is held above.
+   */
+  assert.deepEqual([...pathWords].sort(), [...PATH_WORDS].sort(), 'the page and the router refuse the same words')
+  assert.equal(new Set(pathWords).size, pathWords.length, 'no word twice')
+  for (const w of pathWords) assert.equal(w, w.toLowerCase(), `the page folds case before it looks, so '${w}' is lowercase`)
+  assert.deepEqual([...reservedWords].sort(), [...RESERVED].sort(), 'and the same "which site?" rows')
+  for (const w of reservedWords) assert.ok(PATH_WORDS.has(w), `'${w}' is a path word too`)
+})
+
+/**
+ * THE PASTES IN THIS FILE: every quoted string that is a url, with its scheme or without one, so the
+ * scheme-less pastes (`reddit.com/gallery/…`, `pin.it/…`) are included too.
+ */
+const pastesInThisFile = () => {
+  const src = readFileSync(new URL(import.meta.url), 'utf8')
+  const out = new Set()
+  for (const m of src.matchAll(/['"`](https?:\/\/[^'"`\s$]+)['"`]/g)) out.add(m[1])
+  for (const m of src.matchAll(/['"`]((?:[a-z0-9-]+\.)+[a-z]{2,}\/[^'"`\s$]*)['"`]/gi)) out.add(m[1])
+  return [...out]
+}
+
+/**
+ * KINDS THAT ARE A DESTINATION. A post or a profile is a card; a share code (`shortlink`, `metashare`,
+ * `redditshare`) resolves to one; `ambiguous` is the documented "which site?" answer (docs/API.md); a
+ * `/_media/` link pasted back is the media it names; `site` is the converter page, for `/`.
+ */
+const LANDS = new Set(['post', 'profile', 'shortlink', 'metashare', 'redditshare', 'ambiguous', 'media'])
+const lands = (path, got) => LANDS.has(got.kind) || (got.kind === 'site' && path === '/')
+
+test('EVERY LINK THE CONVERTER HANDS OUT ROUTES, for every paste in this file', () => {
+  /**
+   * THE RULE behind the 2026-11-26 review: an ok:true answer is a link the page shows as ready to paste,
+   * so the worker has to answer it with something, a post, a share code it resolves, or a chooser, and
+   * never "Not found". The defect it was written for: after router.ts PATH_WORDS landed, the converter
+   * went on writing streamable.com/video, imgur.com/share and clips.twitch.tv/watch as /st/video,
+   * /im/share and /tw/watch, each "Not found". The next test covers that family by generation.
+   *
+   * KNOWN DEAD ENDS, each older than that change and each pinned somewhere in this file for its own
+   * reason, are listed rather than skipped, and the list is checked both ways: a new dead link fails,
+   * and so does fixing one of these without taking it off the list.
+   */
+  const KNOWN_DEAD = {
+    // An unknown host is passed through as a fediverse instance (it cannot be checked from here), and
+    // /jack/status/20 is X's shape, which no fediverse arm reads. These pastes test host recognition.
+    'https://embed.example.com/jack/status/20': '/embed.example.com/jack/status/20',
+    'https://other.example.com/jack/status/20': '/other.example.com/jack/status/20',
+    'https://d.other.example.com/jack/status/20': '/d.other.example.com/jack/status/20',
+    'https://d.d.mbedfx.app/jack/status/20': '/d.d.mbedfx.app/jack/status/20',
+    // An X account's likes page: the path is carried as pasted, and names no post.
+    'https://x.com/jack/likes': '/jack/likes',
+    // A Facebook group's front page, with no usable ?multi_permalinks= post id. The worker leaves it
+    // unclaimed; the multi_permalinks test pins "keeps today's answer" for each.
+    'https://www.facebook.com/groups/328668786145521/': '/groups/328668786145521',
+    'https://www.facebook.com/groups/328668786145521/?multi_permalinks=abc': '/groups/328668786145521',
+    'https://www.facebook.com/groups/328668786145521/?multi_permalinks=1391536379858751,1391536379858752': '/groups/328668786145521',
+    'https://www.facebook.com/groups/somegroup/?multi_permalinks=1391536379858751': '/groups/somegroup',
+    // The same group home as an mbedfx link pasted back, which is re-pointed as it is.
+    'https://mbedfx.app/groups/328668786145521/?multi_permalinks=1391536379858751,1391536379858752': '/groups/328668786145521',
+    'https://mbedfx.app/groups/328668786145521': '/groups/328668786145521',
+  }
+  const dead = {}
+  let checked = 0
+  for (const paste of pastesInThisFile()) {
+    const r = convert(paste, 'mbedfx.app')
+    if (!r.ok) continue
+    checked++
+    const got = routed(r.path)
+    if (!lands(r.path, got)) dead[paste] = r.path
+  }
+  assert.ok(checked > 150, `every paste that converts (${checked})`)
+  assert.deepEqual(dead, KNOWN_DEAD, 'the only links the converter hands out that the worker answers "Not found"')
+})
+
+test('A STREAMABLE, IMGUR, DAILYMOTION, TWITCH OR REDDIT ID THAT SPELLS A WORD CONVERTS TO ITS OWN POST, or is refused only when nothing reads it', () => {
+  /**
+   * FINDING A of the 2026-11-26 review, by generation. router.ts PATH_WORDS made /st/{word}, /im/{word}
+   * and /tw/{word} "Not found", and the converter went on writing exactly those, so a real Streamable or
+   * Imgur id that spells a word (Imgur's 5-7 character ids make "video" or "share" likely) converted to
+   * a dead link. Every word the router reads, in three casings, is put in every paste shape of the sites
+   * whose ids the converter writes under a site code, wherever it fits that site's id shape.
+   *
+   * THE STRONGER CHECK, not the previous test's "lands somewhere": the link must be the post on the
+   * pasted site with that id, in each gallery mode. A chooser would pass the weaker one, and
+   * streamable.com/followers did come out as /st/followers, the ['x','ig'] followers chooser.
+   *
+   * A REFUSAL IS ALLOWED ONLY WHEN NO SPELLING READS THE ID, which is checked against every spelling the
+   * router has for that site: a lowercase router.ts RESERVED row, which every Streamable arm and Imgur's
+   * album and gallery arms refuse.
+   *
+   * WITH ONE EXCEPTION SINCE A SECOND REVIEW THE SAME DAY: a bare imgur.com/{row} is refused although
+   * /{row}.gifv reads it. This test pinned imgur.com/gallery as the Imgur post "gallery", which is what
+   * the .gifv respelling made it, and imgur.com/search?q=cats the post "search". No image has any of
+   * those six ids, and gallery and search are Imgur's own pages (measured, public/index.html at the
+   * Imgur branch). The
+   * row now names that exception (`page`), and the exception is checked both ways: such a paste must be
+   * refused, and nothing else may lean on it.
+   */
+  const casings = w => [...new Set([w, w.toUpperCase(), w[0].toUpperCase() + w.slice(1)])]
+  const words = [...PATH_WORDS].flatMap(casings)
+  const idOf = got => got.ref.id ?? got.ref.slug
+  const SHAPES = [
+    // [site, id shape, paste, ref kind or null, every spelling the router has for that id, and the ids
+    // refused although a spelling reads them]
+    ['st', ST_ID, w => `https://streamable.com/${w}`, null, w => [`/st/${w}`, `/st/e/${w}`, `/st/s/${w}`, `/e/${w}`, `/s/${w}`]],
+    ['st', ST_ID, w => `https://streamable.com/e/${w}`, null, w => [`/st/e/${w}`, `/e/${w}`]],
+    ['st', ST_ID, w => `https://streamable.com/s/${w}`, null, w => [`/st/s/${w}`, `/s/${w}`]],
+    ['im', IM_ID, w => `https://imgur.com/${w}`, 'post', w => [`/im/${w}`, `/im/${w}.gifv`, `/${w}.gifv`], w => RESERVED.has(w)],
+    ['im', IM_ID, w => `https://i.imgur.com/${w}.gifv`, 'post', w => [`/im/${w}.gifv`, `/${w}.gifv`]],
+    ['im', IM_ID, w => `https://imgur.com/${w}.gifv`, 'post', w => [`/im/${w}.gifv`, `/${w}.gifv`]],
+    ['im', IM_ID, w => `https://imgur.com/a/${w}`, 'album', w => [`/a/${w}`, `/im/a/${w}`]],
+    ['im', IM_ID, w => `https://imgur.com/gallery/${w}`, 'gallery', w => [`/im/gallery/${w}`]],
+    ['im', IM_ID, w => `https://imgur.com/gallery/a-cat-on-a-${w}`, 'gallery', w => [`/im/gallery/${w}`]],
+    ['dm', DM_ID, w => `https://dai.ly/${w}`, null, w => [`/dm/${w}`, `/video/${w}`]],
+    ['dm', DM_ID, w => `https://www.dailymotion.com/video/${w}`, null, w => [`/dm/${w}`, `/video/${w}`]],
+    ['tw', TWITCH_SLUG, w => `https://clips.twitch.tv/${w}`, 'clip',
+      w => [`/tw/${w}`, `/tw/clip/${w}`, `/clip/${w}`, `/xqc/clip/${w}`, `/tw/embed?clip=${w}`, `/embed?clip=${w}`]],
+    ['tw', TWITCH_SLUG, w => `https://www.twitch.tv/xqc/clip/${w}`, 'clip',
+      w => [`/xqc/clip/${w}`, `/tw/xqc/clip/${w}`, `/tw/embed?clip=${w}`, `/embed?clip=${w}`]],
+    ['tw', TWITCH_SLUG, w => `https://clips.twitch.tv/embed?clip=${w}`, 'clip', w => [`/tw/embed?clip=${w}`, `/embed?clip=${w}`]],
+    ['rd', /^[A-Za-z0-9]+$/, w => `https://www.reddit.com/gallery/${w}`, null, w => [`/rd/gallery/${w}`, `/comments/${w}`]],
+    ['rd', /^[A-Za-z0-9]+$/, w => `https://redd.it/${w}`, null, w => [`/comments/${w}`]],
+  ]
+  const MODES = [[undefined, undefined], ['stills', 'stills'], ['videos', 'videos']]
+  const tally = { converted: 0 }
+  const fits = {}
+  for (const [site, shape, paste, kind, spellings, page = () => false] of SHAPES) {
+    for (const w of words.filter(v => shape.test(v))) {
+      fits[site] = (fits[site] || 0) + 1
+      const reads = spellings(w).some(p => {
+        const got = routed(p)
+        return got.kind === 'post' && got.ref.p === site && idOf(got) === w
+      })
+      for (const [mode, want] of MODES) {
+        const url = paste(w)
+        const r = convert(url, 'mbedfx.app', mode)
+        if (page(w)) assert.equal(r.ok, false, `${url} is the site's own page, not post "${w}" (got ${r.path})`)
+        if (!r.ok) {
+          assert.ok(!reads || page(w), `${url} is refused ("${r.why}"), but the router reads ${site} "${w}" as one of ${spellings(w)}`)
+          const why = /is a page name on several sites/.test(r.why) ? 'reserved' : /Twitch's clip player/.test(r.why) ? 'player' : r.why
+          tally[why] = (tally[why] || 0) + 1
+          continue
+        }
+        const got = routed(r.path)
+        assert.equal(got.kind, 'post', `${url} converts to ${r.path}, which must be a post (got ${got.kind} ${JSON.stringify(got.candidates ?? '')})`)
+        assert.equal(got.ref.p, site, `${url}: ${r.path} must be a ${site} post, not ${JSON.stringify(got.ref)}`)
+        assert.equal(idOf(got), w, `${url}: ${r.path} must carry the pasted id`)
+        if (kind) assert.equal(got.ref.kind, kind, `${url}: ${r.path} is the pasted kind of post`)
+        assert.equal(got.gallery, want, `${url} with mode ${mode}: ${r.path}`)
+        // The token rule ("Read as" replaces it): re-picking the pasted site gives the same link back.
+        if (r.token) assert.equal(forcedPath(r, r.token, null), r.path, `${url}: re-picking ${r.token}`)
+        tally.converted++
+      }
+    }
+  }
+  // Not vacuous, and no site silently drops out. No word has Dailymotion's id shape (router.ts PATH_WORDS
+  // says so and test/router.test.mjs checks it), so its rows are a control on the real id below.
+  assert.equal(fits.dm ?? 0, 0, 'no word is Dailymotion-shaped')
+  for (const site of ['st', 'im', 'tw', 'rd']) assert.ok(fits[site] > 40, `${site} has word-shaped ids (${fits[site]})`)
+  assert.ok(tally.converted > 3000, `converted (${JSON.stringify(tally)})`)
+  // The refusals, in three modes each, are the lowercase RESERVED rows that fit (12 for each Streamable
+  // shape, 6 for each Imgur album and gallery shape and 6 for the bare imgur.com page) and "embed" in its
+  // three casings in each Twitch shape. Nothing else: an unexpected reason would be its own key here.
+  assert.deepEqual(tally, { converted: tally.converted, reserved: (12 * 3 + 6 * 4) * 3, player: 3 * 3 * 3 },
+    `refused (${JSON.stringify(tally)})`)
+
+  // The reported links by name.
+  for (const [paste, path] of [
+    ['https://streamable.com/video', '/st/e/video'],
+    ['https://imgur.com/share', '/im/share.gifv'],
+    ['https://clips.twitch.tv/watch', '/tw/embed?clip=watch'],
+    ['https://www.twitch.tv/xqc/clip/settings', '/tw/embed?clip=settings'],
+    ['https://streamable.com/moo', '/st/moo'],
+    ['https://imgur.com/QAcLnaf', '/im/QAcLnaf'],
+    ['https://dai.ly/x8ocv9e', '/dm/x8ocv9e'],
+  ]) assert.equal(convert(paste, 'mbedfx.app').path, path, paste)
+  // /im/{id}.gifv is the post /im/{id} is: same ref, same canonical, so the card cannot differ.
+  assert.deepEqual(routed('/im/QAcLnaf.gifv'), routed('/im/QAcLnaf'))
+  assert.deepEqual(routed('/im/share.gifv'),
+    { kind: 'post', ref: { p: 'im', kind: 'post', id: 'share' }, canonical: 'https://i.imgur.com/share.gifv' })
+  for (const paste of ['https://streamable.com/followers', 'https://streamable.com/e/settings',
+    'https://imgur.com/a/search', 'https://imgur.com/gallery/a-cat-on-a-gallery',
+    'https://imgur.com/gallery', 'https://imgur.com/search?q=cats', 'https://imgur.com/explore']) {
+    assert.match(convert(paste, 'mbedfx.app').why, /is a page name on several sites, so mbedfx never reads it as/, paste)
+  }
+})
+
+test('A PASTED-BACK mbedfx LINK /{code}/{word} KEEPS THE POST IT NAMED, or is refused when nothing reads it, and a mode never moves it', () => {
+  /**
+   * The rule test above, extended to links of ours pasted back in (second review of 2026-11-26). The
+   * already-ours branch passed /{code}/{word} through as pasted, and since router.ts PATH_WORDS that
+   * was "Not found" for every /st/{id}, /im/{id} and /tw/{slug} whose id spells a word, the very links
+   * this page handed out at 97bebca for streamable.com/video, imgur.com/share and clips.twitch.tv/watch.
+   * A mode made it worse: /st/reel with stills on became /st/reel/p, the Instagram post "p" by @st, and
+   * /tw/status/v an X post. The same held on the guest hosts.
+   *
+   * THE GRID: every site code, every PATH_WORDS word in three casings, three gallery modes, pasted on
+   * mbedfx.app and on both guest hosts.
+   *
+   * WHAT THE PASTED LINK NAMED AT 97bebca, written down because a test cannot load that commit. The
+   * forced depth-1 arms read a word as the code's id when it fit the id shape and was not a lowercase
+   * RESERVED row (ytdlpId() and twSlug() consult reserved()), except Twitch's lowercase "embed". Every
+   * other /{code}/{word} was read the way HEAD reads it, which names no post (the next assertion).
+   * Checked against 97bebca's router itself while this was written, outside the suite: 0 differences
+   * over the 4,114 pasted paths, and no case below failing against it.
+   *
+   * THE RULES:
+   *   - A link that named post S/id converts to S/id in every mode, or is refused, and only where no
+   *     spelling the router has reads S/id now (Twitch's "Embed" and "EMBED", and the clip "embed").
+   *   - A link that named no post converts to one that names none, in every mode. A refusal is allowed
+   *     there too: a Streamable or Imgur id that is a RESERVED row, as pasted from the site, and "embed".
+   *   - A mode never changes the site: the moded link names the unmoded link's post, or nothing.
+   *
+   * WITH A KEPT QUERY TOO, since 2026-11-27 (review of the branch). Every cell is pasted again with each
+   * of QUERIES, one valid and one junk value per parameter the page keeps, on mbedfx.app alone: the
+   * hosts are one branch, and three of them would triple the file's slowest test for nothing. The
+   * branch used to skip its /{code}/{word} handling for ANY kept parameter, so /st/reel?v=abc with
+   * stills on came out /st/reel/p?v=abc (the Instagram post "p"), /tw/status?clip=Foo an X post and
+   * /rd/gallery?v=abc the Reddit post "p", and an unmoded /st/{word}?v=… that named a Streamable video
+   * at 97bebca came out "Not found". Swept outside the suite over the same grid on all three hosts
+   * (370,260 conversions): 32,769 lost a post and 3,660 gained one before the fix, none of either after.
+   *
+   * WHAT A QUERY NAMED AT 97bebca: the three query arms HEAD has (youtubeQuery, facebookQuery,
+   * twitchEmbed), on an exact word, and twitchEmbed did not yet refuse a clip called "embed". Anywhere
+   * else the query changed nothing and the path model above applies. READ_AT_97BEBCA lists each pair
+   * the arms read. Checked, with the path model, against 97bebca's router outside the suite: 0
+   * differences over all 45,254 paths, 41,140 of them with a query.
+   */
+  const casings = w => [...new Set([w, w.toUpperCase(), w[0].toUpperCase() + w.slice(1)])]
+  const words = [...PATH_WORDS].flatMap(casings)
+  const codes = escapeTokens()
+  const hosts = ['mbedfx.app', ...GUEST_HOSTS]
+  const SHAPE = { st: ST_ID, im: IM_ID, tw: TWITCH_SLUG }
+  const QUERIES = ['v=dQw4w9WgXcQ', 'v=1234567890123', 'v=abc', 'fbid=1234567890', 'fbid=abc',
+    'clip=AwkwardHelplessSalamanderSwiftRage', 'clip=embed', 'story_fbid=1234567890&id=1234567',
+    'story_fbid=abc&id=1234567', 'multi_permalinks=1234567890']
+  const READ_AT_97BEBCA = {
+    '/yt/watch?v=dQw4w9WgXcQ': 'yt:dQw4w9WgXcQ',
+    '/fb/watch?v=1234567890123': 'fb:1234567890123',
+    '/fb/photo?fbid=1234567890': 'fb:1234567890',
+    '/fb/photo.php?fbid=1234567890': 'fb:1234567890',
+    '/fb/story.php?story_fbid=1234567890&id=1234567': 'fb:1234567_1234567890',
+    '/fb/permalink.php?story_fbid=1234567890&id=1234567': 'fb:1234567_1234567890',
+    '/tw/embed?clip=AwkwardHelplessSalamanderSwiftRage': 'tw:AwkwardHelplessSalamanderSwiftRage',
+    '/tw/embed?clip=embed': 'tw:embed',
+  }
+  const namedAt97bebca = (c, w, q = '') => READ_AT_97BEBCA[`/${c}/${w}?${q}`] ??
+    (SHAPE[c] && SHAPE[c].test(w) && !RESERVED.has(w) && !(c === 'tw' && w === 'embed') ? `${c}:${w}` : null)
+  // The page's own table says where the query and the mode stay on; the test below holds it to route().
+  const armReads = (c, w, q) => Object.hasOwn(queryArms, c) && Object.hasOwn(queryArms[c], w) &&
+    queryArms[c][w].every(k => new URLSearchParams(q).has(k)) && !(c === 'tw' && q === 'clip=embed')
+  const named = got => got.kind === 'post' ? `${got.ref.p}:${got.ref.id ?? got.ref.slug ?? got.ref.code}` : null
+  const spellings = (c, w) => ({
+    st: [`/st/${w}`, `/st/e/${w}`, `/st/s/${w}`, `/e/${w}`, `/s/${w}`],
+    im: [`/im/${w}`, `/im/${w}.gifv`, `/${w}.gifv`],
+    tw: [`/tw/${w}`, `/tw/clip/${w}`, `/clip/${w}`, `/xqc/clip/${w}`, `/tw/embed?clip=${w}`, `/embed?clip=${w}`],
+  })[c] ?? []
+  const tally = {}
+  const count = k => { tally[k] = (tally[k] || 0) + 1 }
+  for (const c of codes) for (const w of words) for (const q of ['', ...QUERIES]) {
+    const was = namedAt97bebca(c, w, q)
+    if (!was && !q) assert.equal(named(routed(`/${c}/${w}`)), null, `/${c}/${w} names no post on HEAD (router.ts PATH_WORDS)`)
+    const reads = was !== null && [...spellings(c, w), ...(q ? [`/${c}/${w}?${q}`] : [])].some(p => named(routed(p)) === was)
+    for (const host of q ? ['mbedfx.app'] : hosts) {
+      const paste = `https://${host}/${c}/${w}${q ? '?' + q : ''}`
+      const plain = convert(paste, 'mbedfx.app')
+      for (const mode of [undefined, 'stills', 'videos']) {
+        const r = mode ? convert(paste, 'mbedfx.app', mode) : plain
+        if (!r.ok) {
+          assert.equal(plain.ok, false, `${paste}: refused with ${mode} on but not without`)
+          if (was) assert.ok(!reads, `${paste} is refused ("${r.why}"), but the router still reads ${was}`)
+          else {
+            assert.ok((c === 'st' || c === 'im') && SHAPE[c].test(w) && RESERVED.has(w) || c === 'tw' && w.toLowerCase() === 'embed',
+              `${paste} is refused ("${r.why}") though it named no post and nothing about it is unreachable`)
+          }
+          count(`${was ? `refused ${c}` : `refused ${c} (named none)`}${q ? ' ?' : ''}`)
+          continue
+        }
+        assert.equal(r.url, `https://mbedfx.app${r.path}`, `${paste}: re-pointed at the selected domain`)
+        const got = routed(r.path)
+        if (was) {
+          assert.equal(named(got), was, `${paste} (mode ${mode}) converts to ${r.path}, which must be ${was}, not ${JSON.stringify(got)}`)
+          assert.equal(got.gallery, mode, `${paste}: ${r.path} carries the mode where the router reads it`)
+          count(READ_AT_97BEBCA[`/${c}/${w}?${q}`] ? `query arm ${c}` : `respelled ${c}`)
+        } else {
+          assert.equal(named(got), null, `${paste} (mode ${mode}) named no post, and ${r.path} must not name one (${JSON.stringify(got)})`)
+          // As pasted and without the mode, which is what keeps it naming none: respelled, or with /p on,
+          // the router has another reading of it (the paragraph above). A lowercase p or v is the one
+          // exception, older than this: the branch strips a trailing p or v as a mode it is about to
+          // replace, which leaves the bare code (the ['x','ig'] chooser) and then the box's own mode.
+          // The kept query stays on as pasted. On the code's own query arm with a value it does not
+          // read (/yt/watch?v=abc) the mode goes on as well, as it always has there, and names nothing.
+          const suffix = w === 'p' || w === 'v'
+          const m = mode ? (mode === 'stills' ? '/p' : '/v') : ''
+          const tail = q ? `?${q}` : ''
+          const want = suffix ? `/${c}${m}${tail}` : armReads(c, w, q) ? `/${c}/${w}${m}${tail}` : `/${c}/${w}${tail}`
+          assert.equal(r.path, want, `${paste} (mode ${mode}) is passed through as pasted`)
+          count(q ? 'names none ?' : 'names none')
+        }
+        // The mode never moves the link: same post, or nothing, as the unmoded link.
+        assert.equal(named(got), named(routed(plain.path)), `${paste}: mode ${mode} changed the site (${plain.path} vs ${r.path})`)
+      }
+    }
+  }
+  // Exact, so a new reason or a site dropping out of the grid fails here. Per word, 3 hosts x 3 modes
+  // with no query (9), and 10 queries x 3 modes on one host (30): 12 Streamable and 6 Imgur RESERVED
+  // rows fit their shapes, and "embed" has three casings. Under a query, "Embed" and "EMBED" named a
+  // clip for all ten (60), lowercase "embed" named one for its two clip queries, of which the clip
+  // "embed" is refused (3) and the real clip is read, and the other eight named none (24).
+  const respelled = Object.entries(tally).filter(([k]) => k.startsWith('respelled')).map(([, v]) => v)
+  assert.ok(respelled.length === 3 && respelled.every(v => v > 500), `st, im and tw each respell (${JSON.stringify(tally)})`)
+  assert.deepEqual(
+    Object.fromEntries(Object.entries(tally).filter(([k]) => k.startsWith('refused'))),
+    {
+      'refused tw': 2 * 9, 'refused st (named none)': 12 * 9, 'refused im (named none)': 6 * 9, 'refused tw (named none)': 9,
+      'refused tw ?': 2 * 30 + 3, 'refused st (named none) ?': 12 * 30, 'refused im (named none) ?': 6 * 30,
+      'refused tw (named none) ?': 8 * 3,
+    },
+    `refused (${JSON.stringify(tally)})`)
+  // Every pair the arms read at 97bebca is still read through its own arm, mode and all, except the
+  // clip "embed": yt 1, fb 5 and tw 1 pair, 3 modes each.
+  assert.deepEqual(
+    Object.fromEntries(Object.entries(tally).filter(([k]) => k.startsWith('query arm'))),
+    { 'query arm yt': 3, 'query arm fb': 15, 'query arm tw': 3 }, `query arm (${JSON.stringify(tally)})`)
+
+  // The reported links by name, built from a variable so the paste sweeps above do not pick them up.
+  const MB = 'https://mbedfx.app'
+  const HS = 'https://hotsinglesnear.you'
+  for (const [paste, mode, path] of [
+    [`${MB}/im/share`, undefined, '/im/share.gifv'],
+    [`${HS}/im/share`, undefined, '/im/share.gifv'],
+    [`${MB}/st/video`, undefined, '/st/e/video'],
+    [`${MB}/tw/watch`, undefined, '/tw/embed?clip=watch'],
+    [`${MB}/st/reel`, 'stills', '/st/e/reel/p'],
+    [`${MB}/tw/status`, 'videos', '/tw/embed/v?clip=status'],
+    [`${MB}/st/video/p`, 'videos', '/st/e/video/v'],
+    // Named no post: passed through, and the mode left off.
+    [`${MB}/x/status`, 'stills', '/x/status'],
+    [`${MB}/rd/gallery`, 'stills', '/rd/gallery'],
+    [`${MB}/tt/t`, 'videos', '/tt/t'],
+    [`${MB}/tw/settings`, 'stills', '/tw/settings'],
+    // A kept query is a post's id, and the mode goes on as before.
+    [`${MB}/tw/embed?clip=AwkwardHelplessSalamanderSwiftRage`, 'stills', '/tw/embed/p?clip=AwkwardHelplessSalamanderSwiftRage'],
+    [`${MB}/yt/watch?v=dQw4w9WgXcQ`, 'stills', '/yt/watch/p?v=dQw4w9WgXcQ'],
+    // A kept query that is not this code's own arm, as reported on 2026-11-27: it no longer stops the
+    // handling above. These were /st/reel/p?v=abc (Instagram "p"), /tw/status/p?clip=Foo (an X post),
+    // /rd/gallery/p?v=abc (Reddit "p") and /st/video?fbid=… ("Not found").
+    [`${MB}/st/reel?v=abc`, 'stills', '/st/e/reel/p'],
+    [`${MB}/tw/status?clip=Foo`, 'stills', '/tw/embed/p?clip=status'],
+    [`${MB}/rd/gallery?v=abc`, 'stills', '/rd/gallery?v=abc'],
+    [`${MB}/st/video?fbid=1234567890`, undefined, '/st/e/video'],
+    // Not a word: untouched.
+    [`${MB}/st/moo`, 'stills', '/st/moo/p'],
+  ]) assert.equal(convert(paste, 'mbedfx.app', mode).path, path, `${paste} with ${mode}`)
+  assert.equal(routed('/yt/watch/p?v=dQw4w9WgXcQ').gallery, 'stills')
+  for (const paste of [`${MB}/tw/Embed`, `${HS}/tw/EMBED`, `${MB}/st/followers`, `${MB}/im/gallery`,
+    `${MB}/tw/embed?clip=embed`, `${MB}/tw/embed?clip=EMBED`]) {
+    assert.equal(convert(paste, 'mbedfx.app').ok, false, paste)
+  }
+})
+
+test('THE PAGE\'S QUERY_ARMS ARE THE ROUTER\'S: a query names a post under /{code}/{word} exactly where the table says', () => {
+  /**
+   * The already-ours branch keeps a pasted /{code}/{word}?{query} as it is, mode and all, only where
+   * QUERY_ARMS says the router reads that query under that code and word. A copy that lists an arm the
+   * router lacks would hand /st/reel?v=abc its mode again (the Instagram post "p"); one that misses an
+   * arm would respell or strip a real /fb/photo?fbid=… link. So the table is derived back from route():
+   * for every site code, every PATH_WORDS word in three casings and every parameter set the page keeps,
+   * with values each arm reads, the query changes route()'s answer to a post exactly where the table
+   * names the pair.
+   */
+  const casings = w => [...new Set([w, w.toUpperCase(), w[0].toUpperCase() + w.slice(1)])]
+  const VALUES = {
+    v: ['v=dQw4w9WgXcQ', 'v=1234567890123'], fbid: ['fbid=1234567890'], clip: ['clip=AwkwardHelplessSalamanderSwiftRage'],
+    'story_fbid,id': ['story_fbid=1234567890&id=1234567'], multi_permalinks: ['multi_permalinks=1234567890'],
+  }
+  const named = got => got.kind === 'post' ? `${got.ref.p}:${got.ref.id ?? got.ref.slug ?? got.ref.code}` : null
+  const seen = []
+  for (const c of escapeTokens()) for (const w of [...PATH_WORDS].flatMap(casings)) for (const [keys, qs] of Object.entries(VALUES)) {
+    const routerReads = qs.some(q => { const n = named(routed(`/${c}/${w}?${q}`)); return n !== null && n !== named(routed(`/${c}/${w}`)) })
+    const table = Object.hasOwn(queryArms, c) && Object.hasOwn(queryArms[c], w) && queryArms[c][w].join(',') === keys
+    assert.equal(table, routerReads, `/${c}/${w}?${keys}: the page says ${table}, route() says ${routerReads}`)
+    if (routerReads) seen.push(`${c}/${w}?${keys}`)
+  }
+  assert.deepEqual(seen.sort(), ['fb/permalink.php?story_fbid,id', 'fb/photo.php?fbid', 'fb/photo?fbid', 'fb/story.php?story_fbid,id',
+    'fb/watch?v', 'tw/embed?clip', 'yt/watch?v'])
+})
+
+test('THE PAGE\'S SITE CODES AND ID SHAPES ARE THE ROUTER\'S, character for character', () => {
+  /**
+   * The already-ours branch reads SITE_CODES, ST_ID, IM_ID and TWITCH_SLUG to know which pasted
+   * /{code}/{word} the router used to read as an id, and the Threads branch reads TH_CODE to know which
+   * /t/ code the forced /th/t/ arm takes. A copy that drifts would respell a link the router does not
+   * read, or pass one through that it does. Held the way PIN_SHORT_CODE is.
+   */
+  const refkey = readFileSync(new URL('../src/refkey.ts', import.meta.url), 'utf8')
+  for (const [name, page] of [['ST_ID', pageStIdShape], ['IM_ID', pageImIdShape], ['TWITCH_SLUG', pageTwitchSlug], ['TH_CODE', pageThCode]]) {
+    const src = (refkey.match(new RegExp(`export const ${name} = (\\/.*\\/)\\n`)) || [])[1]
+    assert.ok(src, `refkey.ts still declares ${name}`)
+    assert.equal(page.source, src.slice(1, -1), `the page's ${name} is refkey.ts's`)
+  }
+  assert.deepEqual([...siteCodes].sort(), [...escapeTokens()].sort(), 'SITE_CODES is router.ts ESCAPE')
+})
+
+test('A threads.com/t/{code} LINK CONVERTS TO THE THREADS POST, not to the TikTok-first chooser', () => {
+  /**
+   * With only the host swapped, threads.com/t/{code} came out as /t/{code}, which the worker hands to
+   * TikTok first and, for a code TikTok does not claim, answers with the TikTok-or-Threads "which site?"
+   * page, whose Threads choice /th/t/{code} was "Not found" until 2026-11-26. A Threads /t/ code is the
+   * post's own shortcode (router.ts threads() has the redirects measured), so the converter writes
+   * /th/t/{code}, which the worker routes to the post /@i/post/{code} names.
+   */
+  for (const host of ['www.threads.com', 'threads.com', 'www.threads.net', 'threads.net']) {
+    const paste = `https://${host}/t/DTI1vjIEi5y`
+    const r = convert(paste, 'mbedfx.app')
+    assert.equal(r.path, '/th/t/DTI1vjIEi5y', paste)
+    assert.equal(r.platform, 'Threads', paste)
+    assert.equal(r.token, 'th', `${paste}: the converter wrote the code, so "Read as" replaces it`)
+    assert.deepEqual(routed(r.path), routed('/@i/post/DTI1vjIEi5y'), `${paste}: the post /@i/post/ names`)
+  }
+  const r = convert('https://www.threads.com/t/DDYEM_foiI1', 'mbedfx.app')
+  // "Read as TikTok" gives the short link back, and re-picking Threads the same link.
+  assert.equal(forcedPath(r, 'tt', null), '/tt/t/DDYEM_foiI1')
+  assert.equal(routed(forcedPath(r, 'tt', null)).kind, 'shortlink')
+  assert.equal(forcedPath(r, 'th', null), '/th/t/DDYEM_foiI1')
+  // A mode goes on, because a Threads post takes one, and "Read as TikTok" takes it off again: the router
+  // takes no mode on a short link, and /tt/t/{code}/p is "Not found".
+  for (const [mode, seg] of [['stills', 'p'], ['videos', 'v']]) {
+    const moded = convert('https://www.threads.com/t/DDYEM_foiI1', 'mbedfx.app', mode)
+    assert.equal(moded.path, `/th/t/DDYEM_foiI1/${seg}`)
+    assert.equal(routed(moded.path).gallery, mode)
+    assert.equal(forcedPath(moded, 'tt', null), '/tt/t/DDYEM_foiI1')
+  }
+  // TikTok's /t/ is untouched, and so is a Threads /t/ "code" the forced arm does not take.
+  assert.equal(convert('https://www.tiktok.com/t/ZTSw2mYwR', 'mbedfx.app').path, '/t/ZTSw2mYwR')
+  for (const code of ['status', 'Embed', 'a.b']) {
+    assert.equal(convert(`https://www.threads.com/t/${code}`, 'mbedfx.app').path, `/t/${code}`, code)
+  }
+})
+
+test('"embed" IS TWITCH\'S PLAYER IN ANY CASE: refused as a clip, folded as the player', () => {
+  /**
+   * The converter's half of router.ts twSlug()'s third rule. #162 refused clips.twitch.tv/embed in
+   * lowercase only, so /Embed came out as /tw/Embed, which the worker answers "Not found" since
+   * 2026-11-26. ?clip=embed came out as /embed?clip=embed, the ['x','ig'] chooser, and
+   * twitch.tv/{channel}/clip/embed came out as itself, "Not found". Each is refused now. The player's own
+   * path is folded too, so a hand-typed /Embed?clip={slug} reads the clip it names.
+   */
+  for (const v of ['embed', 'Embed', 'EMBED']) {
+    for (const paste of [`https://clips.twitch.tv/${v}`, `https://clips.twitch.tv/embed?clip=${v}`,
+      `https://clips.twitch.tv/${v}?clip=${v}`, `https://www.twitch.tv/xqc/clip/${v}`]) {
+      const r = convert(paste, 'mbedfx.app')
+      assert.equal(r.ok, false, `${paste} must be refused, not ${r.path}`)
+      assert.match(r.why, /Twitch's clip player/, paste)
+    }
+    const named = convert(`https://clips.twitch.tv/${v}?clip=AwkwardHelplessSalamanderSwiftRage`, 'mbedfx.app')
+    assert.equal(named.path, '/embed?clip=AwkwardHelplessSalamanderSwiftRage', v)
+    assert.equal(routed(named.path).ref.slug, 'AwkwardHelplessSalamanderSwiftRage', v)
+  }
+  // On twitch.tv a single segment is a channel, and "embed" is a legal login there.
+  assert.match(convert('https://www.twitch.tv/Embed', 'mbedfx.app').why, /channel/)
+})
+
+test('AN instagram.com/gallery/{id} LINK IS REFUSED, since no Instagram post has that shape', () => {
+  /**
+   * NIT of the 2026-11-26 review. With only the host swapped it converted to /gallery/{id} labelled
+   * Instagram, which the worker reads as the Reddit-or-Imgur chooser, a chooser that stopped offering
+   * Instagram the same day (router.ts AMBIGUOUS). Refused the way a story is, and the "Read as" list
+   * still offers the two sites that do mint the path.
+   */
+  for (const paste of ['https://www.instagram.com/gallery/abc123', 'https://instagram.com/gallery/YcAQlkx/']) {
+    const r = convert(paste, 'mbedfx.app')
+    assert.equal(r.ok, false, paste)
+    assert.match(r.why, /No Instagram post has a link like instagram\.com\/gallery\//, paste)
+    assert.equal(routed(forcedPath(r, 'im', new URL(paste).pathname.replace(/\/$/, ''))).ref.kind, 'gallery', paste)
+  }
+  // Only that shape: @gallery's profile and a post by @gallery are not refused.
+  assert.equal(convert('https://www.instagram.com/gallery/', 'mbedfx.app').ok, true)
+  assert.equal(routed(convert('https://www.instagram.com/gallery/p/DaQ5CPTki4E/', 'mbedfx.app').path).ref?.p, 'ig')
 })
 
 test('AN UNKNOWN HOST IS TREATED AS A FEDIVERSE INSTANCE, and says so', () => {
@@ -1443,7 +2017,12 @@ test('EVERY SITE IN "Read as", ON EVERY PASTE IN THIS FILE: the chip\'s own site
         const forced = forcedPath(r, code, pathOf(paste))
         assert.ok(forced.startsWith(`/${code}/`), `${paste}, read as ${code}: ${forced} leads with the picked token`)
         if (r.token) assert.notEqual(forced.split('/')[2], r.token, `${paste}, read as ${code}: ${forced} stacks a token`)
-        assert.equal(forced.slice(code.length + 1), rest, `${paste}, read as ${code}: the rest is the converted path`)
+        // EXCEPT A MODE ON A TIKTOK SHORT LINK, which the picker drops (added 2026-11-26, rewritten from a
+        // plain equality): /tt/t/{code}/p is "Not found", and threads.com/t/{code} now converts to
+        // /th/t/{code}, which takes a mode, so "Read as TikTok" with stills on would have handed it out.
+        const shortMode = code === 'tt' && /^\/t\/[^/?]+\/[pv]$/.test(rest)
+        assert.equal(forced.slice(code.length + 1), shortMode ? rest.slice(0, -2) : rest,
+          `${paste}, read as ${code}: the rest is the converted path`)
         if (code === r.token) assert.equal(forced, r.path, `${paste}: re-picking the shown site gives back ${r.path}`)
         picks++
       }

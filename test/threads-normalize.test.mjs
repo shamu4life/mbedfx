@@ -7,6 +7,7 @@ import { readFileSync } from 'node:fs'
 import { renderPost } from '../src/render/discord.ts'
 import { fetchThreads } from '../src/platforms/threads/fetch.ts'
 import { cardVerdict } from '../src/smoke.ts'
+import { handle, liveFetchPost } from '../src/worker.ts'
 
 // An SSR page embeds the post as an Instagram media dict under a RelayPrefetchedStreamCache preloader
 // with a stable prefix + rotating hash. This mirrors the real wrapper closely enough to exercise the
@@ -49,13 +50,124 @@ const CODE = 'DDYEM_foiI1'
 const TITLE = 'Pablo Estevez (&#064;pmestevez) on Threads'
 const IMG = 'https://scontent.xx.fbcdn.net/v/t39.92108-6/img.jpg?a=1&amp;b=2'
 
-test('threadsHasPost keys on og:type=article, the one liveness marker', () => {
+/**
+ * Threads' login wall as the OG fallback saw it in production on 2026-11-27: REBUILT from what
+ * /_api/v1 returned, not captured (the fixture's own comment has the measurement and what is inferred).
+ */
+const LOGIN_WALL = readFileSync(new URL('./fixtures/threads-login-wall.html', import.meta.url), 'utf8')
+
+test('threadsHasPost needs og:type=article AND an og:title naming the author, so a login wall is no post', () => {
+  /**
+   * REWRITTEN 2026-11-27. This was "threadsHasPost keys on og:type=article, the one liveness marker",
+   * and pinned og:type as enough. It was enough on 2026-07-21, when a dead code got a shell with no
+   * og:type at all. By 2026-11-27 Threads' login wall reached production through it: a deleted post
+   * and a made-up code each drew a card by "Threads • Log in". The wall carries og:type=article (the
+   * fetch gate could not have passed otherwise), so the type alone is now asserted to be NOT enough.
+   */
   assert.equal(threadsHasPost(mediaPage(TITLE, IMG)), true)
-  // A deleted/private/profile page renders the shell with no article type.
+  assert.equal(threadsHasPost(LOGIN_WALL), false, 'og:type=article with a brand title is not a post page')
+  assert.match(LOGIN_WALL, /og:type" content="article"/, 'the fixture keeps the marker that let it through')
+  // A title naming an author is not enough without the type, and the type is not enough without it.
+  assert.equal(threadsHasPost(`<meta property="og:title" content="${TITLE}" />`), false)
+  assert.equal(threadsHasPost('<meta property="og:type" content="article" /><meta property="og:title" content="Threads" />'), false)
+  assert.equal(threadsHasPost('<meta property="og:type" content="article" />'), false)
+  // A deleted/private/profile page as measured 2026-07-21: the shell with no article type.
   assert.equal(threadsHasPost('<html><head><meta property="og:type" content="profile" /></head></html>'), false)
+  // Real post heads still pass: the two pages captured 2026-10-04 keep their own og:* head. They were
+  // fetched with SSR_HEADERS (a browser UA), not the bot UAs the fallback sends, which could not be
+  // fetched while this was written (429); that their og:title has the same form is what the fallback's
+  // byline parse has relied on since 2026-07-21.
+  assert.equal(threadsHasPost(readFileSync(new URL('./fixtures/threads-ssr-carousel.html', import.meta.url), 'utf8')), true)
+  assert.equal(threadsHasPost(readFileSync(new URL('./fixtures/threads-ssr-video.html', import.meta.url), 'utf8')), true)
   assert.equal(threadsHasPost('<html><head><title>nothing</title></head></html>'), false)
   assert.equal(threadsHasPost(null), false)
   assert.equal(threadsHasPost(undefined), false)
+})
+
+test('A LOGIN WALL IS NEVER A POST, and a date decoded from a code it did not vouch for never surfaces', () => {
+  /**
+   * The production card this prevents, measured 2026-11-27 05:04 UTC through /_api/v1 (Worker egress):
+   * threads.com/@i/post/DbcSwYaEa9r, a deleted post, answered ok:true with author "Threads • Log in",
+   * no handle, the wall's "Join Threads to share ideas…" as its text and a static asset as its picture.
+   * The made-up ZTSw2mYwR answered the same with createdAt 2011-09-03T16:56:37.702Z, decoded from a
+   * code nobody minted. buildFromHtml used the title whole when it was not a byline, and decoded the
+   * date before anything had said the code was a post.
+   */
+  for (const code of ['DbcSwYaEa9r', 'ZTSw2mYwR']) {
+    assert.equal(normalizeThreads({ source: 'html', media: LOGIN_WALL, text: LOGIN_WALL }, { p: 'th', code }), null, code)
+  }
+  // The date production showed is what the code decodes to, which is why it had to be gated.
+  assert.equal(createdAtFromCode('ZTSw2mYwR').toISOString(), '2011-09-03T16:56:37.702Z')
+})
+
+test('EACH OG FIELD COMES FROM A PAGE THAT IS THE POST: one walled page loses its field, never lends the wall\'s', () => {
+  /**
+   * The two OG pages are separate requests, so either can be the wall alone. Read as before, a walled
+   * fbhit page made a real post's caption "Join Threads to share ideas…", and a walled Discordbot page
+   * made its picture the wall's static asset.
+   */
+  const ref = { p: 'th', code: CODE }
+  const textWalled = normalizeThreads({ source: 'html', media: mediaPage(TITLE, IMG), text: LOGIN_WALL }, ref)
+  assert.equal(textWalled.author.handle, 'pmestevez')
+  assert.equal(textWalled.text, '', 'no caption rather than the wall\'s')
+  assert.equal(textWalled.media[0].url, 'https://scontent.xx.fbcdn.net/v/t39.92108-6/img.jpg?a=1&b=2')
+
+  const mediaWalled = normalizeThreads({ source: 'html', media: LOGIN_WALL, text: textPage(TITLE, 'the caption') }, ref)
+  assert.equal(mediaWalled.author.name, 'Pablo Estevez', 'the byline comes from the page that is the post')
+  assert.equal(mediaWalled.text, 'the caption')
+  assert.deepEqual(mediaWalled.media, [], 'no picture rather than the wall\'s static asset')
+
+  // Two pages for one code naming two authors: one is not this post and nothing says which.
+  const other = 'Someone Else (&#064;someoneelse) on Threads'
+  assert.equal(normalizeThreads({ source: 'html', media: mediaPage(TITLE, IMG), text: textPage(other, 'x') }, ref), null)
+})
+
+test('fetchThreads ANSWERS assert_fail WHEN EVERY PAGE IS THE LOGIN WALL, the failure card\'s reason', async () => {
+  // Every request answers the wall, the SSR one included: it carries no Target preloader, so the OG
+  // fallback runs, and it is the fallback's gate that let the wall through before.
+  const real = globalThis.fetch
+  const seen = []
+  globalThis.fetch = async (input, init) => {
+    seen.push(init?.headers?.['user-agent'] ?? '')
+    return new Response(LOGIN_WALL, { status: 200, headers: { 'content-type': 'text/html' } })
+  }
+  try {
+    assert.deepEqual(await fetchThreads({ p: 'th', code: 'DbcSwYaEa9r' }), { ok: false, reason: 'assert_fail' })
+    assert.equal(seen.length, 3, 'the SSR ask and both OG asks, each answered once')
+  } finally {
+    globalThis.fetch = real
+  }
+})
+
+test('THE API ANSWERS fetch_fail FOR A DELETED THREADS POST, not a card by "Threads • Log in"', async () => {
+  /**
+   * The same request production answered wrongly on 2026-11-27, through the real handler and the real
+   * fetcher, with fetch stubbed to answer the wall to every ask. No createdAt reaches the body.
+   */
+  const real = globalThis.fetch
+  globalThis.fetch = async () => new Response(LOGIN_WALL, { status: 200, headers: { 'content-type': 'text/html' } })
+  const points = []
+  try {
+    const env = { AE: { writeDataPoint(p) { points.push(p.blobs) } }, ASSETS: { async fetch() { return new Response('a') } }, TRANSLATE_GOOGLE: 'off' }
+    const deps = {
+      cache: { async match() { return undefined }, async put() {} },
+      fetchPost: liveFetchPost,
+      resolveShortlink: async () => ({ kind: 'unresolved' }),
+      resolveRedditShare: async () => null,
+      resolveMetaShare: async () => null,
+    }
+    const target = 'https://www.threads.com/@i/post/DbcSwYaEa9r'
+    const res = await handle(new Request(`https://mbedfx.app/_api/v1?url=${encodeURIComponent(target)}`), env, { waitUntil() {} }, deps)
+    const raw = await res.text()
+    const body = JSON.parse(raw)
+    assert.equal(body.ok, false, raw)
+    assert.equal(body.error.code, 'fetch_fail')
+    assert.equal(body.error.platform, 'th')
+    assert.doesNotMatch(raw, /Log in|Join Threads|createdAt/)
+    assert.ok(points.some(b => b[0] === 'th' && b[1] === 'assert_fail'), 'counted as the gate refusing the page')
+  } finally {
+    globalThis.fetch = real
+  }
 })
 
 test('createdAtFromCode derives the timestamp from the snowflake (shift 23 + IG epoch)', () => {

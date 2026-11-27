@@ -48,6 +48,19 @@ const YTDLP_ID: Record<'dm' | 'st' | 'im', RegExp> = { dm: DM_ID, st: ST_ID, im:
 export const TWITCH_SLUG = /^[A-Za-z0-9][A-Za-z0-9_-]{2,99}$/
 
 /**
+ * A THREADS SHORTCODE: base64url, slack over the ~11-character norm. Every code in this repo's fixtures
+ * and tests that names a real post is 11 characters (DTI1vjIEi5y, DbWxxQjFe4u, DDYEM_foiI1,
+ * DeEFGTkCLxz, DbkwmbMEt6u), and the bound stays loose because no other length was measured either
+ * way: Instagram, whose codes Threads shares, has longer ones for some posts.
+ *
+ * HERE SINCE 2026-11-26, for TWITCH_SLUG's reason. It was platforms/threads/fetch.ts's alone, where it
+ * pins the url the fetcher builds, and router.ts's forced /th/t/{code} arm gained the same rule, so the
+ * router can never mint a code the fetcher would refuse. NOT ENFORCED BY parseRefKey: the fetcher
+ * re-checks every code before it builds a url, which is the check that matters for a /_media/ path.
+ */
+export const TH_CODE = /^[A-Za-z0-9_-]{1,64}$/
+
+/**
  * THE OWNER SEGMENT of a Facebook post permalink: a numeric page/profile id or a Facebook vanity name.
  *
  * Facebook vanities allow letters, digits and PERIODS, and NOT underscores, which is what makes the

@@ -1,9 +1,11 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { route } from '../src/router.ts'
-import { refKey, parseRefKey } from '../src/refkey.ts'
+import { readFileSync } from 'node:fs'
+import { route, PATH_WORDS } from '../src/router.ts'
+import { refKey, parseRefKey, DM_ID, TH_CODE } from '../src/refkey.ts'
 import { mediaUrl } from '../src/render/embed.ts'
 import { encodeStatusId } from '../src/statusid.ts'
+import { SHORTLINK_CANDIDATES } from '../src/worker.ts'
 
 const r = (p) => route(new URL(`https://staging.megapenispoopenfarten.sex${p}`))
 
@@ -109,7 +111,7 @@ test('AMBIGUOUS PATHS ARE NEVER GUESSED', () => {
     ['/settings/account', ['x', 'bs', 'rd']],
     ['/i/lists', ['x', 'ig']],
     ['/i/bookmarks', ['x', 'ig']],
-    ['/gallery/abc123', ['rd', 'ig', 'im']],
+    ['/gallery/abc123', ['rd', 'im']], // ['rd','ig','im'] until 2026-11-26: Instagram's choice could only dead-end (router.ts AMBIGUOUS)
   ]
   for (const [path, candidates] of cases) {
     const got = r(path)
@@ -332,7 +334,7 @@ test('ACCEPTANCE: the ambiguity table is UNCHANGED by the spoof routes', () => {
   // silently stops being ambiguous and starts serving a post as JSON.
   const id = encodeStatusId(refKey({ p: 'bs', handle: 'alice.bsky.social', rkey: '3k2a' }))
   for (const [p, want] of [
-    ['/gallery', ['ig', 'im', 'rd']],
+    ['/gallery', ['im', 'rd']], // ['rd','ig','im'] until 2026-11-26: Instagram's choice could only dead-end (router.ts AMBIGUOUS)
     ['/settings', ['bs', 'rd', 'x']],
     ['/hashtag', ['bs', 'x']],
   ]) {
@@ -668,7 +670,7 @@ test('ACCEPTANCE: the ambiguity table changes ONLY where this task says it does'
     // /i/moments had NO assertion anywhere in the suite before this line — the one row of
     // ambiguity() that no test covered.
     ['/i/moments', ['x', 'ig']],
-    ['/gallery/abc123', ['rd', 'ig', 'im']],
+    ['/gallery/abc123', ['rd', 'im']], // ['rd','ig','im'] until 2026-11-26: Instagram's choice could only dead-end (router.ts AMBIGUOUS)
     ['/api', ['x', 'ig']],
     ['/users', ['x', 'ig']],
     ['/_oembed', ['x', 'ig']],
@@ -827,6 +829,55 @@ test('/tt/t/{code} — the documented escape hatch reaches the shortlink route t
   assert.notEqual(r('/bs/t/ZTSw2mYwR').kind, 'shortlink')
 })
 
+test('/th/t/{code} IS THE THREADS POST WITH THAT SHORTCODE, and /t/{code} is still asked of TikTok first', () => {
+  /**
+   * The /t/ chooser's Threads choice. When TikTok does not claim a code, the worker offers ['tt','th']
+   * (worker.ts SHORTLINK_CANDIDATES), and the Threads link it builds, /th/t/{code}, answered notfound
+   * until 2026-11-26. A Threads /t/ code is the post's own shortcode (router.ts threads() has the five
+   * redirects and the production check), so the forced arm is the route /@i/post/{code} gets, byte for
+   * byte: one cache entry and one redirect target for both spellings.
+   *
+   * A before/after sweep of router.ts without this arm against router.ts with it, 4,668,416 paths (some
+   * listed twice) under /th/, /x/, /tt/ and no code at depths 1 to 4 with /p, /v and .mp4 forms, moved 80
+   * answers. Every one was a /th/t/{code} path, notfound before and this post now.
+   */
+  for (const code of ['DTI1vjIEi5y', 'DDYEM_foiI1', 'DbkwmbMEt6u']) {
+    assert.deepEqual(r(`/th/t/${code}`), r(`/@i/post/${code}`), code)
+    assert.deepEqual(r(`/th/t/${code}`), {
+      kind: 'post', ref: { p: 'th', code }, canonical: `https://www.threads.com/@i/post/${code}`,
+    }, code)
+    assert.equal(r(`/th/t/${code}/p`).gallery, 'stills', `${code}: a Threads post takes a mode`)
+    // FORCED ONLY: unforced, the same code is still a request to ask TikTok.
+    assert.deepEqual(r(`/t/${code}`), {
+      kind: 'shortlink', p: 'tt', code, canonical: `https://www.tiktok.com/t/${code}`,
+    }, `/t/${code}`)
+  }
+  // A code the fetcher would refuse (refkey.ts TH_CODE) is not routed.
+  for (const bad of ['a.b', '@jack', 'x'.repeat(65)]) assert.equal(r(`/th/t/${bad}`).kind, 'notfound', bad)
+  // Nor is a path word, in any case. Without that, bare /th/t with a mode on, /th/t/p, would be Threads post "p".
+  const cased = w => [w, w.toUpperCase(), w[0].toUpperCase() + w.slice(1)]
+  for (const w of [...PATH_WORDS].filter(v => /^[A-Za-z0-9_-]+$/.test(v)).flatMap(cased)) {
+    assert.notEqual(r(`/th/t/${w}`).ref?.p, 'th', `/th/t/${w}`)
+  }
+  assert.equal(r('/th/t/p').kind, 'notfound')
+  assert.equal(r('/th/t/v').kind, 'notfound')
+  // Exactly depth 2 under the code.
+  assert.equal(r('/th/t').kind, 'notfound')
+  assert.notEqual(r('/th/t/DTI1vjIEi5y/extra/more').ref?.p, 'th')
+})
+
+test('THE ROUTER, THE PAGE AND THE THREADS FETCHER HOLD ONE THREADS SHORTCODE SHAPE', () => {
+  /**
+   * The forced /th/t/{code} arm reads refkey.ts TH_CODE, and platforms/threads/fetch.ts refuses any code
+   * outside it before it builds a url. One constant, so the router cannot mint a code the fetcher would
+   * refuse. Checked here because the fetcher's is a re-export, which a later edit could quietly replace.
+   */
+  const fetchSrc = readFileSync(new URL('../src/platforms/threads/fetch.ts', import.meta.url), 'utf8')
+  assert.match(fetchSrc, /^import \{ TH_CODE \} from '\.\.\/\.\.\/refkey\.ts'$/m)
+  assert.match(fetchSrc, /^const SHORTCODE = TH_CODE$/m)
+  assert.ok(TH_CODE.test('DDYEM_foiI1') && !TH_CODE.test('a.b'))
+})
+
 test('/t alone is still not a shortlink', () => {
   // Depth 1. There is no code to resolve, so this falls through to the ordinary bare-segment
   // handling rather than resolving the empty string against TikTok.
@@ -840,7 +891,7 @@ test('ACCEPTANCE: the ambiguity table is STILL unchanged by the shortlink route'
   for (const [path, candidates] of [
     ['/mrbeast', ['x', 'ig']],
     ['/search', ['x', 'tt', 'bs', 'rd']],
-    ['/gallery/abc123', ['rd', 'ig', 'im']],
+    ['/gallery/abc123', ['rd', 'im']], // ['rd','ig','im'] until 2026-11-26: Instagram's choice could only dead-end (router.ts AMBIGUOUS)
   ]) {
     const got = r(path)
     assert.equal(got.kind, 'ambiguous', path)
@@ -860,7 +911,7 @@ test('ACCEPTANCE: the ambiguity table is unchanged by the pin.it route too', () 
     ['/pin.it/following', ['x', 'ig']],
     ['/pin.it', ['x', 'ig']],
     ['/Rq7Lm3Zx9', ['x', 'ig']],
-    ['/gallery/Rq7Lm3Zx9', ['rd', 'ig', 'im']],
+    ['/gallery/Rq7Lm3Zx9', ['rd', 'im']], // ['rd','ig','im'] until 2026-11-26: Instagram's choice could only dead-end (router.ts AMBIGUOUS)
   ]) {
     const got = r(path)
     assert.equal(got.kind, 'ambiguous', path)
@@ -1191,8 +1242,10 @@ test('ACCEPTANCE: the ambiguity table is COMPLETELY UNCHANGED by this task', () 
   // Instagram is the platform the depth rule is written ABOUT, so the instinct to touch this
   // table is strongest here and is wrong: /p/ and /reel/ are Instagram's OWN routes, which makes
   // segment-1 shadowing moot by construction (spec §Routing). Re-asserted in full so an
-  // accidental change cannot ride along — /gallery/{id} especially, which stays contested
-  // because @gallery is a live Instagram account.
+  // accidental change cannot ride along — /gallery/{id} especially, which stays contested because
+  // Reddit and Imgur both mint it. (Until 2026-11-26 this said "because @gallery is a live Instagram
+  // account". That account is real, but no Instagram post lives at /gallery/{id}, so Instagram left the
+  // row that day; see router.ts AMBIGUOUS.)
   const unchanged = [
     ['/mrbeast', ['x', 'ig']],
     ['/hashtag/nfl', ['x', 'bs']],
@@ -1200,7 +1253,7 @@ test('ACCEPTANCE: the ambiguity table is COMPLETELY UNCHANGED by this task', () 
     ['/explore', ['x', 'ig', 'tt']],
     ['/settings/account', ['x', 'bs', 'rd']],
     ['/i/lists', ['x', 'ig']],
-    ['/gallery/abc123', ['rd', 'ig', 'im']],
+    ['/gallery/abc123', ['rd', 'im']], // ['rd','ig','im'] until 2026-11-26: Instagram's choice could only dead-end (router.ts AMBIGUOUS)
     ['/api', ['x', 'ig']],
     ['/users', ['x', 'ig']],
     ['/_oembed', ['x', 'ig']],
@@ -1369,11 +1422,15 @@ test('THE DELIBERATE NON-CLAIMS: bare ids, galleries and albums are left exactly
    *
    *   "yt-dlp answers /gallery/{id} video-or-playlist unpredictably" dissolved with the container.
    *
-   * The ROUTER-level objection to /gallery/ did not dissolve, and is honoured: reddit.com/gallery
-   * and @gallery on Instagram are both real, so the row is still a chooser. Imgur is ADDED to it
-   * rather than taking it, which is additive — no existing link changes meaning.
+   * The ROUTER-level objection to /gallery/ did not dissolve, and is honoured: reddit.com/gallery/{id}
+   * is a real Reddit post, so the row is still a chooser. Imgur is ADDED to it rather than taking it,
+   * which is additive — no existing link changes meaning. (This also named @gallery on Instagram as a
+   * reason until 2026-11-26. The account is real, but no Instagram POST lives at /gallery/{id}, so
+   * Instagram left the row that day; see router.ts AMBIGUOUS.)
    */
-  assert.deepEqual(r('/gallery/YcAQlkx').candidates, ['rd', 'ig', 'im'])
+  // ['rd', 'ig', 'im'] until 2026-11-26, when Instagram left the row: /ig/gallery/{id} answered notfound and
+  // instagram.com/gallery/{id} names no post, so offering it was offering a dead end (router.ts AMBIGUOUS).
+  assert.deepEqual(r('/gallery/YcAQlkx').candidates, ['rd', 'im'])
   assert.deepEqual(r('/a/iX265HX'), {
     kind: 'post', ref: { p: 'im', kind: 'album', id: 'iX265HX' },
     canonical: 'https://imgur.com/a/iX265HX',
@@ -2005,10 +2062,11 @@ test('NO OTHER PREFIX PICKS UP A FACEBOOK QUERY SHAPE OR A META SHARE LINK', () 
    * on 'tt': /yt/photo/?fbid=… must not start minting a Facebook ref, and /bs/share/{code} must not ask
    * Meta's shortener.
    *
-   * Asserted as "not Facebook's, not a share link" rather than as notfound, because some of these are
-   * posts and were before this change: the forced depth-1 arms of /st/, /im/, /dm/ and /tw/ read any
-   * single segment as that site's id, so /st/photo/?fbid=… is Streamable id 'photo'. The sweep in the
-   * section header found none of these answers changed.
+   * Asserted as "not Facebook's, not a share link" rather than as notfound, because some of these were
+   * posts before this change: the forced depth-1 arms of /st/, /im/, /dm/ and /tw/ read any single
+   * segment as that site's id, so /st/photo/?fbid=… was Streamable id 'photo'. The sweep in the section
+   * header found none of these answers changed. That reading was fixed on 2026-11-26 (PATH_WORDS, pinned
+   * in the section on cross-site words below); this test still asks only what it asked.
    */
   for (const tok of OTHER_TOKENS) {
     for (const p of [...FB_QUERY_SHAPES.map(s => `/${tok}${s}`), `/${tok}/share/Fixture08X`]) {
@@ -2166,10 +2224,11 @@ test('/tw/embed?clip={slug} IS CLIP {slug}, never a clip named "embed"', () => {
 test('NO OTHER PREFIX PICKS UP THE YOUTUBE WATCH SHAPE OR THE TWITCH EMBED SHAPE', () => {
   /**
    * The twins are guarded on `forced === 'yt'` and `forced === 'tw'`. Asserted as "not that platform's
-   * post" rather than as notfound, because some of these were posts before this change and still are:
-   * the forced depth-1 arms of /st/ and /im/ read any single segment as an id, so /st/watch?v=… is
-   * Streamable id 'watch'. That is a defect of its own (left for its own change); the sweep above found
-   * none of these answers changed.
+   * post" rather than as notfound, because some of these were posts before this change: the forced
+   * depth-1 arms of /st/ and /im/ read any single segment as an id, so /st/watch?v=… was Streamable id
+   * 'watch'. That was a defect of its own, left for its own change; the sweep above found none of these
+   * answers changed. It was fixed later the same day (PATH_WORDS, the section below), which is where
+   * the notfound those paths now answer is pinned; this test still asks only what it asked.
    */
   for (const tok of ['x', 'tt', 'ig', 'th', 'rd', 'bs', 'fb', 'dm', 'st', 'im', 'tw', 'lm', 'ms', 'mk', 'pt', 'pn']) {
     for (const shape of YT_WATCH_SHAPES) assert.notEqual(r(`/${tok}${shape}`).ref?.p, 'yt', `/${tok}${shape} must not be read as YouTube`)
@@ -2177,6 +2236,285 @@ test('NO OTHER PREFIX PICKS UP THE YOUTUBE WATCH SHAPE OR THE TWITCH EMBED SHAPE
   for (const tok of ['x', 'tt', 'ig', 'th', 'rd', 'bs', 'yt', 'fb', 'dm', 'st', 'im', 'lm', 'ms', 'mk', 'pt', 'pn']) {
     for (const shape of TW_EMBED_SHAPES) assert.notEqual(r(`/${tok}${shape}`).ref?.p, 'tw', `/${tok}${shape} must not be read as Twitch`)
   }
+})
+
+/* ===================== A SITE CODE NEVER READS ANOTHER SITE'S PATH WORD AS AN ID =====================
+ *
+ * FOUND 2026-11-26 while fixing the "Read as" picker above (#162), and reproduced offline with route() at
+ * 97bebca, the #162 merge. Three defects, fixed together:
+ *
+ *   1. CROSS-SITE WORDS UNDER A FORCED CODE. The forced depth-1 arms read any single segment of the right
+ *      shape as an id: /st/watch?v={id} was Streamable id "watch", /im/watch Imgur "watch", /tw/watch a
+ *      clip "watch", /st/embed Streamable "embed", and /tw/Embed and /tw/EMBED were clips past #162's
+ *      lowercase-only 'embed' check. Now no forced depth-1 arm takes a PATH_WORDS word, in any case.
+ *   2. CHOOSER DEAD ENDS. /gallery/{id} offered Reddit, Instagram and Imgur, and /rd/gallery/{id} and
+ *      /ig/gallery/{id} were both notfound. /rd/gallery/{id} is now the Reddit post /comments/{id} names,
+ *      Instagram left the row (no Instagram post lives there), and the converter turns a
+ *      reddit.com/gallery/{id} paste into /rd/gallery/{id}.
+ *   3. CLIPS NAMED "embed". /clip/embed, /{channel}/clip/embed and their /tw/ forms, unforced too, were a
+ *      clip whose slug is "embed", the player's own path. twSlug() refuses it, in any case, and so does
+ *      the ?clip= reader.
+ *
+ * Checked by a before/after sweep, the router at 97bebca against this one, over 76,534,520 unique paths:
+ * the same 21 first segments as #162's sweep above (none, every escape token, xqc, embed and watch),
+ * then one or two of 134 segments (all 87 PATH_WORDS, upper and title case of 12 of them, and 23 real
+ * ids of every shape) with 18 queries and 11 suffixes, or three of 20 with 4 queries and 3 suffixes.
+ * Each changed answer was put down to a fix by re-running it on the router with that one fix reverted.
+ * 134,182 answers changed, and every one is accounted for:
+ *
+ *   bug 1   76,284   /st/, /im/ or /tw/ + a word, which was that site's id "{word}" (34,632 under /st/,
+ *                    17,316 under /im/, 24,336 under /tw/; none under /dm/, whose id shape no word fits).
+ *                    73,206 are now notfound. The other 3,078 now get the reading every forced miss falls
+ *                    through to, with the code as an account name: /st/reel/p is @st's Instagram reel "p"
+ *                    (2,052, Instagram) and /tw/status/v @tw's tweet "v" (1,026, X), the two-readings
+ *                    residue router.ts GALLERY_SUFFIX names. Their ids are the path's own suffixes, 'p',
+ *                    'v' and '.mp4': no X status id (those are numeric), and no Instagram code of the
+ *                    length this file's real ones have (11).
+ *   bug 1+3     936   /tw/{"embed" in any casing but lowercase}, a clip; now notfound. Both fixes refuse
+ *                    it, so only reverting both restores the old answer.
+ *   bug 2   43,356   16,722 /gallery/{id} choosers, [rd,ig,im] -> [rd,im], and 26,634 /rd/gallery/{id}
+ *                    answers, notfound -> exactly what /comments/{id} gets, suffix and query included.
+ *   bug 3   13,606   a clip "embed", any casing: 13,554 now notfound, 14 the ['x','ig'] chooser
+ *                    (/embed||?clip=embed, as /embed?clip=ab gets) and 38 a fallthrough reading with
+ *                    the same kind of id (/embed/p/p/.mp4?clip=embed is @embed's Instagram post "p", and
+ *                    /tw/status/clip/embed @tw's tweet "clip"). 2,864 were unforced:
+ *                    626 /clip/{embed}, 2,166 /{channel}/clip/{embed} and 72 /embed…?clip={embed}.
+ *
+ * Unforced, nothing else moved: the 16,722 choosers and those 2,864 are the whole list. The sweep scripts
+ * and the 97bebca snapshot are not in the repo; these numbers are the record.
+ */
+
+/**
+ * EVERY WORD router.ts READS AS STRUCTURE, read out of its source rather than listed again here: each
+ * string a segment is compared against (`seg[i] === '…'`, `raw[i] === '…'`, and ambiguity()'s `a`/`b`),
+ * each `new Set([...])` literal but SITE_PATHS (whole pathnames), and the keys of AMBIGUOUS and ESCAPE.
+ * Line comments go first, and only a `//` at a line start or after a space, so `https://` survives; then
+ * block comments. The other order breaks: ambiguity()'s first line ends in a line comment holding
+ * `/settings/*`, which would open a block comment that swallows the code below it.
+ */
+function routerWords() {
+  const src = readFileSync(new URL('../src/router.ts', import.meta.url), 'utf8')
+  const code = src.replace(/(^|\s)\/\/.*$/gm, '$1').replace(/\/\*[\s\S]*?\*\//g, '')
+  const words = new Set()
+  for (const m of code.matchAll(/\b(?:seg|raw)\[\d+\] [!=]== '([^']*)'/g)) words.add(m[1])
+  for (const m of code.matchAll(/\b[ab] [!=]== '([^']*)'/g)) words.add(m[1])
+  for (const m of code.matchAll(/new Set\(\[([^\]]*)\]\)/g)) {
+    for (const q of m[1].matchAll(/'([^']*)'/g)) if (!q[1].startsWith('/')) words.add(q[1])
+  }
+  const block = name => code.match(new RegExp(`const ${name}\\b[^=]*=\\s*\\{([\\s\\S]*?)\\n\\}`))[1]
+  for (const m of block('AMBIGUOUS').matchAll(/^\s*([\w.]+):/gm)) words.add(m[1])
+  const tokens = [...block('ESCAPE').matchAll(/\b(\w+): '\w+'/g)].map(m => m[1])
+  for (const t of tokens) words.add(t)
+  words.delete('')
+  return { words, tokens }
+}
+
+const casings = w => [...new Set([w, w.toUpperCase(), w[0].toUpperCase() + w.slice(1)])]
+
+test('A FORCED SINGLE SEGMENT IS NEVER A WORD THE ROUTER READS AS STRUCTURE, in any case', () => {
+  /**
+   * The rule behind defect 1. A site code in front of one segment is the reader asking for that site's
+   * reading of it, and for a word some site's links use (watch, embed, status, gallery, a site code…)
+   * that reading has no post in it. Before the fix it minted one: the wrong post, with no error, on the
+   * links the "Read as" picker builds from another site's converted path.
+   *
+   * The words come out of router.ts, so a matcher that starts comparing against a new word fails here
+   * until PATH_WORDS names it. Checked both ways: the set covers every parsed word, and no forced code
+   * reads any of them, in three casings, as its own post.
+   */
+  const { words, tokens } = routerWords()
+  // The parse itself, so a regex that stops matching cannot make this test vacuous.
+  assert.ok(words.size >= 80, `the parse finds router.ts's words (found ${words.size})`)
+  for (const w of ['watch', 'embed', 'status', 'story.php', 'permalink.php', 'gallery', 'tv', 'clip', 'reels',
+    'followers', 'statuses', 'dm', 'pin.it', 'visual-search']) {
+    assert.ok(words.has(w), `the parse finds '${w}'`)
+  }
+  assert.equal(tokens.length, 17, 'and every ESCAPE token')
+
+  for (const w of words) assert.ok(PATH_WORDS.has(w), `router.ts reads '${w}' as structure, so PATH_WORDS must name it`)
+  for (const w of PATH_WORDS) assert.equal(w, w.toLowerCase(), `PATH_WORDS is lowercase, since pathWord() folds: '${w}'`)
+
+  let checked = 0
+  for (const tok of tokens) {
+    for (const w of PATH_WORDS) {
+      for (const v of casings(w)) {
+        const got = r(`/${tok}/${v}`)
+        assert.ok(!(got.kind === 'post' && got.ref.p === tok), `/${tok}/${v} must not be a ${tok} post: ${JSON.stringify(got.ref)}`)
+        checked++
+      }
+    }
+  }
+  assert.ok(checked > 17 * 80 * 2, `every token, every word, every casing (${checked})`)
+
+  // The reported links by name, with the queries the picker carries, so a failure says which came back.
+  for (const p of [
+    '/st/watch?v=dQw4w9WgXcQ', '/im/watch?v=dQw4w9WgXcQ', '/tw/watch?v=dQw4w9WgXcQ',
+    '/im/watch', '/tw/watch', '/st/embed', '/tw/Embed', '/tw/EMBED', '/st/Watch',
+    '/st/dm', '/st/tv', '/im/gallery', '/im/video', '/tw/clip', '/st/photo/?fbid=1596906755391068',
+  ]) {
+    assert.equal(r(p).kind, 'notfound', p)
+  }
+})
+
+test('A GENUINE ID UNDER A FORCED CODE STILL ANSWERS, and each site\'s own spelling still reads an id that spells a word', () => {
+  /**
+   * What defect 1's fix must not touch. A real id under its own code routes as it did. A word inside a
+   * longer id is not the word. The depth-2 shapes that name their site (/e/, /s/, /a/, /clip/) and the
+   * forced /im/gallery/{id}, which exists to override the chooser, keep reading every id they read, so
+   * a Streamable or Imgur id that happens to spell a word, refused under /st/ and /im/, still has a way
+   * in (router.ts PATH_WORDS states the cost per site).
+   */
+  assert.deepEqual(r('/st/moo').ref, { p: 'st', id: 'moo' })
+  assert.deepEqual(r('/im/A61SaA1').ref, { p: 'im', kind: 'post', id: 'A61SaA1' })
+  assert.deepEqual(r('/dm/x8ocv9e').ref, { p: 'dm', id: 'x8ocv9e' })
+  assert.equal(r(`/tw/${TW}`).ref.slug, TW)
+  assert.equal(r('/tw/shortlowercaseslug').ref.slug, 'shortlowercaseslug')
+  assert.equal(r('/tw/embedded').ref.slug, 'embedded')
+  assert.equal(r('/st/watchx').ref.id, 'watchx')
+
+  assert.deepEqual(r('/e/watch').ref, { p: 'st', id: 'watch' })
+  assert.deepEqual(r('/s/video').ref, { p: 'st', id: 'video' })
+  assert.deepEqual(r('/watch.gifv').ref, { p: 'im', kind: 'post', id: 'watch' })
+  assert.deepEqual(r('/im/Video.gifv').ref, { p: 'im', kind: 'post', id: 'Video' })
+  assert.deepEqual(r('/a/video').ref, { p: 'im', kind: 'album', id: 'video' })
+  assert.deepEqual(r('/im/gallery/watch').ref, { p: 'im', kind: 'gallery', id: 'watch' })
+  assert.equal(r('/clip/watch').ref.slug, 'watch')
+  assert.equal(r('/xqc/clip/Status').ref.slug, 'Status')
+
+  /**
+   * THE TWO "COSTS NOTHING" CLAIMS IN PATH_WORDS'S DOCSTRING, checked rather than trusted. No word has
+   * Dailymotion's id shape, so /dm/ refuses nothing it could have read, and none is as long as the
+   * shortest of the 697 measured Twitch slugs (18), so /tw/ refuses no measured clip.
+   */
+  for (const w of PATH_WORDS) {
+    for (const v of casings(w)) assert.ok(!DM_ID.test(v), `'${v}' must not be Dailymotion-shaped`)
+    assert.ok(w.length < 18, `'${w}' is shorter than any measured Twitch slug`)
+  }
+})
+
+test('/rd/gallery/{id} IS THE REDDIT POST /comments/{id} NAMES, in every suffix', () => {
+  /**
+   * Defect 2's Reddit half. reddit.com/gallery/{id} is Reddit's own spelling of post {id} (router.ts
+   * reddit() has the measurement), and the /gallery/{id} chooser offers Reddit, so its forced link has
+   * to be that post. It was notfound. deepEqual to /comments/{id}, the spelling the converter already
+   * hands out for redd.it, so the two share one ref, one cache entry and one canonical.
+   */
+  for (const id of ['haucpf', '1x2voz0', 'YcAQlkx']) {
+    for (const sfx of [...PATH_SUFFIXES, '||']) {
+      const p = suffixed(`/rd/gallery/${id}`, sfx)
+      assert.deepEqual(r(p), r(suffixed(`/comments/${id}`, sfx)), `${p} must route exactly as /comments/${id}${sfx}`)
+    }
+  }
+  assert.deepEqual(r('/rd/gallery/haucpf'), {
+    kind: 'post', ref: { p: 'rd', sub: '', id: 'haucpf' }, canonical: 'https://www.reddit.com/comments/haucpf',
+  })
+  // FORCED ONLY: unforced it stays the chooser, because Imgur mints the same path.
+  assert.deepEqual(r('/gallery/haucpf').candidates, ['rd', 'im'])
+  // Exactly depth 2 under the code: no id, or a deeper path, is not this arm's.
+  assert.equal(r('/rd/gallery').kind, 'notfound')
+  assert.notEqual(r('/rd/gallery/haucpf/extra/more').ref?.p, 'rd')
+  // And Instagram, which left the row, has no arm here either.
+  assert.equal(r('/ig/gallery/haucpf').kind, 'notfound')
+})
+
+test('EVERY CHOICE A CHOOSER OFFERS FOR A POST ROUTES TO A POST, and the account and page choosers offer none that do', () => {
+  /**
+   * Defect 2 as a rule. A chooser hands a reader one link per candidate, `/{code}{path}`: the converter's
+   * "Which site?" buttons and the API's candidates are both built that way (/_prep, worker.ts). Offering
+   * one that dead-ends beside one that works was the /gallery/{id} defect: Imgur's choice drew the
+   * gallery, Reddit's and Instagram's answered notfound.
+   *
+   * THE CHOOSERS ARE DERIVED, NOT LISTED. Every one- and two-segment path built from router.ts's own
+   * words and a few ids, and every three-segment one with a word first and an id last, goes through
+   * route(), and each ambiguous answer is grouped by its candidates and its depth, which is as fine as
+   * the table can be cut without re-stating ambiguity() here (rows that share both, like /messages and
+   * /settings, are taken together). A candidate counts as routing when its forced link is a post on that
+   * site for some path in the group. Whether a site accepts one particular id is a second question, and
+   * docs/API.md says so: /im/gallery/{nine characters} is notfound, because Imgur ids are shorter.
+   *
+   * THE RULE: in every row, every candidate routes, or none does. None is the account and page rows
+   * (a bare handle, /hashtag/{tag}, /settings…), where the chooser exists to send a human to the right
+   * site and a forced link has no post to name (docs/API.md: "On a profile url every candidate answers
+   * notfound").
+   *
+   * THE /t/{code} CHOOSER IS A ROW TOO, since 2026-11-26. It is not route()'s: route() answers a /t/ code
+   * as a TikTok short link, and worker.ts shows SHORTLINK_CANDIDATES when TikTok does not claim the code.
+   * Every short link the sweep finds is put in that row with those candidates. This test used to exempt
+   * it, because its Threads choice, /th/t/{code}, was notfound. The forced arm in router.ts threads()
+   * closed that, and the row now has to route on every choice like the rest. A shortlink carries no ref,
+   * so the fallthrough check below compares kind and code as well.
+   */
+  const { words } = routerWords()
+  const IDS = ['haucpf', '1x2voz0', 'YcAQlkx', 'abc123', 'jack', 'Rq7Lm3Zx9', '@jack', '2209468366484962']
+  const segs = [...words, ...IDS]
+  const paths = []
+  for (const a of segs) {
+    paths.push(`/${a}`)
+    for (const b of segs) paths.push(`/${a}/${b}`)
+  }
+  for (const a of words) for (const b of segs) for (const c of IDS) paths.push(`/${a}/${b}/${c}`)
+  const rowOf = got => `depth ${got.path.split('/').length - 1} [${got.candidates.join(',')}]`
+
+  const on = (got, c) => (got.kind === 'post' && got.ref.p === c) || (got.kind === 'shortlink' && got.p === c)
+    || (got.kind === 'redditshare' && c === 'rd') || (got.kind === 'metashare' && (c === 'fb' || c === 'th'))
+  /**
+   * THE SITE'S READING, NOT THE FALLTHROUGH. A forced miss falls through to the path read with the code
+   * as an account name, so /x/status/followers is a post by @x whose id is "followers": a post on X, and
+   * no X reading of /status/followers. The same path with a made-up account in front gives that reading
+   * too, so a forced link whose post matches it is not counted as the choice working.
+   */
+  const reading = got => JSON.stringify([got.kind, got.ref ?? got.code ?? null])
+  const routesOn = (path, c) => {
+    const got = r(`/${c}${path}`)
+    return on(got, c) && reading(got) !== reading(r(`/zz9account${path}`))
+  }
+  const rows = new Map()
+  for (const p of paths) {
+    let got = r(p)
+    // A TikTok short link degrades to worker.ts's chooser when TikTok does not claim the code.
+    if (got.kind === 'shortlink' && got.p === 'tt') got = { kind: 'ambiguous', path: p, candidates: SHORTLINK_CANDIDATES }
+    if (got.kind !== 'ambiguous') continue
+    const key = rowOf(got)
+    if (!rows.has(key)) rows.set(key, { candidates: got.candidates, routes: new Set() })
+    const row = rows.get(key)
+    for (const c of got.candidates) if (routesOn(got.path, c)) row.routes.add(c)
+  }
+  assert.ok(rows.size >= 8, `the sweep reaches the chooser rows (found ${[...rows.keys()]})`)
+  const postRows = []
+  for (const [key, row] of rows) {
+    if (row.routes.size === 0) continue
+    assert.deepEqual([...row.routes].sort(), [...row.candidates].sort(),
+      `${key}: every choice must route to a post, since ${[...row.routes]} does`)
+    postRows.push(key)
+  }
+  // Not vacuous: the row the defect was found on is a post row, and routes on every choice, and so is
+  // the /t/ short-link row (found through the sweep: 't' is a router word and the ids are codes).
+  assert.ok(postRows.includes(rowOf(r('/gallery/YcAQlkx'))), `the gallery row is among the post rows: ${postRows}`)
+  assert.ok(postRows.includes(`depth 2 [${SHORTLINK_CANDIDATES.join(',')}]`), `the /t/ row is among the post rows: ${postRows}`)
+})
+
+test('NO TWITCH CLIP IS NAMED "embed", in any case, at any depth, with /tw/ or without', () => {
+  /**
+   * Defect 3. clips.twitch.tv/embed is the clip player, so "embed" is no clip's slug, and every reader
+   * that minted one minted a ref that fetches nothing. These changed unforced too, on purpose: before
+   * 2026-11-26 each answered `{ p: 'tw', kind: 'clip', slug: 'embed' }`.
+   */
+  for (const v of ['embed', 'Embed', 'EMBED', 'eMbEd']) {
+    for (const p of [`/clip/${v}`, `/xqc/clip/${v}`, `/tw/clip/${v}`, `/tw/xqc/clip/${v}`, `/tw/${v}`,
+      `/clip/${v}/p`, `/xqc/clip/${v}.mp4`]) {
+      assert.equal(r(p).kind, 'notfound', p)
+    }
+    // A refused ?clip= falls through like a junk one: the chooser bare /embed gets, notfound under /tw/.
+    assert.deepEqual(r(`/embed?clip=${v}`), r('/embed?clip=ab'), `/embed?clip=${v}`)
+    assert.equal(r(`/embed?clip=${v}`).kind, 'ambiguous')
+    assert.equal(r(`/tw/embed?clip=${v}`).kind, 'notfound', `/tw/embed?clip=${v}`)
+  }
+  // Only the word: a slug that contains it, and the ?clip=settings the bare arm has always read, still route.
+  assert.equal(r('/clip/embedded').ref.slug, 'embedded')
+  assert.equal(r('/xqc/clip/EmbedTheClip').ref.slug, 'EmbedTheClip')
+  assert.equal(r('/embed?clip=settings').ref.slug, 'settings')
+  assert.equal(r(`/clip/${TW}`).ref.slug, TW)
+  assert.equal(r(`/xqc/clip/${TW}`).ref.slug, TW)
 })
 
 test("DISCORD'S SPOILER BARS DO NOT BREAK A LINK", () => {

@@ -1,7 +1,7 @@
 import type { GalleryMode, Platform, PostRef, Route } from './types.ts'
 import {
   BS_ACTOR, DM_ID, FB_OWNER, FEDI_HOST, IM_ID, LEMMY_ID, MASTO_ID, PEERTUBE_ID, PIN_ID, PIN_SHORT_CODE, ST_ID,
-  TWITCH_SLUG, parseRefKey,
+  TH_CODE, TWITCH_SLUG, parseRefKey,
 } from './refkey.ts'
 import { decodeStatusId, statusIdMode } from './statusid.ts'
 
@@ -157,9 +157,23 @@ const AMBIGUOUS: Record<string, readonly Platform[]> = {
   // links there is, and it used to reach nothing at all — the chooser offered Reddit and Instagram
   // and neither could resolve it. Adding a third candidate is additive: no existing link changes
   // meaning, and the person who pasted an Imgur gallery is finally offered Imgur. See imgur().
-  gallery: ['rd', 'ig', 'im'],
+  //
+  // INSTAGRAM LEFT THIS ROW ON 2026-11-26, because both doors it opened were dead ends. No Instagram
+  // post url has the shape /{x}/{y} unless {x} is p, reel, reels or tv (instagram() below has every
+  // arm), and a depth-2 /{user}/{x} on Instagram is a profile tab (reels, tagged) when it is anything,
+  // never a post. So the forced /ig/gallery/{id} the converter and the API offer answered notfound
+  // (route(), measured offline at 97bebca), and instagram.com/gallery/{id}, the link the human
+  // chooser offers, names no post either. Not fetched: instagram.com answers HTTP 200 for paths that
+  // name nothing (the decoy twitchClipSlug's docstring records), so a request could not settle it.
+  // Reddit's door was dead too until the same day; reddit() now has the forced /rd/gallery/{id} arm.
+  // test/router.test.mjs holds the rule this came from: every choice a chooser offers for a post routes
+  // to one, for an id that site can hold.
+  gallery: ['rd', 'im'],
 }
-const RESERVED = new Set(Object.keys(AMBIGUOUS))
+// Exported for test/landing-convert.test.mjs, which holds the converter page's copy (RESERVED_WORDS in
+// public/index.html) equal to it. The page refuses a Streamable id, or an Imgur album or gallery id, that
+// is one of these, because every arm that reads those ids consults reserved() and none would answer.
+export const RESERVED: ReadonlySet<string> = new Set(Object.keys(AMBIGUOUS))
 
 /**
  * Does this SEGMENT spell a token the ambiguity table reserves? Asked by the yt-dlp tier before it
@@ -204,7 +218,8 @@ function ambiguity(seg: string[]): readonly Platform[] | null {
     if (b === 'followers' || b === 'following') return AMBIGUOUS[b]
     // @i is a live Instagram account and IG's depth-2 fallback renders its profile.
     if (a === 'i' && (b === 'lists' || b === 'bookmarks' || b === 'moments')) return AMBIGUOUS.i
-    // @gallery is a live Instagram account, so Reddit's /gallery/{id} is contested.
+    // Reddit and Imgur both mint /gallery/{id}, so it is contested. Instagram was a third candidate
+    // until 2026-11-26 (@gallery is a live account) and is not one: see the row in AMBIGUOUS.
     if (a === 'gallery') return AMBIGUOUS.gallery
   }
   return null
@@ -470,17 +485,61 @@ const IG_NOT_A_USER = new Set([...KNOWN, 'settings'])
  * the same "normalizer owns its canonical" split TikTok and Instagram use. `canonical` here keeps
  * the caller's spelling, because that is where worker.ts 302s a human.
  *
- * SHORT LINKS (/t/{code}) ARE NOT HERE. Threads mints them too and they are byte-shape-identical to
- * TikTok's, so a synchronous matcher cannot tell them apart — they stay the ['tt','th'] chooser
- * until a resolver claims them, exactly as the shortlink() docstring describes.
+ * UNFORCED SHORT LINKS (/t/{code}) ARE NOT HERE. Threads mints them too and they are byte-shape-identical
+ * to TikTok's, so a synchronous matcher cannot tell them apart. Bare /t/{code} stays a request to ask
+ * TikTok, and a code TikTok disclaims gets the ['tt','th'] chooser (worker.ts SHORTLINK_CANDIDATES),
+ * exactly as the shortlink() docstring describes.
+ *
+ * /th/t/{code}, FORCED ONLY, IS THE THREADS POST WITH THAT SHORTCODE: the route /@i/post/{code} gets,
+ * ref and canonical both, so the two spellings share one cache entry and a human is sent where
+ * /@i/post/{code} sends them. It is the link that chooser's Threads choice builds (and the converter's
+ * "Read as Threads" on a /t/ link), and it answered notfound until 2026-11-26.
+ *
+ * NO RESOLVER, BECAUSE A /t/ CODE IS THE POST'S OWN SHORTCODE, measured rather than assumed:
+ *   - From the dev host this work ran on (not a Worker), in one run at 2026-11-27 03:51 UTC (11-26
+ *     Eastern), threads.com/t/{code} answered 301 to /@{author}/post/{the same code} for all five
+ *     live codes tried, to a curl user agent, to Discordbot and to a request with none: DTI1vjIEi5y
+ *     (@mosseri), DbWxxQjFe4u (@dexerto), DDYEM_foiI1 (@pmestevez), DeEFGTkCLxz (@bradandthegoat),
+ *     DbkwmbMEt6u (@bisniscom). threads.net/t/{code} answered 301 to threads.com/t/{code} for each.
+ *     That run is the evidence, and it did not repeat: a verifier's later run from the same host the
+ *     same day got 429s, and with no user agent a 302 to facebook.com/unsupportedbrowser, and at
+ *     05:04 UTC every www.threads.com request this host made answered 429. What the run showed is that
+ *     a /t/ code and the post's shortcode are one string, which is all this arm relies on.
+ *   - A sixth, DbcSwYaEa9r, is a deleted post. Its /t/ answered 200 with no Location, the soft-404 the
+ *     1.0.0 design spec warns about, and /@{author}/post/ and /@i/post/ both 302 to ?error=invalid_post.
+ *   - A DELETED POST DID NOT GET THE FAILURE CARD, which this paragraph used to claim. At 05:04 UTC
+ *     the same day, production's /_api/v1 (Worker egress) answered threads.com/@i/post/DbcSwYaEa9r
+ *     with ok:true and a post by "Threads • Log in": Threads' login wall, read as the post by the OG
+ *     fallback. A made-up code did the same. platforms/threads/normalize.ts threadsHasPost now
+ *     requires the page to name the post's author, so such a code, through this arm or through
+ *     /@i/post/, is the failure card (tested offline against a page rebuilt from that answer).
+ *   - With a desktop Chrome user agent, /t/ answered 200 with no Location for all six. The redirect
+ *     depends on the user agent, which is one more reason not to follow it: the code is all that's
+ *     needed.
+ *   - From production (Worker egress), mbedfx.app/_api/v1 on threads.com/@i/post/DTI1vjIEi5y and
+ *     /@i/post/DeEFGTkCLxz drew each post under its real author (@mosseri, @bradandthegoat), the same
+ *     day. platforms/threads/fetch.ts asks /@i/post/{code} for every ref, so the arm needs nothing more.
+ *     The same API answered threads.com/t/DTI1vjIEi5y with the ['tt','th'] chooser, which is why the
+ *     choice had to route.
+ *
+ * THE CODE IS HELD TO TH_CODE, the fetcher's own shape (refkey.ts), and is never a PATH_WORDS word: a
+ * bare /th/t with a mode on is /th/t/p, and peelSuffixes reads the raw path once the peeled /th/t
+ * misses, so without that check it was Threads post "p". 'p' fits TH_CODE, and no path word is a code
+ * anybody pasted.
+ *
+ * WHY FORCED ONLY. matchPost runs threads() before routeInner reaches shortlink(), so an unforced arm
+ * here would read every TikTok /t/{code} as a Threads post.
  */
-function threads(seg: string[]): Route | null {
+function threads(seg: string[], forced = false): Route | null {
   if (seg.length === 3 && seg[0].startsWith('@') && seg[0].length > 1 && seg[1] === 'post' && seg[2]) {
     return {
       kind: 'post',
       ref: { p: 'th', code: seg[2] },
       canonical: canonical(`https://www.threads.com/${seg[0]}/post/${seg[2]}`),
     }
+  }
+  if (forced && seg.length === 2 && seg[0] === 't' && TH_CODE.test(seg[1]) && !pathWord(seg[1])) {
+    return threads(['@i', 'post', seg[1]])
   }
   return null
 }
@@ -500,10 +559,10 @@ function threads(seg: string[]): Route | null {
  * check, so /r/{sub}/comments/{id} is claimed before 'r' can dead-end it — exactly how instagram()'s
  * /p/{code} survives 'p' being KNOWN. The mobile app's /s/ SHARE links resolve the same way: claimed
  * here as a 'redditshare' Route (an opaque code the worker resolves via a redirect) before 'r' can
- * dead-end them. The other short forms (redd.it, /gallery/) still land in a later commit; until then
- * they are an honest notfound, never a guess.
+ * dead-end them. redd.it/{id} is the converter's to rewrite (it hands out /comments/{id}), and
+ * /gallery/{id} is the forced arm at the end of this function.
  */
-function reddit(seg: string[]): Route | null {
+function reddit(seg: string[], forced = false): Route | null {
   const post = (sub: string, id: string, href: string): Route =>
     ({ kind: 'post', ref: { p: 'rd', sub, id }, canonical: canonical(href) })
   const share = (sub: string, code: string, href: string): Route =>
@@ -527,6 +586,24 @@ function reddit(seg: string[]): Route | null {
   if (seg.length === 4 && (seg[0] === 'user' || seg[0] === 'u') && seg[2] === 's' && seg[1] && seg[3]) {
     return share('', seg[3], `https://www.reddit.com/${seg[0]}/${seg[1]}/s/${seg[3]}`)
   }
+  /**
+   * /rd/gallery/{id}, FORCED ONLY: `reddit.com/gallery/{id}` is Reddit's own spelling of post {id}. Reddit
+   * hands it out itself: a gallery post's `url` in Reddit's own post record is
+   * `https://www.reddit.com/gallery/{id}` (platforms/reddit/normalize.ts REDDIT_GALLERY, which reads it off
+   * live crossposts, residential, 2026-10-11, and trusts it only when the page it leads to is post {id}).
+   *
+   * IT IS EXACTLY THE ROUTE /comments/{id} GETS, ref and canonical both, so the two spellings share one
+   * cache entry and a human is sent to reddit.com/comments/{id}, the same as for a redd.it link.
+   *
+   * WHY ONLY FORCED. Unforced, /gallery/{id} is the ['rd','im'] chooser, because imgur.com/gallery/{id}
+   * is the same path. That chooser is this arm's unforced twin (matchPost's rule): it offers Reddit, and
+   * picking Reddit there leads here. Until 2026-11-26 nothing did, so /rd/gallery/{id} answered notfound
+   * and the chooser's Reddit choice was a dead end, found while fixing the converter's "Read as" picker
+   * (route() offline at 97bebca). The converter now emits this spelling for a reddit.com/gallery paste.
+   * docs/API.md used to call Reddit's gallery links deprecated upstream; the measurement above is
+   * Reddit still minting them.
+   */
+  if (forced && seg.length === 2 && seg[0] === 'gallery' && seg[1]) return reddit(['comments', seg[1]])
   return null
 }
 
@@ -980,7 +1057,8 @@ function facebookQuery(seg: string[], q: URLSearchParams): Route | null {
  *                      and imgur.com all collapse here) and partly pre-owned by youtube()'s bare
  *                      11-char arm. Claiming it would silently serve the wrong post. It stays the
  *                      ['x','ig'] chooser; the /dm//st//im escape hatches are the answer instead.
- *   /gallery/{id}      already the ['rd','ig'] chooser, AND yt-dlp answers it video-OR-playlist
+ *   /gallery/{id}      already a chooser (['rd','ig'] when this was written, ['rd','im'] since
+ *                      2026-11-26, see AMBIGUOUS), AND yt-dlp answers it video-OR-playlist
  *                      unpredictably (/gallery/YcAQlkx is a video, /t/unmuted/6lAn9VQ is a playlist)
  *                      — a synchronous matcher cannot tell, and guessing serves a title-only card.
  *   /a/{id}            free, but ALWAYS a playlist: a title and nothing else.
@@ -1014,12 +1092,12 @@ const dmPost = (id: string): Route =>
  *    reads at 3; instagram()'s depth-3 arm needs seg[1] in IG_SURFACE and 'video' is not;
  *    tiktok()/threads() both need a leading '@'; reddit() needs 'comments'/'s' at seg[2];
  *    facebook()'s page arm needs seg[1]==='videos', which is not 'video'.
- * The depth-1 arm is FORCED-ONLY — see ESCAPE.
+ * The depth-1 arm is FORCED-ONLY — see ESCAPE — and never reads a path word as an id, see PATH_WORDS.
  */
 function dailymotion(seg: string[], forced = false): Route | null {
   if (seg.length === 2 && seg[0] === 'video' && ytdlpId(DM_ID, seg[1])) return dmPost(seg[1])
   if (seg.length === 3 && seg[0] === 'embed' && seg[1] === 'video' && ytdlpId(DM_ID, seg[2])) return dmPost(seg[2])
-  if (forced && seg.length === 1 && ytdlpId(DM_ID, seg[0])) return dmPost(seg[0])
+  if (forced && seg.length === 1 && !pathWord(seg[0]) && ytdlpId(DM_ID, seg[0])) return dmPost(seg[0])
   return null
 }
 
@@ -1031,7 +1109,7 @@ const stPost = (id: string): Route =>
  *  - no matcher and no ambiguity() row claims the token 'e' at any depth.
  *  - 's' IS Reddit's share marker, but at seg[2] of a DEPTH-4 path (/r/{sub}/s/{code}); this is 's'
  *    at seg[0] of a depth-2 path, which reddit() never inspects.
- * The depth-1 arm is FORCED-ONLY — see ESCAPE.
+ * The depth-1 arm is FORCED-ONLY — see ESCAPE — and never reads a path word as an id, see PATH_WORDS.
  *
  * THE {id} POSITION IS THE ONE IN THIS TIER THAT CAN SWALLOW AN AMBIGUITY ROW, because ST_ID is by far
  * the loosest of the three shapes — 2-16 alnum matches 'followers' and 'following', which are the rows
@@ -1040,7 +1118,7 @@ const stPost = (id: string): Route =>
  */
 function streamable(seg: string[], forced = false): Route | null {
   if (seg.length === 2 && (seg[0] === 'e' || seg[0] === 's') && ytdlpId(ST_ID, seg[1])) return stPost(seg[1])
-  if (forced && seg.length === 1 && ytdlpId(ST_ID, seg[0])) return stPost(seg[0])
+  if (forced && seg.length === 1 && !pathWord(seg[0]) && ytdlpId(ST_ID, seg[0])) return stPost(seg[0])
   return null
 }
 
@@ -1110,12 +1188,24 @@ const imId = (segment: string): string | null => {
  * '{id}.gifv', which the table never names (it is the generic bare-username row), so the row this arm
  * takes is the dead end argued above and not a reserved token. `/search.gifv` is a legal i.imgur.com
  * video url and stays one; `/st/search` is not a Streamable id position we are willing to guess in.
+ *
+ * NOR DOES IT CONSULT PATH_WORDS, and the forced /im/{word}.gifv and /im/gallery.gifv answer the Imgur
+ * post that word names, on purpose (kept 2026-11-26). Whoever typed `.gifv` named a FILE on i.imgur.com,
+ * an extension no other site here uses, so nothing about the link is ambiguous, and the converter
+ * writes /im/{id}.gifv for a real id that spells a word because /im/{id} refuses it. A file that does
+ * not exist is the failure card, never somebody else's post: on 2026-11-27 (UTC), from the dev host,
+ * not a Worker, i.imgur.com/{w}.jpg 302'd to removed.png for each of gallery, search, explore, lists,
+ * hashtag and moments, as it did for a made-up id, while a real id (QAcLnaf) served 439,810 bytes of
+ * image/jpeg. What the arm does not do is turn a bare imgur.com/{word} into a file: imgur.com/gallery
+ * (which 301s to imgur.com/) and imgur.com/search (a 44 KB page of its own) are Imgur's pages, and
+ * the converter refuses a bare imgur.com/{w} for those six lowercase AMBIGUOUS rows rather than write
+ * /im/{w}.gifv for them (public/index.html).
  */
 function imgur(seg: string[], forced = false): Route | null {
   if (seg.length === 1) {
     const m = /^(.+)\.gifv$/.exec(seg[0])
     if (m && IM_ID.test(m[1])) return imPost(m[1])
-    if (forced && ytdlpId(IM_ID, seg[0])) return imPost(seg[0])
+    if (forced && !pathWord(seg[0]) && ytdlpId(IM_ID, seg[0])) return imPost(seg[0])
   }
   /**
    * /a/{id} — AN ALBUM, and it costs nothing to claim: `r('/a/…')` was `notfound` before this
@@ -1124,11 +1214,12 @@ function imgur(seg: string[], forced = false): Route | null {
    * the way `/pin/` names Pinterest — nothing else is competing for it.
    *
    * /gallery/{id} — FORCED ONLY, and that is a deliberate refusal rather than an oversight. The
-   * unforced row belongs to the ['rd','ig'] chooser, and unlike the bare-username row the .gifv arm
-   * took, THIS ONE IS NOT A DEAD END: reddit.com/gallery/{id} and instagram.com/gallery are real
-   * destinations a human may have meant. Imgur is ADDED to that chooser's candidates instead (see
-   * AMBIGUOUS), so a person pasting an Imgur gallery link now gets offered Imgur — which is strictly
-   * more than the nothing they got before — while nobody's Reddit gallery link is silently stolen.
+   * unforced row belongs to the chooser, and unlike the bare-username row the .gifv arm took, THIS
+   * ONE IS NOT A DEAD END: reddit.com/gallery/{id} is a real Reddit post a human may have meant (and
+   * /rd/gallery/{id} routes to it since 2026-11-26). Imgur is ADDED to that chooser's candidates
+   * instead (see AMBIGUOUS, which since the same day offers Reddit and Imgur and no longer Instagram),
+   * so a person pasting an Imgur gallery link gets offered Imgur while nobody's Reddit gallery link is
+   * silently stolen.
    */
   if (seg.length === 2) {
     const id = imId(seg[1])
@@ -1224,8 +1315,19 @@ function twitchClipSlug(s: string): boolean {
  *     the table declares undecidable is the defect this file already fixed once for
  *     `/settings/{surface}/{code}`; a second matcher re-committing it is exactly what the shared
  *     helper is here to prevent.
+ *
+ *  3. NOT "embed", IN ANY CASE (2026-11-26). clips.twitch.tv/embed is the clip PLAYER, whose clip is in
+ *     its query (twitchEmbed() below reads it), so Twitch cannot serve a clip at that slug and a slug
+ *     "embed" names nothing. Until then /clip/embed, /{channel}/clip/embed and their /tw/ twins each
+ *     answered a clip whose slug is "embed", unforced too: a ref for a clip Twitch cannot have, minted
+ *     for a link that names no clip (route() offline at 97bebca). Now they are notfound. Case-folded because no measured slug
+ *     is that short (697 of 697 ran 18 characters or more, see TW_SLUG), so 'Embed' and 'EMBED' cost no
+ *     clip either, and they are the player's path typed by hand. The ?clip= reader applies the same
+ *     refusal (twitchEmbed()), and the depth-1 arm in twitch() refuses every word PATH_WORDS names,
+ *     'embed' among them.
  */
-const twSlug = (s: string): boolean => TWITCH_SLUG.test(s) && !reserved(s)
+const twPlayer = (s: string): boolean => s.toLowerCase() === 'embed'
+const twSlug = (s: string): boolean => TWITCH_SLUG.test(s) && !reserved(s) && !twPlayer(s)
 
 function twitch(seg: string[], forced = false): Route | null {
   // /{channel}/clip/{slug} — the canonical address-bar form. The CHANNEL is checked against the
@@ -1245,12 +1347,15 @@ function twitch(seg: string[], forced = false): Route | null {
   // which is the user saying which platform they mean and needs no recogniser — but even forced, the
   // refkey shape still binds, for reason 1 above.
   //
-  // NEVER 'embed', which is the clip PLAYER's own path on clips.twitch.tv (twitchEmbed() below reads the
-  // clip out of its query), so it names no clip. Until 2026-11-26 the forced arm took it as the slug:
+  // NEVER A WORD THE ROUTER READS AS STRUCTURE (pathWord(), see PATH_WORDS), and 'embed' first among
+  // them: it is the clip PLAYER's own path on clips.twitch.tv (twitchEmbed() below reads the clip out of
+  // its query), so it names no clip. Until 2026-11-26 the forced arm took it as the slug:
   // /tw/embed?clip={slug} answered a Twitch clip whose slug is "embed", the wrong post with no error,
   // and that is exactly the link the converter's "Read as Twitch" built from a clips.twitch.tv/embed
-  // paste. Unforced this changes nothing, because twitchClipSlug() needs 16 characters.
-  if (seg.length === 1 && seg[0] !== 'embed' && twSlug(seg[0]) && (forced || twitchClipSlug(seg[0]))) {
+  // paste. The same day showed every other word doing the same (/tw/watch was a clip named "watch")
+  // and the lowercase-only check letting /tw/Embed through. Unforced this changes nothing, because
+  // twitchClipSlug() needs 16 characters and no path word has that many.
+  if (seg.length === 1 && !pathWord(seg[0]) && twSlug(seg[0]) && (forced || twitchClipSlug(seg[0]))) {
     return twPost(seg[0], `https://clips.twitch.tv/${seg[0]}`)
   }
   return null
@@ -1272,11 +1377,16 @@ function twitch(seg: string[], forced = false): Route | null {
  * A FUNCTION SINCE 2026-11-26, because it gained the /tw/ escape hatch as a second caller. Inline in
  * routeInner and keyed on `seg.length === 1`, it could not fire under the prefix, and the forced
  * depth-1 arm in twitch() took 'embed' as the slug instead (see there).
+ *
+ * `?clip=embed` IS REFUSED, in any case, for twSlug()'s third reason: the player's own path is no clip's
+ * slug. That is the one value refused beyond TWITCH_SLUG, so `?clip=settings` still reads as before. A
+ * refused clip falls through like a junk one: /embed?clip=embed is the ['x','ig'] chooser that
+ * /embed?clip=ab gets, and /tw/embed?clip=embed is notfound.
  */
 function twitchEmbed(seg: string[], q: URLSearchParams): Route | null {
   if (seg.length !== 1 || seg[0] !== 'embed') return null
   const clip = q.get('clip') || ''
-  return TWITCH_SLUG.test(clip) ? twPost(clip, `https://clips.twitch.tv/${clip}`) : null
+  return TWITCH_SLUG.test(clip) && !twPlayer(clip) ? twPost(clip, `https://clips.twitch.tv/${clip}`) : null
 }
 
 /**
@@ -1541,6 +1651,86 @@ function pinterest(seg: string[]): Route | null {
   return m && PIN_ID.test(m[1]) ? pnPost(m[1]) : null
 }
 
+/**
+ * EVERY WORD THIS ROUTER READS AS STRUCTURE: each literal a matcher or routeInner compares a path segment
+ * against, each member of the surface sets above, each AMBIGUOUS row and each ESCAPE token. All lowercase.
+ * Read by pathWord(), which the four FORCED DEPTH-1 arms consult before taking a segment as an id:
+ * /dm/{id}, /st/{id}, /im/{id} and /tw/{slug}. The forced /th/t/{code} arm consults it too (threads()).
+ *
+ * THE DEFECT, found 2026-11-26 while fixing the converter's "Read as" picker (#162) and reproduced
+ * offline with route() at 97bebca. Each of those arms read ANY single segment of the right shape as an
+ * id, so a word from another site's path became a post on the site the reader forced, with no error:
+ *
+ *   /st/watch?v={id}   Streamable id "watch"   (picking Streamable on a youtube.com/watch paste)
+ *   /im/watch          Imgur id "watch"
+ *   /tw/watch          a Twitch clip "watch"
+ *   /st/embed          Streamable id "embed"
+ *   /tw/Embed, /tw/EMBED   clips, past the lowercase-only 'embed' refusal #162 had added
+ *
+ * The picker builds /{code}{path} on whatever another site's link converted to, and the /_prep chooser
+ * builds /{code}{path} too, so these are the paths a reader is handed, not ones they have to invent.
+ *
+ * DERIVED, NOT REMEMBERED. The sets are spread in, so a word added to one is covered here. The inline
+ * literals are listed by hand because a comparison inside a matcher cannot be read at runtime, and
+ * test/router.test.mjs parses this file for every such comparison and fails on a word missing here.
+ * SITE_PATHS is left out: it matches a whole pathname, and every entry but the root carries a '.', which
+ * none of the four id shapes admits.
+ *
+ * WHAT REFUSING COSTS, PER SITE, and why refusing is still the right side:
+ *   Dailymotion  nothing. DM_ID is 'x' plus 4-9 lowercase alnum and no word here has that shape (the
+ *                test checks), so this guard only stops a looser DM_ID from starting to read words.
+ *   Streamable   possibly a real video. ST_ID admits any 2-16 alnum string and Streamable's ids are
+ *                short random ones ('moo'), so an id that spells "watch" or "tv" may exist. Its /st/{id}
+ *                spelling is now notfound; /e/{id} and /s/{id}, Streamable's own paths, still read it.
+ *   Imgur        possibly real images, and more of them. IM_ID is 5-7 case-sensitive alnum, so an id
+ *                spelling "video" or "Watch" in some casing may exist (not measured), and case-folding
+ *                refuses every casing. /im/{id} is now notfound for those; /{id}.gifv still reads them.
+ *   Twitch       nothing measured. 697 of 697 real slugs ran 18 characters or more (TW_SLUG) and the
+ *                longest word here is 13, so no measured slug is lost; /clip/{slug} reads any other.
+ * THE CONVERTER PAGE HANDS OUT THOSE OTHER SPELLINGS, so the cost above is never paid by a pasted link.
+ * Until 2026-11-26 it wrote streamable.com/{id}, imgur.com/{id} and clips.twitch.tv/{slug} as /st/{id},
+ * /im/{id} and /tw/{slug} whatever the id was, so the day this guard landed, streamable.com/video and
+ * imgur.com/share converted to links that answered "Not found" (review of this change, route() offline).
+ * For an id that spells a word here it now writes /st/e/{id}, /im/{id}.gifv and /tw/embed?clip={slug}
+ * instead (public/index.html mbedfxPathWord, its copy of this set, held equal in
+ * test/landing-convert.test.mjs with a test that every link it hands out routes). Where no spelling
+ * reads the id, a Streamable id or an Imgur album or gallery id that is one of the lowercase AMBIGUOUS
+ * rows (every arm that reads those consults reserved()), the page refuses it.
+ * The two mistakes are not the same size. A refused id is a "Not found" card the reader can see, and
+ * the site's own spelling of that id still works. A word read as an id is a card for a post nobody
+ * named, under the site the reader picked, with nothing to say it is wrong: the failure this file says
+ * it cannot debug. When the arm cannot tell which it has, it takes the visible mistake.
+ *
+ * CASE-FOLDED, because a word's case does not change what it names to whoever typed or pasted it
+ * (/tw/Embed is the player's path spelled by hand) and the forced arm has no recogniser to tell such a
+ * spelling from an id. The cost is the case variants of the same words.
+ *
+ * THE ESCAPE TOKENS ARE HERE TOO. /st/dm is a stacked site code with nothing after it, the shape #162's
+ * picker produced, and was Streamable id "dm"; it matters only under /st/, the one id shape that admits
+ * two characters.
+ *
+ * ONLY THE FORCED DEPTH-1 ARMS READ THIS, and /th/t/{code}, the one forced arm added after them (see
+ * threads() for the /th/t/p it stops). A depth-2 shape that names its site (/e/{id}, /a/{id},
+ * /clip/{slug}) is that site's own path, and the forced /im/gallery/{id} exists to override the
+ * chooser, so each keeps reading what it read.
+ */
+export const PATH_WORDS: ReadonlySet<string> = new Set([
+  ...Object.keys(ESCAPE), ...RESERVED, ...KNOWN, ...IG_SURFACE, ...YT_SURFACE, ...LM_SURFACE, ...PIN_TRAILING,
+  // X, TikTok, Threads, Bluesky, Reddit
+  'status', 'web', 'video', 'photo', 'post', 't', 'profile', 'user', 'u', 's',
+  // YouTube, Facebook
+  'watch', 'groups', 'permalink', 'posts', 'photos', 'share', 'videos', 'story.php', 'permalink.php', 'photo.php',
+  // the yt-dlp tier, Twitch, Pinterest
+  'e', 'a', 'gallery', 'clip', 'pin', 'pin.it',
+  // the fediverse arms and their prepend alias
+  'c', 'w', 'notice', 'notes', 'statuses', 'users', 'https:', 'http:',
+  // routeInner's own: the Mastodon spoof, the page's endpoints, the media route
+  'api', 'v1', '_oembed', '_prep', '_card', '_api', '_media', '_alt', 'avatar',
+])
+
+/** Does this segment spell a PATH_WORDS word, in any case? */
+const pathWord = (segment: string): boolean => PATH_WORDS.has(segment.toLowerCase())
+
 function spoofRef(id: string): PostRef | null {
   const key = decodeStatusId(id)
   return key === null ? null : parseRefKey(key)
@@ -1628,8 +1818,10 @@ function matchPost(seg: string[], forced?: Platform): Route | null {
   if (forced === 'x') return x(seg)
   if (forced === 'tt') return tiktok(seg)
   if (forced === 'ig') return instagram(seg)
-  if (forced === 'th') return threads(seg)
-  if (forced === 'rd') return reddit(seg)
+  // `true` unlocks /th/t/{code}, forced-only because unforced /t/{code} is TikTok's to answer first.
+  if (forced === 'th') return threads(seg, true)
+  // `true` unlocks /rd/gallery/{id}, forced-only because unforced it is the ['rd','im'] chooser.
+  if (forced === 'rd') return reddit(seg, true)
   if (forced === 'yt') return youtube(seg)
   if (forced === 'fb') return facebook(seg)
   // The yt-dlp tier. `true` unlocks each one's DEPTH-1 arm, which is forced-only because bare /{id} is

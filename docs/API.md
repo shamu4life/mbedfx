@@ -721,7 +721,12 @@ that lands on TikTok's own "video currently unavailable" page.
 
 The last row is `ambiguous` rather than a dead end because `tiktok.com/t/` and `threads.com/t/` are
 the same path on two different products, so a code TikTok disclaims may well be Threads'. The render
-arm has offered that chooser since the route was written.
+arm has offered that chooser since the route was written. Re-ask the Threads candidate as
+`?url=/th/t/{code}`: that is the Threads post with that shortcode, the same answer
+`?url=https://www.threads.com/@i/post/{code}` gets, because a Threads `/t/` code is the post's own
+shortcode (`src/router.ts` `threads()` has the redirects measured on 2026-11-26). Until then
+`/th/t/{code}` answered `notfound`, so the Threads choice led nowhere. `?url=/tt/t/{code}` asks
+TikTok again.
 
 All four rows used to answer `not_a_post`. The walls were corrected on 2026-08-11 and the other two
 rows on 2026-08-12, each after measuring the same code through both surfaces. On a walled code that
@@ -765,12 +770,12 @@ Measured offline 2026-08-04 and re-driven 2026-08-05. Every row but the last two
     "message": "That path belongs to more than one site. Re-ask with a two-letter site prefix, e.g. /im/gallery/YcAQlkx.",
     "platform": null,
     "canonical": null,
-    "candidates": ["rd", "ig", "im"]
+    "candidates": ["rd", "im"]
   }
 }
 ```
 
-`/gallery/YcAQlkx` could be Reddit, Instagram or Imgur, and is the case the code was built for.
+`/gallery/YcAQlkx` could be Reddit or Imgur, and is the case the code was built for.
 Re-ask with the site code in front of the path:
 
 ```
@@ -782,8 +787,9 @@ At 1.9.0's review that message read `/im/gallery/abc`. `?url=/im/gallery/abc` an
 end twice (`apiFailure`, `src/worker.ts`).
 
 `candidates` is which sites claim that path shape; whether one accepts that id is a second question.
-`/rd/gallery/…` is the clearest case: Reddit's gallery links are deprecated upstream and deliberately
-unrouted. Expect a few `notfound`s while walking the list, and take the first success. On a profile
+`?url=/im/gallery/abc` above shows the difference: Imgur has the shape and refuses the id.
+`?url=/rd/gallery/abc` gets the Reddit post that `?url=/comments/abc` gets. Expect a few
+`notfound`s while walking the list, and take the first success. On a profile
 url every candidate answers `notfound` (`?url=/x/jack` → `notfound`, verified 2026-08-05). There is
 no bare-handle profile route, because a bare handle names an account on more than one site, so a
 forced site prefix has nothing to resolve to. `/profile/{handle}` is a different shape and does

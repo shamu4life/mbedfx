@@ -1,0 +1,28 @@
+<!--
+  NOT A CAPTURE. Threads' login wall as the OG fallback saw it, REBUILT from what production returned,
+  because the Worker's raw bytes cannot be captured and every www.threads.com request from the dev
+  host got 429 while this was written (only the 301s from threads.net and the bare threads.com came
+  back).
+
+  Measured 2026-11-27 05:03:59 to 05:04:07 UTC through production's /_api/v1 (Worker egress, served
+  from the BOS colo): threads.com/@i/post/DbcSwYaEa9r (a deleted post) and /@i/post/ZTSw2mYwR (a code
+  nobody minted) each answered ok:true with author.name "Threads • Log in", handle null, this text,
+  createdAt decoded from the code, and one image whose /_media/ 302 went to the rsrc.php url below.
+
+  What each tag stands for:
+  - og:type=article: inferred, not seen. fetchThreads returns assert_fail unless one of the two pages
+    carries it, and production did not.
+  - og:title, name=description and og:image: the three values the card showed, in the tags
+    buildFromHtml read them from. How Threads spells the bullet (a literal or an entity) is not known;
+    the normalizer decodes either.
+
+  One page serves as both the Discordbot and the facebookexternalhit page in the tests. Both were the
+  wall in production: the caption (read only from the fbhit page) was the wall's text, and the image
+  (read only from the Discordbot page) was a static asset rather than a post's share card.
+-->
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8" /><title>Threads • Log in</title>
+<meta property="og:type" content="article" />
+<meta property="og:title" content="Threads • Log in" />
+<meta property="og:image" content="https://static.cdninstagram.com/rsrc.php/yd/r/kHwIMM5b8PW.webp" />
+<meta name="description" content="Join Threads to share ideas, ask questions, post random thoughts, find your people and more. Log in with your Instagram." />
+</head><body></body></html>
