@@ -120,7 +120,7 @@
                         "message": "That path belongs to more than one site. Re-ask with a two-letter site prefix, e.g. /im/gallery/YcAQlkx.",
                         "platform": null,
                         "canonical": null,
-                        "candidates": ["rd", "ig", "im"]
+                        "candidates": ["rd", "im"]
                       }
                     }
                   }

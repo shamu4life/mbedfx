@@ -1,7 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
-import { route } from '../src/router.ts'
+import { route, PATH_WORDS } from '../src/router.ts'
 import { guestHosts, guestServes } from '../src/guesthost.ts'
 
 /**
@@ -677,6 +677,72 @@ test('IMGUR ALBUMS AND GALLERIES CONVERT — they used to be on the refusal list
   // A still photo still needs the prefix — a bare id is undecidable against Dailymotion.
   assert.equal(convert('https://imgur.com/QAcLnaf', 'mbedfx.app').url, 'https://mbedfx.app/im/QAcLnaf')
   assert.deepEqual(routed('/im/QAcLnaf').ref, { p: 'im', kind: 'post', id: 'QAcLnaf' })
+})
+
+test('A REDDIT GALLERY LINK CONVERTS TO THE REDDIT POST, never to the "which site?" chooser', () => {
+  /**
+   * FOUND 2026-11-26 while fixing the "Read as" picker. reddit.com/gallery/{id} names Reddit post {id},
+   * and the converter swapped only the host, so it handed out /gallery/{id}: the Reddit-or-Imgur chooser,
+   * for a link whose host had already said Reddit. Picking Reddit on that chooser then gave
+   * /rd/gallery/{id}, which the worker answered "Not found". Now the converter writes /rd/gallery/{id}
+   * itself, the forced spelling the worker routes to the post (router.ts reddit()), as it writes
+   * /im/gallery/{id} for Imgur's twin.
+   */
+  for (const [paste, id] of [
+    ['https://www.reddit.com/gallery/haucpf', 'haucpf'],
+    ['https://old.reddit.com/gallery/1x2voz0/', '1x2voz0'],
+    ['reddit.com/gallery/haucpf?utm_source=share', 'haucpf'],
+  ]) {
+    const r = convert(paste, 'mbedfx.app')
+    assert.ok(r.ok, `${paste} must convert`)
+    assert.equal(r.url, `https://mbedfx.app/rd/gallery/${id}`, paste)
+    assert.equal(r.platform, 'Reddit', paste)
+    assert.equal(r.token, 'rd', `${paste}: the converter wrote the code, so "Read as" replaces it`)
+    assert.deepEqual(routed(r.path), routed(`/comments/${id}`), `${r.path} is the post /comments/${id} names`)
+    assert.equal(routed(r.path).kind, 'post', r.path)
+  }
+  const r = convert('https://www.reddit.com/gallery/haucpf', 'mbedfx.app')
+  // Re-picking Reddit gives the same link back, and Imgur reads the same id as its own gallery.
+  assert.equal(forcedPath(r, 'rd', null), '/rd/gallery/haucpf')
+  assert.equal(forcedPath(r, 'im', null), '/im/gallery/haucpf')
+  assert.deepEqual(routed('/im/gallery/haucpf').ref, { p: 'im', kind: 'gallery', id: 'haucpf' })
+  // The stills box adds its mode after the id, where the router reads it.
+  const stills = convert('https://www.reddit.com/gallery/haucpf', 'mbedfx.app', 'stills')
+  assert.equal(stills.path, '/rd/gallery/haucpf/p')
+  assert.equal(routed(stills.path).gallery, 'stills')
+})
+
+test('NO SITE IN "Read as" TURNS ANOTHER SITE\'S PATH WORD INTO A POST, on every paste in this file', () => {
+  /**
+   * The converter's half of router.ts PATH_WORDS. Picking a site builds /{code}{path} on whatever the
+   * paste converted to, so picking Streamable, Imgur or Twitch on a youtube.com/watch paste gave
+   * /st/watch?v=…, /im/watch?v=… and /tw/watch?v=…, each a post on the picked site whose id was
+   * "watch". The worker now refuses those words under a forced code, so no pick on any paste in this
+   * file may route to a post on the picked site whose id is one of them. (A pick may still be a dead
+   * end: forcing Streamable on a YouTube link has no YouTube post to keep, and "Not found" is the honest
+   * answer.)
+   */
+  const src = readFileSync(new URL(import.meta.url), 'utf8')
+  const pastes = [...new Set([...src.matchAll(/['"`](https?:\/\/[^'"`\s$]+)['"`]/g)].map(m => m[1]))]
+  const CODE_OF = new Function(`return ${HTML.match(/var CODE_OF = (\{[\s\S]*?\});/)[1]}`)()
+  const pathOf = v => { try { const p = new URL(v).pathname; return p && p !== '/' ? p : null } catch { return null } }
+  let picks = 0
+  for (const paste of pastes) {
+    const r = convert(paste, 'mbedfx.app')
+    for (const code of Object.values(CODE_OF)) {
+      const forced = forcedPath(r, code, pathOf(paste))
+      if (!forced) continue
+      const got = routed(forced)
+      const id = got.ref?.id ?? got.ref?.slug ?? got.ref?.code
+      assert.ok(!(got.kind === 'post' && got.ref.p === code && typeof id === 'string' && PATH_WORDS.has(id.toLowerCase())),
+        `${paste}, read as ${code}: ${forced} is a ${code} post whose id is the path word "${id}"`)
+      picks++
+    }
+  }
+  assert.ok(picks > 2000, `every paste, every site (${picks})`)
+  // The reported one by name.
+  const yt = convert('https://www.youtube.com/watch?v=dQw4w9WgXcQ', 'mbedfx.app')
+  for (const code of ['st', 'im', 'tw']) assert.equal(routed(forcedPath(yt, code, null)).kind, 'notfound', code)
 })
 
 test('AN UNKNOWN HOST IS TREATED AS A FEDIVERSE INSTANCE, and says so', () => {

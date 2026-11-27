@@ -765,12 +765,12 @@ Measured offline 2026-08-04 and re-driven 2026-08-05. Every row but the last two
     "message": "That path belongs to more than one site. Re-ask with a two-letter site prefix, e.g. /im/gallery/YcAQlkx.",
     "platform": null,
     "canonical": null,
-    "candidates": ["rd", "ig", "im"]
+    "candidates": ["rd", "im"]
   }
 }
 ```
 
-`/gallery/YcAQlkx` could be Reddit, Instagram or Imgur, and is the case the code was built for.
+`/gallery/YcAQlkx` could be Reddit or Imgur, and is the case the code was built for.
 Re-ask with the site code in front of the path:
 
 ```
@@ -782,8 +782,9 @@ At 1.9.0's review that message read `/im/gallery/abc`. `?url=/im/gallery/abc` an
 end twice (`apiFailure`, `src/worker.ts`).
 
 `candidates` is which sites claim that path shape; whether one accepts that id is a second question.
-`/rd/gallery/…` is the clearest case: Reddit's gallery links are deprecated upstream and deliberately
-unrouted. Expect a few `notfound`s while walking the list, and take the first success. On a profile
+`?url=/im/gallery/abc` above shows the difference: Imgur has the shape and refuses the id.
+`?url=/rd/gallery/abc` gets the Reddit post that `?url=/comments/abc` gets. Expect a few
+`notfound`s while walking the list, and take the first success. On a profile
 url every candidate answers `notfound` (`?url=/x/jack` → `notfound`, verified 2026-08-05). There is
 no bare-handle profile route, because a bare handle names an account on more than one site, so a
 forced site prefix has nothing to resolve to. `/profile/{handle}` is a different shape and does

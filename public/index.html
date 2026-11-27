@@ -1048,7 +1048,7 @@ function mbedfxConvert(input, host, gallery) {
 
   /**
    * `token` is set only where THIS CONVERTER put the router's escape token in front of the path itself
-   * (/dm/{id}, /st/{id}, /im/{id}, /im/gallery/{id}, /tw/{slug}), so the "Read as" picker can replace it
+   * (/dm/{id}, /st/{id}, /im/{id}, /im/gallery/{id}, /rd/gallery/{id}, /tw/{slug}), so the "Read as" picker can replace it
    * instead of stacking a second one in front (mbedfxForcedPath). It is never read off the path: the
    * first segment of x.com/tw/status/20 is a handle that happens to spell a token, and only the
    * converter knows which of the two it wrote.
@@ -1239,6 +1239,14 @@ function mbedfxConvert(input, host, gallery) {
         return out('/groups/' + ghome[1] + '/posts/' + gpid + '/' + qsuf, 'Facebook', '', 'fb');
       }
     }
+    /*
+     * A REDDIT GALLERY KEEPS ITS SITE. reddit.com/gallery/{id} names post {id}, but with only the host
+     * swapped it came out as /gallery/{id}, which the worker reads as the Reddit-or-Imgur chooser, so a
+     * link whose host already said Reddit landed on a "which site?" page. /rd/gallery/{id} is the forced
+     * spelling the worker routes straight to that post (router.ts reddit(), since 2026-11-26), the twin
+     * of Imgur's /im/gallery/{id} below, and its token lets "Read as Imgur" give /im/gallery/{id}.
+     */
+    if (platform === 'Reddit' && seg[0] === 'gallery' && seg.length === 2) return out('/rd/gallery/' + seg[1], 'Reddit', '', 'rd', 'rd');
     if (platform === 'Instagram' && seg[0] === 'stories') {
       return no("Instagram stories aren't routed. They expire, so there's no stable post to draw.");
     }
@@ -1799,7 +1807,8 @@ function mbedfxPrepResolved(asked, answer) {
         /**
          * AN AMBIGUOUS PATH BECOMES A CHOICE. The candidates are the ROUTER'S — the same list a human
          * gets from the chooser page — not something guessed here: only route() knows /gallery/{id}
-         * is contested between Reddit, Instagram and Imgur.
+         * is contested between Reddit and Imgur (and that Instagram was dropped from that row on
+         * 2026-11-26, because its choice could only dead-end).
          */
         if (!j.ok && j.reason === 'ambiguous' && j.candidates && j.candidates.length) {
           result.style.display = 'none'; copy.style.display = 'none';

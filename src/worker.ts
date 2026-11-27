@@ -6747,7 +6747,8 @@ async function serve(req: Request, env: Env, ctx: ExecutionContext, d: Deps): Pr
          * AN AMBIGUOUS PATH HANDS BACK ITS CANDIDATES, so the page can offer a choice instead of a
          * dead end. This is the router's own answer — the same list renderChooser shows a human —
          * rather than anything the page guesses, which is the point: route() is the only thing that
-         * knows /gallery/{id} is contested between Reddit, Instagram and Imgur.
+         * knows /gallery/{id} is contested between Reddit and Imgur. Every choice it offers there routes
+         * to a post since 2026-11-26 (test/router.test.mjs holds that as a rule).
          *
          * The forced url is built here too, because the ESCAPE token that disambiguates each one is
          * router vocabulary and the page has no business re-spelling it.
@@ -7142,7 +7143,7 @@ async function serve(req: Request, env: Env, ctx: ExecutionContext, d: Deps): Pr
        * for a missing or unreadable `url`, 405 for a write verb — and never about the post.
        *
        * THE HOST IN `url` IS IGNORED, and the tie it could break is left unbroken. `/gallery/abc` is
-       * Reddit, Instagram or Imgur, and this endpoint is handed a full url that says which — so it
+       * Reddit or Imgur, and this endpoint is handed a full url that says which — so it
        * looks like free disambiguation. It is not free: it would make the answer depend on a string
        * the caller controls, on a service where a hostname is a thing we FETCH (the fediverse arm
        * turns one into a request, and refkey.ts is explicit that Cloudflare is not relied on to block

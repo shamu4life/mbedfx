@@ -179,8 +179,27 @@ mbedfx.app's Reddit app and account, and it names no account at all. Nobody else
   Streamable, Imgur and some Twitch links already come out of the converter with their site code
   (`/dm/…`, `/st/…`, `/im/…`, `/tw/…`), and picking a site on one of them put a second code in front:
   `/dm/dm/…`, also "Not found". The picked code now replaces the one already there, and a
-  `clips.twitch.tv/embed` link with no clip in it is refused. Picking Reddit for a
-  `reddit.com/gallery/…` link still answers "Not found".
+  `clips.twitch.tv/embed` link with no clip in it is refused.
+- **A site code no longer reads another site's path word as an id.** With `/st/`,
+  `/im/` or `/tw/` in front of a single word, the Worker read the word as that site's id, so
+  `mbedfx.app/st/watch?v=…` was a Streamable video called "watch", `/im/watch` an Imgur image, and
+  `/tw/watch` and `/tw/Embed` Twitch clips. Picking Streamable, Imgur or Twitch in the converter's
+  "Read as" list on a YouTube link handed out links like these. Any word a supported site uses in its
+  links, and any site code, is now refused there however it's capitalised. A real Streamable or Imgur
+  id that happens to spell one of those words is refused too as `/st/{id}` or `/im/{id}`, and still
+  works as `/e/{id}` or `/{id}.gifv`.
+- **Picking Reddit on a Reddit gallery link works.** `mbedfx.app/rd/gallery/{id}` answered "Not
+  found", so for a `/gallery/{id}` link, which Reddit and Imgur both use, the "which site?" choice
+  for Reddit went nowhere. It now draws the same card as `/comments/{id}`, and the converter turns a
+  `reddit.com/gallery/{id}` link into `/rd/gallery/{id}` instead of a link that stops at the "which
+  site?" question. Instagram isn't offered for these links any more. No Instagram post has a
+  `/gallery/` link, so that choice could only say "Not found", and the API now lists `["rd","im"]`
+  as their `candidates`.
+- **No Twitch clip is called "embed".** `/clip/embed`, `/{channel}/clip/embed`, the same two with
+  `/tw/` in front, and `/embed?clip=embed` gave a card for a clip called "embed". That's the address
+  of Twitch's clip player, so no clip has the name. The path forms now say "Not found" however
+  "embed" is capitalised, and `/embed?clip=embed` gets the same "which site?" page as an `/embed` link
+  with no usable clip.
 - **`RESOLVER_SECRET` was documented as protecting the Cloudflare container, and it doesn't.**
   `container/README.md` said to set it on the container as well as the Worker, and nothing in this
   repo puts it there: the container's Durable Object passes it no environment, so the container never
