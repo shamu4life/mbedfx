@@ -84,8 +84,9 @@ mbedfx.app's Reddit app and account, and it names no account at all. Nobody else
   component embed, Discord drew it instead of the usual card, and on a video post the card lost its
   poster frame and its date. The route never reached a release and is gone. After the deploy that
   evening, a 10-picture Threads post and a 10-picture Reddit gallery came out as intended in both the
-  phone and desktop apps: nine pictures in a 3x3 grid, the footer's date, no logo and no button. A
-  gallery of five to eight pictures hasn't been checked yet.
+  phone and desktop apps: nine pictures in a 3x3 grid, the footer's date, no logo and no button.
+  Reddit galleries of five, six, seven and eight pictures followed, and Discord laid out each one the
+  way the converter's preview does: three to a row, with any extra pictures in a shorter top row.
 
 ### Changed
 

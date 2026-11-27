@@ -88,7 +88,9 @@ import { clampText, hasAuthor, normalizeBreaks, statParts } from './text.ts'
  * 10-picture Threads post and a 10-picture Reddit gallery, both public, drew this card as intended. Nine pictures in a 3x3 grid, all
  * loaded inside Discord's 10-second budget for "the whole fetch, including every image in the
  * payload"; the `-#` footer as small text; `<t:…>` as a real date; no thumbnail and no button.
- * NOT MEASURED YET: a gallery of five to eight, whose mosaic Discord lays out itself.
+ * Five to eight, whose mosaic Discord lays out itself, were pasted the same evening (one public Reddit
+ * gallery of each size): three to a row with the remainder in a shorter first row, exactly as the
+ * converter's preview draws them (galleryCells in public/index.html).
  *
  * THE SCHEMA, read 2026-11-26 from Discord's own docs source at commit 2d337dbb16 ("Document link
  * previews", discord/discord-api-docs#8606, merged 2026-10-06; the changelog entry is dated
