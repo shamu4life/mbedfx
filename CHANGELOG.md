@@ -77,8 +77,9 @@ mbedfx.app's Reddit app and account, and it names no account at all. Nobody else
   Instagram and Threads carousels, Reddit galleries, Facebook posts, Imgur albums and TikTok photo
   posts. Their card is now a Discord component embed laid out like the usual card, with the author,
   the text, the counts, the pictures and a footer with the site name and date. A post with a video, a
-  GIF or a spoiler tag keeps the usual card, as does any post with four pictures or fewer, and other
-  apps see no change. The converter's preview draws the same grid. On 2026-11-26 posts were pasted
+  GIF or a spoiler tag keeps the usual card. So does a post quoting a video, a post whose translation
+  hasn't come back yet (the usual card picks it up a moment later), and any post with four pictures or
+  fewer. Other apps see no change. The converter's preview draws the same grid. On 2026-11-26 posts were pasted
   into the Discord mobile app through a temporary test route, `/_wait/e`. Wherever a page had a
   component embed, Discord drew it instead of the usual card, and on a video post the card lost its
   poster frame and its date. The route never reached a release and is gone. Nobody has checked

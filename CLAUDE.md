@@ -66,7 +66,11 @@ plays inline.
   age-note bug were both this shape. A post with more than four pictures and no video has a third: the
   component embed in its head (`src/render/componentembed.ts`), which Discord draws instead of the
   activity document and without fetching it (measured 2026-11-26). A change to what the activity card
-  says has to land there too.
+  says has to land there too, or the post keeps the activity card: the quoted video's "🎬 Contains
+  video" line has nowhere to go, so a post quoting a video does. And that card gets no second chance.
+  A translation that missed the head's deadline still reaches the activity document a moment later,
+  never the component embed, so a head with anything pending keeps the activity card
+  (`takesGalleryCard`'s `pending`).
 - `theme-color` is a standard HTML meta, not an og tag, and takes `name=`. The `property=` spelling
   shipped for the entire life of the feature and left every card uncoloured. Both spellings are
   emitted now, from one value.
